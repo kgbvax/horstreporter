@@ -1,0 +1,16 @@
+body, html { margin: 0; padding: 0; height: 100%; font-family: sans-serif; }
+#map { height: 100vh; width: 100%; z-index: 1; }
+#controls {
+    position: absolute;
+    top: 10px; right: 10px;
+    background: rgba(255, 255, 255, 0.95);
+    padding: 15px; border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+    z-index: 1000;
+    display: flex; flex-direction: column; gap: 10px;
+}
+#controls h2 { margin: 0 0 10px 0; font-size: 1.2rem; }
+#fetch-form { display: flex; flex-direction: column; gap: 10px; }
+input[type="text"], input[type="number"] { padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
+button { padding: 8px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+button:hover { background: #0056b3; }
