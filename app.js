@@ -1,13 +1,44 @@
 const map = L.map('map').setView([20, 0], 2);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+
+const lightTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
     maxZoom: 18,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-}).addTo(map);
+});
 
+const darkTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    maxZoom: 18,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+});
+
+let currentTileLayer = null;
 let heatLayer = null;
 let eventSource = null;
 let liveSpots = [];
 let renderInterval = null;
+
+function setTheme(theme) {
+    document.body.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+
+    if (currentTileLayer) {
+        map.removeLayer(currentTileLayer);
+    }
+
+    if (theme === 'dark') {
+        currentTileLayer = darkTileLayer;
+        document.getElementById('theme-toggle').innerText = '☀️';
+        document.getElementById('theme-toggle').title = 'Switch to light theme';
+    } else {
+        currentTileLayer = lightTileLayer;
+        document.getElementById('theme-toggle').innerText = '🌙';
+        document.getElementById('theme-toggle').title = 'Switch to dark theme';
+    }
+    currentTileLayer.addTo(map);
+}
+
+// --- Theme Initializer ---
+const savedTheme = localStorage.getItem('theme') || 'dark'; // Default to dark theme
+setTheme(savedTheme);
 
 function latLngToLocator(lat, lng) {
     lng = Math.max(-180, Math.min(180, lng));
@@ -67,6 +98,12 @@ map.on('mousemove', function(e) {
 
 map.on('mouseout', function() {
     tooltip.style.display = 'none';
+});
+
+document.getElementById('theme-toggle').addEventListener('click', () => {
+    const currentTheme = document.body.getAttribute('data-theme');
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
 });
 
 document.getElementById('filter-0db').addEventListener('change', () => {

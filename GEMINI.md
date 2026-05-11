@@ -28,6 +28,7 @@ The application consists of a Go backend and a JavaScript frontend.
 ## Features
 
 -   **Live Mode**: Connects to the stream and displays data as it happens.
+-   **Switchable Themes**: Toggle between light and dark themes for the entire interface, including the map, to suit your viewing preference.
 -   **SNR Filter**: An option to hide reports with an SNR of 0 dB or less, focusing on stronger signals.
 -   **Band Filter**: Users can select to view all bands or filter for a specific band of interest. Active bands are highlighted in the UI.
 -   **Band Cycler**: An automatic function to cycle through the currently active bands, providing a dynamic overview of conditions.
