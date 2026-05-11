@@ -1,4 +1,7 @@
-const map = L.map('map').setView([20, 0], 2);
+const map = L.map('map', {
+    zoomSnap: 0.25,
+    zoomDelta: 0.25
+}).setView([20, 0], 2);
 
 const lightTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
     maxZoom: 18,
@@ -40,7 +43,15 @@ function setTheme(theme) {
 const savedTheme = localStorage.getItem('theme') || 'dark'; // Default to dark theme
 setTheme(savedTheme);
 
-function latLngToLocator(lat, lng) {
+function getGridResolution() {
+    const target = document.getElementById('target')?.value.trim() || '';
+    if (/^[A-Za-z]{2}[0-9]{2}[A-Za-z]{2}/.test(target)) {
+        return 6;
+    }
+    return 4;
+}
+
+function latLngToLocator(lat, lng, precision = 4) {
     lng = Math.max(-180, Math.min(180, lng));
     lat = Math.max(-90, Math.min(90, lat));
     let _lon = lng + 180;
@@ -51,7 +62,14 @@ function latLngToLocator(lat, lng) {
     _lat = _lat % 10;
     let char3 = String.fromCharCode(48 + Math.floor(_lon / 2));
     let char4 = String.fromCharCode(48 + Math.floor(_lat / 1));
-    return char1 + char2 + char3 + char4;
+    
+    if (precision < 6) return char1 + char2 + char3 + char4;
+    
+    _lon = (_lon % 2) * 60;
+    _lat = (_lat % 1) * 60;
+    let char5 = String.fromCharCode(65 + Math.floor(_lon / 5));
+    let char6 = String.fromCharCode(65 + Math.floor(_lat / 2.5));
+    return char1 + char2 + char3 + char4 + char5 + char6;
 }
 
 function getSelectedBand() {
@@ -62,7 +80,8 @@ function getSelectedBand() {
 const tooltip = document.getElementById('tooltip');
 
 map.on('mousemove', function(e) {
-    const loc = latLngToLocator(e.latlng.lat, e.latlng.lng);
+    const res = getGridResolution();
+    const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, res);
     const filter0dbEnabled = document.getElementById('filter-0db').checked;
     const selectedBand = getSelectedBand();
     
@@ -134,7 +153,8 @@ document.getElementById('btn-geo').addEventListener('click', () => {
 
     navigator.geolocation.getCurrentPosition(
         (position) => {
-            const loc = latLngToLocator(position.coords.latitude, position.coords.longitude);
+            // Pre-fill with a 4-character locator (square)
+            const loc = latLngToLocator(position.coords.latitude, position.coords.longitude, 4);
             document.getElementById('target').value = loc;
             btn.innerHTML = originalText;
             btn.disabled = false;
@@ -186,7 +206,7 @@ document.getElementById('btn-cycle').addEventListener('click', () => {
 
 document.getElementById('fetch-form').addEventListener('submit', (e) => {
     e.preventDefault();
-    const target = document.getElementById('target').value.trim();
+    const target = document.getElementById('target').value.trim().toUpperCase();
     const minutes = document.getElementById('minutes').value || 15;
 
     if (!target) {
@@ -194,11 +214,7 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
         return;
     }
 
-    const isLocator = /^[A-Za-z]{2}[0-9]{2}([A-Za-z]{2})?$/.test(target);
-    const callsign = !isLocator ? target : '';
-    const locator = isLocator ? target : '';
-
-    console.log(`Starting live stream for callsign: '${callsign}', locator: '${locator}'`);
+    console.log(`Starting live stream for target: '${target}'`);
 
     if (eventSource) {
         eventSource.close();
@@ -214,11 +230,11 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
     }
 
     const params = new URLSearchParams();
-    if (callsign) params.append('callsign', callsign);
-    if (locator) params.append('locator', locator);
+    params.append('target', target);
+    if (minutes) params.append('minutes', minutes);
 
     const statusEl = document.getElementById('stream-status');
-    const currentSub = callsign ? `Callsign: ${callsign}` : `Locator: ${locator}`;
+    const currentSub = `Target: ${target}`;
     let totalReceived = 0;
     statusEl.innerHTML = `Status: Connecting to ${currentSub}...`;
 
@@ -272,6 +288,12 @@ function locatorToBounds(locator) {
     let lat = (locator.charCodeAt(1) - 65) * 10 - 90;
     lng += (locator.charCodeAt(2) - 48) * 2;
     lat += (locator.charCodeAt(3) - 48) * 1;
+    
+    if (locator.length >= 6) {
+        lng += (locator.charCodeAt(4) - 65) * (5/60);
+        lat += (locator.charCodeAt(5) - 65) * (2.5/60);
+        return [[lat, lng], [lat + (2.5/60), lng + (5/60)]];
+    }
     return [[lat, lng], [lat + 1, lng + 2]];
 }
 
@@ -327,19 +349,22 @@ function renderGridSnr(spots, maxMinutes) {
     const filter0dbEnabled = document.getElementById('filter-0db').checked;
     const selectedBand = getSelectedBand();
     const squareData = {};
+    const res = getGridResolution();
 
     spots.forEach(spot => {
         if (filter0dbEnabled && spot.snr <= 0) return;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return;
 
-        let loc4 = spot.locator.substring(0, 4);
-        if (loc4.length === 4) {
-            if (!squareData[loc4]) {
-                squareData[loc4] = { snrSum: 0, count: 0, bands: {} };
+        let loc = spot.locator.substring(0, res);
+        if (loc.length < res) loc = spot.locator.substring(0, 4); // Fallback if data is sparse
+
+        if (loc.length >= 4) {
+            if (!squareData[loc]) {
+                squareData[loc] = { snrSum: 0, count: 0, bands: {} };
             }
-            squareData[loc4].snrSum += spot.snr;
-            squareData[loc4].count++;
-            squareData[loc4].bands[spot.band] = (squareData[loc4].bands[spot.band] || 0) + 1;
+            squareData[loc].snrSum += spot.snr;
+            squareData[loc].count++;
+            squareData[loc].bands[spot.band] = (squareData[loc].bands[spot.band] || 0) + 1;
         }
     });
 
@@ -379,18 +404,21 @@ function renderGridAge(spots, maxMinutes) {
     const filter0dbEnabled = document.getElementById('filter-0db').checked;
     const selectedBand = getSelectedBand();
     const squareData = {};
+    const res = getGridResolution();
 
     spots.forEach(spot => {
         if (filter0dbEnabled && spot.snr <= 0) return;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return;
 
-        let loc4 = spot.locator.substring(0, 4);
-        if (loc4.length === 4) {
-            if (!squareData[loc4]) {
-                squareData[loc4] = { bands: {}, minAge: Infinity };
+        let loc = spot.locator.substring(0, res);
+        if (loc.length < res) loc = spot.locator.substring(0, 4);
+
+        if (loc.length >= 4) {
+            if (!squareData[loc]) {
+                squareData[loc] = { bands: {}, minAge: Infinity };
             }
-            squareData[loc4].bands[spot.band] = (squareData[loc4].bands[spot.band] || 0) + 1;
-            squareData[loc4].minAge = Math.min(squareData[loc4].minAge, spot.ageSeconds);
+            squareData[loc].bands[spot.band] = (squareData[loc].bands[spot.band] || 0) + 1;
+            squareData[loc].minAge = Math.min(squareData[loc].minAge, spot.ageSeconds);
         }
     });
 
@@ -525,3 +553,21 @@ function renderLiveHeatmap(spots, maxMinutes) {
         heatLayer = L.layerGroup().addTo(map);
     }
 }
+
+function updateServerStats() {
+    const statsEl = document.getElementById('server-stats');
+    if (!statsEl) return;
+
+    fetch('/api/stats')
+        .then(response => response.json())
+        .then(stats => {
+            statsEl.innerHTML = `Server Stats | Connections: ${stats.active_connections}<br>History Cache: ${stats.history_size} spots`;
+        })
+        .catch(error => {
+            console.error('Error fetching server stats:', error);
+            statsEl.innerHTML = 'Server stats unavailable.';
+        });
+}
+
+updateServerStats();
+setInterval(updateServerStats, 10000); // Update every 10 seconds

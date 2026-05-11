@@ -14,12 +14,12 @@
         </div>
         <form id="fetch-form">
             <div class="target-input-container">
-                <input type="text" id="target" placeholder="Callsign or Locator (e.g., W1AW or FN31)" />
+                <input type="text" id="target" placeholder="Callsign or Locator (e.g. W1AW, JO, FN31, JO32WE)" tooltip="You can use fields, squares, subsquares or callsigns" />
                 <button type="button" id="btn-geo" title="Use current location">📍</button>
-                <button type="submit">Analyze</button>
+                <button type="submit">Go</button>
             </div>
             <label>Minutes:
-                <input type="number" id="minutes" value="15" min="1" max="120" />
+                <input type="number" id="minutes" value="15" min="1" max="60" />
             </label>
             <label>
                 <input type="checkbox" id="filter-0db" checked /> SSB level only
@@ -49,6 +49,7 @@
 </div>
         </form>
         <div id="stream-status">Status: Not subscribed</div>
+        <div id="server-stats"></div>
     </div>
     <div id="map"></div>
     <div id="tooltip"></div>

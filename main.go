@@ -5,11 +5,34 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
+
+var logLevel = "INFO"
+
+func init() {
+	if lvl := os.Getenv("LOG_LEVEL"); lvl != "" {
+		logLevel = strings.ToUpper(lvl)
+	}
+}
+
+func logDebug(format string, v ...interface{}) {
+	if logLevel == "DEBUG" {
+		log.Printf("[DEBUG] "+format, v...)
+	}
+}
+
+func logInfo(format string, v ...interface{}) {
+	if logLevel == "DEBUG" || logLevel == "INFO" {
+		log.Printf("[INFO] "+format, v...)
+	}
+}
 
 type Spot struct {
 	Lat        float64 `json:"lat"`
@@ -31,33 +54,251 @@ type MQTTMessage struct {
 	MD string `json:"md"`
 }
 
+type Client struct {
+	target string
+	send   chan Spot
+}
+
+type Hub struct {
+	sync.RWMutex
+	clients map[*Client]bool
+	history []MQTTMessage
+}
+
+var hub = &Hub{
+	clients: make(map[*Client]bool),
+	history: make([]MQTTMessage, 0),
+}
+
+func (h *Hub) broadcastMsg(m MQTTMessage) {
+	h.Lock()
+	defer h.Unlock()
+
+	h.history = append(h.history, m)
+
+	now := time.Now().Unix()
+	for client := range h.clients {
+		if spot, ok := matchAndCreateSpot(client, m, now); ok {
+			select {
+			case client.send <- spot:
+			default:
+				// Client buffer full, spot dropped for this client
+			}
+		}
+	}
+}
+
+// matchCall checks for an exact callsign match, or a match with common prefix/suffix modifiers (e.g., W1AW/P, DL/W1AW)
+func matchCall(spotCall, target string) bool {
+	if spotCall == target {
+		return true
+	}
+	if strings.HasPrefix(spotCall, target+"/") {
+		return true
+	}
+	if strings.HasSuffix(spotCall, "/"+target) {
+		return true
+	}
+	if strings.Contains(spotCall, "/"+target+"/") {
+		return true
+	}
+	return false
+}
+
+func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
+	if client.target == "" {
+		return Spot{}, false
+	}
+
+	sc, rc := strings.ToUpper(m.SC), strings.ToUpper(m.RC)
+	sl, rl := strings.ToUpper(m.SL), strings.ToUpper(m.RL)
+
+	isSender := matchCall(sc, client.target) || (sl != "" && strings.HasPrefix(sl, client.target))
+	isReceiver := matchCall(rc, client.target) || (rl != "" && strings.HasPrefix(rl, client.target))
+
+	if logLevel == "DEBUG" {
+		logDebug("Target '%s' | Evaluating Spot -> SC:%s RC:%s SL:%s RL:%s | isSender:%v isReceiver:%v", client.target, sc, rc, sl, rl, isSender, isReceiver)
+	}
+
+	if !isSender && !isReceiver {
+		return Spot{}, false
+	}
+
+	var remoteLocator string
+	var relation string
+	if isSender {
+		remoteLocator = rl
+		relation = "Sender"
+	} else {
+		remoteLocator = sl
+		relation = "Receiver"
+	}
+
+	if remoteLocator == "" {
+		if logLevel == "DEBUG" {
+			logDebug("Target '%s' matched as %s, but remote locator is empty. Dropping spot.", client.target, relation)
+		}
+		return Spot{}, false
+	}
+
+	lat, lng := locatorToLatLng(remoteLocator)
+	age := now - m.T
+	if age < 0 {
+		age = 0
+	}
+
+	if logLevel == "DEBUG" {
+		logDebug("Target '%s' matched successfully! Mapped to Remote Locator: %s", client.target, remoteLocator)
+	}
+
+	return Spot{
+		Lat:        lat,
+		Lng:        lng,
+		SNR:        m.RP,
+		AgeSeconds: age,
+		Locator:    remoteLocator,
+		Band:       m.B,
+	}, true
+}
+
+func startMQTT() {
+	opts := mqtt.NewClientOptions().AddBroker("tcp://mqtt.pskreporter.info:1883")
+	opts.SetClientID(fmt.Sprintf("horstreporter.kgbvax.net-%d", time.Now().UnixNano()))
+	opts.SetAutoReconnect(true)
+
+	client := mqtt.NewClient(opts)
+	if token := client.Connect(); token.Wait() && token.Error() != nil {
+		log.Fatalf("MQTT connect error: %v", token.Error())
+	}
+
+	msgHandler := func(client mqtt.Client, msg mqtt.Message) {
+		var m MQTTMessage
+		if err := json.Unmarshal(msg.Payload(), &m); err != nil {
+			logDebug("Failed to unmarshal payload: %s", string(msg.Payload()))
+			return
+		}
+
+		// Extract missing fields from the topic string (PSKReporter omits them in JSON to save bandwidth)
+		// Topic format: pskr/filter/v2/{band}/{mode}/{senderCall}/{receiverCall}/{senderLocator}/{receiverLocator}
+		topicParts := strings.Split(msg.Topic(), "/")
+		if len(topicParts) >= 9 {
+			if m.B == "" && topicParts[3] != "unknown" {
+				m.B = topicParts[3]
+			}
+			if m.MD == "" && topicParts[4] != "unknown" {
+				m.MD = topicParts[4]
+			}
+			if m.SC == "" && topicParts[5] != "unknown" {
+				m.SC = strings.ReplaceAll(topicParts[5], ".", "/") // Slashes in callsigns are replaced by dots in the topic
+			}
+			if m.RC == "" && topicParts[6] != "unknown" {
+				m.RC = strings.ReplaceAll(topicParts[6], ".", "/")
+			}
+			if m.SL == "" && topicParts[7] != "unknown" {
+				m.SL = topicParts[7]
+			}
+			if m.RL == "" && topicParts[8] != "unknown" {
+				m.RL = topicParts[8]
+			}
+		}
+
+		mode := strings.ToUpper(m.MD)
+		if mode == "FT8" || mode == "FT4" {
+			if m.T == 0 {
+				m.T = time.Now().Unix()
+			}
+			hub.broadcastMsg(m)
+		}
+	}
+
+	if token := client.Subscribe("pskr/filter/v2/#", 0, msgHandler); token.Wait() && token.Error() != nil {
+		log.Fatalf("MQTT subscribe error: %v", token.Error())
+	}
+	logInfo("Subscribed to global PSKReporter MQTT feed")
+}
+
 func locatorToLatLng(locator string) (float64, float64) {
 	locator = strings.ToUpper(locator)
-	if len(locator) < 4 {
+	if len(locator) < 2 {
 		return 0, 0
 	}
 	lng := float64(locator[0]-'A')*20 - 180
 	lat := float64(locator[1]-'A')*10 - 90
-	lng += float64(locator[2]-'0') * 2
-	lat += float64(locator[3]-'0') * 1
-	if len(locator) >= 6 {
-		lng += float64(locator[4]-'A')*(5.0/60.0) + (5.0 / 120.0)
-		lat += float64(locator[5]-'A')*(2.5/60.0) + (2.5 / 120.0)
+
+	if len(locator) >= 4 {
+		lng += float64(locator[2]-'0') * 2
+		lat += float64(locator[3]-'0') * 1
+		if len(locator) >= 6 {
+			lng += float64(locator[4]-'A')*(5.0/60.0) + (5.0 / 120.0)
+			lat += float64(locator[5]-'A')*(2.5/60.0) + (2.5 / 120.0)
+		} else {
+			lng += 1.0
+			lat += 0.5
+		}
 	} else {
-		lng += 1.0
-		lat += 0.5
+		lng += 10.0 // Center of field
+		lat += 5.0
 	}
 	return lat, lng
 }
 
 func streamHandler(w http.ResponseWriter, r *http.Request) {
-	callsign := strings.ToUpper(r.URL.Query().Get("callsign"))
-	locator := strings.ToUpper(r.URL.Query().Get("locator"))
+	target := strings.ToUpper(r.URL.Query().Get("target"))
+	minutesStr := r.URL.Query().Get("minutes")
 
-	if callsign == "" && locator == "" {
-		http.Error(w, "callsign or locator required", http.StatusBadRequest)
+	// Fallback for cached frontend clients that still send callsign/locator params
+	if target == "" {
+		if call := r.URL.Query().Get("callsign"); call != "" {
+			target = strings.ToUpper(call)
+		} else if loc := r.URL.Query().Get("locator"); loc != "" {
+			target = strings.ToUpper(loc)
+		}
+	}
+
+	if target == "" {
+		http.Error(w, "target required", http.StatusBadRequest)
 		return
 	}
+
+	minutes, err := strconv.Atoi(minutesStr)
+	if err != nil || minutes <= 0 {
+		minutes = 15
+	}
+	if minutes > 60 {
+		minutes = 60
+	}
+	historySeconds := int64(minutes * 60)
+
+	client := &Client{
+		target: target,
+		send:   make(chan Spot, 10000), // Buffer to handle initial history dump
+	}
+
+	hub.Lock()
+	hub.clients[client] = true
+	logInfo("New client stream started for target: %s (History: %d mins)", target, minutes)
+
+	now := time.Now().Unix()
+	var historySpots []Spot
+	for _, m := range hub.history {
+		// Dump spots from the requested history length
+		if now-m.T <= historySeconds {
+			if spot, ok := matchAndCreateSpot(client, m, now); ok {
+				historySpots = append(historySpots, spot)
+			}
+		}
+	}
+	hub.Unlock()
+
+	defer func() {
+		hub.Lock()
+		if _, ok := hub.clients[client]; ok {
+			delete(hub.clients, client)
+			close(client.send)
+		}
+		hub.Unlock()
+		logInfo("Client stream closed for target: %s", target)
+	}()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -70,100 +311,44 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := mqtt.NewClientOptions().AddBroker("tcp://mqtt.pskreporter.info:1883")
-	opts.SetClientID(fmt.Sprintf("horstreporter-%d", time.Now().UnixNano()))
-	opts.SetAutoReconnect(true)
-
-	client := mqtt.NewClient(opts)
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
-		log.Printf("MQTT connect error: %v", token.Error())
-		return
+	for _, spot := range historySpots {
+		b, _ := json.Marshal(spot)
+		fmt.Fprintf(w, "data: %s\n\n", string(b))
 	}
-	defer client.Disconnect(250)
-
-	topics := make(map[string]byte)
-	if callsign != "" {
-		safeCall := strings.ReplaceAll(callsign, "/", ".")
-		topics[fmt.Sprintf("pskr/filter/v2/+/+/%s/#", safeCall)] = 0
-		topics[fmt.Sprintf("pskr/filter/v2/+/+/+/%s/#", safeCall)] = 0
-	} else if locator != "" {
-		loc := locator
-		if len(loc) > 4 {
-			loc = loc[:4]
-		}
-		if len(loc) == 4 {
-			topics[fmt.Sprintf("pskr/filter/v2/+/+/+/+/%s/#", loc)] = 0
-			topics[fmt.Sprintf("pskr/filter/v2/+/+/+/+/+/%s/#", loc)] = 0
-		} else {
-			topics["pskr/filter/v2/#"] = 0
-		}
-	} else {
-		topics["pskr/filter/v2/#"] = 0
-	}
-
-	spotChan := make(chan Spot, 100)
-
-	msgHandler := func(client mqtt.Client, msg mqtt.Message) {
-		var m MQTTMessage
-		if err := json.Unmarshal(msg.Payload(), &m); err != nil {
-			return
-		}
-
-		mode := strings.ToUpper(m.MD)
-		if mode != "FT8" && mode != "FT4" {
-			return
-		}
-
-		isSender := (callsign != "" && strings.ToUpper(m.SC) == callsign) || (locator != "" && strings.HasPrefix(strings.ToUpper(m.SL), locator))
-		isReceiver := (callsign != "" && strings.ToUpper(m.RC) == callsign) || (locator != "" && strings.HasPrefix(strings.ToUpper(m.RL), locator))
-
-		if !isSender && !isReceiver {
-			return
-		}
-
-		var remoteLocator string
-		if isSender {
-			remoteLocator = m.RL
-		} else {
-			remoteLocator = m.SL
-		}
-
-		if remoteLocator == "" {
-			return
-		}
-
-		lat, lng := locatorToLatLng(remoteLocator)
-		age := time.Now().Unix() - m.T
-		if age < 0 || m.T == 0 {
-			age = 0
-		}
-
-		//log.Printf("Matched spot: %s -> %s | Band: %s, SNR: %ddB, Mode: %s", m.SC, m.RC, m.B, m.RP, m.MD)
-		spotChan <- Spot{Lat: lat, Lng: lng, SNR: m.RP, AgeSeconds: age, Locator: strings.ToUpper(remoteLocator), Band: m.B}
-	}
-
-	var topicList []string
-	for t := range topics {
-		topicList = append(topicList, t)
-	}
-	log.Printf("Connecting to MQTT live stream. Subscribed to paths: %s", strings.Join(topicList, ", "))
-
-	if token := client.SubscribeMultiple(topics, msgHandler); token.Wait() && token.Error() != nil {
-		log.Printf("MQTT subscribe error: %v", token.Error())
-		return
-	}
+	flusher.Flush()
 
 	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case spot := <-spotChan:
+		case spot, ok := <-client.send:
+			if !ok {
+				return
+			}
 			b, _ := json.Marshal(spot)
 			fmt.Fprintf(w, "data: %s\n\n", string(b))
 			flusher.Flush()
 		}
 	}
+}
+
+func statsHandler(w http.ResponseWriter, r *http.Request) {
+	hub.RLock()
+	numClients := len(hub.clients)
+	historySize := len(hub.history)
+	hub.RUnlock()
+
+	stats := struct {
+		ActiveConnections int `json:"active_connections"`
+		HistorySize       int `json:"history_size"`
+	}{
+		ActiveConnections: numClients,
+		HistorySize:       historySize,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }
 
 // noCache is a middleware that sets headers to prevent caching of static files.
@@ -178,9 +363,27 @@ func noCache(h http.Handler) http.Handler {
 }
 
 func main() {
+	go startMQTT()
+
+	go func() {
+		for range time.Tick(1 * time.Minute) {
+			hub.Lock()
+			cutoff := time.Now().Unix() - 3600 // Prune history older than 60 minutes
+			var newHistory []MQTTMessage
+			for _, m := range hub.history {
+				if m.T >= cutoff {
+					newHistory = append(newHistory, m)
+				}
+			}
+			hub.history = newHistory
+			hub.Unlock()
+		}
+	}()
+
 	fs := http.FileServer(http.Dir("."))
 	http.Handle("/", noCache(fs))
 	http.HandleFunc("/api/stream", streamHandler)
-	fmt.Println("HorstReporter streaming API starting on http://localhost:8080...")
+	http.HandleFunc("/api/stats", statsHandler)
+	logInfo("HorstReporter streaming API starting on http://localhost:8080...")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
