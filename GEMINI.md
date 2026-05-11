@@ -29,7 +29,7 @@ The application consists of a Go backend and a JavaScript frontend.
 
 -   **Live Mode**: Connects to the stream and displays data as it happens.
 -   **Switchable Themes**: Toggle between light and dark themes for the entire interface, including the map, to suit your viewing preference.
--   **SNR Filter**: An option to hide reports with an SNR of 0 dB or less, focusing on stronger signals.
+-   **SNR Filter**: An option to filter reports by minimum Signal-to-Noise Ratio (SNR) for viable SSB or CW connections, with configurable dB thresholds.
 -   **Band Filter**: Users can select to view all bands or filter for a specific band of interest. Active bands are highlighted in the UI.
 -   **Band Cycler**: An automatic function to cycle through the currently active bands, providing a dynamic overview of conditions.
 -   **Geolocation**: A button to automatically detect the user's locator via the browser's geolocation API.

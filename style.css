@@ -107,6 +107,39 @@ select {
     box-sizing: border-box;
 }
 
+.button-group {
+    display: flex;
+    width: 100%;
+    border: 1px solid var(--input-border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.button-group input[type="radio"] {
+    display: none;
+}
+
+.button-group label {
+    flex: 1;
+    text-align: center;
+    padding: 8px;
+    background-color: var(--input-bg);
+    color: var(--text-color);
+    cursor: pointer;
+    transition: background-color 0.2s, color 0.2s;
+    border-right: 1px solid var(--input-border);
+    font-size: 14px;
+}
+
+.button-group label:last-child {
+    border-right: none;
+}
+
+.button-group input[type="radio"]:checked + label {
+    background-color: var(--button-bg);
+    color: var(--button-text);
+}
+
 button {
     padding: 8px 12px;
     border: none;
@@ -152,8 +185,23 @@ button:hover {
     gap: 5px;
 }
 
+.options-panel {
+    margin-top: 10px;
+    border-top: 1px solid var(--border-color);
+    padding-top: 10px;
+}
+
+.options-panel summary {
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.options-content {
+    margin-top: 10px;
+}
+
 #stream-status {
-    margin-top: 15px;
+    margin-top: 0;
     font-size: 14px;
     color: var(--status-color);
 }
@@ -163,11 +211,11 @@ button:hover {
 }
 
 #server-stats {
-    margin-top: 10px;
+    margin-top: 0;
     font-size: 12px;
     color: var(--status-color);
-    border-top: 1px solid var(--border-color);
-    padding-top: 10px;
+    border-top: none;
+    padding-top: 0;
 }
 
 #tooltip {

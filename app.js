@@ -1,7 +1,56 @@
+let initialCenter = [20, 0];
+let initialZoom = 2;
+
+try {
+    const savedCenter = localStorage.getItem('mapCenter');
+    const savedZoom = localStorage.getItem('mapZoom');
+    if (savedCenter) initialCenter = JSON.parse(savedCenter);
+    if (savedZoom) initialZoom = parseFloat(savedZoom);
+} catch (e) {
+    console.error("Error parsing saved map state", e);
+}
+
+try {
+    const savedTarget = localStorage.getItem('target');
+    if (savedTarget) document.getElementById('target').value = savedTarget;
+
+    const savedMinutes = localStorage.getItem('minutes');
+    if (savedMinutes) document.getElementById('minutes').value = savedMinutes;
+
+    const savedMinSnr = localStorage.getItem('minSnrSelect');
+    if (savedMinSnr) {
+        const radio = document.querySelector(`input[name="min-snr"][value="${savedMinSnr}"]`);
+        if (radio) radio.checked = true;
+    }
+
+    const savedStyle = localStorage.getItem('mapStyle');
+    if (savedStyle && document.getElementById('style-select')) {
+        document.getElementById('style-select').value = savedStyle;
+    }
+
+    const savedBand = localStorage.getItem('selectedBand');
+    if (savedBand) {
+        const radio = document.querySelector(`input[name="band"][value="${savedBand}"]`);
+        if (radio) radio.checked = true;
+    }
+
+    const savedSsbMinDb = localStorage.getItem('ssbMinDb');
+    if (savedSsbMinDb !== null && document.getElementById('ssb-min-db')) {
+        document.getElementById('ssb-min-db').value = savedSsbMinDb;
+    }
+
+    const savedCwMinDb = localStorage.getItem('cwMinDb');
+    if (savedCwMinDb !== null && document.getElementById('cw-min-db')) {
+        document.getElementById('cw-min-db').value = savedCwMinDb;
+    }
+} catch (e) {
+    console.error("Error parsing saved form state", e);
+}
+
 const map = L.map('map', {
     zoomSnap: 0.25,
     zoomDelta: 0.25
-}).setView([20, 0], 2);
+}).setView(initialCenter, initialZoom);
 
 const lightTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
     maxZoom: 18,
@@ -15,9 +64,32 @@ const darkTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z
 
 let currentTileLayer = null;
 let heatLayer = null;
+let targetLayer = null;
 let eventSource = null;
 let liveSpots = [];
 let renderInterval = null;
+
+// Debounce rendering to prevent UI lockups during heavy spot bursts
+let renderPending = false;
+function scheduleRender() {
+    if (!renderPending) {
+        renderPending = true;
+        requestAnimationFrame(() => {
+            const minutes = document.getElementById('minutes').value || 15;
+            updateMapVisualization(liveSpots, parseInt(minutes));
+            renderPending = false;
+        });
+    }
+}
+
+map.on('moveend', () => {
+    const center = map.getCenter();
+    localStorage.setItem('mapCenter', JSON.stringify([center.lat, center.lng]));
+});
+
+map.on('zoomend', () => {
+    localStorage.setItem('mapZoom', map.getZoom());
+});
 
 function setTheme(theme) {
     document.body.setAttribute('data-theme', theme);
@@ -72,6 +144,19 @@ function latLngToLocator(lat, lng, precision = 4) {
     return char1 + char2 + char3 + char4 + char5 + char6;
 }
 
+function getMinSnrMode() {
+    const checkedRadio = document.querySelector('input[name="min-snr"]:checked');
+    return checkedRadio ? checkedRadio.value : 'none';
+}
+
+function setFaviconColor(color) {
+    const favicon = document.getElementById('favicon');
+    if (favicon) {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" fill="${color}"/></svg>`;
+        favicon.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+    }
+}
+
 function getSelectedBand() {
     const checkedRadio = document.querySelector('input[name="band"]:checked');
     return checkedRadio ? checkedRadio.value : 'all';
@@ -82,12 +167,15 @@ const tooltip = document.getElementById('tooltip');
 map.on('mousemove', function(e) {
     const res = getGridResolution();
     const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, res);
-    const filter0dbEnabled = document.getElementById('filter-0db').checked;
+    const minSnrMode = getMinSnrMode();
+    const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
+    const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const selectedBand = getSelectedBand();
     
     const squareSpots = liveSpots.filter(s => {
         if (!s.locator || !s.locator.startsWith(loc)) return false;
-        if (filter0dbEnabled && s.snr <= 0) return false;
+        if (minSnrMode === 'ssb' && s.snr < ssbMinDb) return false;
+        if (minSnrMode === 'cw' && s.snr < cwMinDb) return false;
         if (selectedBand !== 'all' && s.band !== selectedBand) return false;
         return true;
     });
@@ -125,19 +213,31 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
     setTheme(newTheme);
 });
 
-document.getElementById('filter-0db').addEventListener('change', () => {
-    const minutes = document.getElementById('minutes').value || 15;
-    updateMapVisualization(liveSpots, parseInt(minutes));
+document.getElementById('min-snr-group')?.addEventListener('change', (e) => {
+    if (e.target.name === 'min-snr') {
+        localStorage.setItem('minSnrSelect', e.target.value);
+        scheduleRender();
+    }
+});
+
+document.getElementById('ssb-min-db')?.addEventListener('change', () => {
+    localStorage.setItem('ssbMinDb', document.getElementById('ssb-min-db').value);
+    scheduleRender();
+});
+
+document.getElementById('cw-min-db')?.addEventListener('change', () => {
+    localStorage.setItem('cwMinDb', document.getElementById('cw-min-db').value);
+    scheduleRender();
 });
 
 document.getElementById('band-container').addEventListener('change', () => {
-    const minutes = document.getElementById('minutes').value || 15;
-    updateMapVisualization(liveSpots, parseInt(minutes));
+    localStorage.setItem('selectedBand', getSelectedBand());
+    scheduleRender();
 });
 
 document.getElementById('style-select')?.addEventListener('change', () => {
-    const minutes = document.getElementById('minutes').value || 15;
-    updateMapVisualization(liveSpots, parseInt(minutes));
+    localStorage.setItem('mapStyle', document.getElementById('style-select').value);
+    scheduleRender();
 });
 
 document.getElementById('btn-geo').addEventListener('click', () => {
@@ -156,6 +256,7 @@ document.getElementById('btn-geo').addEventListener('click', () => {
             // Pre-fill with a 4-character locator (square)
             const loc = latLngToLocator(position.coords.latitude, position.coords.longitude, 4);
             document.getElementById('target').value = loc;
+            localStorage.setItem('target', loc);
             btn.innerHTML = originalText;
             btn.disabled = false;
         },
@@ -182,10 +283,13 @@ document.getElementById('btn-cycle').addEventListener('click', () => {
         btn.innerHTML = '⏸️';
         btn.title = 'Stop Cycling';
         cycleInterval = setInterval(() => {
-            const filter0dbEnabled = document.getElementById('filter-0db').checked;
+            const minSnrMode = getMinSnrMode();
+            const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
+            const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
             const activeBands = new Set();
             liveSpots.forEach(s => {
-                if (filter0dbEnabled && s.snr <= 0) return;
+                if (minSnrMode === 'ssb' && s.snr < ssbMinDb) return;
+                if (minSnrMode === 'cw' && s.snr < cwMinDb) return;
                 activeBands.add(s.band);
             });
 
@@ -206,6 +310,32 @@ document.getElementById('btn-cycle').addEventListener('click', () => {
 
 document.getElementById('fetch-form').addEventListener('submit', (e) => {
     e.preventDefault();
+    const btnSubmit = document.getElementById('btn-submit');
+
+    if (btnSubmit && btnSubmit.textContent === 'Stop') {
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+        if (renderInterval) {
+            clearInterval(renderInterval);
+            renderInterval = null;
+        }
+        liveSpots = [];
+        if (heatLayer) {
+            map.removeLayer(heatLayer);
+            heatLayer = null;
+        }
+        if (targetLayer) {
+            map.removeLayer(targetLayer);
+            targetLayer = null;
+        }
+        btnSubmit.textContent = 'Go';
+        document.getElementById('stream-status').innerHTML = 'Status: Not subscribed';
+        setFaviconColor('#6c757d');
+        return;
+    }
+
     const target = document.getElementById('target').value.trim().toUpperCase();
     const minutes = document.getElementById('minutes').value || 15;
 
@@ -213,6 +343,9 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
         alert('Please provide a Callsign or Locator.');
         return;
     }
+
+    localStorage.setItem('target', target);
+    localStorage.setItem('minutes', minutes);
 
     console.log(`Starting live stream for target: '${target}'`);
 
@@ -229,6 +362,39 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
         heatLayer = null;
     }
 
+    if (targetLayer) {
+        map.removeLayer(targetLayer);
+        targetLayer = null;
+    }
+
+    const isLocator = /^[A-Z]{2}([0-9]{2}([A-Z]{2})?)?$/.test(target);
+    if (isLocator) {
+        if (target.length === 2) {
+            const bounds = fieldToBounds(target);
+            if (bounds) {
+                targetLayer = L.rectangle(bounds, { color: '#ff0000', weight: 3, fillOpacity: 0.1, interactive: false }).addTo(map);
+            }
+        } else if (target.length === 4) {
+            const bounds = locatorToBounds(target);
+            if (bounds) {
+                targetLayer = L.rectangle(bounds, { color: '#ff0000', weight: 3, fillOpacity: 0.1, interactive: false }).addTo(map);
+            }
+        } else if (target.length >= 6) {
+            const bounds = locatorToBounds(target);
+            if (bounds) {
+                const lat = (bounds[0][0] + bounds[1][0]) / 2;
+                const lng = (bounds[0][1] + bounds[1][1]) / 2;
+                const crossIcon = L.divIcon({
+                    html: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" stroke="red" stroke-width="4" fill="none" stroke-linecap="round"><line x1="4" y1="4" x2="20" y2="20"></line><line x1="20" y1="4" x2="4" y2="20"></line></svg>',
+                    className: 'target-cross',
+                    iconSize: [24, 24],
+                    iconAnchor: [12, 12]
+                });
+                targetLayer = L.marker([lat, lng], { icon: crossIcon, interactive: false }).addTo(map);
+            }
+        }
+    }
+
     const params = new URLSearchParams();
     params.append('target', target);
     if (minutes) params.append('minutes', minutes);
@@ -236,27 +402,55 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
     const statusEl = document.getElementById('stream-status');
     const currentSub = `Target: ${target}`;
     let totalReceived = 0;
+    let lastStatusUpdate = 0;
     statusEl.innerHTML = `Status: Connecting to ${currentSub}...`;
 
+    if (btnSubmit) btnSubmit.textContent = 'Stop';
+
     eventSource = new EventSource(`/api/stream?${params.toString()}`);
+    setFaviconColor('#ffa500'); // Orange for connecting/waiting
     
     eventSource.onopen = () => {
         console.log("Connected to live MQTT stream");
         statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong></br><span style="color: orange;">(Waiting for data...)</span>`;
+        setFaviconColor('#ffa500'); // Orange until data arrives
     };
 
     eventSource.onmessage = (e) => {
         totalReceived++;
-        statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: green;">Receiving data (Spots: ${totalReceived})</span>`;
+        
         const spot = JSON.parse(e.data);
         liveSpots.push(spot);
+        setFaviconColor('#28a745'); // Green for active receiving
 
-        updateMapVisualization(liveSpots, parseInt(minutes));
+        // Throttle DOM text updates to max ~4 times a second
+        const now = Date.now();
+        if (now - lastStatusUpdate > 250) {
+            let durationStr = "0:00";
+            if (liveSpots.length > 0) {
+                let minAge = liveSpots[0].ageSeconds;
+                let maxAge = liveSpots[0].ageSeconds;
+                for (let i = 1; i < liveSpots.length; i++) {
+                    if (liveSpots[i].ageSeconds < minAge) minAge = liveSpots[i].ageSeconds;
+                    if (liveSpots[i].ageSeconds > maxAge) maxAge = liveSpots[i].ageSeconds;
+                }
+                let diff = maxAge - minAge;
+                let m = Math.floor(diff / 60);
+                let s = Math.floor(diff % 60);
+                durationStr = `${m}:${s.toString().padStart(2, '0')}`;
+            }
+
+            statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: green;">Receiving data (Spots: ${totalReceived}, Duration: ${durationStr})</span>`;
+            lastStatusUpdate = now;
+        }
+
+        scheduleRender();
     };
 
     eventSource.onerror = (e) => {
         console.error("Stream error:", e);
         statusEl.innerHTML = `Status: <span style="color: red;">Connection error / Disconnected</span>`;
+        setFaviconColor('#dc3545'); // Red for error
     };
 
     renderInterval = setInterval(() => {
@@ -264,7 +458,7 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
             const maxAge = parseInt(minutes) * 60;
             liveSpots.forEach(s => s.ageSeconds += 5); 
             liveSpots = liveSpots.filter(s => s.ageSeconds <= maxAge);
-            updateMapVisualization(liveSpots, parseInt(minutes));
+            scheduleRender();
         }
     }, 5000);
 });
@@ -298,10 +492,13 @@ function locatorToBounds(locator) {
 }
 
 function updateBandLabels(spots) {
-    const filter0dbEnabled = document.getElementById('filter-0db').checked;
+    const minSnrMode = getMinSnrMode();
+    const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
+    const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const activeBands = new Set();
     spots.forEach(s => {
-        if (filter0dbEnabled && s.snr <= 0) return;
+        if (minSnrMode === 'ssb' && s.snr < ssbMinDb) return;
+        if (minSnrMode === 'cw' && s.snr < cwMinDb) return;
         activeBands.add(s.band);
     });
 
@@ -346,13 +543,16 @@ function updateMapVisualization(spots, maxMinutes) {
 function renderGridSnr(spots, maxMinutes) {
     heatLayer = L.layerGroup().addTo(map);
 
-    const filter0dbEnabled = document.getElementById('filter-0db').checked;
+    const minSnrMode = getMinSnrMode();
+    const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
+    const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const selectedBand = getSelectedBand();
     const squareData = {};
     const res = getGridResolution();
 
     spots.forEach(spot => {
-        if (filter0dbEnabled && spot.snr <= 0) return;
+        if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
+        if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return;
 
         let loc = spot.locator.substring(0, res);
@@ -401,13 +601,16 @@ function renderGridSnr(spots, maxMinutes) {
 function renderGridAge(spots, maxMinutes) {
     heatLayer = L.layerGroup().addTo(map);
 
-    const filter0dbEnabled = document.getElementById('filter-0db').checked;
+    const minSnrMode = getMinSnrMode();
+    const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
+    const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const selectedBand = getSelectedBand();
     const squareData = {};
     const res = getGridResolution();
 
     spots.forEach(spot => {
-        if (filter0dbEnabled && spot.snr <= 0) return;
+        if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
+        if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return;
 
         let loc = spot.locator.substring(0, res);
@@ -461,12 +664,15 @@ function fieldToBounds(field) {
 function renderAggregatedFields(spots, maxMinutes) {
     heatLayer = L.layerGroup().addTo(map);
 
-    const filter0dbEnabled = document.getElementById('filter-0db').checked;
+    const minSnrMode = getMinSnrMode();
+    const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
+    const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const selectedBand = getSelectedBand();
     
     const squareData = {};
     spots.forEach(spot => {
-        if (filter0dbEnabled && spot.snr <= 0) return;
+        if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
+        if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return;
 
         let loc4 = spot.locator.substring(0, 4);
@@ -527,12 +733,15 @@ function renderAggregatedFields(spots, maxMinutes) {
 }
 
 function renderLiveHeatmap(spots, maxMinutes) {
-    const filter0dbEnabled = document.getElementById('filter-0db').checked;
+    const minSnrMode = getMinSnrMode();
+    const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
+    const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const selectedBand = getSelectedBand();
 
     const heatPoints = spots
         .filter(spot => {
-            if (filter0dbEnabled && spot.snr <= 0) return false;
+            if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return false;
+            if (minSnrMode === 'cw' && spot.snr < cwMinDb) return false;
             if (selectedBand !== 'all' && spot.band !== selectedBand) return false;
             return true;
         })
@@ -571,3 +780,8 @@ function updateServerStats() {
 
 updateServerStats();
 setInterval(updateServerStats, 10000); // Update every 10 seconds
+
+// Automatically trigger analysis on load if a target is saved
+if (localStorage.getItem('target')) {
+    document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+}

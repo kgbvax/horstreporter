@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"golang.org/x/crypto/acme/autocert"
 )
 
 var logLevel = "INFO"
@@ -363,6 +365,12 @@ func noCache(h http.Handler) http.Handler {
 }
 
 func main() {
+	port := flag.String("port", "8080", "HTTP/HTTPS server port")
+	certFile := flag.String("cert", "", "Path to TLS certificate file")
+	keyFile := flag.String("key", "", "Path to TLS key file")
+	domain := flag.String("domain", "", "Domain for Let's Encrypt (enables automatic TLS)")
+	flag.Parse()
+
 	go startMQTT()
 
 	go func() {
@@ -384,6 +392,24 @@ func main() {
 	http.Handle("/", noCache(fs))
 	http.HandleFunc("/api/stream", streamHandler)
 	http.HandleFunc("/api/stats", statsHandler)
-	logInfo("HorstReporter streaming API starting on http://localhost:8080...")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+
+	if *domain != "" {
+		logInfo("HorstReporter starting HTTPS server with Let's Encrypt for domain %s on port %s...", *domain, *port)
+		m := &autocert.Manager{
+			Cache:      autocert.DirCache("certs"), // Stores certificates in a local "certs" folder
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(*domain),
+		}
+		server := &http.Server{
+			Addr:      ":" + *port,
+			TLSConfig: m.TLSConfig(),
+		}
+		log.Fatal(server.ListenAndServeTLS("", ""))
+	} else if *certFile != "" && *keyFile != "" {
+		logInfo("HorstReporter starting HTTPS server with provided certs on port %s...", *port)
+		log.Fatal(http.ListenAndServeTLS(":"+*port, *certFile, *keyFile, nil))
+	} else {
+		logInfo("HorstReporter starting HTTP server on port %s...", *port)
+		log.Fatal(http.ListenAndServe(":"+*port, nil))
+	}
 }

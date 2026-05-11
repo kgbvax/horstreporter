@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>horstreporter - HF Propagation Heatmap</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link id="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='8' fill='%236c757d'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -16,14 +17,26 @@
             <div class="target-input-container">
                 <input type="text" id="target" placeholder="Callsign or Locator (e.g. W1AW, JO, FN31, JO32WE)" tooltip="You can use fields, squares, subsquares or callsigns" />
                 <button type="button" id="btn-geo" title="Use current location">📍</button>
-                <button type="submit">Go</button>
+                <button type="submit" id="btn-submit">Go</button>
+            </div>
+            <div class="stats-container" style="display: flex; flex-direction: column; gap: 5px;">
+                <div id="stream-status">Status: Not subscribed</div>
+                <div id="server-stats"></div>
             </div>
             <label>Minutes:
                 <input type="number" id="minutes" value="15" min="1" max="60" />
             </label>
-            <label>
-                <input type="checkbox" id="filter-0db" checked /> SSB level only
-            </label>
+            <div style="display: flex; flex-direction: column; gap: 5px;">
+                <label>Min SNR:</label>
+                <div class="button-group" id="min-snr-group">
+                    <input type="radio" id="snr-none" name="min-snr" value="none">
+                    <label for="snr-none">None</label>
+                    <input type="radio" id="snr-ssb" name="min-snr" value="ssb" checked>
+                    <label for="snr-ssb">SSB</label>
+                    <input type="radio" id="snr-cw" name="min-snr" value="cw">
+                    <label for="snr-cw">CW</label>
+                </div>
+            </div>
             <label for="style-select">Style:</label>
 <select id="style-select">
     <option value="grid-snr" selected>Grid (SNR)</option>
@@ -47,9 +60,18 @@
                 <button type="button" id="btn-cycle" title="Cycle Active Bands">▶️</button>
             </div>
 </div>
+            <details class="options-panel">
+                <summary>Options</summary>
+                <div class="options-content">
+                    <label>SSB Min dB:
+                        <input type="number" id="ssb-min-db" value="0" />
+                    </label>
+                    <label style="display:block; margin-top:5px;">CW Min dB:
+                        <input type="number" id="cw-min-db" value="-15" />
+                    </label>
+                </div>
+            </details>
         </form>
-        <div id="stream-status">Status: Not subscribed</div>
-        <div id="server-stats"></div>
     </div>
     <div id="map"></div>
     <div id="tooltip"></div>
