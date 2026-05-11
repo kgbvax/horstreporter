@@ -5,6 +5,8 @@
     <title>horstreporter - HF Propagation Heatmap</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <link rel="stylesheet" href="style.css" />
+    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet.heat.js"></script>
+
 </head>
 <body>
     <div id="controls">
@@ -20,7 +22,14 @@
             <label>
                 <input type="checkbox" id="filter-0db" checked /> SSB level only
             </label>
-            <div id="band-container" style="display: inline-flex; flex-direction: column; vertical-align: top; margin-left: 15px; font-size: 13px;">
+            <label for="style-select">Style:</label>
+<select id="style-select">
+    <option value="grid-snr" selected>Grid (SNR)</option>
+    <option value="grid-age">Grid (Age)</option>
+    <option value="aggregated">Aggregated Fields</option>
+    <option value="heatmap">Heatmap</option>
+</select>
+<div id="band-container" style="display: inline-flex; flex-direction: column; vertical-align: top; margin-left: 15px; font-size: 13px;">
                 <label style="margin-bottom: 2px; padding: 2px 4px; border-radius: 3px; background-color: #555555; color: white; transition: all 0.3s;"><input type="radio" name="band" value="all" checked> All Bands</label>
                 <label style="margin-bottom: 2px; padding: 2px 4px; border-radius: 3px; background-color: #800080; color: white; transition: all 0.3s;"><input type="radio" name="band" value="80m"> 80m</label>
                 <label style="margin-bottom: 2px; padding: 2px 4px; border-radius: 3px; background-color: #0000FF; color: white; transition: all 0.3s;"><input type="radio" name="band" value="40m"> 40m</label>

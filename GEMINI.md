@@ -18,9 +18,11 @@ The application consists of a Go backend and a JavaScript frontend.
 -   **Interactive Map**: Uses Leaflet.js to display a world map.
 -   **User Input**: The user can specify a callsign or locator to monitor, and a time window (e.g., last 15 minutes) for the data.
 -   **Heatmap Visualization**:
-    -   Instead of individual spots, the map displays data aggregated into Maidenhead grid squares (e.g., `JO62`).
-    -   The **color** of a grid square indicates the **dominant amateur radio band** (the one with the most activity) within that square.
-    -   The **opacity** of the square represents the average Signal-to-Noise Ratio (SNR), creating a "hotness" effect: stronger signals result in more opaque squares. This helps in identifying areas where a connection is likely viable.
+-   **Multiple Visualization Styles**: The user can choose between different map styles from a dropdown:
+    -   **Grid (SNR)**: Displays data aggregated into 4-character Maidenhead grid squares (e.g., `JO62`). The **color** of a square indicates the dominant amateur radio band, and its **opacity** represents the average Signal-to-Noise Ratio (SNR).
+    -   **Grid (Age)**: Similar to the Grid (SNR) style, but opacity is based on the age of the most recent report, providing a visual cue for data freshness.
+    -   **Aggregated Fields**: Simplifies the view by grouping dense clusters of grid squares into their parent 2-character Maidenhead fields (e.g., `JO`). This provides a less cluttered overview of active regions.
+    -   **Heatmap**: Renders a classic, smooth heatmap where the color intensity represents signal strength, clearly showing propagation "hotspots".
 -   **Dynamic Updates**: The map updates in real-time as new spots arrive. Old spots are automatically removed from the dataset after the configured time window expires.
 
 ## Features
@@ -31,4 +33,3 @@ The application consists of a Go backend and a JavaScript frontend.
 -   **Band Cycler**: An automatic function to cycle through the currently active bands, providing a dynamic overview of conditions.
 -   **Geolocation**: A button to automatically detect the user's locator via the browser's geolocation API.
 -   **Tooltip Details**: Hovering over a grid square on the map shows a tooltip with detailed statistics: min/max/avg SNR, the best band, and the total number of spots.
-

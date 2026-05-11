@@ -71,12 +71,17 @@ map.on('mouseout', function() {
 
 document.getElementById('filter-0db').addEventListener('change', () => {
     const minutes = document.getElementById('minutes').value || 15;
-    renderHeatmap(liveSpots, parseInt(minutes));
+    updateMapVisualization(liveSpots, parseInt(minutes));
 });
 
 document.getElementById('band-container').addEventListener('change', () => {
     const minutes = document.getElementById('minutes').value || 15;
-    renderHeatmap(liveSpots, parseInt(minutes));
+    updateMapVisualization(liveSpots, parseInt(minutes));
+});
+
+document.getElementById('style-select')?.addEventListener('change', () => {
+    const minutes = document.getElementById('minutes').value || 15;
+    updateMapVisualization(liveSpots, parseInt(minutes));
 });
 
 document.getElementById('btn-geo').addEventListener('click', () => {
@@ -191,7 +196,7 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
         const spot = JSON.parse(e.data);
         liveSpots.push(spot);
 
-        renderHeatmap(liveSpots, parseInt(minutes));
+        updateMapVisualization(liveSpots, parseInt(minutes));
     };
 
     eventSource.onerror = (e) => {
@@ -204,7 +209,7 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
             const maxAge = parseInt(minutes) * 60;
             liveSpots.forEach(s => s.ageSeconds += 5); 
             liveSpots = liveSpots.filter(s => s.ageSeconds <= maxAge);
-            renderHeatmap(liveSpots, parseInt(minutes));
+            updateMapVisualization(liveSpots, parseInt(minutes));
         }
     }, 5000);
 });
@@ -253,11 +258,32 @@ function updateBandLabels(spots) {
     });
 }
 
-function renderHeatmap(spots, maxMinutes) {
+function updateMapVisualization(spots, maxMinutes) {
     if (heatLayer) map.removeLayer(heatLayer);
-    heatLayer = L.layerGroup().addTo(map);
-
+    
     updateBandLabels(spots);
+
+    const style = document.getElementById('style-select')?.value || 'grid-snr';
+
+    switch (style) {
+        case 'grid-snr':
+            renderGridSnr(spots, maxMinutes);
+            break;
+        case 'grid-age':
+            renderGridAge(spots, maxMinutes);
+            break;
+        case 'aggregated':
+            renderAggregatedFields(spots, maxMinutes);
+            break;
+        case 'heatmap':
+            renderLiveHeatmap(spots, maxMinutes);
+            break;
+        default:
+            renderGridSnr(spots, maxMinutes);
+    }
+}
+function renderGridSnr(spots, maxMinutes) {
+    heatLayer = L.layerGroup().addTo(map);
 
     const filter0dbEnabled = document.getElementById('filter-0db').checked;
     const selectedBand = getSelectedBand();
@@ -305,5 +331,158 @@ function renderHeatmap(spots, maxMinutes) {
                 fillOpacity: opacity
             }).addTo(heatLayer);
         }
+    }
+}
+
+function renderGridAge(spots, maxMinutes) {
+    heatLayer = L.layerGroup().addTo(map);
+
+    const filter0dbEnabled = document.getElementById('filter-0db').checked;
+    const selectedBand = getSelectedBand();
+    const squareData = {};
+
+    spots.forEach(spot => {
+        if (filter0dbEnabled && spot.snr <= 0) return;
+        if (selectedBand !== 'all' && spot.band !== selectedBand) return;
+
+        let loc4 = spot.locator.substring(0, 4);
+        if (loc4.length === 4) {
+            if (!squareData[loc4]) {
+                squareData[loc4] = { bands: {}, minAge: Infinity };
+            }
+            squareData[loc4].bands[spot.band] = (squareData[loc4].bands[spot.band] || 0) + 1;
+            squareData[loc4].minAge = Math.min(squareData[loc4].minAge, spot.ageSeconds);
+        }
+    });
+
+    const maxAgeSeconds = maxMinutes * 60;
+
+    for (let loc in squareData) {
+        let dominantBand = 'all';
+        let maxCount = 0;
+        for (let b in squareData[loc].bands) {
+            if (squareData[loc].bands[b] > maxCount) {
+                maxCount = squareData[loc].bands[b];
+                dominantBand = b;
+            }
+        }
+
+        let color = bandColors[dominantBand] || bandColors['all'];
+        
+        const opacity = 0.3 + (0.6 * (1 - (squareData[loc].minAge / maxAgeSeconds)));
+        
+        let bounds = locatorToBounds(loc);
+        if (bounds) {
+            L.rectangle(bounds, {
+                color: color,
+                weight: 1,
+                fillColor: color,
+                fillOpacity: Math.max(0.2, Math.min(0.9, opacity))
+            }).addTo(heatLayer);
+        }
+    }
+}
+
+function fieldToBounds(field) {
+    if (!field || field.length < 2) return null;
+    field = field.toUpperCase();
+    const lng = (field.charCodeAt(0) - 65) * 20 - 180;
+    const lat = (field.charCodeAt(1) - 65) * 10 - 90;
+    return [[lat, lng], [lat + 10, lng + 20]];
+}
+
+function renderAggregatedFields(spots, maxMinutes) {
+    heatLayer = L.layerGroup().addTo(map);
+
+    const filter0dbEnabled = document.getElementById('filter-0db').checked;
+    const selectedBand = getSelectedBand();
+    
+    const squareData = {};
+    spots.forEach(spot => {
+        if (filter0dbEnabled && spot.snr <= 0) return;
+        if (selectedBand !== 'all' && spot.band !== selectedBand) return;
+
+        let loc4 = spot.locator.substring(0, 4);
+        if (loc4.length === 4) {
+            if (!squareData[loc4]) {
+                squareData[loc4] = { snrSum: 0, count: 0, bands: {} };
+            }
+            squareData[loc4].snrSum += spot.snr;
+            squareData[loc4].count++;
+            squareData[loc4].bands[spot.band] = (squareData[loc4].bands[spot.band] || 0) + 1;
+        }
+    });
+
+    const fieldData = {};
+    for (const loc4 in squareData) {
+        const loc2 = loc4.substring(0, 2);
+        if (!fieldData[loc2]) {
+            fieldData[loc2] = [];
+        }
+        fieldData[loc2].push({ loc4, ...squareData[loc4] });
+    }
+
+    const AGGREGATION_THRESHOLD = 3;
+
+    for (const loc2 in fieldData) {
+        const squaresInField = fieldData[loc2];
+        
+        if (squaresInField.length > AGGREGATION_THRESHOLD) {
+            let totalSnrSum = 0, totalCount = 0;
+            const totalBands = {};
+            squaresInField.forEach(sq => {
+                totalSnrSum += sq.snrSum;
+                totalCount += sq.count;
+                for (const band in sq.bands) {
+                    totalBands[band] = (totalBands[band] || 0) + sq.bands[band];
+                }
+            });
+
+            const avgSnr = totalSnrSum / totalCount;
+            let dominantBand = Object.keys(totalBands).reduce((a, b) => totalBands[a] > totalBands[b] ? a : b, 'all');
+            const color = bandColors[dominantBand] || bandColors['all'];
+            let opacity = (avgSnr >= 10) ? 0.9 : (avgSnr >= 0) ? 0.6 : 0.3;
+
+            const bounds = fieldToBounds(loc2);
+            if (bounds) L.rectangle(bounds, { color, weight: 1, fillColor: color, fillOpacity: opacity }).addTo(heatLayer);
+
+        } else {
+            squaresInField.forEach(sq => {
+                const avgSnr = sq.snrSum / sq.count;
+                let dominantBand = Object.keys(sq.bands).reduce((a, b) => sq.bands[a] > sq.bands[b] ? a : b, 'all');
+                const color = bandColors[dominantBand] || bandColors['all'];
+                let opacity = (avgSnr >= 10) ? 0.9 : (avgSnr >= 0) ? 0.6 : 0.3;
+                const bounds = locatorToBounds(sq.loc4);
+                if (bounds) L.rectangle(bounds, { color, weight: 1, fillColor: color, fillOpacity: opacity }).addTo(heatLayer);
+            });
+        }
+    }
+}
+
+function renderLiveHeatmap(spots, maxMinutes) {
+    const filter0dbEnabled = document.getElementById('filter-0db').checked;
+    const selectedBand = getSelectedBand();
+
+    const heatPoints = spots
+        .filter(spot => {
+            if (filter0dbEnabled && spot.snr <= 0) return false;
+            if (selectedBand !== 'all' && spot.band !== selectedBand) return false;
+            return true;
+        })
+        .map(spot => {
+            const intensity = Math.max(0, Math.min(1, (spot.snr + 20) / 40));
+            return [spot.lat, spot.lng, intensity];
+        });
+
+    if (heatPoints.length > 0) {
+        heatLayer = L.heatLayer(heatPoints, {
+            radius: 25,
+            blur: 15,
+            maxZoom: 10,
+            max: 1.0,
+            gradient: {0.4: 'blue', 0.6: 'lime', 0.8: 'yellow', 1.0: 'red'}
+        }).addTo(map);
+    } else {
+        heatLayer = L.layerGroup().addTo(map);
     }
 }
