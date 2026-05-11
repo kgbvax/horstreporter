@@ -166,8 +166,20 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// noCache is a middleware that sets headers to prevent caching of static files.
+// This is useful for development to ensure the latest files are always served.
+func noCache(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate") // HTTP 1.1.
+		w.Header().Set("Pragma", "no-cache")                                   // HTTP 1.0.
+		w.Header().Set("Expires", "0")                                         // Proxies.
+		h.ServeHTTP(w, r)
+	})
+}
+
 func main() {
-	http.Handle("/", http.FileServer(http.Dir(".")))
+	fs := http.FileServer(http.Dir("."))
+	http.Handle("/", noCache(fs))
 	http.HandleFunc("/api/stream", streamHandler)
 	fmt.Println("HorstReporter streaming API starting on http://localhost:8080...")
 	log.Fatal(http.ListenAndServe(":8080", nil))

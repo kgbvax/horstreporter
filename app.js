@@ -156,9 +156,11 @@ document.getElementById('btn-cycle').addEventListener('click', () => {
     if (cycleInterval) {
         clearInterval(cycleInterval);
         cycleInterval = null;
-        btn.innerHTML = 'Cycle Active';
+        btn.innerHTML = '▶️';
+        btn.title = 'Cycle Active Bands';
     } else {
-        btn.innerHTML = 'Stop Cycling';
+        btn.innerHTML = '⏸️';
+        btn.title = 'Stop Cycling';
         cycleInterval = setInterval(() => {
             const filter0dbEnabled = document.getElementById('filter-0db').checked;
             const activeBands = new Set();
