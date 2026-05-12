@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"sort"
 	"strconv"
@@ -421,7 +422,15 @@ func main() {
 	domain := flag.String("domain", "", "Domain for Let's Encrypt (enables automatic TLS)")
 	dev := flag.Bool("dev", false, "Enable development mode (disables caching of static files)")
 	flag.BoolVar(&compressStream, "compress", false, "Enable gzip compression for the SSE stream")
+	enablePprof := flag.Bool("pprof", false, "Enable pprof profiling on localhost:6060")
 	flag.Parse()
+
+	if *enablePprof {
+		go func() {
+			logInfo("Starting internal pprof server on localhost:6060")
+			log.Println(http.ListenAndServe("localhost:6060", nil))
+		}()
+	}
 
 	go startMQTT()
 
@@ -448,21 +457,22 @@ func main() {
 		}
 	}()
 
+	appMux := http.NewServeMux()
 	var fileServer http.Handler
 	if *dev {
 		logInfo("Development mode enabled: Serving static files directly from the disk.")
 		fileServer = http.FileServer(http.Dir("static"))
-		http.Handle("/", noCache(fileServer))
+		appMux.Handle("/", noCache(fileServer))
 	} else {
 		staticFS, err := fs.Sub(staticFiles, "static")
 		if err != nil {
 			log.Fatal("Failed to load embedded static files:", err)
 		}
 		fileServer = http.FileServer(http.FS(staticFS))
-		http.Handle("/", fileServer)
+		appMux.Handle("/", fileServer)
 	}
-	http.HandleFunc("/api/stream", streamHandler)
-	http.HandleFunc("/api/stats", statsHandler)
+	appMux.HandleFunc("/api/stream", streamHandler)
+	appMux.HandleFunc("/api/stats", statsHandler)
 
 	if *domain != "" {
 		logInfo("HorstReporter starting HTTPS server with Let's Encrypt for domain %s on port %s...", *domain, *port)
@@ -474,13 +484,14 @@ func main() {
 		server := &http.Server{
 			Addr:      ":" + *port,
 			TLSConfig: m.TLSConfig(),
+			Handler:   appMux,
 		}
 		log.Fatal(server.ListenAndServeTLS("", ""))
 	} else if *certFile != "" && *keyFile != "" {
 		logInfo("HorstReporter starting HTTPS server with provided certs on port %s...", *port)
-		log.Fatal(http.ListenAndServeTLS(":"+*port, *certFile, *keyFile, nil))
+		log.Fatal(http.ListenAndServeTLS(":"+*port, *certFile, *keyFile, appMux))
 	} else {
 		logInfo("HorstReporter starting HTTP server on port %s...", *port)
-		log.Fatal(http.ListenAndServe(":"+*port, nil))
+		log.Fatal(http.ListenAndServe(":"+*port, appMux))
 	}
 }

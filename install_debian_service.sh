@@ -46,9 +46,11 @@ if [ ! -f "$DEFAULT_CONFIG" ]; then
     cat <<EOF > "$DEFAULT_CONFIG"
 # horstreporter command line arguments
 # To enable Let's Encrypt (which will utilize the allowed 80/443 ports), provide your domain:
-# ARGS="-port 443 -domain example.com"
+ARGS="-port 443 -domain example.com -pprof"
 # To enable compression of the SSE stream to save bandwidth:
 # ARGS="-port 80 -compress"
+# To enable internal pprof profiling on localhost:6060:
+# ARGS="-port 80 -compress -pprof"
 ARGS="-port 80"
 EOF
 fi
