@@ -1,14 +1,17 @@
 package main
 
 import (
+	"compress/gzip"
 	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +23,8 @@ import (
 
 //go:embed static
 var staticFiles embed.FS
+
+var compressStream bool
 
 var logLevel = "INFO"
 
@@ -290,13 +295,16 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	logInfo("New client stream started for target: %s (History: %d mins)", target, minutes)
 
 	now := time.Now().Unix()
+	cutoff := now - historySeconds
 	var historySpots []Spot
-	for _, m := range hub.history {
-		// Dump spots from the requested history length
-		if now-m.T <= historySeconds {
-			if spot, ok := matchAndCreateSpot(client, m, now); ok {
-				historySpots = append(historySpots, spot)
-			}
+
+	idx := sort.Search(len(hub.history), func(i int) bool {
+		return hub.history[i].T >= cutoff
+	})
+
+	for i := idx; i < len(hub.history); i++ {
+		if spot, ok := matchAndCreateSpot(client, hub.history[i], now); ok {
+			historySpots = append(historySpots, spot)
 		}
 	}
 	hub.Unlock()
@@ -316,6 +324,16 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
+	var writer io.Writer = w
+	var gz *gzip.Writer
+
+	if compressStream && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		w.Header().Set("Content-Encoding", "gzip")
+		gz = gzip.NewWriter(w)
+		writer = gz
+		defer gz.Close()
+	}
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
@@ -324,9 +342,13 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 
 	for _, spot := range historySpots {
 		b, _ := json.Marshal(spot)
-		fmt.Fprintf(w, "data: %s\n\n", string(b))
+		fmt.Fprintf(writer, "data: %s\n\n", string(b))
 	}
-	fmt.Fprintf(w, "event: history_end\ndata: {}\n\n")
+	fmt.Fprintf(writer, "event: history_end\ndata: {}\n\n")
+
+	if gz != nil {
+		gz.Flush()
+	}
 	flusher.Flush()
 
 	ctx := r.Context()
@@ -339,7 +361,10 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			b, _ := json.Marshal(spot)
-			fmt.Fprintf(w, "data: %s\n\n", string(b))
+			fmt.Fprintf(writer, "data: %s\n\n", string(b))
+			if gz != nil {
+				gz.Flush()
+			}
 			flusher.Flush()
 		}
 	}
@@ -395,6 +420,7 @@ func main() {
 	keyFile := flag.String("key", "", "Path to TLS key file")
 	domain := flag.String("domain", "", "Domain for Let's Encrypt (enables automatic TLS)")
 	dev := flag.Bool("dev", false, "Enable development mode (disables caching of static files)")
+	flag.BoolVar(&compressStream, "compress", false, "Enable gzip compression for the SSE stream")
 	flag.Parse()
 
 	go startMQTT()
@@ -404,15 +430,11 @@ func main() {
 			hub.Lock()
 			cutoff := time.Now().Unix() - 2*3600 // Prune history older than 2h
 
-			keepIdx := -1
-			for i, m := range hub.history {
-				if m.T >= cutoff {
-					keepIdx = i
-					break
-				}
-			}
+			keepIdx := sort.Search(len(hub.history), func(i int) bool {
+				return hub.history[i].T >= cutoff
+			})
 
-			if keepIdx == -1 {
+			if keepIdx == len(hub.history) {
 				if len(hub.history) > 0 {
 					hub.history = make([]MQTTMessage, 0)
 				}

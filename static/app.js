@@ -204,7 +204,19 @@ map.on('mousemove', function(e) {
         });
         
         squareSpots.sort((a, b) => b.snr - a.snr);
-        let topSpots = squareSpots.slice(0, 10);
+        
+        let uniqueSpots = [];
+        let seenPairs = new Set();
+        for (let s of squareSpots) {
+            let pairKey = `${s.sender}-${s.receiver}`;
+            if (!seenPairs.has(pairKey)) {
+                seenPairs.add(pairKey);
+                uniqueSpots.push(s);
+                if (uniqueSpots.length >= 10) break;
+            }
+        }
+        let topSpots = uniqueSpots;
+
         let reportsHtml = `<hr style="margin: 5px 0; border: 0; border-top: 1px solid var(--tooltip-border);">` +
                           `<span style="font-size: 11px;"><b>Top Reports:</b><br>`;
         topSpots.forEach(s => {
@@ -850,7 +862,7 @@ function updateServerStats() {
     fetch('/api/stats')
         .then(response => response.json())
         .then(stats => {
-            statsEl.innerHTML = `Server Stats | Connections: ${formatNumber(stats.active_connections)}<br>History Cache: ${formatNumber(stats.history_size)} spots (${formatNumber(stats.history_minutes)} mins, ~${formatNumber(stats.history_size_kb)} kB)`;
+            statsEl.innerHTML = `Server Stats | Connections: ${formatNumber(stats.active_connections)}<br>Spot history: ${formatNumber(stats.history_size)} spots (${formatNumber(stats.history_minutes)} mins, ~${formatNumber(stats.history_size_kb)} kB)`;
         })
         .catch(error => {
             console.error('Error fetching server stats:', error);

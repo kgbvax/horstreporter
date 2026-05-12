@@ -47,6 +47,8 @@ if [ ! -f "$DEFAULT_CONFIG" ]; then
 # horstreporter command line arguments
 # To enable Let's Encrypt (which will utilize the allowed 80/443 ports), provide your domain:
 # ARGS="-port 443 -domain example.com"
+# To enable compression of the SSE stream to save bandwidth:
+# ARGS="-port 80 -compress"
 ARGS="-port 80"
 EOF
 fi
