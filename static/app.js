@@ -172,6 +172,10 @@ map.on('mousemove', function(e) {
     const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const selectedBand = getSelectedBand();
     
+    let baseDb = 0;
+    if (minSnrMode === 'ssb') baseDb = ssbMinDb;
+    else if (minSnrMode === 'cw') baseDb = cwMinDb;
+
     const squareSpots = liveSpots.filter(s => {
         if (!s.locator || !s.locator.startsWith(loc)) return false;
         if (minSnrMode === 'ssb' && s.snr < ssbMinDb) return false;
@@ -194,7 +198,13 @@ map.on('mousemove', function(e) {
             }
         });
         
-        tooltip.innerHTML = `<strong>${loc}</strong><br>Min: ${min}dB<br>Max: ${max}dB<br>Avg: ${avg}dB<br>Best Band: ${bestBand}<br>Spots: ${squareSpots.length}`;
+        let scaleHtml = `<hr style="margin: 5px 0; border: 0; border-top: 1px solid var(--tooltip-border);">` +
+                        `<span style="font-size: 11px;"><b>Opacity Thresholds:</b><br>` +
+                        `Low: &lt; ${baseDb}dB<br>` +
+                        `Med: ${baseDb} to &lt; ${baseDb + 10}dB<br>` + 
+                        `High: &ge; ${baseDb + 10}dB</span>`;
+
+        tooltip.innerHTML = `<strong>${loc}</strong><br>Min: ${min}dB<br>Max: ${max}dB<br>Avg: ${avg}dB<br>Best Band: ${bestBand}<br>Spots: ${squareSpots.length}${scaleHtml}`;
         tooltip.style.display = 'block';
         tooltip.style.left = (e.originalEvent.pageX + 15) + 'px';
         tooltip.style.top = (e.originalEvent.pageY + 15) + 'px';
@@ -410,11 +420,19 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
     eventSource = new EventSource(`/api/stream?${params.toString()}`);
     setFaviconColor('#ffa500'); // Orange for connecting/waiting
     
+    let historyLoading = true;
+
     eventSource.onopen = () => {
         console.log("Connected to live MQTT stream");
-        statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong></br><span style="color: orange;">(Waiting for data...)</span>`;
+        statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong></br><span style="color: orange;">(Fetching history...)</span> <div class="spinner"></div>`;
         setFaviconColor('#ffa500'); // Orange until data arrives
     };
+
+    eventSource.addEventListener('history_end', () => {
+        historyLoading = false;
+        statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: green;">Receiving data (Spots: ${totalReceived})</span>`;
+        lastStatusUpdate = Date.now();
+    });
 
     eventSource.onmessage = (e) => {
         totalReceived++;
@@ -426,21 +444,11 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
         // Throttle DOM text updates to max ~4 times a second
         const now = Date.now();
         if (now - lastStatusUpdate > 250) {
-            let durationStr = "0:00";
-            if (liveSpots.length > 0) {
-                let minAge = liveSpots[0].ageSeconds;
-                let maxAge = liveSpots[0].ageSeconds;
-                for (let i = 1; i < liveSpots.length; i++) {
-                    if (liveSpots[i].ageSeconds < minAge) minAge = liveSpots[i].ageSeconds;
-                    if (liveSpots[i].ageSeconds > maxAge) maxAge = liveSpots[i].ageSeconds;
-                }
-                let diff = maxAge - minAge;
-                let m = Math.floor(diff / 60);
-                let s = Math.floor(diff % 60);
-                durationStr = `${m}:${s.toString().padStart(2, '0')}`;
+            if (historyLoading) {
+                statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: orange;">Fetching history (Spots: ${totalReceived})</span> <div class="spinner"></div>`;
+            } else {
+                statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: green;">Receiving data (Spots: ${totalReceived})</span>`;
             }
-
-            statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: green;">Receiving data (Spots: ${totalReceived}, Duration: ${durationStr})</span>`;
             lastStatusUpdate = now;
         }
 
@@ -770,7 +778,7 @@ function updateServerStats() {
     fetch('/api/stats')
         .then(response => response.json())
         .then(stats => {
-            statsEl.innerHTML = `Server Stats | Connections: ${stats.active_connections}<br>History Cache: ${stats.history_size} spots`;
+            statsEl.innerHTML = `Server Stats | Connections: ${stats.active_connections}<br>History Cache: ${stats.history_size} spots (${stats.history_minutes} mins)`;
         })
         .catch(error => {
             console.error('Error fetching server stats:', error);

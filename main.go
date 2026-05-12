@@ -1,9 +1,11 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -15,6 +17,9 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"golang.org/x/crypto/acme/autocert"
 )
+
+//go:embed static
+var staticFiles embed.FS
 
 var logLevel = "INFO"
 
@@ -317,6 +322,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		b, _ := json.Marshal(spot)
 		fmt.Fprintf(w, "data: %s\n\n", string(b))
 	}
+	fmt.Fprintf(w, "event: history_end\ndata: {}\n\n")
 	flusher.Flush()
 
 	ctx := r.Context()
@@ -339,14 +345,22 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	hub.RLock()
 	numClients := len(hub.clients)
 	historySize := len(hub.history)
+	var historyMinutes int
+	if historySize > 0 {
+		oldest := hub.history[0].T
+		now := time.Now().Unix()
+		historyMinutes = int((now - oldest) / 60)
+	}
 	hub.RUnlock()
 
 	stats := struct {
 		ActiveConnections int `json:"active_connections"`
 		HistorySize       int `json:"history_size"`
+		HistoryMinutes    int `json:"history_minutes"`
 	}{
 		ActiveConnections: numClients,
 		HistorySize:       historySize,
+		HistoryMinutes:    historyMinutes,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -369,6 +383,7 @@ func main() {
 	certFile := flag.String("cert", "", "Path to TLS certificate file")
 	keyFile := flag.String("key", "", "Path to TLS key file")
 	domain := flag.String("domain", "", "Domain for Let's Encrypt (enables automatic TLS)")
+	dev := flag.Bool("dev", false, "Enable development mode (disables caching of static files)")
 	flag.Parse()
 
 	go startMQTT()
@@ -388,8 +403,19 @@ func main() {
 		}
 	}()
 
-	fs := http.FileServer(http.Dir("."))
-	http.Handle("/", noCache(fs))
+	var fileServer http.Handler
+	if *dev {
+		logInfo("Development mode enabled: Serving static files directly from the disk.")
+		fileServer = http.FileServer(http.Dir("static"))
+		http.Handle("/", noCache(fileServer))
+	} else {
+		staticFS, err := fs.Sub(staticFiles, "static")
+		if err != nil {
+			log.Fatal("Failed to load embedded static files:", err)
+		}
+		fileServer = http.FileServer(http.FS(staticFS))
+		http.Handle("/", fileServer)
+	}
 	http.HandleFunc("/api/stream", streamHandler)
 	http.HandleFunc("/api/stats", statsHandler)
 
