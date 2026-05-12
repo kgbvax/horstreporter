@@ -48,6 +48,8 @@ type Spot struct {
 	AgeSeconds int64   `json:"ageSeconds"`
 	Locator    string  `json:"locator"`
 	Band       string  `json:"band"`
+	Sender     string  `json:"sender"`
+	Receiver   string  `json:"receiver"`
 }
 
 type MQTTMessage struct {
@@ -165,6 +167,8 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 		AgeSeconds: age,
 		Locator:    remoteLocator,
 		Band:       m.B,
+		Sender:     m.SC,
+		Receiver:   m.RC,
 	}, true
 }
 
@@ -346,21 +350,28 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	numClients := len(hub.clients)
 	historySize := len(hub.history)
 	var historyMinutes int
+	var historySizeBytes int64
 	if historySize > 0 {
 		oldest := hub.history[0].T
 		now := time.Now().Unix()
 		historyMinutes = int((now - oldest) / 60)
+		for _, m := range hub.history {
+			// Estimate memory footprint: base struct size (~112 bytes) + string lengths
+			historySizeBytes += 112 + int64(len(m.SC)+len(m.SL)+len(m.RC)+len(m.RL)+len(m.B)+len(m.MD))
+		}
 	}
 	hub.RUnlock()
 
 	stats := struct {
-		ActiveConnections int `json:"active_connections"`
-		HistorySize       int `json:"history_size"`
-		HistoryMinutes    int `json:"history_minutes"`
+		ActiveConnections int   `json:"active_connections"`
+		HistorySize       int   `json:"history_size"`
+		HistoryMinutes    int   `json:"history_minutes"`
+		HistorySizeKB     int64 `json:"history_size_kb"`
 	}{
 		ActiveConnections: numClients,
 		HistorySize:       historySize,
 		HistoryMinutes:    historyMinutes,
+		HistorySizeKB:     historySizeBytes / 1024,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -389,16 +400,28 @@ func main() {
 	go startMQTT()
 
 	go func() {
-		for range time.Tick(1 * time.Minute) {
+		for range time.Tick(5 * time.Minute) {
 			hub.Lock()
-			cutoff := time.Now().Unix() - 3600 // Prune history older than 60 minutes
-			var newHistory []MQTTMessage
-			for _, m := range hub.history {
+			cutoff := time.Now().Unix() - 2*3600 // Prune history older than 2h
+
+			keepIdx := -1
+			for i, m := range hub.history {
 				if m.T >= cutoff {
-					newHistory = append(newHistory, m)
+					keepIdx = i
+					break
 				}
 			}
-			hub.history = newHistory
+
+			if keepIdx == -1 {
+				if len(hub.history) > 0 {
+					hub.history = make([]MQTTMessage, 0)
+				}
+			} else if keepIdx > 0 {
+				retained := len(hub.history) - keepIdx
+				newHistory := make([]MQTTMessage, retained)
+				copy(newHistory, hub.history[keepIdx:])
+				hub.history = newHistory
+			}
 			hub.Unlock()
 		}
 	}()

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>HorstReporter Info</title>
+    <link rel="stylesheet" href="style.css" />
+    <style>
+        body {
+            display: block;
+            height: auto;
+            padding: 20px;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+        h1, h2 {
+            margin-top: 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Horstreporter</h1>
+    <p>Horstreporter's goal is to make current band-openings easy to explore (for DL9ET at least)<br>
+    It is an alternate frontend for <a href="https://www.pskreporter.info">pskreporter.</a></p>
+
+    <h2>Usage</h2>
+    <p>Enter a locator (e.g., JO, FN31, JO32WE) or a callsign (e.g., W1AW) into the target box and click <strong>Go</strong>.</p>
+    <p>HorstReporter will fetch recent and live FT8/FT4 reports where the target is either the sender or receiver.</p>
+    <ul>
+        <li><strong>Filters:</strong> Select specific bands or apply minimum SNR thresholds (SSB/CW) to filter the visible spots.</li>
+        <li><strong>Styles:</strong> Change the map visualization style (e.g., Grid SNR, Grid Age) using the dropdown.</li>
+        <li><strong>Details:</strong> Hover over colored areas on the map to see top reports and signal statistics.</li>
+    </ul>
+
+    <p>You can also change perspective by simply clicking on the map.</p>
+<p>As with everything ham radio, this should be considered experimental and may implode any moment. <br>  Contact DL9ET for feedback or requests.
+    More information may be available in my blog: <a href="https://dl9et.darc.de/tags/horstreporter/" target="_blank" >https://dl9et.darc.de/tags/horstreporter/</a></p>
+    <script>
+        // Sync the iframe's theme with the parent window
+        try {
+            const parentBody = window.parent.document.body;
+            document.body.setAttribute('data-theme', parentBody.getAttribute('data-theme') || 'dark');
+            
+            new MutationObserver((mutations) => {
+                mutations.forEach(m => document.body.setAttribute('data-theme', parentBody.getAttribute('data-theme')));
+            }).observe(parentBody, { attributes: true, attributeFilter: ['data-theme'] });
+        } catch (e) { console.warn("Could not sync theme with parent window:", e); }
+    </script>
+</body>
+</html>

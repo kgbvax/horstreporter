@@ -111,6 +111,11 @@ function setTheme(theme) {
     currentTileLayer.addTo(map);
 }
 
+function formatNumber(num) {
+    if (num == null) return '';
+    return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+}
+
 // --- Theme Initializer ---
 const savedTheme = localStorage.getItem('theme') || 'dark'; // Default to dark theme
 setTheme(savedTheme);
@@ -198,13 +203,16 @@ map.on('mousemove', function(e) {
             }
         });
         
-        let scaleHtml = `<hr style="margin: 5px 0; border: 0; border-top: 1px solid var(--tooltip-border);">` +
-                        `<span style="font-size: 11px;"><b>Opacity Thresholds:</b><br>` +
-                        `Low: &lt; ${baseDb}dB<br>` +
-                        `Med: ${baseDb} to &lt; ${baseDb + 10}dB<br>` + 
-                        `High: &ge; ${baseDb + 10}dB</span>`;
+        squareSpots.sort((a, b) => b.snr - a.snr);
+        let topSpots = squareSpots.slice(0, 10);
+        let reportsHtml = `<hr style="margin: 5px 0; border: 0; border-top: 1px solid var(--tooltip-border);">` +
+                          `<span style="font-size: 11px;"><b>Top Reports:</b><br>`;
+        topSpots.forEach(s => {
+            reportsHtml += `${s.sender} / ${s.receiver} / ${s.snr}dB<br>`;
+        });
+        reportsHtml += `</span>`;
 
-        tooltip.innerHTML = `<strong>${loc}</strong><br>Min: ${min}dB<br>Max: ${max}dB<br>Avg: ${avg}dB<br>Best Band: ${bestBand}<br>Spots: ${squareSpots.length}${scaleHtml}`;
+        tooltip.innerHTML = `<strong>${loc}</strong><br>Min: ${min}dB<br>Max: ${max}dB<br>Avg: ${avg}dB<br>Best Band: ${bestBand}<br>Spots: ${formatNumber(squareSpots.length)}${reportsHtml}`;
         tooltip.style.display = 'block';
         tooltip.style.left = (e.originalEvent.pageX + 15) + 'px';
         tooltip.style.top = (e.originalEvent.pageY + 15) + 'px';
@@ -217,11 +225,62 @@ map.on('mouseout', function() {
     tooltip.style.display = 'none';
 });
 
+map.on('click', function(e) {
+    const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, 4);
+    const targetInput = document.getElementById('target');
+    if (targetInput) {
+        targetInput.value = loc;
+        const btnSubmit = document.getElementById('btn-submit');
+        if (btnSubmit) btnSubmit.textContent = 'Go'; // Force a clean restart
+        document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    }
+});
+
 document.getElementById('theme-toggle').addEventListener('click', () => {
     const currentTheme = document.body.getAttribute('data-theme');
     const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
     setTheme(newTheme);
 });
+
+// --- Info Overlay Initialization ---
+const themeToggleBtn = document.getElementById('theme-toggle');
+if (themeToggleBtn && themeToggleBtn.parentNode) {
+    // Group the new info button and the theme toggle together
+    const headerActions = document.createElement('div');
+    headerActions.style.display = 'flex';
+    headerActions.style.gap = '8px';
+    
+    const infoBtn = document.createElement('button');
+    infoBtn.id = 'info-toggle';
+    infoBtn.innerHTML = 'ℹ️';
+    infoBtn.title = 'Information';
+    infoBtn.style.background = 'none';
+    infoBtn.style.border = '1px solid var(--border-color)';
+    infoBtn.style.borderRadius = '5px';
+    infoBtn.style.cursor = 'pointer';
+    infoBtn.style.fontSize = '18px';
+    infoBtn.style.padding = '4px 8px';
+    infoBtn.style.lineHeight = '1';
+
+    themeToggleBtn.parentNode.insertBefore(headerActions, themeToggleBtn);
+    headerActions.appendChild(infoBtn);
+    headerActions.appendChild(themeToggleBtn);
+
+    // Create overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'info-overlay';
+    overlay.innerHTML = `
+        <div class="info-content">
+            <button id="close-info" title="Close">&times;</button>
+            <iframe src="info.html" frameborder="0"></iframe>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    infoBtn.addEventListener('click', () => overlay.style.display = 'flex');
+    document.getElementById('close-info').addEventListener('click', () => overlay.style.display = 'none');
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.style.display = 'none'; });
+}
 
 document.getElementById('min-snr-group')?.addEventListener('change', (e) => {
     if (e.target.name === 'min-snr') {
@@ -269,6 +328,10 @@ document.getElementById('btn-geo').addEventListener('click', () => {
             localStorage.setItem('target', loc);
             btn.innerHTML = originalText;
             btn.disabled = false;
+            
+            const btnSubmit = document.getElementById('btn-submit');
+            if (btnSubmit) btnSubmit.textContent = 'Go';
+            document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
         },
         (error) => {
             console.error('Geolocation error:', error);
@@ -315,6 +378,15 @@ document.getElementById('btn-cycle').addEventListener('click', () => {
             radios[nextIndex].checked = true;
             document.getElementById('band-container').dispatchEvent(new Event('change'));
         }, 3000);
+    }
+});
+
+document.getElementById('target').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        const btnSubmit = document.getElementById('btn-submit');
+        if (btnSubmit) btnSubmit.textContent = 'Go';
+        document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
     }
 });
 
@@ -430,7 +502,7 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
 
     eventSource.addEventListener('history_end', () => {
         historyLoading = false;
-        statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: green;">Receiving data (Spots: ${totalReceived})</span>`;
+        statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)})</span>`;
         lastStatusUpdate = Date.now();
     });
 
@@ -445,9 +517,9 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
         const now = Date.now();
         if (now - lastStatusUpdate > 250) {
             if (historyLoading) {
-                statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: orange;">Fetching history (Spots: ${totalReceived})</span> <div class="spinner"></div>`;
+                statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: orange;">Fetching history (Spots: ${formatNumber(totalReceived)})</span> <div class="spinner"></div>`;
             } else {
-                statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: green;">Receiving data (Spots: ${totalReceived})</span>`;
+                statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)})</span>`;
             }
             lastStatusUpdate = now;
         }
@@ -778,7 +850,7 @@ function updateServerStats() {
     fetch('/api/stats')
         .then(response => response.json())
         .then(stats => {
-            statsEl.innerHTML = `Server Stats | Connections: ${stats.active_connections}<br>History Cache: ${stats.history_size} spots (${stats.history_minutes} mins)`;
+            statsEl.innerHTML = `Server Stats | Connections: ${formatNumber(stats.active_connections)}<br>History Cache: ${formatNumber(stats.history_size)} spots (${formatNumber(stats.history_minutes)} mins, ~${formatNumber(stats.history_size_kb)} kB)`;
         })
         .catch(error => {
             console.error('Error fetching server stats:', error);
