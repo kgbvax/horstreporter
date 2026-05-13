@@ -48,32 +48,50 @@
                 </select>
             </div>
 <div class="form-sections">
-            <div id="band-container" style="overflow-x: auto; width: 100%;">
-                <table style="border-spacing: 4px; border-collapse: separate; text-align: center; vertical-align: middle;">
+            <div id="band-container" style="width: 100%;">
+                <table style="border-spacing: 4px; border-collapse: separate; text-align: left; vertical-align: middle; width: 100%;">
+                    <thead>
+                        <tr>
+                            <th style="font-weight: bold; padding-left: 5px;">View</th>
+                            <th style="text-align: center; font-weight: bold;">Enable</th>
+                        </tr>
+                    </thead>
                     <tbody>
                         <tr>
-                            <td style="text-align: right; font-weight: bold; padding-right: 10px;">View</td>
                             <td><label class="band-label" style="background-color: #555555; color: white; display: block; margin: 0; white-space: nowrap;"><input type="radio" name="band" value="all" checked> All Bands</label></td>
-                            <td><label class="band-label" style="background-color: #800080; color: white; display: block; margin: 0;"><input type="radio" name="band" value="80m"> 80m</label></td>
-                            <td><label class="band-label" style="background-color: #0000FF; color: white; display: block; margin: 0;"><input type="radio" name="band" value="40m"> 40m</label></td>
-                            <td><label class="band-label" style="background-color: #008000; color: white; display: block; margin: 0;"><input type="radio" name="band" value="20m"> 20m</label></td>
-                            <td><label class="band-label" style="background-color: #808000; color: white; display: block; margin: 0;"><input type="radio" name="band" value="17m"> 17m</label></td>
-                            <td><label class="band-label" style="background-color: #FFA500; display: block; margin: 0;"><input type="radio" name="band" value="15m"> 15m</label></td>
-                            <td><label class="band-label" style="background-color: #00FFFF; display: block; margin: 0;"><input type="radio" name="band" value="12m"> 12m</label></td>
-                            <td><label class="band-label" style="background-color: #FF0000; color: white; display: block; margin: 0;"><input type="radio" name="band" value="10m"> 10m</label></td>
-                            <td><label class="band-label" style="background-color: #FF00FF; color: white; display: block; margin: 0;"><input type="radio" name="band" value="6m"> 6m</label></td>
+                            <td></td>
                         </tr>
                         <tr>
-                            <td style="text-align: right; font-weight: bold; padding-right: 10px;">Enable</td>
-                            <td></td>
-                            <td><input type="checkbox" class="band-enable" value="80m" checked title="Enable/Disable 80m"></td>
-                            <td><input type="checkbox" class="band-enable" value="40m" checked title="Enable/Disable 40m"></td>
-                            <td><input type="checkbox" class="band-enable" value="20m" checked title="Enable/Disable 20m"></td>
-                            <td><input type="checkbox" class="band-enable" value="17m" checked title="Enable/Disable 17m"></td>
-                            <td><input type="checkbox" class="band-enable" value="15m" checked title="Enable/Disable 15m"></td>
-                            <td><input type="checkbox" class="band-enable" value="12m" checked title="Enable/Disable 12m"></td>
-                            <td><input type="checkbox" class="band-enable" value="10m" checked title="Enable/Disable 10m"></td>
-                            <td><input type="checkbox" class="band-enable" value="6m" checked title="Enable/Disable 6m"></td>
+                            <td><label class="band-label" style="background-color: #800080; color: white; display: block; margin: 0;"><input type="radio" name="band" value="80m"> 80m</label></td>
+                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="80m" checked title="Enable/Disable 80m"></td>
+                        </tr>
+                        <tr>
+                            <td><label class="band-label" style="background-color: #0000FF; color: white; display: block; margin: 0;"><input type="radio" name="band" value="40m"> 40m</label></td>
+                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="40m" checked title="Enable/Disable 40m"></td>
+                        </tr>
+                        <tr>
+                            <td><label class="band-label" style="background-color: #008000; color: white; display: block; margin: 0;"><input type="radio" name="band" value="20m"> 20m</label></td>
+                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="20m" checked title="Enable/Disable 20m"></td>
+                        </tr>
+                        <tr>
+                            <td><label class="band-label" style="background-color: #808000; color: white; display: block; margin: 0;"><input type="radio" name="band" value="17m"> 17m</label></td>
+                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="17m" checked title="Enable/Disable 17m"></td>
+                        </tr>
+                        <tr>
+                            <td><label class="band-label" style="background-color: #FFA500; display: block; margin: 0;"><input type="radio" name="band" value="15m"> 15m</label></td>
+                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="15m" checked title="Enable/Disable 15m"></td>
+                        </tr>
+                        <tr>
+                            <td><label class="band-label" style="background-color: #00FFFF; display: block; margin: 0;"><input type="radio" name="band" value="12m"> 12m</label></td>
+                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="12m" checked title="Enable/Disable 12m"></td>
+                        </tr>
+                        <tr>
+                            <td><label class="band-label" style="background-color: #FF0000; color: white; display: block; margin: 0;"><input type="radio" name="band" value="10m"> 10m</label></td>
+                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="10m" checked title="Enable/Disable 10m"></td>
+                        </tr>
+                        <tr>
+                            <td><label class="band-label" style="background-color: #FF00FF; color: white; display: block; margin: 0;"><input type="radio" name="band" value="6m"> 6m</label></td>
+                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="6m" checked title="Enable/Disable 6m"></td>
                         </tr>
                     </tbody>
                 </table>
