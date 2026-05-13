@@ -11,6 +11,15 @@ try {
 }
 
 try {
+    document.querySelectorAll('.band-enable').forEach(cb => {
+        const savedEnable = localStorage.getItem(`enable-${cb.value}`);
+        if (savedEnable !== null) {
+            cb.checked = savedEnable === 'true';
+            const radio = document.querySelector(`input[name="band"][value="${cb.value}"]`);
+            if (radio) radio.disabled = !cb.checked;
+        }
+    });
+
     const savedTarget = localStorage.getItem('target');
     if (savedTarget) document.getElementById('target').value = savedTarget;
 
@@ -167,6 +176,14 @@ function getSelectedBand() {
     return checkedRadio ? checkedRadio.value : 'all';
 }
 
+function getEnabledBands() {
+    const enabled = new Set();
+    document.querySelectorAll('.band-enable').forEach(cb => {
+        if (cb.checked) enabled.add(cb.value);
+    });
+    return enabled;
+}
+
 const tooltip = document.getElementById('tooltip');
 
 map.on('mousemove', function(e) {
@@ -176,6 +193,7 @@ map.on('mousemove', function(e) {
     const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
     const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const selectedBand = getSelectedBand();
+    const enabledBands = getEnabledBands();
     
     let baseDb = 0;
     if (minSnrMode === 'ssb') baseDb = ssbMinDb;
@@ -185,6 +203,7 @@ map.on('mousemove', function(e) {
         if (!s.locator || !s.locator.startsWith(loc)) return false;
         if (minSnrMode === 'ssb' && s.snr < ssbMinDb) return false;
         if (minSnrMode === 'cw' && s.snr < cwMinDb) return false;
+        if (!enabledBands.has(s.band)) return false;
         if (selectedBand !== 'all' && s.band !== selectedBand) return false;
         return true;
     });
@@ -316,6 +335,22 @@ document.getElementById('band-container').addEventListener('change', () => {
     scheduleRender();
 });
 
+document.querySelectorAll('.band-enable').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+        const band = e.target.value;
+        const radio = document.querySelector(`input[name="band"][value="${band}"]`);
+        if (radio) {
+            radio.disabled = !e.target.checked;
+            if (!e.target.checked && radio.checked) {
+                document.querySelector('input[name="band"][value="all"]').checked = true;
+                localStorage.setItem('selectedBand', 'all');
+            }
+        }
+        localStorage.setItem(`enable-${band}`, e.target.checked);
+        scheduleRender();
+    });
+});
+
 document.getElementById('style-select')?.addEventListener('change', () => {
     localStorage.setItem('mapStyle', document.getElementById('style-select').value);
     scheduleRender();
@@ -372,14 +407,21 @@ document.getElementById('btn-cycle').addEventListener('click', () => {
             const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
             const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
             const activeBands = new Set();
+            const enabledBands = getEnabledBands();
+
             liveSpots.forEach(s => {
                 if (minSnrMode === 'ssb' && s.snr < ssbMinDb) return;
                 if (minSnrMode === 'cw' && s.snr < cwMinDb) return;
+                if (!enabledBands.has(s.band)) return;
                 activeBands.add(s.band);
             });
 
             const radios = Array.from(document.querySelectorAll('input[name="band"]'))
-                .filter(r => r.value !== 'all' && activeBands.has(r.value));
+                .filter(r => {
+                    if (r.disabled) return false;
+                    if (r.value === 'all') return true;
+                    return activeBands.has(r.value);
+                });
             
             if (radios.length === 0) return;
 
@@ -588,9 +630,12 @@ function updateBandLabels(spots) {
     const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
     const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const activeBands = new Set();
+    const enabledBands = getEnabledBands();
+
     spots.forEach(s => {
         if (minSnrMode === 'ssb' && s.snr < ssbMinDb) return;
         if (minSnrMode === 'cw' && s.snr < cwMinDb) return;
+        if (!enabledBands.has(s.band)) return;
         activeBands.add(s.band);
     });
 
@@ -598,6 +643,14 @@ function updateBandLabels(spots) {
     radios.forEach(radio => {
         if (radio.value === 'all') return;
         const label = radio.parentElement;
+        const isEnabled = enabledBands.has(radio.value);
+        
+        if (!isEnabled) {
+            label.style.opacity = '0.2';
+            label.style.filter = 'grayscale(100%)';
+            return;
+        }
+
         if (activeBands.has(radio.value)) {
             label.style.opacity = '1';
             label.style.filter = 'none';
@@ -639,12 +692,14 @@ function renderGridSnr(spots, maxMinutes) {
     const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
     const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const selectedBand = getSelectedBand();
+    const enabledBands = getEnabledBands();
     const squareData = {};
     const res = getGridResolution();
 
     spots.forEach(spot => {
         if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
         if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
+        if (!enabledBands.has(spot.band)) return;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return;
 
         let loc = spot.locator.substring(0, res);
@@ -697,12 +752,14 @@ function renderGridAge(spots, maxMinutes) {
     const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
     const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const selectedBand = getSelectedBand();
+    const enabledBands = getEnabledBands();
     const squareData = {};
     const res = getGridResolution();
 
     spots.forEach(spot => {
         if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
         if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
+        if (!enabledBands.has(spot.band)) return;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return;
 
         let loc = spot.locator.substring(0, res);
@@ -760,11 +817,13 @@ function renderAggregatedFields(spots, maxMinutes) {
     const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
     const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const selectedBand = getSelectedBand();
+    const enabledBands = getEnabledBands();
     
     const squareData = {};
     spots.forEach(spot => {
         if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
         if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
+        if (!enabledBands.has(spot.band)) return;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return;
 
         let loc4 = spot.locator.substring(0, 4);
@@ -829,11 +888,13 @@ function renderLiveHeatmap(spots, maxMinutes) {
     const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
     const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const selectedBand = getSelectedBand();
+    const enabledBands = getEnabledBands();
 
     const heatPoints = spots
         .filter(spot => {
             if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return false;
             if (minSnrMode === 'cw' && spot.snr < cwMinDb) return false;
+            if (!enabledBands.has(spot.band)) return false;
             if (selectedBand !== 'all' && spot.band !== selectedBand) return false;
             return true;
         })

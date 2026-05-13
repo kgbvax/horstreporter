@@ -24,6 +24,7 @@ fi
 echo "Setting up installation directories at $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR/certs"
+mkdir -p "/var/log/$APP_NAME"
 
 # 3. Check and copy the binary
 if [ ! -f "$BINARY_NAME" ]; then
@@ -38,6 +39,7 @@ chmod +x "$INSTALL_DIR/$BINARY_NAME"
 
 # Set correct ownership for the service user
 chown -R "$APP_USER:$APP_USER" "$INSTALL_DIR"
+chown -R "$APP_USER:$APP_USER" "/var/log/$APP_NAME"
 
 # 4. Create an environment configuration file for easy arg modifications
 DEFAULT_CONFIG="/etc/default/$APP_NAME"
@@ -46,12 +48,13 @@ if [ ! -f "$DEFAULT_CONFIG" ]; then
     cat <<EOF > "$DEFAULT_CONFIG"
 # horstreporter command line arguments
 # To enable Let's Encrypt (which will utilize the allowed 80/443 ports), provide your domain:
-ARGS="-port 443 -domain example.com -pprof"
+#ARGS="-port 443 -domain example.com -pprof"
 # To enable compression of the SSE stream to save bandwidth:
 # ARGS="-port 80 -compress"
 # To enable internal pprof profiling on localhost:6060:
 # ARGS="-port 80 -compress -pprof"
-ARGS="-port 80"
+# To enable file logging (rotated and gzipped automatically):
+ARGS="-port 80 -port 443 -domain example.com -pprof -log-file /var/log/$APP_NAME/$APP_NAME.log -log-max-age 14 -log-max-size 50"
 EOF
 fi
 

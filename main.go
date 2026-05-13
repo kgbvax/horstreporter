@@ -20,6 +20,7 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"golang.org/x/crypto/acme/autocert"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 //go:embed static
@@ -423,7 +424,22 @@ func main() {
 	dev := flag.Bool("dev", false, "Enable development mode (disables caching of static files)")
 	flag.BoolVar(&compressStream, "compress", false, "Enable gzip compression for the SSE stream")
 	enablePprof := flag.Bool("pprof", false, "Enable pprof profiling on localhost:6060")
+	logFile := flag.String("log-file", "", "Path to the log file (enables file logging with rotation)")
+	logMaxAge := flag.Int("log-max-age", 30, "Maximum number of days to retain old log files")
+	logMaxBackups := flag.Int("log-max-backups", 7, "Maximum number of old log files to retain")
+	logMaxSize := flag.Int("log-max-size", 100, "Maximum size in megabytes of the log file before it gets rotated")
 	flag.Parse()
+
+	if *logFile != "" {
+		log.SetOutput(&lumberjack.Logger{
+			Filename:   *logFile,
+			MaxSize:    *logMaxSize,
+			MaxBackups: *logMaxBackups,
+			MaxAge:     *logMaxAge,
+			Compress:   true,
+		})
+		logInfo("Logging configured to write to file: %s (MaxAge: %d days, MaxBackups: %d, MaxSize: %d MB)", *logFile, *logMaxAge, *logMaxBackups, *logMaxSize)
+	}
 
 	if *enablePprof {
 		go func() {
