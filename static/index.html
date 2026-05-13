@@ -4,120 +4,125 @@
     <meta charset="UTF-8">
     <title>horstreporter - HF Propagation Heatmap</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link id="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='8' fill='%236c757d'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="style.css" />
 </head>
-<body>
-    <div id="controls">
-        <div class="controls-header">
-            <h2>horstreporter</h2>
-            <button id="theme-toggle" title="Toggle theme"></button>
+<body class="d-flex vh-100 overflow-hidden m-0">
+    <div id="controls" class="d-flex flex-column p-3 bg-light border-end overflow-auto z-1 position-relative" style="width: 320px; transition: background-color 0.3s, border-color 0.3s;">
+        <div class="controls-header d-flex justify-content-between align-items-center mb-3">
+            <h2 class="h4 m-0">horstreporter</h2>
+            <button id="theme-toggle" class="btn btn-outline-secondary btn-sm" title="Toggle theme"></button>
         </div>
-        <form id="fetch-form">
-            <div class="target-input-container">
-                <input type="text" id="target" placeholder="Callsign or Locator (e.g. W1AW, JO, FN31, JO32WE)" tooltip="You can use fields, squares, subsquares or callsigns" />
-                <button type="button" id="btn-geo" title="Use current location">📍</button>
-                <button type="submit" id="btn-submit">Go</button>
+        <form id="fetch-form" class="d-flex flex-column gap-3">
+            <div class="target-input-container input-group">
+                <input type="text" id="target" class="form-control" placeholder="Callsign or Locator (e.g. W1AW, JO, FN31, JO32WE)" title="You can use fields, squares, subsquares or callsigns" />
+                <button type="button" id="btn-geo" class="btn btn-outline-secondary" title="Use current location"><i class="fas fa-map-marker-alt"></i></button>
+                <button type="submit" id="btn-submit" class="btn btn-primary">Go</button>
             </div>
-            <div class="stats-container" style="display: flex; flex-direction: column; gap: 5px;">
+            <div class="stats-container d-flex flex-column gap-1 small text-muted">
                 <div id="stream-status">Status: Not subscribed</div>
                 <div id="server-stats"></div>
             </div>
-            <div class="inline-input-group">
-                <label for="minutes">Max spot age:</label>
-                <input type="number" id="minutes" value="15" min="1" max="60" />
-            </div>
-            <div class="inline-input-group">
-                <label>Min SNR:</label>
-                <div class="button-group" id="min-snr-group">
-                    <input type="radio" id="snr-none" name="min-snr" value="none">
-                    <label for="snr-none">None</label>
-                    <input type="radio" id="snr-cw" name="min-snr" value="cw">
-                    <label for="snr-cw">CW</label>
-                     <input type="radio" id="snr-ssb" name="min-snr" value="ssb" checked>
-                    <label for="snr-ssb">SSB</label>
+            <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
+                <label class="form-label mb-0">Min SNR:</label>
+                <div class="btn-group w-100" role="group" id="min-snr-group">
+                    <input type="radio" class="btn-check" id="snr-none" name="min-snr" value="none" autocomplete="off">
+                    <label class="btn btn-outline-primary btn-sm" for="snr-none">None</label>
+                    <input type="radio" class="btn-check" id="snr-cw" name="min-snr" value="cw" autocomplete="off">
+                    <label class="btn btn-outline-primary btn-sm" for="snr-cw">CW</label>
+                     <input type="radio" class="btn-check" id="snr-ssb" name="min-snr" value="ssb" autocomplete="off" checked>
+                    <label class="btn btn-outline-primary btn-sm" for="snr-ssb">SSB</label>
                 </div>
             </div>
-            <div class="inline-input-group">
-                <label for="style-select">Style:</label>
-                <select id="style-select">
+            <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
+                <label for="style-select" class="form-label mb-0">Style:</label>
+                <select id="style-select" class="form-select form-select-sm">
                     <option value="grid-snr" selected>Grid (SNR)</option>
                     <option value="grid-age">Grid (Age)</option>
                     <option value="aggregated">Aggregated Fields</option>
                     <option value="density-polygon">Density Polygon</option>
                 </select>
             </div>
-<div class="form-sections">
-            <div id="band-container" style="width: 100%;">
-                <table style="border-spacing: 4px; border-collapse: separate; text-align: left; vertical-align: middle; width: 100%;">
+            <div class="form-sections d-flex flex-column gap-2">
+            <div id="band-container" class="w-100 bg-transparent">
+                <table class="table table-sm table-borderless align-middle m-0" style="font-size: 0.85rem; --bs-table-bg: transparent;">
                     <thead>
                         <tr>
-                            <th style="font-weight: bold; padding-left: 5px;">View</th>
-                            <th style="text-align: center; font-weight: bold;">Enable</th>
+                            <th class="ps-1">Band</th>
+                            <th class="text-center">Enable</th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr>
-                            <td><label class="band-label" style="background-color: #555555; color: white; display: block; margin: 0; white-space: nowrap;"><input type="radio" name="band" value="all" checked> All Bands</label></td>
+                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #555555; cursor: pointer; white-space: nowrap;"><input type="radio" class="form-check-input me-1" name="band" value="all" checked> All Bands</label></td>
                             <td></td>
                         </tr>
                         <tr>
-                            <td><label class="band-label" style="background-color: #800080; color: white; display: block; margin: 0;"><input type="radio" name="band" value="80m"> 80m</label></td>
-                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="80m" checked title="Enable/Disable 80m"></td>
+                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #800080; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="80m"> 80m</label></td>
+                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="80m" checked title="Enable/Disable 80m"></td>
                         </tr>
                         <tr>
-                            <td><label class="band-label" style="background-color: #0000FF; color: white; display: block; margin: 0;"><input type="radio" name="band" value="40m"> 40m</label></td>
-                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="40m" checked title="Enable/Disable 40m"></td>
+                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #0000FF; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="40m"> 40m</label></td>
+                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="40m" checked title="Enable/Disable 40m"></td>
                         </tr>
                         <tr>
-                            <td><label class="band-label" style="background-color: #008000; color: white; display: block; margin: 0;"><input type="radio" name="band" value="20m"> 20m</label></td>
-                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="20m" checked title="Enable/Disable 20m"></td>
+                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #008000; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="20m"> 20m</label></td>
+                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="20m" checked title="Enable/Disable 20m"></td>
                         </tr>
                         <tr>
-                            <td><label class="band-label" style="background-color: #808000; color: white; display: block; margin: 0;"><input type="radio" name="band" value="17m"> 17m</label></td>
-                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="17m" checked title="Enable/Disable 17m"></td>
+                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #808000; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="17m"> 17m</label></td>
+                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="17m" checked title="Enable/Disable 17m"></td>
                         </tr>
                         <tr>
-                            <td><label class="band-label" style="background-color: #FFA500; display: block; margin: 0;"><input type="radio" name="band" value="15m"> 15m</label></td>
-                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="15m" checked title="Enable/Disable 15m"></td>
+                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-dark" style="background-color: #FFA500; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="15m"> 15m</label></td>
+                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="15m" checked title="Enable/Disable 15m"></td>
                         </tr>
                         <tr>
-                            <td><label class="band-label" style="background-color: #00FFFF; display: block; margin: 0;"><input type="radio" name="band" value="12m"> 12m</label></td>
-                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="12m" checked title="Enable/Disable 12m"></td>
+                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-dark" style="background-color: #00FFFF; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="12m"> 12m</label></td>
+                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="12m" checked title="Enable/Disable 12m"></td>
                         </tr>
                         <tr>
-                            <td><label class="band-label" style="background-color: #FF0000; color: white; display: block; margin: 0;"><input type="radio" name="band" value="10m"> 10m</label></td>
-                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="10m" checked title="Enable/Disable 10m"></td>
+                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #FF0000; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="10m"> 10m</label></td>
+                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="10m" checked title="Enable/Disable 10m"></td>
                         </tr>
                         <tr>
-                            <td><label class="band-label" style="background-color: #FF00FF; color: white; display: block; margin: 0;"><input type="radio" name="band" value="6m"> 6m</label></td>
-                            <td style="text-align: center;"><input type="checkbox" class="band-enable" value="6m" checked title="Enable/Disable 6m"></td>
+                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #FF00FF; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="6m"> 6m</label></td>
+                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="6m" checked title="Enable/Disable 6m"></td>
                         </tr>
                     </tbody>
                 </table>
             </div>
-            <div class="action-buttons">
-                <button type="button" id="btn-cycle" title="Cycle Active Bands">▶️</button>
+            <div class="action-buttons d-flex justify-content-center w-100">
+                <button type="button" id="btn-cycle" class="btn btn-outline-secondary btn-sm w-100" title="Cycle Active Bands"><i class="fas fa-play"></i></button>
             </div>
-</div>
-            <details class="options-panel">
-                <summary>Options</summary>
-                <div class="options-content">
-                    <label>SSB Min dB:
-                        <input type="number" id="ssb-min-db" value="0" />
+            </div>
+            <details class="options-panel border-top pt-2 mt-2">
+                <summary class="small fw-bold" style="cursor: pointer;">Options</summary>
+                <div class="options-content d-flex flex-column gap-2 mt-2 small">
+                    <label class="d-flex align-items-center justify-content-between">Max Spot Age (min):
+                        <input type="number" id="minutes" class="form-control form-control-sm w-auto" value="15" min="1" max="60" style="max-width: 80px;" />
                     </label>
-                    <label style="display:block; margin-top:5px;">CW Min dB:
-                        <input type="number" id="cw-min-db" value="-15" />
+                    <label class="d-flex align-items-center justify-content-between">SSB Min dB:
+                        <input type="number" id="ssb-min-db" class="form-control form-control-sm w-auto" value="0" style="max-width: 80px;" />
                     </label>
-                    <label style="display:block; margin-top:5px;">Min Spots Density:
-                        <input type="number" id="density-threshold" value="5" min="1" />
+                    <label class="d-flex align-items-center justify-content-between">CW Min dB:
+                        <input type="number" id="cw-min-db" class="form-control form-control-sm w-auto" value="-15" style="max-width: 80px;" />
+                    </label>
+                    <label class="d-flex align-items-center justify-content-between">Min Spots Density:
+                        <input type="number" id="density-threshold" class="form-control form-control-sm w-auto" value="5" min="1" style="max-width: 80px;" />
+                    </label>
+                    <label class="d-flex align-items-center justify-content-between">Auto-zoom to spots:
+                        <input type="checkbox" id="auto-zoom" class="form-check-input m-0" />
                     </label>
                 </div>
             </details>
         </form>
     </div>
-    <div id="map"></div>
+    <div id="map" class="flex-grow-1 h-100"></div>
     <div id="tooltip"></div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL" crossorigin="anonymous"></script>
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
     <script src="app.js"></script>

@@ -52,6 +52,11 @@ try {
     if (savedCwMinDb !== null && document.getElementById('cw-min-db')) {
         document.getElementById('cw-min-db').value = savedCwMinDb;
     }
+
+    const savedAutoZoom = localStorage.getItem('autoZoom');
+    if (savedAutoZoom !== null && document.getElementById('auto-zoom')) {
+        document.getElementById('auto-zoom').checked = savedAutoZoom === 'true';
+    }
 } catch (e) {
     console.error("Error parsing saved form state", e);
 }
@@ -77,6 +82,7 @@ let targetLayer = null;
 let eventSource = null;
 let liveSpots = [];
 let renderInterval = null;
+let cycleInterval = null;
 
 // Debounce rendering to prevent UI lockups during heavy spot bursts
 let renderPending = false;
@@ -110,11 +116,11 @@ function setTheme(theme) {
 
     if (theme === 'dark') {
         currentTileLayer = darkTileLayer;
-        document.getElementById('theme-toggle').innerText = '☀️';
+        document.getElementById('theme-toggle').innerHTML = '<i class="fas fa-sun"></i>';
         document.getElementById('theme-toggle').title = 'Switch to light theme';
     } else {
         currentTileLayer = lightTileLayer;
-        document.getElementById('theme-toggle').innerText = '🌙';
+        document.getElementById('theme-toggle').innerHTML = '<i class="fas fa-moon"></i>';
         document.getElementById('theme-toggle').title = 'Switch to dark theme';
     }
     currentTileLayer.addTo(map);
@@ -283,7 +289,7 @@ if (themeToggleBtn && themeToggleBtn.parentNode) {
     
     const infoBtn = document.createElement('button');
     infoBtn.id = 'info-toggle';
-    infoBtn.innerHTML = 'ℹ️';
+    infoBtn.innerHTML = '<i class="fas fa-info-circle"></i>';
     infoBtn.title = 'Information';
     infoBtn.style.background = 'none';
     infoBtn.style.border = '1px solid var(--border-color)';
@@ -330,7 +336,16 @@ document.getElementById('cw-min-db')?.addEventListener('change', () => {
     scheduleRender();
 });
 
-document.getElementById('band-container').addEventListener('change', () => {
+document.getElementById('band-container').addEventListener('change', (e) => {
+    if (e && e.isTrusted && cycleInterval && e.target && e.target.name === 'band') {
+        clearInterval(cycleInterval);
+        cycleInterval = null;
+        const btn = document.getElementById('btn-cycle');
+        if (btn) {
+            btn.innerHTML = '<i class="fas fa-play"></i>';
+            btn.title = 'Cycle Active Bands';
+        }
+    }
     localStorage.setItem('selectedBand', getSelectedBand());
     scheduleRender();
 });
@@ -356,6 +371,11 @@ document.getElementById('style-select')?.addEventListener('change', () => {
     scheduleRender();
 });
 
+document.getElementById('auto-zoom')?.addEventListener('change', (e) => {
+    localStorage.setItem('autoZoom', e.target.checked);
+    if (e.target.checked) scheduleRender();
+});
+
 document.getElementById('btn-geo').addEventListener('click', () => {
     if (!navigator.geolocation) {
         alert('Geolocation is not supported by your browser.');
@@ -364,7 +384,7 @@ document.getElementById('btn-geo').addEventListener('click', () => {
 
     const btn = document.getElementById('btn-geo');
     const originalText = btn.innerHTML;
-    btn.innerHTML = '⏳';
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
     btn.disabled = true;
 
     navigator.geolocation.getCurrentPosition(
@@ -390,17 +410,15 @@ document.getElementById('btn-geo').addEventListener('click', () => {
     );
 });
 
-let cycleInterval = null;
-
 document.getElementById('btn-cycle').addEventListener('click', () => {
     const btn = document.getElementById('btn-cycle');
     if (cycleInterval) {
         clearInterval(cycleInterval);
         cycleInterval = null;
-        btn.innerHTML = '▶️';
+        btn.innerHTML = '<i class="fas fa-play"></i>';
         btn.title = 'Cycle Active Bands';
     } else {
-        btn.innerHTML = '⏸️';
+        btn.innerHTML = '<i class="fas fa-pause"></i>';
         btn.title = 'Stop Cycling';
         cycleInterval = setInterval(() => {
             const minSnrMode = getMinSnrMode();
@@ -684,6 +702,35 @@ function updateMapVisualization(spots, maxMinutes) {
         default:
             renderGridSnr(spots, maxMinutes);
     }
+
+    if (document.getElementById('auto-zoom')?.checked) {
+        const minSnrMode = getMinSnrMode();
+        const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
+        const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
+        const selectedBand = getSelectedBand();
+        const enabledBands = getEnabledBands();
+
+        let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+        let found = false;
+
+        spots.forEach(spot => {
+            if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
+            if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
+            if (!enabledBands.has(spot.band)) return;
+            if (selectedBand !== 'all' && spot.band !== selectedBand) return;
+
+            if (spot.lat < minLat) minLat = spot.lat;
+            if (spot.lat > maxLat) maxLat = spot.lat;
+            if (spot.lng < minLng) minLng = spot.lng;
+            if (spot.lng > maxLng) maxLng = spot.lng;
+            found = true;
+        });
+
+        if (found) {
+            const bounds = L.latLngBounds([minLat, minLng], [maxLat, maxLng]);
+            map.fitBounds(bounds, { padding: [20, 20], maxZoom: 8 });
+        }
+    }
 }
 function renderGridSnr(spots, maxMinutes) {
     heatLayer = L.layerGroup().addTo(map);
@@ -923,7 +970,7 @@ function updateServerStats() {
     fetch('/api/stats')
         .then(response => response.json())
         .then(stats => {
-            statsEl.innerHTML = `Server Stats | Connections: ${formatNumber(stats.active_connections)}<br>Spot history: ${formatNumber(stats.history_size)} spots (${formatNumber(stats.history_minutes)} mins, ~${formatNumber(stats.history_size_kb)} kB)`;
+            statsEl.innerHTML = `Connections: ${formatNumber(stats.active_connections)} History: ${formatNumber(stats.history_size)} spots (${formatNumber(stats.history_minutes)} mins)`;
         })
         .catch(error => {
             console.error('Error fetching server stats:', error);
