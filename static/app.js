@@ -93,6 +93,7 @@ document.getElementById('band-container').addEventListener('change', (e) => {
         if (btn) {
             btn.innerHTML = '<i class="fas fa-play"></i>';
             btn.title = 'Cycle Active Bands';
+            btn.classList.remove('active');
         }
     }
     localStorage.setItem('selectedBand', getSelectedBand());
@@ -177,9 +178,11 @@ document.getElementById('btn-cycle').addEventListener('click', () => {
         state.cycleInterval = null;
         btn.innerHTML = '<i class="fas fa-play"></i>';
         btn.title = 'Cycle Active Bands';
+        btn.classList.remove('active');
     } else {
         btn.innerHTML = '<i class="fas fa-pause"></i>';
         btn.title = 'Stop Cycling';
+        btn.classList.add('active');
         state.cycleInterval = setInterval(() => {
             const minSnrMode = getMinSnrMode();
             const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
