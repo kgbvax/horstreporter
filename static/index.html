@@ -3,11 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <title>horstreporter - HF Propagation Heatmap</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="vendor/css/leaflet.css" />
+    <link rel="stylesheet" href="vendor/css/bootstrap.min.css">
+    <link rel="stylesheet" href="vendor/css/all.min.css">
     <link id="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='8' fill='%236c757d'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="style.css" />
+    <link rel="preload" as="image" href="hk.jpg" fetchpriority="high">
 </head>
 <body class="d-flex vh-100 overflow-hidden m-0">
     <div id="controls" class="d-flex flex-column p-3 bg-light border-end overflow-auto z-1 position-relative" style="width: 320px; transition: background-color 0.3s, border-color 0.3s;">
@@ -40,7 +41,9 @@
                 <label class="form-label mb-0">Style:</label>
                 <div class="btn-group w-100" role="group" id="style-group">
                     <input type="radio" class="btn-check" id="style-grid" name="style-select" value="grid-snr" autocomplete="off" checked>
-                    <label class="btn btn-outline-primary btn-sm" for="style-grid">Grid (SNR)</label>
+                    <label class="btn btn-outline-primary btn-sm" for="style-grid">Grid</label>
+                    <input type="radio" class="btn-check" id="style-heatmap" name="style-select" value="heatmap" autocomplete="off">
+                    <label class="btn btn-outline-primary btn-sm" for="style-heatmap">Heatmap</label>
                     <input type="radio" class="btn-check" id="style-area" name="style-select" value="active-area" autocomplete="off">
                     <label class="btn btn-outline-primary btn-sm" for="style-area">Active Area</label>
                 </div>
@@ -112,7 +115,7 @@
                     </label>
                     <div class="d-flex flex-column w-100">
                         <label class="d-flex align-items-center justify-content-between mb-0" for="cluster-distance"><span>Max Cluster Dist:</span> <span><span id="cluster-dist-val">500</span> km</span></label>
-                        <input type="range" id="cluster-distance" class="form-range" min="500" max="10000" step="100" value="500" />
+                        <input type="range" id="cluster-distance" class="form-range" min="100" max="2000" step="50" value="500" />
                     </div>
                     <label class="d-flex align-items-center justify-content-between">Smooth active area edges:
                         <input type="checkbox" id="smooth-edges" class="form-check-input m-0" checked />
@@ -129,9 +132,10 @@
     </div>
     <div id="map" class="flex-grow-1 h-100"></div>
     <div id="tooltip"></div>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL" crossorigin="anonymous"></script>
-    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
-    <script src="app.js"></script>
+    <script src="vendor/js/bootstrap.bundle.min.js"></script>
+    <script src="vendor/js/leaflet.js"></script>
+    <script src="vendor/js/leaflet-heat.js"></script>
+    <script src="vendor/js/turf.min.js"></script>
+    <script type="module" src="app.js"></script>
 </body>
 </html>
