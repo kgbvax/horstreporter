@@ -17,7 +17,7 @@
         </div>
         <form id="fetch-form" class="d-flex flex-column gap-3">
             <div class="target-input-container input-group">
-                <input type="text" id="target" class="form-control" placeholder="Callsign or Locator (e.g. W1AW, JO, FN31, JO32WE)" title="You can use fields, squares, subsquares or callsigns" />
+                <input type="text" id="target" class="form-control" placeholder="Callsign or Locator (e.g. W1AW, FN31, JO32WE)" title="You can use squares, subsquares or callsigns" />
                 <button type="button" id="btn-geo" class="btn btn-outline-secondary" title="Use current location"><i class="fas fa-map-marker-alt"></i></button>
                 <button type="submit" id="btn-submit" class="btn btn-primary">Go</button>
             </div>
@@ -37,13 +37,13 @@
                 </div>
             </div>
             <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
-                <label for="style-select" class="form-label mb-0">Style:</label>
-                <select id="style-select" class="form-select form-select-sm">
-                    <option value="grid-snr" selected>Grid (SNR)</option>
-                    <option value="grid-age">Grid (Age)</option>
-                    <option value="aggregated">Aggregated Fields</option>
-                    <option value="density-polygon">Density Polygon</option>
-                </select>
+                <label class="form-label mb-0">Style:</label>
+                <div class="btn-group w-100" role="group" id="style-group">
+                    <input type="radio" class="btn-check" id="style-grid" name="style-select" value="grid-snr" autocomplete="off" checked>
+                    <label class="btn btn-outline-primary btn-sm" for="style-grid">Grid (SNR)</label>
+                    <input type="radio" class="btn-check" id="style-area" name="style-select" value="active-area" autocomplete="off">
+                    <label class="btn btn-outline-primary btn-sm" for="style-area">Active Area</label>
+                </div>
             </div>
             <div class="form-sections d-flex flex-column gap-2">
             <div id="band-container" class="w-100 bg-transparent">
@@ -110,11 +110,18 @@
                     <label class="d-flex align-items-center justify-content-between">CW Min dB:
                         <input type="number" id="cw-min-db" class="form-control form-control-sm w-auto" value="-15" style="max-width: 80px;" />
                     </label>
-                    <label class="d-flex align-items-center justify-content-between">Min Spots Density:
-                        <input type="number" id="density-threshold" class="form-control form-control-sm w-auto" value="5" min="1" style="max-width: 80px;" />
+                    <div class="d-flex flex-column w-100">
+                        <label class="d-flex align-items-center justify-content-between mb-0" for="cluster-distance"><span>Max Cluster Dist:</span> <span><span id="cluster-dist-val">500</span> km</span></label>
+                        <input type="range" id="cluster-distance" class="form-range" min="500" max="10000" step="100" value="500" />
+                    </div>
+                    <label class="d-flex align-items-center justify-content-between">Smooth active area edges:
+                        <input type="checkbox" id="smooth-edges" class="form-check-input m-0" checked />
                     </label>
                     <label class="d-flex align-items-center justify-content-between">Auto-zoom to spots:
                         <input type="checkbox" id="auto-zoom" class="form-check-input m-0" />
+                    </label>
+                    <label class="d-flex align-items-center justify-content-between">Include surrounding 8 squares:
+                        <input type="checkbox" id="surroundings" class="form-check-input m-0" />
                     </label>
                 </div>
             </details>

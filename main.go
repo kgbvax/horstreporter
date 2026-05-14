@@ -71,8 +71,8 @@ type MQTTMessage struct {
 }
 
 type Client struct {
-	target string
-	send   chan Spot
+	targets []string
+	send    chan Spot
 }
 
 type Hub struct {
@@ -122,18 +122,27 @@ func matchCall(spotCall, target string) bool {
 }
 
 func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
-	if client.target == "" {
+	if len(client.targets) == 0 {
 		return Spot{}, false
 	}
 
 	sc, rc := strings.ToUpper(m.SC), strings.ToUpper(m.RC)
 	sl, rl := strings.ToUpper(m.SL), strings.ToUpper(m.RL)
 
-	isSender := matchCall(sc, client.target) || (sl != "" && strings.HasPrefix(sl, client.target))
-	isReceiver := matchCall(rc, client.target) || (rl != "" && strings.HasPrefix(rl, client.target))
+	isSender := false
+	isReceiver := false
+
+	for _, t := range client.targets {
+		if matchCall(sc, t) || (isLocator(t) && sl != "" && strings.HasPrefix(sl, t)) {
+			isSender = true
+		}
+		if matchCall(rc, t) || (isLocator(t) && rl != "" && strings.HasPrefix(rl, t)) {
+			isReceiver = true
+		}
+	}
 
 	if logLevel == "DEBUG" {
-		logDebug("Target '%s' | Evaluating Spot -> SC:%s RC:%s SL:%s RL:%s | isSender:%v isReceiver:%v", client.target, sc, rc, sl, rl, isSender, isReceiver)
+		logDebug("Targets '%v' | Evaluating Spot -> SC:%s RC:%s SL:%s RL:%s | isSender:%v isReceiver:%v", client.targets, sc, rc, sl, rl, isSender, isReceiver)
 	}
 
 	if !isSender && !isReceiver {
@@ -152,7 +161,7 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 
 	if remoteLocator == "" {
 		if logLevel == "DEBUG" {
-			logDebug("Target '%s' matched as %s, but remote locator is empty. Dropping spot.", client.target, relation)
+			logDebug("Targets '%v' matched as %s, but remote locator is empty. Dropping spot.", client.targets, relation)
 		}
 		return Spot{}, false
 	}
@@ -164,7 +173,7 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 	}
 
 	if logLevel == "DEBUG" {
-		logDebug("Target '%s' matched successfully! Mapped to Remote Locator: %s", client.target, remoteLocator)
+		logDebug("Targets '%v' matched successfully! Mapped to Remote Locator: %s", client.targets, remoteLocator)
 	}
 
 	return Spot{
@@ -183,11 +192,6 @@ func startMQTT() {
 	opts := mqtt.NewClientOptions().AddBroker("tcp://mqtt.pskreporter.info:1883")
 	opts.SetClientID(fmt.Sprintf("horstreporter.kgbvax.net-%d", time.Now().UnixNano()))
 	opts.SetAutoReconnect(true)
-
-	client := mqtt.NewClient(opts)
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
-		log.Fatalf("MQTT connect error: %v", token.Error())
-	}
 
 	msgHandler := func(client mqtt.Client, msg mqtt.Message) {
 		var m MQTTMessage
@@ -229,10 +233,60 @@ func startMQTT() {
 		}
 	}
 
-	if token := client.Subscribe("pskr/filter/v2/#", 0, msgHandler); token.Wait() && token.Error() != nil {
-		log.Fatalf("MQTT subscribe error: %v", token.Error())
+	opts.SetOnConnectHandler(func(c mqtt.Client) {
+		logInfo("Connected to MQTT broker. Subscribing...")
+		if token := c.Subscribe("pskr/filter/v2/#", 0, msgHandler); token.Wait() && token.Error() != nil {
+			log.Printf("MQTT subscribe error: %v", token.Error())
+		} else {
+			logInfo("Subscribed to global PSKReporter MQTT feed")
+		}
+	})
+
+	opts.SetConnectionLostHandler(func(c mqtt.Client, err error) {
+		logInfo("MQTT connection lost: %v", err)
+	})
+
+	client := mqtt.NewClient(opts)
+	if token := client.Connect(); token.Wait() && token.Error() != nil {
+		log.Fatalf("MQTT connect error: %v", token.Error())
 	}
-	logInfo("Subscribed to global PSKReporter MQTT feed")
+}
+
+func isLocator(s string) bool {
+	if len(s) < 4 {
+		return false
+	}
+	if s[0] < 'A' || s[0] > 'R' || s[1] < 'A' || s[1] > 'R' {
+		return false
+	}
+	if s[2] < '0' || s[2] > '9' || s[3] < '0' || s[3] > '9' {
+		return false
+	}
+	return true
+}
+
+func getSurroundingSquares(locator string) []string {
+	if !isLocator(locator) {
+		return []string{locator}
+	}
+	loc := strings.ToUpper(locator[:4])
+	x := int(loc[0]-'A')*10 + int(loc[2]-'0')
+	y := int(loc[1]-'A')*10 + int(loc[3]-'0')
+
+	var res []string
+	for dx := -1; dx <= 1; dx++ {
+		for dy := -1; dy <= 1; dy++ {
+			nx, ny := x+dx, y+dy
+			if nx >= 0 && nx < 180 && ny >= 0 && ny < 180 {
+				char0 := byte('A' + nx/10)
+				char1 := byte('A' + ny/10)
+				char2 := byte('0' + nx%10)
+				char3 := byte('0' + ny%10)
+				res = append(res, string([]byte{char0, char1, char2, char3}))
+			}
+		}
+	}
+	return res
 }
 
 func locatorToLatLng(locator string) (float64, float64) {
@@ -263,6 +317,7 @@ func locatorToLatLng(locator string) (float64, float64) {
 func streamHandler(w http.ResponseWriter, r *http.Request) {
 	target := strings.ToUpper(r.URL.Query().Get("target"))
 	minutesStr := r.URL.Query().Get("minutes")
+	surroundings := r.URL.Query().Get("surroundings") == "true"
 
 	// Fallback for cached frontend clients that still send callsign/locator params
 	if target == "" {
@@ -287,14 +342,21 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	historySeconds := int64(minutes * 60)
 
+	var targets []string
+	if surroundings && isLocator(target) {
+		targets = getSurroundingSquares(target)
+	} else {
+		targets = []string{target}
+	}
+
 	client := &Client{
-		target: target,
-		send:   make(chan Spot, 10000), // Buffer to handle initial history dump
+		targets: targets,
+		send:    make(chan Spot, 10000), // Buffer to handle initial history dump
 	}
 
 	hub.Lock()
 	hub.clients[client] = true
-	logInfo("New client stream started for target: %s (History: %d mins)", target, minutes)
+	logInfo("New client stream started for targets: %v (History: %d mins)", targets, minutes)
 
 	now := time.Now().Unix()
 	cutoff := now - historySeconds
@@ -318,7 +380,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 			close(client.send)
 		}
 		hub.Unlock()
-		logInfo("Client stream closed for target: %s", target)
+		logInfo("Client stream closed for targets: %v", targets)
 	}()
 
 	w.Header().Set("Content-Type", "text/event-stream")

@@ -33,8 +33,9 @@ try {
     }
 
     const savedStyle = localStorage.getItem('mapStyle');
-    if (savedStyle && document.getElementById('style-select')) {
-        document.getElementById('style-select').value = savedStyle;
+    if (savedStyle) {
+        const radio = document.querySelector(`input[name="style-select"][value="${savedStyle}"]`);
+        if (radio) radio.checked = true;
     }
 
     const savedBand = localStorage.getItem('selectedBand');
@@ -53,9 +54,25 @@ try {
         document.getElementById('cw-min-db').value = savedCwMinDb;
     }
 
+    const savedClusterDist = localStorage.getItem('clusterDistance');
+    if (savedClusterDist !== null && document.getElementById('cluster-distance')) {
+        document.getElementById('cluster-distance').value = savedClusterDist;
+        document.getElementById('cluster-dist-val').textContent = savedClusterDist;
+    }
+
+    const savedSmoothEdges = localStorage.getItem('smoothEdges');
+    if (savedSmoothEdges !== null && document.getElementById('smooth-edges')) {
+        document.getElementById('smooth-edges').checked = savedSmoothEdges === 'true';
+    }
+
     const savedAutoZoom = localStorage.getItem('autoZoom');
     if (savedAutoZoom !== null && document.getElementById('auto-zoom')) {
         document.getElementById('auto-zoom').checked = savedAutoZoom === 'true';
+    }
+
+    const savedSurroundings = localStorage.getItem('surroundings');
+    if (savedSurroundings !== null && document.getElementById('surroundings')) {
+        document.getElementById('surroundings').checked = savedSurroundings === 'true';
     }
 } catch (e) {
     console.error("Error parsing saved form state", e);
@@ -336,6 +353,17 @@ document.getElementById('cw-min-db')?.addEventListener('change', () => {
     scheduleRender();
 });
 
+document.getElementById('cluster-distance')?.addEventListener('input', (e) => {
+    document.getElementById('cluster-dist-val').textContent = e.target.value;
+    localStorage.setItem('clusterDistance', e.target.value);
+    scheduleRender();
+});
+
+document.getElementById('smooth-edges')?.addEventListener('change', (e) => {
+    localStorage.setItem('smoothEdges', e.target.checked);
+    scheduleRender();
+});
+
 document.getElementById('band-container').addEventListener('change', (e) => {
     if (e && e.isTrusted && cycleInterval && e.target && e.target.name === 'band') {
         clearInterval(cycleInterval);
@@ -366,14 +394,25 @@ document.querySelectorAll('.band-enable').forEach(cb => {
     });
 });
 
-document.getElementById('style-select')?.addEventListener('change', () => {
-    localStorage.setItem('mapStyle', document.getElementById('style-select').value);
-    scheduleRender();
+document.getElementById('style-group')?.addEventListener('change', (e) => {
+    if (e.target.name === 'style-select') {
+        localStorage.setItem('mapStyle', e.target.value);
+        scheduleRender();
+    }
 });
 
 document.getElementById('auto-zoom')?.addEventListener('change', (e) => {
     localStorage.setItem('autoZoom', e.target.checked);
     if (e.target.checked) scheduleRender();
+});
+
+document.getElementById('surroundings')?.addEventListener('change', (e) => {
+    localStorage.setItem('surroundings', e.target.checked);
+    const btnSubmit = document.getElementById('btn-submit');
+    if (btnSubmit && btnSubmit.textContent === 'Stop') {
+        btnSubmit.textContent = 'Go';
+        document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    }
 });
 
 document.getElementById('btn-geo').addEventListener('click', () => {
@@ -521,14 +560,9 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
         targetLayer = null;
     }
 
-    const isLocator = /^[A-Z]{2}([0-9]{2}([A-Z]{2})?)?$/.test(target);
+    const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(target);
     if (isLocator) {
-        if (target.length === 2) {
-            const bounds = fieldToBounds(target);
-            if (bounds) {
-                targetLayer = L.rectangle(bounds, { color: '#ff0000', weight: 3, fillOpacity: 0.1, interactive: false }).addTo(map);
-            }
-        } else if (target.length === 4) {
+        if (target.length === 4) {
             const bounds = locatorToBounds(target);
             if (bounds) {
                 targetLayer = L.rectangle(bounds, { color: '#ff0000', weight: 3, fillOpacity: 0.1, interactive: false }).addTo(map);
@@ -552,6 +586,9 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
     const params = new URLSearchParams();
     params.append('target', target);
     if (minutes) params.append('minutes', minutes);
+    if (document.getElementById('surroundings')?.checked) {
+        params.append('surroundings', 'true');
+    }
 
     const statusEl = document.getElementById('stream-status');
     const currentSub = `Target: ${target}`;
@@ -684,20 +721,18 @@ function updateMapVisualization(spots, maxMinutes) {
     
     updateBandLabels(spots);
 
-    const style = document.getElementById('style-select')?.value || 'grid-snr';
+    const checkedStyleRadio = document.querySelector('input[name="style-select"]:checked');
+    const style = checkedStyleRadio ? checkedStyleRadio.value : 'grid-snr';
 
     switch (style) {
         case 'grid-snr':
             renderGridSnr(spots, maxMinutes);
             break;
-        case 'grid-age':
-            renderGridAge(spots, maxMinutes);
-            break;
-        case 'aggregated':
-            renderAggregatedFields(spots, maxMinutes);
-            break;
         case 'heatmap':
             renderLiveHeatmap(spots, maxMinutes);
+            break;
+        case 'active-area':
+            renderActiveArea(spots, maxMinutes);
             break;
         default:
             renderGridSnr(spots, maxMinutes);
@@ -792,7 +827,7 @@ function renderGridSnr(spots, maxMinutes) {
     }
 }
 
-function renderGridAge(spots, maxMinutes) {
+function renderActiveArea(spots, maxMinutes) {
     heatLayer = L.layerGroup().addTo(map);
 
     const minSnrMode = getMinSnrMode();
@@ -800,8 +835,11 @@ function renderGridAge(spots, maxMinutes) {
     const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
     const selectedBand = getSelectedBand();
     const enabledBands = getEnabledBands();
-    const squareData = {};
-    const res = getGridResolution();
+    let maxClusterDist = parseInt(document.getElementById('cluster-distance')?.value, 10);
+    if (isNaN(maxClusterDist) || maxClusterDist < 100) maxClusterDist = 500;
+    const smoothEdges = document.getElementById('smooth-edges')?.checked;
+
+    const pointsByBand = {};
 
     spots.forEach(spot => {
         if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
@@ -809,122 +847,73 @@ function renderGridAge(spots, maxMinutes) {
         if (!enabledBands.has(spot.band)) return;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return;
 
-        let loc = spot.locator.substring(0, res);
-        if (loc.length < res) loc = spot.locator.substring(0, 4);
-
-        if (loc.length >= 4) {
-            if (!squareData[loc]) {
-                squareData[loc] = { bands: {}, minAge: Infinity };
-            }
-            squareData[loc].bands[spot.band] = (squareData[loc].bands[spot.band] || 0) + 1;
-            squareData[loc].minAge = Math.min(squareData[loc].minAge, spot.ageSeconds);
+        if (!pointsByBand[spot.band]) {
+            pointsByBand[spot.band] = [];
         }
+        // Turf expects coordinates as [longitude, latitude]
+        pointsByBand[spot.band].push(turf.point([spot.lng, spot.lat]));
     });
 
-    const maxAgeSeconds = maxMinutes * 60;
-
-    for (let loc in squareData) {
-        let dominantBand = 'all';
-        let maxCount = 0;
-        for (let b in squareData[loc].bands) {
-            if (squareData[loc].bands[b] > maxCount) {
-                maxCount = squareData[loc].bands[b];
-                dominantBand = b;
-            }
-        }
-
-        let color = bandColors[dominantBand] || bandColors['all'];
+    for (const band in pointsByBand) {
+        const pts = pointsByBand[band];
+        const color = bandColors[band] || bandColors['all'];
         
-        const opacity = 0.3 + (0.6 * (1 - (squareData[loc].minAge / maxAgeSeconds)));
-        
-        let bounds = locatorToBounds(loc);
-        if (bounds) {
-            L.rectangle(bounds, {
-                color: color,
-                weight: 1,
-                fillColor: color,
-                fillOpacity: Math.max(0.2, Math.min(0.9, opacity))
-            }).addTo(heatLayer);
-        }
-    }
-}
+        if (pts.length >= 3) {
+            const fc = turf.featureCollection(pts);
+            
+            // Group points that are within the configured distance of each other into clusters
+            // to prevent drawing massive polygons across oceans with no activity.
+            const clustered = turf.clustersDbscan(fc, maxClusterDist, { units: 'kilometers', minPoints: 3 });
+            
+            const clusters = {};
+            const isolatedPts = [];
 
-function fieldToBounds(field) {
-    if (!field || field.length < 2) return null;
-    field = field.toUpperCase();
-    const lng = (field.charCodeAt(0) - 65) * 20 - 180;
-    const lat = (field.charCodeAt(1) - 65) * 10 - 90;
-    return [[lat, lng], [lat + 10, lng + 20]];
-}
-
-function renderAggregatedFields(spots, maxMinutes) {
-    heatLayer = L.layerGroup().addTo(map);
-
-    const minSnrMode = getMinSnrMode();
-    const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
-    const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
-    const selectedBand = getSelectedBand();
-    const enabledBands = getEnabledBands();
-    
-    const squareData = {};
-    spots.forEach(spot => {
-        if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
-        if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
-        if (!enabledBands.has(spot.band)) return;
-        if (selectedBand !== 'all' && spot.band !== selectedBand) return;
-
-        let loc4 = spot.locator.substring(0, 4);
-        if (loc4.length === 4) {
-            if (!squareData[loc4]) {
-                squareData[loc4] = { snrSum: 0, count: 0, bands: {} };
-            }
-            squareData[loc4].snrSum += spot.snr;
-            squareData[loc4].count++;
-            squareData[loc4].bands[spot.band] = (squareData[loc4].bands[spot.band] || 0) + 1;
-        }
-    });
-
-    const fieldData = {};
-    for (const loc4 in squareData) {
-        const loc2 = loc4.substring(0, 2);
-        if (!fieldData[loc2]) {
-            fieldData[loc2] = [];
-        }
-        fieldData[loc2].push({ loc4, ...squareData[loc4] });
-    }
-
-    const AGGREGATION_THRESHOLD = 3;
-
-    for (const loc2 in fieldData) {
-        const squaresInField = fieldData[loc2];
-        
-        if (squaresInField.length > AGGREGATION_THRESHOLD) {
-            let totalSnrSum = 0, totalCount = 0;
-            const totalBands = {};
-            squaresInField.forEach(sq => {
-                totalSnrSum += sq.snrSum;
-                totalCount += sq.count;
-                for (const band in sq.bands) {
-                    totalBands[band] = (totalBands[band] || 0) + sq.bands[band];
+            turf.featureEach(clustered, function (point) {
+                if (point.properties && point.properties.cluster !== undefined && point.properties.cluster !== null) {
+                    const clusterId = point.properties.cluster;
+                    if (!clusters[clusterId]) clusters[clusterId] = [];
+                    clusters[clusterId].push(point);
+                } else {
+                    isolatedPts.push(point);
                 }
             });
 
-            const avgSnr = totalSnrSum / totalCount;
-            let dominantBand = Object.keys(totalBands).reduce((a, b) => totalBands[a] > totalBands[b] ? a : b, 'all');
-            const color = bandColors[dominantBand] || bandColors['all'];
-            let opacity = (avgSnr >= 10) ? 0.9 : (avgSnr >= 0) ? 0.6 : 0.3;
+            for (const clusterId in clusters) {
+                const clusterPts = clusters[clusterId];
+                if (clusterPts.length >= 3) {
+                    const clusterFc = turf.featureCollection(clusterPts);
+                    const hull = turf.convex(clusterFc);
+                    if (hull) {
+                        let finalShape = hull;
+                        if (smoothEdges) {
+                            try {
+                                finalShape = turf.polygonSmooth(hull, { iterations: 2 });
+                            } catch (e) {
+                                console.error("Error smoothing polygon", e);
+                            }
+                        }
+                        L.geoJSON(finalShape, {
+                            style: { color: color, weight: 2, opacity: 0.8, fillColor: color, fillOpacity: 0.2 },
+                            interactive: false
+                        }).addTo(heatLayer);
+                    }
+                } else {
+                    clusterPts.forEach(p => isolatedPts.push(p));
+                }
+            }
 
-            const bounds = fieldToBounds(loc2);
-            if (bounds) L.rectangle(bounds, { color, weight: 1, fillColor: color, fillOpacity: opacity }).addTo(heatLayer);
-
+            // Draw isolated points that couldn't form a polygon
+            isolatedPts.forEach(p => {
+                L.circleMarker([p.geometry.coordinates[1], p.geometry.coordinates[0]], {
+                    color: color, radius: 5, weight: 2, fillOpacity: 0.5, interactive: false
+                }).addTo(heatLayer);
+            });
         } else {
-            squaresInField.forEach(sq => {
-                const avgSnr = sq.snrSum / sq.count;
-                let dominantBand = Object.keys(sq.bands).reduce((a, b) => sq.bands[a] > sq.bands[b] ? a : b, 'all');
-                const color = bandColors[dominantBand] || bandColors['all'];
-                let opacity = (avgSnr >= 10) ? 0.9 : (avgSnr >= 0) ? 0.6 : 0.3;
-                const bounds = locatorToBounds(sq.loc4);
-                if (bounds) L.rectangle(bounds, { color, weight: 1, fillColor: color, fillOpacity: opacity }).addTo(heatLayer);
+            // For 1 or 2 isolated spots that cannot form a geometric polygon, fallback to simple markers
+            pts.forEach(p => {
+                L.circleMarker([p.geometry.coordinates[1], p.geometry.coordinates[0]], {
+                    color: color, radius: 5, weight: 2, fillOpacity: 0.5, interactive: false
+                }).addTo(heatLayer);
             });
         }
     }
