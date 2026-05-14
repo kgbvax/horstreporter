@@ -54,7 +54,7 @@ func main() {
 	logMaxAge := flag.Int("log-max-age", 30, "Maximum number of days to retain old log files")
 	logMaxBackups := flag.Int("log-max-backups", 7, "Maximum number of old log files to retain")
 	logMaxSize := flag.Int("log-max-size", 100, "Maximum size in megabytes of the log file before it gets rotated")
-	flag.IntVar(&maxClients, "max-clients", 100, "Maximum number of concurrent SSE clients (0 = unlimited)")
+	flag.IntVar(&maxClients, "max-clients", 150, "Maximum number of concurrent SSE clients (0 = unlimited)")
 	flag.Parse()
 
 	if *logFile != "" {

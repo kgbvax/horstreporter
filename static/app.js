@@ -14,14 +14,29 @@ setTheme(savedTheme);
 // --- Init UI ---
 initUI();
 
+let lastRenderTime = 0;
+
 export function scheduleRender() {
-    if (!state.renderPending) {
-        state.renderPending = true;
+    if (state.renderPending) return;
+
+    const now = Date.now();
+    const timeSinceLastRender = now - lastRenderTime;
+
+    const doRender = () => {
         requestAnimationFrame(() => {
             const minutes = document.getElementById('minutes').value || 15;
             updateMapVisualization(state.liveSpots, parseInt(minutes));
+            lastRenderTime = Date.now();
             state.renderPending = false;
         });
+    };
+
+    if (timeSinceLastRender >= 1000) {
+        state.renderPending = true;
+        doRender();
+    } else {
+        state.renderPending = true;
+        setTimeout(doRender, 1000 - timeSinceLastRender);
     }
 }
 

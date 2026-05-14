@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>horstreporter - HF Propagation Heatmap</title>
+    <title>horstreporter - HF Propagation Maps</title>
     <link rel="stylesheet" href="vendor/css/leaflet.css" />
     <link rel="stylesheet" href="vendor/css/bootstrap.min.css">
     <link rel="stylesheet" href="vendor/css/all.min.css">
@@ -65,7 +65,12 @@
                         <tr>
                             <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #800080; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="80m"> 80m</label></td>
                             <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="80m" checked title="Enable/Disable 80m"></td>
+                        </tr>                        
+                        <tr>
+                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #4B0082; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="60m"> 60m</label></td>
+                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="60m" checked title="Enable/Disable 60m"></td>
                         </tr>
+                        
                         <tr>
                             <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #0000FF; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="40m"> 40m</label></td>
                             <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="40m" checked title="Enable/Disable 40m"></td>
@@ -123,7 +128,7 @@
                     <label class="d-flex align-items-center justify-content-between">Auto-zoom to spots:
                         <input type="checkbox" id="auto-zoom" class="form-check-input m-0" />
                     </label>
-                    <label class="d-flex align-items-center justify-content-between">Include surrounding 8 squares:
+                    <label class="d-flex align-items-center justify-content-between">Include adjacent squares:
                         <input type="checkbox" id="surroundings" class="form-check-input m-0" />
                     </label>
                 </div>

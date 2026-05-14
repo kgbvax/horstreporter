@@ -36,7 +36,7 @@
         // Sync the iframe's theme with the parent window
         try {
             const parentBody = window.parent.document.body;
-            document.body.setAttribute('data-theme', parentBody.getAttribute('data-theme') || 'dark');
+            document.body.setAttribute('data-theme', parentBody.getAttribute('data-theme') || 'light');
             
             new MutationObserver((mutations) => {
                 mutations.forEach(m => document.body.setAttribute('data-theme', parentBody.getAttribute('data-theme')));
