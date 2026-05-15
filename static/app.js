@@ -2,8 +2,9 @@ import { state } from './state.js';
 import { loadConfig } from './config.js';
 import { initMap, setTheme, map } from './map.js';
 import { initUI } from './ui.js';
+import { initUI, updateBandMatrix } from './ui.js';
 import { updateMapVisualization } from './renderers.js';
-import { latLngToLocator, locatorToBounds, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber } from './utils.js';
+import { latLngToLocator, locatorToBounds, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors } from './utils.js';
 
 // --- Init Configuration & Map ---
 const { initialCenter, initialZoom } = loadConfig();
@@ -13,6 +14,21 @@ setTheme(savedTheme);
 
 // --- Init UI ---
 initUI();
+
+function updateCurrentBandDisplay() {
+    const band = getSelectedBand();
+    const display = document.getElementById('current-band-display');
+    if (display) {
+        display.textContent = band === 'all' ? 'All Bands' : band;
+        display.style.backgroundColor = bandColors[band] || bandColors['all'];
+        display.style.color = (band === '15m' || band === '12m') ? '#212529' : '#fff';
+    }
+}
+
+// Force an initial render to sync visual band states (colors/opacity) loaded from localStorage
+updateMapVisualization(state.liveSpots, parseInt(document.getElementById('minutes')?.value || 15));
+updateBandMatrix(state.liveSpots);
+updateCurrentBandDisplay();
 
 let lastRenderTime = 0;
 
@@ -26,6 +42,7 @@ export function scheduleRender() {
         requestAnimationFrame(() => {
             const minutes = document.getElementById('minutes').value || 15;
             updateMapVisualization(state.liveSpots, parseInt(minutes));
+            updateBandMatrix(state.liveSpots);
             lastRenderTime = Date.now();
             state.renderPending = false;
         });
@@ -57,6 +74,24 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
     setTheme(newTheme);
 });
 
+document.getElementById('hide-sidebar')?.addEventListener('click', () => {
+    const controls = document.getElementById('controls');
+    controls.style.marginLeft = '-320px';
+    document.getElementById('show-sidebar').style.display = 'block';
+});
+
+document.getElementById('show-sidebar')?.addEventListener('click', () => {
+    const controls = document.getElementById('controls');
+    controls.style.marginLeft = '0px';
+    document.getElementById('show-sidebar').style.display = 'none';
+});
+
+document.getElementById('controls')?.addEventListener('transitionend', (e) => {
+    if (e.propertyName === 'margin-left') {
+        map.invalidateSize(); // Fixes distorted tile layers and centering after map container is stretched
+    }
+});
+
 document.getElementById('min-snr-group')?.addEventListener('change', (e) => {
     if (e.target.name === 'min-snr') {
         localStorage.setItem('minSnrSelect', e.target.value);
@@ -72,6 +107,15 @@ document.getElementById('ssb-min-db')?.addEventListener('change', () => {
 document.getElementById('cw-min-db')?.addEventListener('change', () => {
     localStorage.setItem('cwMinDb', document.getElementById('cw-min-db').value);
     scheduleRender();
+});
+
+document.getElementById('cycle-time')?.addEventListener('change', (e) => {
+    localStorage.setItem('cycleTime', e.target.value);
+    if (state.cycleInterval) {
+        // Restart cycle to pick up the new time
+        document.getElementById('btn-cycle').click();
+        document.getElementById('btn-cycle').click();
+    }
 });
 
 document.getElementById('cluster-distance')?.addEventListener('input', (e) => {
@@ -97,6 +141,7 @@ document.getElementById('band-container').addEventListener('change', (e) => {
         }
     }
     localStorage.setItem('selectedBand', getSelectedBand());
+    updateCurrentBandDisplay();
     scheduleRender();
 });
 
@@ -113,6 +158,28 @@ document.querySelectorAll('.band-enable').forEach(cb => {
         }
         localStorage.setItem(`enable-${band}`, e.target.checked);
         scheduleRender();
+    });
+});
+
+document.querySelectorAll('.band-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const preset = btn.getAttribute('data-preset');
+        const highBands = ['20m', '17m', '15m', '12m', '10m', '6m', '4m'];
+        const lowBands = ['160m', '80m', '60m', '40m', '30m'];
+        const ssbBands = ['160m', '80m', '40m', '20m', '17m', '15m', '12m', '10m', '6m', '4m'];
+        
+        document.querySelectorAll('.band-enable').forEach(cb => {
+            let enable = false;
+            if (preset === 'all') enable = true;
+            else if (preset === 'high') enable = highBands.includes(cb.value);
+            else if (preset === 'low') enable = lowBands.includes(cb.value);
+            else if (preset === 'ssb') enable = ssbBands.includes(cb.value);
+            
+            if (cb.checked !== enable) {
+                cb.checked = enable;
+                cb.dispatchEvent(new Event('change', { bubbles: true })); // Triggers map re-render and localStorage save
+            }
+        });
     });
 });
 
@@ -183,6 +250,7 @@ document.getElementById('btn-cycle').addEventListener('click', () => {
         btn.innerHTML = '<i class="fas fa-pause"></i>';
         btn.title = 'Stop Cycling';
         btn.classList.add('active');
+        const cycleTimeMs = parseInt(document.getElementById('cycle-time')?.value || '3', 10) * 1000;
         state.cycleInterval = setInterval(() => {
             const minSnrMode = getMinSnrMode();
             const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
@@ -212,7 +280,7 @@ document.getElementById('btn-cycle').addEventListener('click', () => {
             
             radios[nextIndex].checked = true;
             document.getElementById('band-container').dispatchEvent(new Event('change'));
-        }, 3000);
+        }, cycleTimeMs);
     }
 });
 

@@ -62,6 +62,13 @@ func startMQTT() {
 			if m.T == 0 {
 				m.T = time.Now().Unix()
 			}
+
+			if spotRecorder != nil {
+				if b, err := json.Marshal(m); err == nil {
+					b = append(b, '\n')
+					spotRecorder.Write(b)
+				}
+			}
 			hub.broadcastMsg(m)
 		}
 	}

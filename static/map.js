@@ -14,8 +14,11 @@ const darkTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z
 export function initMap(initialCenter, initialZoom) {
     map = L.map('map', {
         zoomSnap: 0.25,
-        zoomDelta: 0.25
+        zoomDelta: 0.25,
+        zoomControl: false
     }).setView(initialCenter, initialZoom);
+
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
 
     map.on('moveend', () => {
         const center = map.getCenter();

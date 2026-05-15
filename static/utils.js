@@ -49,6 +49,7 @@ export function setFaviconColor(color) {
 }
 
 export const bandColors = {
+    '160m': '#8B0000',
     '80m': '#800080',
     '60m': '#4B0082',
     '40m': '#0000FF',
@@ -59,6 +60,7 @@ export const bandColors = {
     '12m': '#00FFFF',
     '10m': '#FF0000',
     '6m':  '#FF00FF',
+    '4m':  '#FF1493',
     'all': '#555555'
 };
 

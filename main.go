@@ -16,6 +16,8 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
+var spotRecorder *lumberjack.Logger
+
 //go:embed static
 var staticFiles embed.FS
 
@@ -55,6 +57,7 @@ func main() {
 	logMaxBackups := flag.Int("log-max-backups", 7, "Maximum number of old log files to retain")
 	logMaxSize := flag.Int("log-max-size", 100, "Maximum size in megabytes of the log file before it gets rotated")
 	flag.IntVar(&maxClients, "max-clients", 150, "Maximum number of concurrent SSE clients (0 = unlimited)")
+	recordSpots := flag.String("record-spots", "", "Path to a file to record all incoming spots as JSONL")
 	flag.Parse()
 
 	if *logFile != "" {
@@ -66,6 +69,17 @@ func main() {
 			Compress:   true,
 		})
 		logInfo("Logging configured to write to file: %s (MaxAge: %d days, MaxBackups: %d, MaxSize: %d MB)", *logFile, *logMaxAge, *logMaxBackups, *logMaxSize)
+	}
+
+	if *recordSpots != "" {
+		spotRecorder = &lumberjack.Logger{
+			Filename:   *recordSpots,
+			MaxSize:    *logMaxSize,
+			MaxBackups: *logMaxBackups,
+			MaxAge:     *logMaxAge,
+			Compress:   true,
+		}
+		logInfo("Recording incoming spots to JSONL file: %s", *recordSpots)
 	}
 
 	if *enablePprof {

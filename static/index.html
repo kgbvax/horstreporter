@@ -10,11 +10,18 @@
     <link rel="stylesheet" href="style.css" />
     <link rel="preload" as="image" href="hk.jpg" fetchpriority="high">
 </head>
-<body class="d-flex vh-100 overflow-hidden m-0">
-    <div id="controls" class="d-flex flex-column p-3 bg-light border-end overflow-auto z-1 position-relative" style="width: 320px; transition: background-color 0.3s, border-color 0.3s;">
+<body class="d-flex vh-100 overflow-hidden m-0 position-relative">
+    <button id="show-sidebar" class="btn btn-secondary shadow-sm position-absolute" style="top: 15px; left: 0; z-index: 1000; display: none; border-radius: 0 4px 4px 0;" title="Show controls">
+        <i class="fas fa-chevron-right"></i>
+    </button>
+    <div id="current-band-display" class="h4 m-0 p-2 rounded" style="position: absolute; top: 15px; right: 15px; z-index: 1000; background-color: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); box-shadow: 0 2px 4px var(--shadow-color); transition: background-color 0.3s, color 0.3s; pointer-events: none;">All Bands</div>
+    <div id="controls" class="d-flex flex-column p-3 bg-light border-end overflow-auto z-1 position-relative" style="width: 320px; transition: margin-left 0.3s, background-color 0.3s, border-color 0.3s;">
         <div class="controls-header d-flex justify-content-between align-items-center mb-3">
             <h2 class="h4 m-0">horstreporter</h2>
-            <button id="theme-toggle" class="btn btn-outline-secondary btn-sm" title="Toggle theme"></button>
+            <div class="d-flex gap-2">
+                <button id="theme-toggle" class="btn btn-outline-secondary btn-sm" title="Toggle theme"></button>
+                <button type="button" id="hide-sidebar" class="btn btn-outline-secondary btn-sm" title="Hide controls"><i class="fas fa-chevron-left"></i></button>
+            </div>
         </div>
         <form id="fetch-form" class="d-flex flex-column gap-3">
             <div class="target-input-container input-group">
@@ -49,65 +56,94 @@
                 </div>
             </div>
             <div class="form-sections d-flex flex-column gap-2">
-            <div id="band-container" class="w-100 bg-transparent">
-                <table class="table table-sm table-borderless align-middle m-0" style="font-size: 0.85rem; --bs-table-bg: transparent;">
-                    <thead>
-                        <tr>
-                            <th class="ps-1">Band</th>
-                            <th class="text-center">Enable</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #555555; cursor: pointer; white-space: nowrap;"><input type="radio" class="form-check-input me-1" name="band" value="all" checked> All Bands</label></td>
-                            <td></td>
-                        </tr>
-                        <tr>
-                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #800080; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="80m"> 80m</label></td>
-                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="80m" checked title="Enable/Disable 80m"></td>
-                        </tr>                        
-                        <tr>
-                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #4B0082; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="60m"> 60m</label></td>
-                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="60m" checked title="Enable/Disable 60m"></td>
-                        </tr>
-                        
-                        <tr>
-                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #0000FF; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="40m"> 40m</label></td>
-                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="40m" checked title="Enable/Disable 40m"></td>
-                        </tr>
-                        <tr>
-                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #008080; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="30m"> 30m</label></td>
-                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="30m" checked title="Enable/Disable 30m"></td>
-                        </tr>
-                        <tr>
-                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #008000; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="20m"> 20m</label></td>
-                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="20m" checked title="Enable/Disable 20m"></td>
-                        </tr>
-                        <tr>
-                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #808000; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="17m"> 17m</label></td>
-                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="17m" checked title="Enable/Disable 17m"></td>
-                        </tr>
-                        <tr>
-                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-dark" style="background-color: #FFA500; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="15m"> 15m</label></td>
-                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="15m" checked title="Enable/Disable 15m"></td>
-                        </tr>
-                        <tr>
-                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-dark" style="background-color: #00FFFF; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="12m"> 12m</label></td>
-                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="12m" checked title="Enable/Disable 12m"></td>
-                        </tr>
-                        <tr>
-                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #FF0000; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="10m"> 10m</label></td>
-                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="10m" checked title="Enable/Disable 10m"></td>
-                        </tr>
-                        <tr>
-                            <td><label class="form-check-label px-2 py-1 rounded w-100 d-block text-white" style="background-color: #FF00FF; cursor: pointer;"><input type="radio" class="form-check-input me-1" name="band" value="6m"> 6m</label></td>
-                            <td class="text-center"><input type="checkbox" class="form-check-input band-enable" value="6m" checked title="Enable/Disable 6m"></td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-            <div class="action-buttons d-flex justify-content-center w-100">
-                <button type="button" id="btn-cycle" class="btn btn-outline-primary btn-sm w-100" title="Cycle Active Bands"><i class="fas fa-play"></i></button>
+            <div id="band-container" class="w-100 bg-transparent mb-2" style="font-size: 0.85rem;">
+                <div class="row g-2 mb-2">
+                    <div class="col-12">
+                        <div class="d-flex justify-content-between gap-1">
+                            <button type="button" class="btn btn-outline-secondary btn-sm flex-fill py-0 band-preset" data-preset="all" style="font-size: 0.75rem;" title="Enable All Bands">All</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm flex-fill py-0 band-preset" data-preset="high" style="font-size: 0.75rem;" title="Enable High Bands (20m and up)">High</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm flex-fill py-0 band-preset" data-preset="low" style="font-size: 0.75rem;" title="Enable Low Bands (below 20m)">Low</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm flex-fill py-0 band-preset" data-preset="ssb" style="font-size: 0.75rem;" title="Enable SSB Bands (Excludes 60m and 30m)">SSB</button>
+                        </div>
+                    </div>
+                    <div class="col-12 action-buttons d-flex justify-content-center w-100">
+                        <button type="button" id="btn-cycle" class="btn btn-outline-primary btn-sm w-100" title="Cycle Active Bands"><i class="fas fa-play"></i></button>
+                    </div>
+                    <div class="col-12">
+                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #555555; border: 2px solid transparent; position: relative;">
+                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="all" id="band-all" checked>
+                            <label class="form-check-label text-white w-100 stretched-link" for="band-all" style="cursor:pointer; white-space: nowrap;">All Bands</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="row g-2">
+                    <!-- Column 1 -->
+                    <div class="col-6 d-flex flex-column gap-2">
+                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #8B0000; border: 2px solid transparent; position: relative; opacity: 0.2; filter: grayscale(100%);">
+                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="160m" id="band-160m" disabled>
+                            <label class="form-check-label text-white w-100 stretched-link" for="band-160m" style="cursor:pointer;">160m</label>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="160m" title="Enable/Disable 160m">
+                        </div>
+                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #800080; border: 2px solid transparent; position: relative;">
+                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="80m" id="band-80m">
+                            <label class="form-check-label text-white w-100 stretched-link" for="band-80m" style="cursor:pointer;">80m</label>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="80m" checked title="Enable/Disable 80m">
+                        </div>
+                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #4B0082; border: 2px solid transparent; position: relative; opacity: 0.2; filter: grayscale(100%);">
+                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="60m" id="band-60m" disabled>
+                            <label class="form-check-label text-white w-100 stretched-link" for="band-60m" style="cursor:pointer;">60m</label>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="60m" title="Enable/Disable 60m">
+                        </div>
+                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #0000FF; border: 2px solid transparent; position: relative;">
+                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="40m" id="band-40m">
+                            <label class="form-check-label text-white w-100 stretched-link" for="band-40m" style="cursor:pointer;">40m</label>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="40m" checked title="Enable/Disable 40m">
+                        </div>
+                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #03b1b1; border: 2px solid transparent; position: relative;">
+                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="30m" id="band-30m">
+                            <label class="form-check-label text-white w-100 stretched-link" for="band-30m" style="cursor:pointer;">30m</label>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="30m"  title="Enable/Disable 30m">
+                        </div>
+                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #008000; border: 2px solid transparent; position: relative;">
+                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="20m" id="band-20m">
+                            <label class="form-check-label text-white w-100 stretched-link" for="band-20m" style="cursor:pointer;">20m</label>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="20m" checked title="Enable/Disable 20m">
+                        </div>
+                    </div>
+                    <!-- Column 2 -->
+                    <div class="col-6 d-flex flex-column gap-2">
+                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #808000; border: 2px solid transparent; position: relative;">
+                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="17m" id="band-17m">
+                            <label class="form-check-label text-white w-100 stretched-link" for="band-17m" style="cursor:pointer;">17m</label>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="17m" checked title="Enable/Disable 17m">
+                        </div>
+                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #FFA500; border: 2px solid transparent; position: relative;">
+                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="15m" id="band-15m">
+                            <label class="form-check-label text-dark w-100 stretched-link" for="band-15m" style="cursor:pointer;">15m</label>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="15m" checked title="Enable/Disable 15m">
+                        </div>
+                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #00FFFF; border: 2px solid transparent; position: relative;">
+                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="12m" id="band-12m">
+                            <label class="form-check-label text-dark w-100 stretched-link" for="band-12m" style="cursor:pointer;">12m</label>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="12m" checked title="Enable/Disable 12m">
+                        </div>
+                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #FF0000; border: 2px solid transparent; position: relative;">
+                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="10m" id="band-10m">
+                            <label class="form-check-label text-white w-100 stretched-link" for="band-10m" style="cursor:pointer;">10m</label>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="10m" checked title="Enable/Disable 10m">
+                        </div>
+                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #FF00FF; border: 2px solid transparent; position: relative;">
+                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="6m" id="band-6m">
+                            <label class="form-check-label text-white w-100 stretched-link" for="band-6m" style="cursor:pointer;">6m</label>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="6m" checked title="Enable/Disable 6m">
+                        </div>
+                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #FF1493; border: 2px solid transparent; position: relative; opacity: 0.2; filter: grayscale(100%);">
+                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="4m" id="band-4m" disabled>
+                            <label class="form-check-label text-white w-100 stretched-link" for="band-4m" style="cursor:pointer;">4m</label>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="4m" title="Enable/Disable 4m">
+                        </div>
+                    </div>
+                </div>
             </div>
             </div>
             <details class="options-panel border-top pt-2 mt-2">
@@ -121,6 +157,9 @@
                     </label>
                     <label class="d-flex align-items-center justify-content-between">CW Min dB:
                         <input type="number" id="cw-min-db" class="form-control form-control-sm w-auto" value="-15" style="max-width: 80px;" />
+                    </label>
+                    <label class="d-flex align-items-center justify-content-between">Band Cycle Time (sec):
+                        <input type="number" id="cycle-time" class="form-control form-control-sm w-auto" value="3" min="1" max="60" style="max-width: 80px;" />
                     </label>
                     <div class="d-flex flex-column w-100">
                         <label class="d-flex align-items-center justify-content-between mb-0" for="cluster-distance"><span>Max Cluster Dist:</span> <span><span id="cluster-dist-val">500</span> km</span></label>

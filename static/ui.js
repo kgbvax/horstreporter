@@ -87,8 +87,8 @@ function initInfoOverlay() {
         
         const infoBtn = document.createElement('button');
         infoBtn.id = 'info-toggle';
-        infoBtn.innerHTML = '<i class="fas fa-info-circle"></i>';
-        infoBtn.title = 'Information';
+        infoBtn.innerHTML = '<i class="fas fa-question-circle"></i>';
+        infoBtn.title = 'Help';
         infoBtn.style.background = 'none';
         infoBtn.style.border = '1px solid var(--border-color)';
         infoBtn.style.borderRadius = '5px';

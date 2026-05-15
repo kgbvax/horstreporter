@@ -21,16 +21,16 @@ It is effectively an alternate frontend for <a href="https://www.pskreporter.inf
 * Click anywhere on the map to quickly set a new target locator and refresh the data.  
 
 
-# BACKSTORY
+
+# Origin
 Made by DL9ET (<a href="https://mastodon.radio/@dl9et" target="_blank">English Mastodon</a>, <a href="https://radiosocial.de/@dl9et" target="_blank">German Mastodon</a>, <a href="https://www.qrz.com/db/DL9ET" target="_blank"> on QRZ</a>) to ~~scratch an itch~~ discover SSB DX opportunities. 
 
 
 This is based on me watching DK3JF scout the airwaves with WSJTX in Morokulien. I whipped somrthing up based on our SDR's feed which was very useful but later came to the realization that you don't need an SDR: the WSJT-X of the OM next door is good enough. So this is the current approach: using pskreporter data from your grid.
 
-If you are intrested in this approach, have a look at <a href="https://hf.dxview.org" target="_blank">https://hf.dxview.org</a> which follows the same approach (just more refined).
+If you are intrested in this approach, have a look at <a href="https://hf.dxview.org" target="_blank">https://hf.dxview.org</a>.
 
-As with everything ham radio, this should be considered experimental and may implode any moment.  95% of this was created with Google Gemini.
-Contact DL9ET for feedback or requests.  
+As with everything ham radio, this should be considered experimental and may implode any moment.  95% of this was created with Google Gemini. Contact me for feedback or requests.  
 More information may be available in my blog: <a href="https://dl9et.darc.de/tags/horstreporter/" target="_blank">https://dl9et.darc.de/tags/horstreporter/</a>
 
 The green plushy dragon in the lower left is called "Horst-Kevin".

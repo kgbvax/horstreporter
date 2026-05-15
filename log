@@ -1,0 +1,70 @@
+2026/05/14 22:43:46 [INFO] Logging configured to write to file: log (MaxAge: 30 days, MaxBackups: 7, MaxSize: 100 MB)
+2026/05/14 22:43:46 [INFO] Recording incoming spots to JSONL file: recor
+2026/05/14 22:43:46 [INFO] Development mode enabled: Serving static files directly from the disk.
+2026/05/14 22:43:46 [INFO] HorstReporter starting HTTP server on port 8080...
+2026/05/14 22:43:46 [INFO] Connected to MQTT broker. Subscribing...
+2026/05/14 22:43:46 [INFO] Subscribed to global PSKReporter MQTT feed
+2026/05/14 22:43:47 [INFO] New client stream started for targets: [JO21 JO22 JO23 JO31 JO32 JO33 JO41 JO42 JO43] (History: 25 mins)
+2026/05/14 22:43:47 [INFO] New client stream started for targets: [JO32] (History: 25 mins)
+2026/05/14 22:43:47 [INFO] New client stream started for targets: [CM86 CM87 CM88 CM96 CM97 CM98 DM06 DM07 DM08] (History: 25 mins)
+2026/05/14 22:43:47 [INFO] New client stream started for targets: [JO32] (History: 25 mins)
+2026/05/14 22:43:47 [INFO] New client stream started for targets: [JO32] (History: 25 mins)
+2026/05/14 22:50:09 [INFO] New client stream started for targets: [DM02 DM03 DM04 DM12 DM13 DM14 DM22 DM23 DM24] (History: 25 mins)
+2026/05/14 23:39:48 [INFO] Client stream closed for targets: [DM02 DM03 DM04 DM12 DM13 DM14 DM22 DM23 DM24]
+2026/05/14 23:39:56 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:39:58 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:40:35 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:41:53 [INFO] Client stream closed for targets: [CM86 CM87 CM88 CM96 CM97 CM98 DM06 DM07 DM08]
+2026/05/14 23:42:16 [INFO] Client stream closed for targets: [JO21 JO22 JO23 JO31 JO32 JO33 JO41 JO42 JO43]
+2026/05/14 23:45:29 [INFO] Logging configured to write to file: log (MaxAge: 30 days, MaxBackups: 7, MaxSize: 100 MB)
+2026/05/14 23:45:29 [INFO] Development mode enabled: Serving static files directly from the disk.
+2026/05/14 23:45:29 [INFO] HorstReporter starting HTTP server on port 8080...
+2026/05/14 23:45:29 [INFO] Connected to MQTT broker. Subscribing...
+2026/05/14 23:45:29 [INFO] Subscribed to global PSKReporter MQTT feed
+2026/05/14 23:45:31 [INFO] New client stream started for targets: [JO32] (History: 25 mins)
+2026/05/14 23:45:38 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:46:29 [INFO] New client stream started for targets: [JO32] (History: 15 mins)
+2026/05/14 23:49:48 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:49:48 [INFO] New client stream started for targets: [JO32] (History: 15 mins)
+2026/05/14 23:49:50 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:49:50 [INFO] New client stream started for targets: [JO32] (History: 15 mins)
+2026/05/14 23:49:55 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:49:55 [INFO] New client stream started for targets: [JO32] (History: 15 mins)
+2026/05/14 23:49:57 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:49:57 [INFO] New client stream started for targets: [JO32] (History: 15 mins)
+2026/05/14 23:49:58 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:49:58 [INFO] New client stream started for targets: [JO32] (History: 15 mins)
+2026/05/14 23:49:58 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:49:58 [INFO] New client stream started for targets: [JO32] (History: 15 mins)
+2026/05/14 23:49:59 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:49:59 [INFO] New client stream started for targets: [JO32] (History: 15 mins)
+2026/05/14 23:53:35 [INFO] Logging configured to write to file: log (MaxAge: 30 days, MaxBackups: 7, MaxSize: 100 MB)
+2026/05/14 23:53:35 [INFO] Development mode enabled: Serving static files directly from the disk.
+2026/05/14 23:53:35 [INFO] HorstReporter starting HTTP server on port 8080...
+2026/05/14 23:53:35 [INFO] Connected to MQTT broker. Subscribing...
+2026/05/14 23:53:35 [INFO] Subscribed to global PSKReporter MQTT feed
+2026/05/14 23:53:35 [INFO] New client stream started for targets: [JO32] (History: 15 mins)
+2026/05/14 23:53:35 [INFO] New client stream started for targets: [JO32] (History: 25 mins)
+2026/05/14 23:53:41 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:53:41 [INFO] New client stream started for targets: [JO32] (History: 25 mins)
+2026/05/14 23:56:24 [INFO] Logging configured to write to file: log (MaxAge: 30 days, MaxBackups: 7, MaxSize: 100 MB)
+2026/05/14 23:56:24 [INFO] Development mode enabled: Serving static files directly from the disk.
+2026/05/14 23:56:24 [INFO] HorstReporter starting HTTP server on port 8080...
+2026/05/14 23:56:24 [INFO] Connected to MQTT broker. Subscribing...
+2026/05/14 23:56:24 [INFO] Subscribed to global PSKReporter MQTT feed
+2026/05/14 23:56:25 [INFO] New client stream started for targets: [JO32] (History: 25 mins)
+2026/05/14 23:56:27 [INFO] New client stream started for targets: [JO32] (History: 15 mins)
+2026/05/14 23:56:27 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:56:27 [INFO] New client stream started for targets: [JO32] (History: 25 mins)
+2026/05/14 23:58:06 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:58:06 [INFO] New client stream started for targets: [JO32] (History: 25 mins)
+2026/05/14 23:58:40 [INFO] Client stream closed for targets: [JO32]
+2026/05/14 23:58:40 [INFO] New client stream started for targets: [IP31] (History: 25 mins)
+2026/05/14 23:58:43 [INFO] Client stream closed for targets: [IP31]
+2026/05/14 23:58:43 [INFO] New client stream started for targets: [JO21] (History: 25 mins)
+2026/05/14 23:58:43 [INFO] Client stream closed for targets: [JO21]
+2026/05/14 23:58:43 [INFO] New client stream started for targets: [JO41] (History: 25 mins)
+2026/05/14 23:58:44 [INFO] Client stream closed for targets: [JO41]
+2026/05/14 23:58:44 [INFO] New client stream started for targets: [JO21] (History: 25 mins)
+2026/05/14 23:58:45 [INFO] Client stream closed for targets: [JO21]
+2026/05/14 23:58:45 [INFO] New client stream started for targets: [JO31] (History: 25 mins)

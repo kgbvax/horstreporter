@@ -55,6 +55,11 @@ export function loadConfig() {
             document.getElementById('cw-min-db').value = savedCwMinDb;
         }
 
+        const savedCycleTime = localStorage.getItem('cycleTime');
+        if (savedCycleTime !== null && document.getElementById('cycle-time')) {
+            document.getElementById('cycle-time').value = savedCycleTime;
+        }
+
         const savedClusterDist = localStorage.getItem('clusterDistance');
         if (savedClusterDist !== null && document.getElementById('cluster-distance')) {
             document.getElementById('cluster-distance').value = savedClusterDist;

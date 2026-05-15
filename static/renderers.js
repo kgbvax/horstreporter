@@ -49,7 +49,10 @@ export function updateMapVisualization(spots, maxMinutes) {
 
         if (found) {
             const bounds = L.latLngBounds([minLat, minLng], [maxLat, maxLng]);
-            map.fitBounds(bounds, { padding: [20, 20], maxZoom: 8 });
+            const center = bounds.getCenter();
+            const minBounds = center.toBounds(2000000); // minimum 2000km
+            bounds.extend(minBounds);
+            map.fitBounds(bounds, { padding: [20, 20], maxZoom: 5 });
         }
     }
 }
@@ -70,22 +73,30 @@ function updateBandLabels(spots) {
 
     const radios = document.querySelectorAll('input[name="band"]');
     radios.forEach(radio => {
-        if (radio.value === 'all') return;
-        const label = radio.parentElement;
-        const isEnabled = enabledBands.has(radio.value);
+        const wrapper = radio.closest('.band-wrapper');
+        if (!wrapper) return;
         
+        if (radio.checked) {
+            wrapper.style.borderColor = 'var(--text-color)';
+        } else {
+            wrapper.style.borderColor = 'transparent';
+        }
+
+        if (radio.value === 'all') return;
+        
+        const isEnabled = enabledBands.has(radio.value);
         if (!isEnabled) {
-            label.style.opacity = '0.2';
-            label.style.filter = 'grayscale(100%)';
+            wrapper.style.opacity = '0.2';
+            wrapper.style.filter = 'grayscale(100%)';
             return;
         }
 
         if (activeBands.has(radio.value)) {
-            label.style.opacity = '1';
-            label.style.filter = 'none';
+            wrapper.style.opacity = '1';
+            wrapper.style.filter = 'none';
         } else {
-            label.style.opacity = '0.4';
-            label.style.filter = 'grayscale(100%)';
+            wrapper.style.opacity = '0.4';
+            wrapper.style.filter = 'grayscale(100%)';
         }
     });
 }
