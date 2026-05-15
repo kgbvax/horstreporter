@@ -66,11 +66,6 @@ export function loadConfig() {
             document.getElementById('cluster-dist-val').textContent = savedClusterDist;
         }
 
-        const savedSmoothEdges = localStorage.getItem('smoothEdges');
-        if (savedSmoothEdges !== null && document.getElementById('smooth-edges')) {
-            document.getElementById('smooth-edges').checked = savedSmoothEdges === 'true';
-        }
-
         const savedAutoZoom = localStorage.getItem('autoZoom');
         if (savedAutoZoom !== null && document.getElementById('auto-zoom')) {
             document.getElementById('auto-zoom').checked = savedAutoZoom === 'true';

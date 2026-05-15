@@ -171,7 +171,6 @@ function renderActiveArea(spots, maxMinutes) {
     const enabledBands = getEnabledBands();
     let maxClusterDist = parseInt(document.getElementById('cluster-distance')?.value, 10);
     if (isNaN(maxClusterDist) || maxClusterDist < 100) maxClusterDist = 500;
-    const smoothEdges = document.getElementById('smooth-edges')?.checked;
 
     const pointsByBand = {};
     const seenCoordsByBand = {};
@@ -229,12 +228,10 @@ function renderActiveArea(spots, maxMinutes) {
                     }
                     if (hull) {
                         let finalShape = hull;
-                        if (smoothEdges) {
-                            try {
-                                finalShape = turf.polygonSmooth(hull, { iterations: 2 });
-                            } catch (e) {
-                                console.error("Error smoothing polygon", e);
-                            }
+                        try {
+                            finalShape = turf.polygonSmooth(hull, { iterations: 2 });
+                        } catch (e) {
+                            console.error("Error smoothing polygon", e);
                         }
                         L.geoJSON(finalShape, {
                             style: { color: color, weight: 1, opacity: 0.8, fillColor: color, fillOpacity: 0.2 },

@@ -2,7 +2,6 @@ import { state } from './state.js';
 import { loadConfig } from './config.js';
 import { initMap, setTheme, map } from './map.js';
 import { initUI } from './ui.js';
-import { initUI, updateBandMatrix } from './ui.js';
 import { updateMapVisualization } from './renderers.js';
 import { latLngToLocator, locatorToBounds, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors } from './utils.js';
 
@@ -27,7 +26,6 @@ function updateCurrentBandDisplay() {
 
 // Force an initial render to sync visual band states (colors/opacity) loaded from localStorage
 updateMapVisualization(state.liveSpots, parseInt(document.getElementById('minutes')?.value || 15));
-updateBandMatrix(state.liveSpots);
 updateCurrentBandDisplay();
 
 let lastRenderTime = 0;
@@ -42,7 +40,6 @@ export function scheduleRender() {
         requestAnimationFrame(() => {
             const minutes = document.getElementById('minutes').value || 15;
             updateMapVisualization(state.liveSpots, parseInt(minutes));
-            updateBandMatrix(state.liveSpots);
             lastRenderTime = Date.now();
             state.renderPending = false;
         });
@@ -121,11 +118,6 @@ document.getElementById('cycle-time')?.addEventListener('change', (e) => {
 document.getElementById('cluster-distance')?.addEventListener('input', (e) => {
     document.getElementById('cluster-dist-val').textContent = e.target.value;
     localStorage.setItem('clusterDistance', e.target.value);
-    scheduleRender();
-});
-
-document.getElementById('smooth-edges')?.addEventListener('change', (e) => {
-    localStorage.setItem('smoothEdges', e.target.checked);
     scheduleRender();
 });
 
