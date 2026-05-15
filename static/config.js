@@ -39,6 +39,12 @@ export function loadConfig() {
             if (radio) radio.checked = true;
         }
 
+        const savedProjection = localStorage.getItem('mapProjection');
+        if (savedProjection) {
+            const radio = document.querySelector(`input[name="projection-select"][value="${savedProjection}"]`);
+            if (radio) radio.checked = true;
+        }
+
         const savedBand = localStorage.getItem('selectedBand');
         if (savedBand) {
             const radio = document.querySelector(`input[name="band"][value="${savedBand}"]`);

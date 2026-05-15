@@ -3,14 +3,16 @@ import { map } from './map.js';
 import { getGridResolution, latLngToLocator, getMinSnrMode, getSelectedBand, getEnabledBands, formatNumber } from './utils.js';
 
 export function initUI() {
-    initTooltip();
     initInfoOverlay();
     initServerStats();
 }
 
-function initTooltip() {
+export function attachUITooltipEvents() {
     const tooltip = document.getElementById('tooltip');
-    if (!tooltip) return;
+    if (!tooltip || !map) return;
+
+    map.off('mousemove');
+    map.off('mouseout');
 
     map.on('mousemove', function(e) {
         const res = getGridResolution();

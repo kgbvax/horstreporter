@@ -3,6 +3,8 @@ import { map } from './map.js';
 import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, bandColors, locatorToBounds } from './utils.js';
 
 export function updateMapVisualization(spots, maxMinutes) {
+    if (!map) return;
+
     if (state.heatLayer) map.removeLayer(state.heatLayer);
     
     updateBandLabels(spots);

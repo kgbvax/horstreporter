@@ -61,6 +61,7 @@ export const bandColors = {
     '10m': '#FF0000',
     '6m':  '#FF00FF',
     '4m':  '#FF1493',
+    '2m':  '#008080',
     'all': '#555555'
 };
 

@@ -1,18 +1,49 @@
 import { state } from './state.js';
 import { loadConfig } from './config.js';
-import { initMap, setTheme, map } from './map.js';
-import { initUI } from './ui.js';
+import { initMap, setTheme, map, loadWorldGeoJson } from './map.js';
+import { initUI, attachUITooltipEvents } from './ui.js';
 import { updateMapVisualization } from './renderers.js';
 import { latLngToLocator, locatorToBounds, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors } from './utils.js';
 
 // --- Init Configuration & Map ---
 const { initialCenter, initialZoom } = loadConfig();
-initMap(initialCenter, initialZoom);
+const savedProjection = localStorage.getItem('mapProjection') || 'mercator';
 const savedTheme = localStorage.getItem('theme') || 'light';
-setTheme(savedTheme);
+
+export function attachMapEvents() {
+    map.on('click', function(e) {
+        const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, 4);
+        const targetInput = document.getElementById('target');
+        if (targetInput) {
+            targetInput.value = loc;
+            const btnSubmit = document.getElementById('btn-submit');
+            if (btnSubmit) btnSubmit.textContent = 'Go'; // Force a clean restart
+            document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+        }
+    });
+}
 
 // --- Init UI ---
 initUI();
+
+(async () => {
+    if (savedProjection === 'azimuthal') {
+        await loadWorldGeoJson();
+    }
+    initMap(initialCenter, initialZoom, savedProjection);
+    setTheme(savedTheme, savedProjection);
+    attachMapEvents();
+    attachUITooltipEvents();
+    
+    // Force an initial render to sync visual band states (colors/opacity) loaded from localStorage
+    updateMapVisualization(state.liveSpots, parseInt(document.getElementById('minutes')?.value || 15));
+    updateCurrentBandDisplay();
+
+    // Automatically trigger analysis on load if a target is saved
+    if (localStorage.getItem('target')) {
+        document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    }
+})();
 
 function updateCurrentBandDisplay() {
     const band = getSelectedBand();
@@ -23,10 +54,6 @@ function updateCurrentBandDisplay() {
         display.style.color = (band === '15m' || band === '12m') ? '#212529' : '#fff';
     }
 }
-
-// Force an initial render to sync visual band states (colors/opacity) loaded from localStorage
-updateMapVisualization(state.liveSpots, parseInt(document.getElementById('minutes')?.value || 15));
-updateCurrentBandDisplay();
 
 let lastRenderTime = 0;
 
@@ -54,21 +81,11 @@ export function scheduleRender() {
     }
 }
 
-map.on('click', function(e) {
-    const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, 4);
-    const targetInput = document.getElementById('target');
-    if (targetInput) {
-        targetInput.value = loc;
-        const btnSubmit = document.getElementById('btn-submit');
-        if (btnSubmit) btnSubmit.textContent = 'Go'; // Force a clean restart
-        document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
-    }
-});
-
 document.getElementById('theme-toggle').addEventListener('click', () => {
     const currentTheme = document.body.getAttribute('data-theme');
     const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-    setTheme(newTheme);
+    const projection = document.querySelector('input[name="projection-select"]:checked')?.value || 'mercator';
+    setTheme(newTheme, projection);
 });
 
 document.getElementById('hide-sidebar')?.addEventListener('click', () => {
@@ -84,8 +101,37 @@ document.getElementById('show-sidebar')?.addEventListener('click', () => {
 });
 
 document.getElementById('controls')?.addEventListener('transitionend', (e) => {
-    if (e.propertyName === 'margin-left') {
+    if (e.propertyName === 'margin-left' && map) {
         map.invalidateSize(); // Fixes distorted tile layers and centering after map container is stretched
+    }
+});
+
+document.getElementById('style-group')?.addEventListener('change', (e) => {
+    if (e.target.name === 'style-select') {
+        localStorage.setItem('mapStyle', e.target.value);
+        scheduleRender();
+    }
+});
+
+document.getElementById('projection-group')?.addEventListener('change', async (e) => {
+    if (e.target.name === 'projection-select') {
+        const projection = e.target.value;
+        localStorage.setItem('mapProjection', projection);
+        
+        if (projection === 'azimuthal') {
+            await loadWorldGeoJson();
+        }
+        
+        const center = map.getCenter();
+        const zoom = map.getZoom();
+        
+        initMap([center.lat, center.lng], zoom, projection);
+        const currentTheme = document.body.getAttribute('data-theme') || 'light';
+        setTheme(currentTheme, projection);
+        
+        attachMapEvents();
+        attachUITooltipEvents();
+        scheduleRender();
     }
 });
 
@@ -156,9 +202,9 @@ document.querySelectorAll('.band-enable').forEach(cb => {
 document.querySelectorAll('.band-preset').forEach(btn => {
     btn.addEventListener('click', () => {
         const preset = btn.getAttribute('data-preset');
-        const highBands = ['20m', '17m', '15m', '12m', '10m', '6m', '4m'];
+        const highBands = ['20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
         const lowBands = ['160m', '80m', '60m', '40m', '30m'];
-        const ssbBands = ['160m', '80m', '40m', '20m', '17m', '15m', '12m', '10m', '6m', '4m'];
+        const ssbBands = ['160m', '80m', '40m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
         
         document.querySelectorAll('.band-enable').forEach(cb => {
             let enable = false;
@@ -173,13 +219,6 @@ document.querySelectorAll('.band-preset').forEach(btn => {
             }
         });
     });
-});
-
-document.getElementById('style-group')?.addEventListener('change', (e) => {
-    if (e.target.name === 'style-select') {
-        localStorage.setItem('mapStyle', e.target.value);
-        scheduleRender();
-    }
 });
 
 document.getElementById('auto-zoom')?.addEventListener('change', (e) => {
@@ -228,6 +267,23 @@ document.getElementById('btn-geo').addEventListener('click', () => {
         },
         { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
     );
+});
+
+document.getElementById('btn-center')?.addEventListener('click', () => {
+    if (!map) return;
+
+    const target = document.getElementById('target').value.trim().toUpperCase();
+    const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(target);
+    if (isLocator) {
+        const bounds = locatorToBounds(target);
+        if (bounds) {
+            const lat = (bounds[0][0] + bounds[1][0]) / 2;
+            const lng = (bounds[0][1] + bounds[1][1]) / 2;
+            map.setView([lat, lng], map.getZoom());
+        }
+    } else if (target) {
+        alert('Cannot center: Please provide a valid Maidenhead locator.');
+    }
 });
 
 document.getElementById('btn-cycle').addEventListener('click', () => {
@@ -287,6 +343,8 @@ document.getElementById('target').addEventListener('keydown', (e) => {
 
 document.getElementById('fetch-form').addEventListener('submit', (e) => {
     e.preventDefault();
+    if (!map) return;
+
     const btnSubmit = document.getElementById('btn-submit');
 
     if (btnSubmit && btnSubmit.textContent === 'Stop') {
@@ -342,24 +400,35 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
 
     const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(target);
     if (isLocator) {
-        if (target.length === 4) {
-            const bounds = locatorToBounds(target);
-            if (bounds) {
-                state.targetLayer = L.rectangle(bounds, { color: '#ff0000', weight: 3, fillOpacity: 0.1, interactive: false }).addTo(map);
-            }
-        } else if (target.length >= 6) {
-            const bounds = locatorToBounds(target);
-            if (bounds) {
-                const lat = (bounds[0][0] + bounds[1][0]) / 2;
-                const lng = (bounds[0][1] + bounds[1][1]) / 2;
-                const crossIcon = L.divIcon({
-                    html: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" stroke="red" stroke-width="4" fill="none" stroke-linecap="round"><line x1="4" y1="4" x2="20" y2="20"></line><line x1="20" y1="4" x2="4" y2="20"></line></svg>',
-                    className: 'target-cross',
-                    iconSize: [24, 24],
-                    iconAnchor: [12, 12]
-                });
-                state.targetLayer = L.marker([lat, lng], { icon: crossIcon, interactive: false }).addTo(map);
-            }
+        let lat = null, lng = null;
+        let bounds = locatorToBounds(target);
+        
+        if (bounds) {
+            lat = (bounds[0][0] + bounds[1][0]) / 2;
+            lng = (bounds[0][1] + bounds[1][1]) / 2;
+        }
+
+        const currentProj = document.querySelector('input[name="projection-select"]:checked')?.value || 'mercator';
+        if (currentProj === 'azimuthal' && lat !== null && lng !== null) {
+            const zoom = map.getZoom();
+            initMap([lat, lng], zoom, 'azimuthal');
+            const currentTheme = document.body.getAttribute('data-theme') || 'light';
+            setTheme(currentTheme, 'azimuthal');
+            attachMapEvents();
+            attachUITooltipEvents();
+            scheduleRender();
+        }
+
+        if (target.length === 4 && bounds) {
+            state.targetLayer = L.rectangle(bounds, { color: '#ff0000', weight: 3, fillOpacity: 0.1, interactive: false }).addTo(map);
+        } else if (target.length >= 6 && bounds) {
+            const crossIcon = L.divIcon({
+                html: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" stroke="red" stroke-width="4" fill="none" stroke-linecap="round"><line x1="4" y1="4" x2="20" y2="20"></line><line x1="20" y1="4" x2="4" y2="20"></line></svg>',
+                className: 'target-cross',
+                iconSize: [24, 24],
+                iconAnchor: [12, 12]
+            });
+            state.targetLayer = L.marker([lat, lng], { icon: crossIcon, interactive: false }).addTo(map);
         }
     }
 
@@ -441,8 +510,3 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
         }
     }, 5000);
 });
-
-// Automatically trigger analysis on load if a target is saved
-if (localStorage.getItem('target')) {
-    document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
-}
