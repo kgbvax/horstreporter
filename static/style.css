@@ -1,3 +1,14 @@
+#azimuth-zoom-controls {
+    user-select: none;
+    pointer-events: auto;
+}
+#azimuth-zoom-controls button {
+    min-width: 2.2em;
+    font-size: 1.3em;
+    font-weight: 600;
+    border-radius: 0.5em;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
 /* Global variables and theme setup */
 body {
     --bg-color: #ffffff;
@@ -32,6 +43,18 @@ body[data-theme="dark"] {
 #map {
     flex-grow: 1;
     height: 100%;
+}
+
+#map-stack {
+    flex-grow: 1;
+    height: 100%;
+    position: relative;
+}
+
+#azimuth-canvas {
+    display: none;
+    z-index: 600;
+    pointer-events: auto;
 }
 
 #controls {

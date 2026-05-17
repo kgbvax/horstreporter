@@ -1,17 +1,161 @@
 import { state } from './state.js';
 import { loadConfig } from './config.js';
-import { initMap, setTheme, map, loadWorldGeoJson } from './map.js';
+import { initMap, setTheme, map } from './map.js';
+import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, setAzimuthEnabled, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled } from './azimuth-runtime.js';
 import { initUI, attachUITooltipEvents } from './ui.js';
 import { updateMapVisualization } from './renderers.js';
 import { latLngToLocator, locatorToBounds, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors } from './utils.js';
 
+// --- Azimuth Zoom State ---
+let azimuthZoom = Number(localStorage.getItem('azimuthZoom') || 1.5);
+function updateAzimuthZoom(newZoom) {
+    azimuthZoom = clampAzimuthZoom(newZoom);
+    localStorage.setItem('azimuthZoom', azimuthZoom);
+    setAzimuthZoom(azimuthZoom);
+    if (isAzimuthEnabled()) scheduleRender();
+}
+
+let azimuthHorizonKm = Number(localStorage.getItem('azimuthHorizonKm') || 16000);
+function updateAzimuthHorizonKm(newHorizonKm) {
+    azimuthHorizonKm = clampAzimuthHorizonKm(newHorizonKm);
+    localStorage.setItem('azimuthHorizonKm', azimuthHorizonKm);
+    setAzimuthHorizonKm(azimuthHorizonKm);
+    const horizonInput = document.getElementById('azimuth-horizon-km');
+    if (horizonInput && Number(horizonInput.value) !== azimuthHorizonKm) {
+        horizonInput.value = String(azimuthHorizonKm);
+    }
+    if (isAzimuthEnabled()) scheduleRender();
+}
+
+let azimuthNs6tIndicator = localStorage.getItem('azimuthNs6tIndicator') !== 'false';
+function updateAzimuthNs6tIndicator(enabled) {
+    azimuthNs6tIndicator = Boolean(enabled);
+    localStorage.setItem('azimuthNs6tIndicator', azimuthNs6tIndicator ? 'true' : 'false');
+    setAzimuthNs6tIndicatorEnabled(azimuthNs6tIndicator);
+    const indicatorInput = document.getElementById('azimuth-ns6t-indicator');
+    if (indicatorInput) indicatorInput.checked = azimuthNs6tIndicator;
+    if (isAzimuthEnabled()) scheduleRender();
+}
+
+let dxccLabelDensity = Number(localStorage.getItem('dxccLabelDensity') || 1.0);
+function updateDxccLabelDensity(density) {
+    dxccLabelDensity = Math.max(0, Math.min(5.0, Number(density) || 1.0));
+    localStorage.setItem('dxccLabelDensity', dxccLabelDensity);
+    setAzimuthDxccLabelDensity(dxccLabelDensity);
+    const densityInput = document.getElementById('dxcc-label-density');
+    if (densityInput && Number(densityInput.value) !== dxccLabelDensity) {
+        densityInput.value = String(dxccLabelDensity);
+    }
+    document.getElementById('dxcc-label-density-val').textContent = dxccLabelDensity.toFixed(1);
+    if (isAzimuthEnabled()) scheduleRender();
+}
+
+let azimuthDxccLabelsEnabled = localStorage.getItem('azimuthDxccLabelsEnabled') !== 'false';
+function updateAzimuthDxccLabelsEnabled(enabled) {
+    azimuthDxccLabelsEnabled = Boolean(enabled);
+    localStorage.setItem('azimuthDxccLabelsEnabled', azimuthDxccLabelsEnabled ? 'true' : 'false');
+    setAzimuthDxccLabelsEnabled(azimuthDxccLabelsEnabled);
+    const dxccToggle = document.getElementById('azimuth-dxcc-labels');
+    if (dxccToggle) dxccToggle.checked = azimuthDxccLabelsEnabled;
+    if (isAzimuthEnabled()) scheduleRender();
+}
+
+const storedDk3jfMode = localStorage.getItem('dk3jfModeEnabled');
+const legacyStoredDk3jxMode = localStorage.getItem('dk3jxModeEnabled');
+let dk3jfModeEnabled = storedDk3jfMode !== null
+    ? storedDk3jfMode === 'true'
+    : legacyStoredDk3jxMode === 'true';
+
+function setElementVisibility(el, visible) {
+    if (!el) return;
+    if (visible) {
+        el.style.removeProperty('display');
+    } else {
+        el.style.setProperty('display', 'none', 'important');
+    }
+}
+
+async function updateDk3jfMode(enabled) {
+    dk3jfModeEnabled = Boolean(enabled);
+    localStorage.setItem('dk3jfModeEnabled', dk3jfModeEnabled ? 'true' : 'false');
+    localStorage.removeItem('dk3jxModeEnabled');
+
+    const dk3jfToggle = document.getElementById('dk3jf-mode');
+    if (dk3jfToggle) dk3jfToggle.checked = dk3jfModeEnabled;
+
+    const band2mWrapper = document.getElementById('band-wrapper-2m');
+    setElementVisibility(band2mWrapper, dk3jfModeEnabled);
+
+    const projectionRow = document.getElementById('projection-switch-row');
+    setElementVisibility(projectionRow, dk3jfModeEnabled);
+
+    const azimuthOptionsGroup = document.getElementById('azimuth-options-group');
+    setElementVisibility(azimuthOptionsGroup, dk3jfModeEnabled);
+
+    if (!dk3jfModeEnabled) {
+        const band2mEnable = document.querySelector('.band-enable[value="2m"]');
+        const band2mRadio = document.querySelector('input[name="band"][value="2m"]');
+        const allBandRadio = document.querySelector('input[name="band"][value="all"]');
+
+        if (band2mEnable) {
+            band2mEnable.checked = false;
+            localStorage.setItem('enable-2m', 'false');
+        }
+        if (band2mRadio) {
+            band2mRadio.disabled = true;
+            if (band2mRadio.checked && allBandRadio) {
+                allBandRadio.checked = true;
+                localStorage.setItem('selectedBand', 'all');
+                updateCurrentBandDisplay();
+            }
+        }
+
+        const mercatorRadio = document.querySelector('input[name="projection-select"][value="mercator"]');
+        if (mercatorRadio && !mercatorRadio.checked) {
+            mercatorRadio.checked = true;
+            localStorage.setItem('mapProjection', 'mercator');
+            await applyProjectionMode('mercator');
+        }
+    }
+
+    scheduleRender();
+}
+
 // --- Init Configuration & Map ---
 const { initialCenter, initialZoom } = loadConfig();
-const savedProjection = localStorage.getItem('mapProjection') || 'mercator';
 const savedTheme = localStorage.getItem('theme') || 'light';
+const savedProjection = localStorage.getItem('mapProjection') || 'mercator';
+let lastRenderTime = 0;
+let renderTimeoutId = null;
+const MIN_RENDER_INTERVAL_MS = 40;
+
+function currentProjection() {
+    return document.querySelector('input[name="projection-select"]:checked')?.value || 'mercator';
+}
+
+async function applyProjectionMode(projection) {
+    if (projection === 'azimuthal') {
+        await loadAzimuthWorldGeoJson();
+        setAzimuthEnabled(true);
+        setAzimuthTheme(document.body.getAttribute('data-theme') || 'light');
+        setAzimuthZoom(azimuthZoom);
+        document.getElementById('azimuth-zoom-controls').style.display = 'block';
+        scheduleRender();
+        return;
+    }
+
+    setAzimuthEnabled(false);
+    document.getElementById('azimuth-zoom-controls').style.display = 'none';
+    if (map) map.invalidateSize();
+    scheduleRender();
+}
 
 export function attachMapEvents() {
     map.on('click', function(e) {
+        if (currentProjection() === 'azimuthal') {
+            return;
+        }
+
         const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, 4);
         const targetInput = document.getElementById('target');
         if (targetInput) {
@@ -27,11 +171,21 @@ export function attachMapEvents() {
 initUI();
 
 (async () => {
-    if (savedProjection === 'azimuthal') {
-        await loadWorldGeoJson();
-    }
-    initMap(initialCenter, initialZoom, savedProjection);
-    setTheme(savedTheme, savedProjection);
+    initMap(initialCenter, initialZoom);
+    initAzimuthCanvas();
+    setTheme(savedTheme);
+    setAzimuthTheme(savedTheme);
+    setAzimuthCenter(initialCenter);
+    updateAzimuthHorizonKm(azimuthHorizonKm);
+    updateAzimuthNs6tIndicator(azimuthNs6tIndicator);
+    updateDxccLabelDensity(dxccLabelDensity);
+    updateAzimuthDxccLabelsEnabled(azimuthDxccLabelsEnabled);
+    await updateDk3jfMode(dk3jfModeEnabled);
+
+    const initialProjection = dk3jfModeEnabled ? savedProjection : 'mercator';
+    const projRadio = document.querySelector(`input[name="projection-select"][value="${initialProjection}"]`);
+    if (projRadio) projRadio.checked = true;
+    await applyProjectionMode(initialProjection);
     attachMapEvents();
     attachUITooltipEvents();
     
@@ -55,37 +209,38 @@ function updateCurrentBandDisplay() {
     }
 }
 
-let lastRenderTime = 0;
-
 export function scheduleRender() {
-    if (state.renderPending) return;
-
     const now = Date.now();
     const timeSinceLastRender = now - lastRenderTime;
+    const delay = Math.max(0, MIN_RENDER_INTERVAL_MS - timeSinceLastRender);
 
-    const doRender = () => {
+    if (renderTimeoutId) {
+        clearTimeout(renderTimeoutId);
+        renderTimeoutId = null;
+    }
+
+    state.renderPending = true;
+    renderTimeoutId = setTimeout(() => {
+        renderTimeoutId = null;
         requestAnimationFrame(() => {
             const minutes = document.getElementById('minutes').value || 15;
-            updateMapVisualization(state.liveSpots, parseInt(minutes));
+            if (isAzimuthEnabled()) {
+                renderAzimuthScene({ spots: state.liveSpots });
+            } else {
+                updateMapVisualization(state.liveSpots, parseInt(minutes));
+            }
             lastRenderTime = Date.now();
             state.renderPending = false;
         });
-    };
-
-    if (timeSinceLastRender >= 1000) {
-        state.renderPending = true;
-        doRender();
-    } else {
-        state.renderPending = true;
-        setTimeout(doRender, 1000 - timeSinceLastRender);
-    }
+    }, delay);
 }
 
 document.getElementById('theme-toggle').addEventListener('click', () => {
     const currentTheme = document.body.getAttribute('data-theme');
     const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-    const projection = document.querySelector('input[name="projection-select"]:checked')?.value || 'mercator';
-    setTheme(newTheme, projection);
+    setTheme(newTheme);
+    setAzimuthTheme(newTheme);
+    if (isAzimuthEnabled()) scheduleRender();
 });
 
 document.getElementById('hide-sidebar')?.addEventListener('click', () => {
@@ -103,6 +258,7 @@ document.getElementById('show-sidebar')?.addEventListener('click', () => {
 document.getElementById('controls')?.addEventListener('transitionend', (e) => {
     if (e.propertyName === 'margin-left' && map) {
         map.invalidateSize(); // Fixes distorted tile layers and centering after map container is stretched
+        if (isAzimuthEnabled()) scheduleRender();
     }
 });
 
@@ -114,24 +270,29 @@ document.getElementById('style-group')?.addEventListener('change', (e) => {
 });
 
 document.getElementById('projection-group')?.addEventListener('change', async (e) => {
-    if (e.target.name === 'projection-select') {
-        const projection = e.target.value;
-        localStorage.setItem('mapProjection', projection);
-        
-        if (projection === 'azimuthal') {
-            await loadWorldGeoJson();
-        }
-        
-        const center = map.getCenter();
-        const zoom = map.getZoom();
-        
-        initMap([center.lat, center.lng], zoom, projection);
-        const currentTheme = document.body.getAttribute('data-theme') || 'light';
-        setTheme(currentTheme, projection);
-        
-        attachMapEvents();
-        attachUITooltipEvents();
-        scheduleRender();
+    if (e.target?.name !== 'projection-select') return;
+    localStorage.setItem('mapProjection', e.target.value);
+    await applyProjectionMode(e.target.value);
+});
+
+// Azimuth zoom button events
+document.getElementById('azimuth-zoom-in')?.addEventListener('click', () => {
+    updateAzimuthZoom(azimuthZoom + 0.2);
+});
+document.getElementById('azimuth-zoom-out')?.addEventListener('click', () => {
+    updateAzimuthZoom(azimuthZoom - 0.2);
+});
+
+// Keyboard +/- for azimuth zoom
+window.addEventListener('keydown', (e) => {
+    if (!isAzimuthEnabled()) return;
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    if (e.key === '+' || e.key === '=') {
+        updateAzimuthZoom(azimuthZoom + 0.2);
+        e.preventDefault();
+    } else if (e.key === '-' || e.key === '_') {
+        updateAzimuthZoom(azimuthZoom - 0.2);
+        e.preventDefault();
     }
 });
 
@@ -159,6 +320,30 @@ document.getElementById('cycle-time')?.addEventListener('change', (e) => {
         document.getElementById('btn-cycle').click();
         document.getElementById('btn-cycle').click();
     }
+});
+
+document.getElementById('azimuth-horizon-km')?.addEventListener('change', (e) => {
+    updateAzimuthHorizonKm(e.target.value);
+});
+
+document.getElementById('azimuth-ns6t-indicator')?.addEventListener('change', (e) => {
+    updateAzimuthNs6tIndicator(e.target.checked);
+});
+
+document.getElementById('dxcc-label-density')?.addEventListener('input', (e) => {
+    document.getElementById('dxcc-label-density-val').textContent = e.target.value;
+});
+
+document.getElementById('dxcc-label-density')?.addEventListener('change', (e) => {
+    updateDxccLabelDensity(e.target.value);
+});
+
+document.getElementById('azimuth-dxcc-labels')?.addEventListener('change', (e) => {
+    updateAzimuthDxccLabelsEnabled(e.target.checked);
+});
+
+document.getElementById('dk3jf-mode')?.addEventListener('change', async (e) => {
+    await updateDk3jfMode(e.target.checked);
 });
 
 document.getElementById('cluster-distance')?.addEventListener('input', (e) => {
@@ -279,7 +464,12 @@ document.getElementById('btn-center')?.addEventListener('click', () => {
         if (bounds) {
             const lat = (bounds[0][0] + bounds[1][0]) / 2;
             const lng = (bounds[0][1] + bounds[1][1]) / 2;
-            map.setView([lat, lng], map.getZoom());
+            if (currentProjection() === 'azimuthal') {
+                setAzimuthCenter([lat, lng]);
+                scheduleRender();
+            } else {
+                map.setView([lat, lng], map.getZoom());
+            }
         }
     } else if (target) {
         alert('Cannot center: Please provide a valid Maidenhead locator.');
@@ -406,29 +596,23 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
         if (bounds) {
             lat = (bounds[0][0] + bounds[1][0]) / 2;
             lng = (bounds[0][1] + bounds[1][1]) / 2;
+            if (currentProjection() === 'azimuthal') {
+                setAzimuthCenter([lat, lng]);
+            }
         }
 
-        const currentProj = document.querySelector('input[name="projection-select"]:checked')?.value || 'mercator';
-        if (currentProj === 'azimuthal' && lat !== null && lng !== null) {
-            const zoom = map.getZoom();
-            initMap([lat, lng], zoom, 'azimuthal');
-            const currentTheme = document.body.getAttribute('data-theme') || 'light';
-            setTheme(currentTheme, 'azimuthal');
-            attachMapEvents();
-            attachUITooltipEvents();
-            scheduleRender();
-        }
-
-        if (target.length === 4 && bounds) {
-            state.targetLayer = L.rectangle(bounds, { color: '#ff0000', weight: 3, fillOpacity: 0.1, interactive: false }).addTo(map);
-        } else if (target.length >= 6 && bounds) {
-            const crossIcon = L.divIcon({
-                html: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" stroke="red" stroke-width="4" fill="none" stroke-linecap="round"><line x1="4" y1="4" x2="20" y2="20"></line><line x1="20" y1="4" x2="4" y2="20"></line></svg>',
-                className: 'target-cross',
-                iconSize: [24, 24],
-                iconAnchor: [12, 12]
-            });
-            state.targetLayer = L.marker([lat, lng], { icon: crossIcon, interactive: false }).addTo(map);
+        if (currentProjection() !== 'azimuthal') {
+            if (target.length === 4 && bounds) {
+                state.targetLayer = L.rectangle(bounds, { color: '#ff0000', weight: 3, fillOpacity: 0.1, interactive: false }).addTo(map);
+            } else if (target.length >= 6 && bounds) {
+                const crossIcon = L.divIcon({
+                    html: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" stroke="red" stroke-width="4" fill="none" stroke-linecap="round"><line x1="4" y1="4" x2="20" y2="20"></line><line x1="20" y1="4" x2="4" y2="20"></line></svg>',
+                    className: 'target-cross',
+                    iconSize: [24, 24],
+                    iconAnchor: [12, 12]
+                });
+                state.targetLayer = L.marker([lat, lng], { icon: crossIcon, interactive: false }).addTo(map);
+            }
         }
     }
 

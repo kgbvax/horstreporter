@@ -236,7 +236,7 @@ function renderActiveArea(spots, maxMinutes) {
                             console.error("Error smoothing polygon", e);
                         }
                         L.geoJSON(finalShape, {
-                            style: { color: color, weight: 1, opacity: 0.8, fillColor: color, fillOpacity: 0.2 },
+                            style: { color: color, weight: 1, opacity: 0.9, fillColor: color, fillOpacity: 0.18 },
                             interactive: false
                         }).addTo(state.heatLayer);
                     }
@@ -247,13 +247,25 @@ function renderActiveArea(spots, maxMinutes) {
 
             isolatedPts.forEach(p => {
                 L.circleMarker([p.geometry.coordinates[1], p.geometry.coordinates[0]], {
-                    color: color, radius: 5, weight: 2, fillOpacity: 0.5, interactive: false
+                    color: color,
+                    fillColor: color,
+                    radius: 4.5,
+                    weight: 2,
+                    opacity: 0.65,
+                    fillOpacity: 0.5,
+                    interactive: false
                 }).addTo(state.heatLayer);
             });
         } else {
             pts.forEach(p => {
                 L.circleMarker([p.geometry.coordinates[1], p.geometry.coordinates[0]], {
-                    color: color, radius: 5, weight: 2, fillOpacity: 0.5, interactive: false
+                    color: color,
+                    fillColor: color,
+                    radius: 4.5,
+                    weight: 2,
+                    opacity: 0.65,
+                    fillOpacity: 0.5,
+                    interactive: false
                 }).addTo(state.heatLayer);
             });
         }

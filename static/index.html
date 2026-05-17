@@ -55,13 +55,13 @@
                     <label class="btn btn-outline-primary btn-sm" for="style-area">Active Area</label>
                 </div>
             </div>
-            <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
+            <div id="projection-switch-row" class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
                 <label class="form-label mb-0">Projection:</label>
                 <div class="btn-group w-100" role="group" id="projection-group">
                     <input type="radio" class="btn-check" id="proj-mercator" name="projection-select" value="mercator" autocomplete="off" checked>
                     <label class="btn btn-outline-primary btn-sm" for="proj-mercator">Mercator</label>
                     <input type="radio" class="btn-check" id="proj-azimuthal" name="projection-select" value="azimuthal" autocomplete="off">
-                    <label class="btn btn-outline-primary btn-sm" for="proj-azimuthal" title="Azimuthal Equidistant (Beam Chart)">Azimuthal</label>
+                    <label class="btn btn-outline-primary btn-sm" for="proj-azimuthal">Azimuthal</label>
                 </div>
             </div>
             <div class="form-sections d-flex flex-column gap-2">
@@ -151,7 +151,7 @@
                             <label class="form-check-label text-white w-100 stretched-link" for="band-4m" style="cursor:pointer;">4m</label>
                             <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="4m" title="Enable/Disable 4m">
                         </div>
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #008080; border: 2px solid transparent; position: relative; opacity: 0.2; filter: grayscale(100%);">
+                        <div id="band-wrapper-2m" class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #008080; border: 2px solid transparent; position: relative; opacity: 0.2; filter: grayscale(100%);">
                             <input type="radio" class="form-check-input ms-1 me-2" name="band" value="2m" id="band-2m" disabled>
                             <label class="form-check-label text-white w-100 stretched-link" for="band-2m" style="cursor:pointer;">2m</label>
                             <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="2m" title="Enable/Disable 2m">
@@ -185,17 +185,40 @@
                     <label class="d-flex align-items-center justify-content-between">Include adjacent squares:
                         <input type="checkbox" id="surroundings" class="form-check-input m-0" />
                     </label>
+                    <label class="d-flex align-items-center justify-content-between">DK3JF Mode:
+                        <input type="checkbox" id="dk3jf-mode" class="form-check-input m-0" />
+                    </label>
+                    <div id="azimuth-options-group" class="d-flex flex-column gap-2">
+                        <label class="d-flex align-items-center justify-content-between">Azimuthal horizon (km):
+                            <input type="number" id="azimuth-horizon-km" class="form-control form-control-sm w-auto" value="16000" min="1000" max="20015" step="100" style="max-width: 100px;" />
+                        </label>
+                        <label class="d-flex align-items-center justify-content-between">NS6T-style azimuth indicator:
+                            <input type="checkbox" id="azimuth-ns6t-indicator" class="form-check-input m-0" checked />
+                        </label>
+                        <label class="d-flex align-items-center justify-content-between">Show DXCC labels:
+                            <input type="checkbox" id="azimuth-dxcc-labels" class="form-check-input m-0" checked />
+                        </label>
+                        <div class="d-flex flex-column w-100">
+                            <label class="d-flex align-items-center justify-content-between mb-0" for="dxcc-label-density"><span>DXCC Label Density:</span> <span><span id="dxcc-label-density-val">1.0</span>x</span></label>
+                            <input type="range" id="dxcc-label-density" class="form-range" min="0" max="5" step="0.1" value="1.0" />
+                        </div>
+                    </div>
                 </div>
             </details>
         </form>
     </div>
-    <div id="map" class="flex-grow-1 h-100"></div>
+    <div id="map-stack" class="flex-grow-1 h-100 position-relative">
+        <div id="map" class="w-100 h-100"></div>
+        <canvas id="azimuth-canvas" class="position-absolute top-0 start-0 w-100 h-100"></canvas>
+        <div id="azimuth-zoom-controls" class="position-absolute bottom-0 end-0 m-3" style="display:none; z-index: 1001;">
+            <button id="azimuth-zoom-in" class="btn btn-outline-secondary btn-sm mb-1" title="Zoom in" tabindex="-1">+</button><br>
+            <button id="azimuth-zoom-out" class="btn btn-outline-secondary btn-sm" title="Zoom out" tabindex="-1">−</button>
+        </div>
+    </div>
     <div id="tooltip"></div>
     <script src="vendor/js/bootstrap.bundle.min.js"></script>
     <script src="vendor/js/leaflet.js"></script>
     <script src="vendor/js/leaflet-heat.js"></script>
-    <script src="vendor/js/proj4.js"></script>
-    <script src="vendor/js/proj4leaflet.js"></script>
     <script src="vendor/js/turf.min.js"></script>
     <script type="module" src="app.js"></script>
 </body>

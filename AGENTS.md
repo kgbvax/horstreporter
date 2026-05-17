@@ -1,34 +1,49 @@
 # HorstReporter AI Agent Instructions
 
-## What this project is
-- A Go web server that connects to the PSK Reporter MQTT stream, filters HF reception reports (spots), and serves a static browser frontend.
-- The frontend lives in `static/` and uses Leaflet, Bootstrap, and Turf for map-based visualization.
-- Key backend entry point: `main.go`.
-- Key frontend entry point: `static/app.js` (plus `static/ui.js`, `static/state.js`, `static/renderer.js`, and other UI/logic files).
+## Project snapshot
+- HorstReporter is a **single Go binary** that consumes PSK Reporter MQTT data, filters spots, and serves a static browser UI.
+- Backend entry point: `main.go`.
+- Frontend entry point: `static/app.js`.
+- Frontend stack: plain ES modules + static assets (Leaflet/Bootstrap/Turf), **no React/Vue build pipeline**.
 
-## What agents should know
-- `main.go` embeds `static/` for production builds, but `--dev` mode serves `static/` from disk.
-- The backend exposes at least two API endpoints:
-  - `/api/stream` for SSE spot events
-  - `/api/stats` for aggregated statistics
-- The codebase is not a typical Go web framework app; it is a small custom server with static assets and MQTT handling.
-- The frontend is plain ES modules and static assets; there is no React/Vue build pipeline.
+## Architecture boundaries
+- Backend core files:
+  - `main.go` (flags, server wiring, static serving, TLS)
+  - `mqtt.go` (MQTT ingest + topic/message parsing)
+  - `hub.go` (in-memory client hub + spot history)
+  - `spot.go` (spot model + matching/locator utilities)
+  - `server.go` (HTTP handlers)
+- API endpoints:
+  - `/api/stream` (SSE)
+  - `/api/stats` (aggregated server stats)
 
-## Recommended commands
-- Run backend tests: `go test ./...`
-- Run frontend tests: `npm test`
-- The `package.json` frontend test script is `vitest run`.
+## Quick commands agents should use
+- Backend tests: `go test ./...`
+- Frontend tests: `npm test` (runs `vitest run`)
+- Dev run: `go run . -dev -port 8080`
 
 ## Editing guidance
-- Prefer changes in `main.go`, `mqtt.go`, `hub.go`, `spot.go`, `server.go` for backend logic.
-- Prefer changes in `static/*.js`, `static/index.html`, `static/style.css` for frontend behavior and UI.
-- Avoid editing `static/vendor/` files unless absolutely necessary; these are third-party libraries.
+- Backend logic changes should generally happen in `main.go`, `mqtt.go`, `hub.go`, `spot.go`, `server.go`.
+- Frontend behavior/UI changes should generally happen in `static/*.js`, `static/index.html`, `static/style.css`.
+- Prefer extending existing modules (`static/state.js`, `static/map.js`, `static/renderers.js`, `static/ui.js`) over creating new architecture layers.
 
-## Useful docs and references
-- Use `GEMINI.md` for feature and architecture context.
-- There is no README in the repo root, so rely on code structure and `GEMINI.md` for guidance.
+## Repo-specific guardrails
+- In production mode, static files are embedded via `//go:embed static`; in `-dev` mode they are served from disk.
+  - If frontend changes do not appear, verify whether the app is running in `-dev` or from a previously built binary.
+- Keep this as a single-service design. Do not introduce microservice assumptions.
+- Do not add a frontend toolchain unless the task explicitly requires one.
+- Avoid editing `static/vendor/` unless absolutely necessary (third-party code).
+- Treat `hub.history`/client handling changes carefully; these affect SSE fan-out behavior across all clients.
+
+## Testing expectations
+- For backend edits, run `go test ./...`.
+- For frontend edits, run `npm test`.
+- Prefer small, focused changes and verify behavior at API boundaries (`/api/stream`, `/api/stats`) when relevant.
+
+## Canonical references (link, don’t duplicate)
+- Feature/architecture details: [`GEMINI.md`](./GEMINI.md)
+- User-facing behavior/content: [`static/info.md`](./static/info.md)
 
 ## What to avoid
-- Do not add a new frontend build toolchain unless the change clearly requires it.
-- Do not refactor vendor libraries in `static/vendor/`.
-- Do not assume this is a multi-service microservice architecture; it is a single Go binary plus static site.
+- Don’t refactor vendor libraries in `static/vendor/` as part of unrelated tasks.
+- Don’t assume framework conventions from Gin/Echo/React/Vite; this repo is intentionally minimal and custom.
