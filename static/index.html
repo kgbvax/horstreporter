@@ -163,6 +163,15 @@
             <details class="options-panel border-top pt-2 mt-2">
                 <summary class="small fw-bold" style="cursor: pointer;">Options</summary>
                 <div class="options-content d-flex flex-column gap-2 mt-2 small">
+                    <label class="d-flex align-items-center justify-content-between">Show grayline:
+                        <input type="checkbox" id="show-grayline" class="form-check-input m-0" />
+                    </label>
+                    <label class="d-flex align-items-center justify-content-between">Color countries:
+                        <input type="checkbox" id="color-countries" class="form-check-input m-0" />
+                    </label>
+                    <label class="d-flex align-items-center justify-content-between">Show DXCC entity labels:
+                        <input type="checkbox" id="show-dxcc-labels" class="form-check-input m-0" />
+                    </label>
                     <label class="d-flex align-items-center justify-content-between">Max Spot Age (min):
                         <input type="number" id="minutes" class="form-control form-control-sm w-auto" value="15" min="1" max="60" style="max-width: 80px;" />
                     </label>
@@ -194,9 +203,6 @@
                         </label>
                         <label class="d-flex align-items-center justify-content-between">NS6T-style azimuth indicator:
                             <input type="checkbox" id="azimuth-ns6t-indicator" class="form-check-input m-0" checked />
-                        </label>
-                        <label class="d-flex align-items-center justify-content-between">Show DXCC labels:
-                            <input type="checkbox" id="azimuth-dxcc-labels" class="form-check-input m-0" checked />
                         </label>
                         <div class="d-flex flex-column w-100">
                             <label class="d-flex align-items-center justify-content-between mb-0" for="dxcc-label-density"><span>DXCC Label Density:</span> <span><span id="dxcc-label-density-val">1.0</span>x</span></label>

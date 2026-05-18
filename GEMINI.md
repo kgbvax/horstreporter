@@ -31,3 +31,34 @@ The application consists of a Go backend and a JavaScript frontend.
 -   **Band Cycler**: An automatic function to cycle through the currently active bands, providing a dynamic overview of conditions.
 -   **Geolocation**: A button to automatically detect the user's locator via the browser's geolocation API.
 -   **Tooltip Details**: Hovering over a grid square on the map shows a tooltip with detailed statistics: min/max/avg SNR, the best band, and the total number of spots.
+
+## API Behavior Notes
+
+### `/api/stream`
+
+- Query parameter `target` is the canonical filter input.
+- For backward compatibility with cached/older frontends, `callsign` and `locator` are still accepted as fallback query parameters if `target` is missing.
+- `minutes` defaults to `15` when missing/invalid and is capped at `60`.
+- `surroundings=true` only expands to neighboring squares when the target is a valid locator.
+- On connection pressure (`-max-clients` reached), the endpoint responds as SSE with `event: server_error` and a human-readable capacity message.
+
+### `/api/stats`
+
+- Returns aggregated runtime information:
+    - `active_connections`
+    - `history_size`
+    - `history_minutes`
+    - `history_size_kb` (approximate in-memory history footprint)
+
+## Testing & Validation
+
+Run both suites during normal development:
+
+- Backend: `go test ./...`
+- Frontend: `npm test` (Vitest)
+
+Current regression coverage includes:
+
+- Spot matching for callsigns/locators, sender-vs-receiver routing, and edge conditions (missing remote locator, future timestamps).
+- Stream handler integration, compatibility query params, bad-request validation, and max-client capacity handling.
+- Stats endpoint JSON structure and rolling history window behavior.

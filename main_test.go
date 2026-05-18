@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -256,4 +257,194 @@ func TestStatsHandlerIntegration(t *testing.T) {
 	if historyMins < 9 || historyMins > 11 {
 		t.Errorf("Expected history minutes ~10, got %v", historyMins)
 	}
+}
+
+func withHubSnapshot(t *testing.T, fn func()) {
+	t.Helper()
+
+	hub.Lock()
+	origClients := hub.clients
+	origHistory := hub.history
+	hub.clients = make(map[*Client]bool)
+	hub.history = make([]MQTTMessage, 0)
+	hub.Unlock()
+
+	origMaxClients := maxClients
+	defer func() {
+		hub.Lock()
+		hub.clients = origClients
+		hub.history = origHistory
+		hub.Unlock()
+		maxClients = origMaxClients
+	}()
+
+	fn()
+}
+
+func TestMatchAndCreateSpotEdgeCases(t *testing.T) {
+	now := int64(200000)
+
+	t.Run("No targets configured", func(t *testing.T) {
+		client := &Client{targets: []string{}}
+		_, ok := matchAndCreateSpot(client, MQTTMessage{}, now)
+		if ok {
+			t.Fatal("expected no match when client has no targets")
+		}
+	})
+
+	t.Run("Receiver-side match uses sender locator", func(t *testing.T) {
+		client := &Client{targets: []string{"K1JT"}}
+		msg := MQTTMessage{
+			SC: "W1AW",
+			RC: "K1JT",
+			SL: "FN31",
+			RL: "FN20",
+			RP: -5,
+			T:  now - 30,
+			B:  "20m",
+			MD: "FT8",
+		}
+
+		spot, ok := matchAndCreateSpot(client, msg, now)
+		if !ok {
+			t.Fatal("expected receiver-side match")
+		}
+		if spot.Locator != "FN31" {
+			t.Fatalf("expected remote locator FN31 for receiver-side match, got %q", spot.Locator)
+		}
+	})
+
+	t.Run("Drops match when remote locator is empty", func(t *testing.T) {
+		client := &Client{targets: []string{"W1AW"}}
+		msg := MQTTMessage{
+			SC: "W1AW",
+			RC: "K1JT",
+			SL: "FN31",
+			RL: "",
+			RP: -10,
+			T:  now - 5,
+			B:  "40m",
+			MD: "FT8",
+		}
+
+		_, ok := matchAndCreateSpot(client, msg, now)
+		if ok {
+			t.Fatal("expected spot to be dropped when remote locator is empty")
+		}
+	})
+
+	t.Run("Future timestamps clamp age to zero", func(t *testing.T) {
+		client := &Client{targets: []string{"W1AW"}}
+		msg := MQTTMessage{
+			SC: "W1AW",
+			RC: "K1JT",
+			SL: "FN31",
+			RL: "FN20",
+			RP: -12,
+			T:  now + 60,
+			B:  "20m",
+			MD: "FT8",
+		}
+
+		spot, ok := matchAndCreateSpot(client, msg, now)
+		if !ok {
+			t.Fatal("expected match")
+		}
+		if spot.AgeSeconds != 0 {
+			t.Fatalf("expected age to be clamped to 0, got %d", spot.AgeSeconds)
+		}
+	})
+}
+
+func TestStreamHandlerValidationAndCompatibility(t *testing.T) {
+	withHubSnapshot(t, func() {
+		server := httptest.NewServer(http.HandlerFunc(streamHandler))
+		defer server.Close()
+
+		t.Run("Returns 400 when target and compatibility params are missing", func(t *testing.T) {
+			resp, err := http.Get(server.URL)
+			if err != nil {
+				t.Fatalf("Failed to make request: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d", resp.StatusCode)
+			}
+		})
+
+		t.Run("Accepts callsign fallback parameter for older clients", func(t *testing.T) {
+			hub.Lock()
+			hub.history = []MQTTMessage{{
+				SC: "W1AW",
+				RC: "K1JT",
+				SL: "FN31",
+				RL: "FN20",
+				RP: -10,
+				T:  time.Now().Unix(),
+				B:  "20m",
+				MD: "FT8",
+			}}
+			hub.Unlock()
+
+			resp, err := http.Get(server.URL + "?callsign=W1AW")
+			if err != nil {
+				t.Fatalf("Failed to make request: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("expected 200, got %d", resp.StatusCode)
+			}
+
+			reader := bufio.NewReader(resp.Body)
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("Failed to read stream line: %v", err)
+			}
+			if !strings.HasPrefix(line, "data: {") || !strings.Contains(line, `"sender":"W1AW"`) {
+				t.Fatalf("expected sender W1AW in first data event, got %q", line)
+			}
+		})
+	})
+}
+
+func TestStreamHandlerMaxClientsCapacity(t *testing.T) {
+	withHubSnapshot(t, func() {
+		maxClients = 1
+
+		hub.Lock()
+		hub.clients[&Client{send: make(chan Spot, 1)}] = true
+		hub.Unlock()
+
+		req := httptest.NewRequest(http.MethodGet, "/api/stream?target=W1AW", nil)
+		rec := httptest.NewRecorder()
+
+		streamHandler(rec, req)
+
+		res := rec.Result()
+		defer res.Body.Close()
+
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", res.StatusCode)
+		}
+
+		if ctype := res.Header.Get("Content-Type"); ctype != "text/event-stream" {
+			t.Fatalf("expected text/event-stream content type, got %q", ctype)
+		}
+
+		bodyBytes, err := io.ReadAll(res.Body)
+		if err != nil {
+			t.Fatalf("failed to read response body: %v", err)
+		}
+		body := string(bodyBytes)
+
+		expected := "event: server_error"
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in body, got: %s", expected, body)
+		}
+		if !strings.Contains(body, "Server is at capacity") {
+			t.Fatalf("expected capacity message in body, got: %s", body)
+		}
+	})
 }

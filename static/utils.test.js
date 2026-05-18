@@ -1,9 +1,22 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
     formatNumber,
+    getCountryColoringEnabled,
+    getMercatorDxccLabelsEnabled,
+    getClosestSunEvent,
+    getCountryFillForFeature,
+    getCountryFillForKey,
+    getGraylineEnabled,
+    getGraylineOverlayCells,
+    getGraylineOverlayOpacities,
+    getGraylineSegments,
     latLngToLocator,
     locatorToBounds,
+    normalizeLongitude,
+    GRAYLINE_TWILIGHT_WIDTH_DEGREES,
     setFaviconColor,
+    getSubsolarPoint,
+    getSolarZenithAngle,
     getGridResolution,
     getMinSnrMode,
     getSelectedBand,
@@ -50,6 +63,85 @@ describe('utils.js', () => {
             const href = document.getElementById('favicon')?.getAttribute('href') || '';
             expect(href).toContain('data:image/svg+xml');
             expect(decodeURIComponent(href)).toContain('#123456');
+        });
+
+        it('normalizeLongitude wraps values into the expected range', () => {
+            expect(normalizeLongitude(190)).toBe(-170);
+            expect(normalizeLongitude(-190)).toBe(170);
+            expect(normalizeLongitude(45)).toBe(45);
+        });
+
+        it('getCountryFillForKey is deterministic for a given key and theme', () => {
+            expect(getCountryFillForKey('DEU', 'light')).toBe(getCountryFillForKey('DEU', 'light'));
+            expect(getCountryFillForKey('DEU', 'dark')).toBe(getCountryFillForKey('DEU', 'dark'));
+            expect(getCountryFillForKey('DEU', 'light')).not.toBe(getCountryFillForKey('DEU', 'dark'));
+        });
+
+        it('getCountryFillForFeature prefers map color indexes like the azimuth map', () => {
+            const feature = { properties: { MAPCOLOR13: 2, ADM0_A3: 'DEU' } };
+            expect(getCountryFillForFeature(feature, 'light')).toBe('#FBD3D1');
+            expect(getCountryFillForFeature(feature, 'dark')).toBe('#5a3c3b');
+        });
+
+        it('getSubsolarPoint returns a plausible solar position', () => {
+            const subsolar = getSubsolarPoint(new Date('2026-03-20T12:00:00Z'));
+
+            expect(subsolar.lat).toBeGreaterThan(-2);
+            expect(subsolar.lat).toBeLessThan(2);
+            expect(subsolar.lng).toBeGreaterThanOrEqual(-180);
+            expect(subsolar.lng).toBeLessThanOrEqual(180);
+        });
+
+        it('getGraylineSegments returns usable terminator segments', () => {
+            const segments = getGraylineSegments(new Date('2026-03-20T12:00:00Z'), 10);
+
+            expect(segments.length).toBeGreaterThan(0);
+            expect(segments.some(segment => segment.length >= 10)).toBe(true);
+
+            segments.flat().forEach(([lat, lng]) => {
+                expect(lat).toBeGreaterThanOrEqual(-90);
+                expect(lat).toBeLessThanOrEqual(90);
+                expect(lng).toBeGreaterThanOrEqual(-180);
+                expect(lng).toBeLessThanOrEqual(180);
+            });
+        });
+
+        it('getSolarZenithAngle is lower near the subsolar point than on the night side', () => {
+            const source = { lat: 0, lng: 0 };
+
+            expect(getSolarZenithAngle(0, 0, source)).toBeCloseTo(0, 6);
+            expect(getSolarZenithAngle(0, 180, source)).toBeCloseTo(180, 6);
+        });
+
+        it('getGraylineOverlayOpacities creates a twilight band about one hour wide', () => {
+            const source = { lat: 0, lng: 0 };
+            const dayEdge = 90 - (GRAYLINE_TWILIGHT_WIDTH_DEGREES / 2);
+            const nightEdge = 90 + (GRAYLINE_TWILIGHT_WIDTH_DEGREES / 2);
+
+            const daySide = getGraylineOverlayOpacities(0, dayEdge - 5, source);
+            const twilight = getGraylineOverlayOpacities(0, 90, source);
+            const nightSide = getGraylineOverlayOpacities(0, nightEdge + 10, source);
+
+            expect(daySide.graylineOpacity).toBe(0);
+            expect(daySide.nightOpacity).toBe(0);
+            expect(twilight.graylineOpacity).toBeGreaterThan(0);
+            expect(nightSide.nightOpacity).toBeGreaterThan(0);
+        });
+
+        it('getGraylineOverlayCells yields shaded cells only for twilight and night regions', () => {
+            const cells = getGraylineOverlayCells({ lat: 0, lng: 0 }, { latStep: 30, lngStep: 30 });
+
+            expect(cells.length).toBeGreaterThan(0);
+            expect(cells.every(cell => cell.graylineOpacity > 0 || cell.nightOpacity > 0)).toBe(true);
+        });
+
+        it('getClosestSunEvent returns a nearby sunrise/sunset with signed minutes when within range', () => {
+            const equinoxNoon = new Date('2026-03-20T12:00:00Z');
+            const closest = getClosestSunEvent(0, 0, equinoxNoon, 500);
+
+            expect(closest).not.toBeNull();
+            expect(['sunrise', 'sunset']).toContain(closest.type);
+            expect(Number.isInteger(closest.deltaMinutes)).toBe(true);
         });
     });
 
@@ -99,6 +191,30 @@ describe('utils.js', () => {
             expect(enabled.has('6m')).toBe(true);
             expect(enabled.has('40m')).toBe(false);
             expect(enabled.size).toBe(2);
+        });
+
+        it('getGraylineEnabled reads from the checkbox when present', () => {
+            document.body.innerHTML = '<input type="checkbox" id="show-grayline" checked />';
+            expect(getGraylineEnabled()).toBe(true);
+
+            document.body.innerHTML = '<input type="checkbox" id="show-grayline" />';
+            expect(getGraylineEnabled()).toBe(false);
+        });
+
+        it('getCountryColoringEnabled reads from the checkbox when present', () => {
+            document.body.innerHTML = '<input type="checkbox" id="color-countries" checked />';
+            expect(getCountryColoringEnabled()).toBe(true);
+
+            document.body.innerHTML = '<input type="checkbox" id="color-countries" />';
+            expect(getCountryColoringEnabled()).toBe(false);
+        });
+
+        it('getMercatorDxccLabelsEnabled reads from the checkbox when present', () => {
+            document.body.innerHTML = '<input type="checkbox" id="show-dxcc-labels" checked />';
+            expect(getMercatorDxccLabelsEnabled()).toBe(true);
+
+            document.body.innerHTML = '<input type="checkbox" id="show-dxcc-labels" />';
+            expect(getMercatorDxccLabelsEnabled()).toBe(false);
         });
     });
 });

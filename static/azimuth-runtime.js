@@ -1,8 +1,9 @@
-import { bandColors, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution } from './utils.js';
+import { bandColors, getEnabledBands, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution } from './utils.js';
 
 const EARTH_RADIUS_KM = 6371;
 const ANTIPODE_KM = Math.PI * EARTH_RADIUS_KM;
 const MAX_VISIBLE_C = Math.PI - 0.02;
+const DXCC_SHOW_ALL_ZOOM_THRESHOLD = 5.0;
 
 const PALETTE_LIGHT = [
     '#FBEFF0', '#FBD3D1', '#FEE5DA', '#FFE2B7', '#FFFBD4', '#E8EDAD', '#E4F0DB',
@@ -46,6 +47,31 @@ const DXCC_PREFIX_BY_ISO_A2 = {
     VE: 'YV', VG: 'VP2', VI: 'K4', VU: 'YJ', WF: 'FW', WS: '5W'
 };
 
+const DXCC_PREFIX_BY_A3 = {
+    FRA: 'F',
+    NOR: 'LA',
+    GBR: 'G',
+    DEU: 'DL',
+    ESP: 'EA',
+    PRT: 'CT',
+    ITA: 'I',
+    RUS: 'UA'
+};
+
+// Entities that are not represented as separate countries in world.geojson but are distinct DXCC entities.
+const SUPPLEMENTAL_DXCC_ENTITIES = [
+    { key: 'DXCC_ASIATIC_RUSSIA', name: 'Asiatic Russia', prefix: 'UA9', lat: 60.0, lng: 90.0, scoreBoost: 3.2 },
+    { key: 'DXCC_KALININGRAD', name: 'Kaliningrad', prefix: 'UA2', lat: 54.7, lng: 20.5, scoreBoost: 2.1 },
+    { key: 'DXCC_ALASKA', name: 'Alaska', prefix: 'KL7', lat: 64.8, lng: -149.5, scoreBoost: 2.2 },
+    { key: 'DXCC_HAWAII', name: 'Hawaii', prefix: 'KH6', lat: 20.8, lng: -157.5, scoreBoost: 2.1 },
+    { key: 'DXCC_AZORES', name: 'Azores', prefix: 'CU', lat: 38.6, lng: -28.0, scoreBoost: 1.9 },
+    { key: 'DXCC_MADEIRA', name: 'Madeira', prefix: 'CT3', lat: 32.7, lng: -16.9, scoreBoost: 1.7 },
+    { key: 'DXCC_CANARY_ISLANDS', name: 'Canary Islands', prefix: 'EA8', lat: 28.3, lng: -16.5, scoreBoost: 1.9 },
+    { key: 'DXCC_BALEARIC', name: 'Balearic Islands', prefix: 'EA6', lat: 39.6, lng: 2.9, scoreBoost: 1.6 },
+    { key: 'DXCC_CEUTA_MELILLA', name: 'Ceuta and Melilla', prefix: 'EA9', lat: 35.3, lng: -2.9, scoreBoost: 1.6 },
+    { key: 'DXCC_SARDINIA', name: 'Sardinia', prefix: 'IS0', lat: 40.1, lng: 9.0, scoreBoost: 1.4 }
+];
+
 const state = {
     enabled: false,
     canvas: null,
@@ -64,6 +90,10 @@ const state = {
     canvasSizeCache: { width: 0, height: 0, dpr: 0 },
     dxccLabelCache: new Map(),
     countryFillCache: new Map(),
+    graylineOverlayCache: {
+        key: '',
+        canvas: null
+    },
     worldLayerCache: {
         key: '',
         canvas: null
@@ -264,8 +294,25 @@ function featurePrefix(feature) {
     const p = feature?.properties || {};
     const explicit = p.DXCC_PREFIX || p.DXCC || p.dxccPrefix;
     if (explicit) return String(explicit).toUpperCase();
-    const iso = String(p.ISO_A2 || '').toUpperCase();
-    return DXCC_PREFIX_BY_ISO_A2[iso] || null;
+    const isoCandidates = [p.ISO_A2, p.ISO_A2_EH, p.POSTAL]
+        .map(v => String(v || '').toUpperCase())
+        .filter(v => !!v && v !== '-99');
+
+    for (const iso of isoCandidates) {
+        const prefix = DXCC_PREFIX_BY_ISO_A2[iso];
+        if (prefix) return prefix;
+    }
+
+    const a3Candidates = [p.ADM0_A3, p.BRK_A3, p.SOV_A3, p.ISO_A3, p.ISO_A3_EH]
+        .map(v => String(v || '').toUpperCase())
+        .filter(v => !!v && v !== '-99');
+
+    for (const a3 of a3Candidates) {
+        const prefix = DXCC_PREFIX_BY_A3[a3];
+        if (prefix) return prefix;
+    }
+
+    return null;
 }
 
 function featureAnchor(feature) {
@@ -404,6 +451,7 @@ export function selectProminentDxccLabels(featureCollection, center, options = {
     const features = featureCollection?.features || [];
     const maxLabels = Number(options.maxLabels ?? 28);
     const minDistanceKm = Number(options.minDistanceKm ?? 900);
+    const includeSupplemental = options.includeSupplemental ?? (features.length > 50);
 
     const candidates = [];
     for (const feature of features) {
@@ -424,6 +472,24 @@ export function selectProminentDxccLabels(featureCollection, center, options = {
         const score = areaScore + (0.7 * popScore) - (0.45 * labelRank) - (distanceKm / 100000);
 
         candidates.push({ key: featureKey(feature), name: featureName(feature), prefix, lat, lng, distanceKm, score });
+    }
+
+    if (includeSupplemental) {
+        for (const entity of SUPPLEMENTAL_DXCC_ENTITIES) {
+            const distanceKm = haversineKm(center[0], center[1], entity.lat, entity.lng);
+            if (distanceKm > ANTIPODE_KM - 300) continue;
+
+            const score = 4.2 + Number(entity.scoreBoost || 0) - (distanceKm / 90000);
+            candidates.push({
+                key: entity.key,
+                name: entity.name,
+                prefix: entity.prefix,
+                lat: entity.lat,
+                lng: entity.lng,
+                distanceKm,
+                score
+            });
+        }
     }
 
     candidates.sort((a, b) => (b.score - a.score) || (a.distanceKm - b.distanceKm));
@@ -467,13 +533,17 @@ export function createAzimuthRenderPlan({ featureCollection, center, spots = [],
     let labels = state.dxccLabelCache.get(labelCacheKey);
     if (!labels) {
         const baseLodTable = {
-            maxLabels: z <= 1.1 ? 10 : z <= 1.4 ? 16 : z <= 1.8 ? 26 : z <= 2.2 ? 38 : 54,
-            minDistanceKm: z <= 1.1 ? 1800 : z <= 1.4 ? 1450 : z <= 1.8 ? 1100 : z <= 2.2 ? 850 : 650
+            maxLabels: z <= 1.1 ? 18 : z <= 1.4 ? 28 : z <= 1.8 ? 42 : z <= 2.2 ? 62 : 90,
+            minDistanceKm: z <= 1.1 ? 1400 : z <= 1.4 ? 1150 : z <= 1.8 ? 900 : z <= 2.2 ? 700 : 520
         };
-        const adjustedLod = state.dxccLabelDensity === 0 ? { maxLabels: 0, minDistanceKm: 20015 } : {
-            maxLabels: Math.max(3, Math.round(baseLodTable.maxLabels * state.dxccLabelDensity)),
-            minDistanceKm: Math.max(100, Math.round(baseLodTable.minDistanceKm / state.dxccLabelDensity))
-        };
+        const adjustedLod = state.dxccLabelDensity === 0
+            ? { maxLabels: 0, minDistanceKm: 20015 }
+            : z >= DXCC_SHOW_ALL_ZOOM_THRESHOLD
+                ? { maxLabels: 2000, minDistanceKm: 0 }
+                : {
+                    maxLabels: Math.max(3, Math.round(baseLodTable.maxLabels * state.dxccLabelDensity)),
+                    minDistanceKm: Math.max(100, Math.round(baseLodTable.minDistanceKm / state.dxccLabelDensity))
+                };
         labels = selectProminentDxccLabels(featureCollection, center, adjustedLod).map(l => ({ key: l.key, prefix: l.prefix, lat: Number(l.lat.toFixed(3)), lng: Number(l.lng.toFixed(3)) }));
 
         state.dxccLabelCache.set(labelCacheKey, labels);
@@ -631,10 +701,120 @@ function drawAzimuthLabels(ctx, width, height, plan) {
     }
 }
 
+function unprojectFromCanvas(x, y, width, height, options = {}) {
+    const applyZoom = options.applyZoom !== false;
+    const radius = Math.min(width, height) * 0.47;
+    const scale = (radius * (applyZoom ? state.zoom : 1)) / Math.PI;
+    if (!scale) return null;
+
+    const nx = (x - (width / 2)) / scale;
+    const ny = -((y - (height / 2)) / scale);
+    const rho = Math.hypot(nx, ny);
+    if (!Number.isFinite(rho) || rho > MAX_VISIBLE_C) return null;
+
+    const lat0 = degToRad(state.center[0]);
+    const lon0 = degToRad(state.center[1]);
+
+    if (rho === 0) {
+        return { lat: state.center[0], lng: state.center[1], c: 0 };
+    }
+
+    const sinC = Math.sin(rho);
+    const cosC = Math.cos(rho);
+    const lat = Math.asin((cosC * Math.sin(lat0)) + ((ny * sinC * Math.cos(lat0)) / rho));
+    const lon = lon0 + Math.atan2(nx * sinC, (rho * Math.cos(lat0) * cosC) - (ny * Math.sin(lat0) * sinC));
+
+    return {
+        lat: radToDeg(lat),
+        lng: normalizeLng(radToDeg(lon)),
+        c: rho
+    };
+}
+
+function hexToRgb(hex) {
+    const value = String(hex || '').replace('#', '');
+    if (value.length !== 6) return [0, 0, 0];
+    return [
+        Number.parseInt(value.slice(0, 2), 16),
+        Number.parseInt(value.slice(2, 4), 16),
+        Number.parseInt(value.slice(4, 6), 16)
+    ];
+}
+
+function blendOverlayColors(base, color, alpha) {
+    if (alpha <= 0) return base;
+    const nextAlpha = base.a + (alpha * (1 - base.a));
+    if (nextAlpha <= 0) return base;
+    return {
+        r: ((base.r * base.a) + (color[0] * alpha * (1 - base.a))) / nextAlpha,
+        g: ((base.g * base.a) + (color[1] * alpha * (1 - base.a))) / nextAlpha,
+        b: ((base.b * base.a) + (color[2] * alpha * (1 - base.a))) / nextAlpha,
+        a: nextAlpha
+    };
+}
+
+function drawGrayline(ctx, width, height) {
+    const bucket = Math.floor(Date.now() / (5 * 60 * 1000));
+    const key = `${width}x${height}:${state.theme}:${state.zoom.toFixed(2)}:${state.horizonKm}:${state.center[0].toFixed(3)}:${state.center[1].toFixed(3)}:${bucket}`;
+
+    if (state.graylineOverlayCache.key === key && state.graylineOverlayCache.canvas) {
+        ctx.drawImage(state.graylineOverlayCache.canvas, 0, 0, width, height);
+        return;
+    }
+
+    const overlayCanvas = typeof OffscreenCanvas !== 'undefined'
+        ? new OffscreenCanvas(Math.max(1, width), Math.max(1, height))
+        : document.createElement('canvas');
+    overlayCanvas.width = Math.max(1, width);
+    overlayCanvas.height = Math.max(1, height);
+
+    const overlayCtx = overlayCanvas.getContext('2d');
+    if (!overlayCtx) return;
+
+    const subsolarPoint = getSubsolarPoint(new Date(bucket * 5 * 60 * 1000));
+    const twilightFill = hexToRgb(state.theme === 'dark' ? '#9a8371' : '#b08b72');
+    const nightFill = hexToRgb(state.theme === 'dark' ? '#01050a' : '#182534');
+    const imageData = overlayCtx.createImageData(width, height);
+    const data = imageData.data;
+
+    for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+            const geo = unprojectFromCanvas(x + 0.5, y + 0.5, width, height);
+            if (!geo) continue;
+
+            const distanceKm = geo.c * EARTH_RADIUS_KM;
+            if (distanceKm > state.horizonKm) continue;
+
+            const { graylineOpacity, nightOpacity } = getGraylineOverlayOpacities(geo.lat, geo.lng, subsolarPoint);
+            if (graylineOpacity <= 0 && nightOpacity <= 0) continue;
+
+            let pixel = { r: 0, g: 0, b: 0, a: 0 };
+            pixel = blendOverlayColors(pixel, twilightFill, graylineOpacity);
+            pixel = blendOverlayColors(pixel, nightFill, nightOpacity);
+
+            const offset = (y * width * 4) + (x * 4);
+            data[offset] = Math.round(pixel.r);
+            data[offset + 1] = Math.round(pixel.g);
+            data[offset + 2] = Math.round(pixel.b);
+            data[offset + 3] = Math.round(pixel.a * 255);
+        }
+    }
+
+    overlayCtx.putImageData(imageData, 0, 0);
+    state.graylineOverlayCache = {
+        key,
+        canvas: overlayCanvas
+    };
+    ctx.drawImage(overlayCanvas, 0, 0, width, height);
+}
+
 function drawAzimuthIndicator(ctx, width, height) {
     const centerX = width / 2;
     const centerY = height / 2;
-    const maxDist = Math.max(1200, Math.min(state.horizonKm, ANTIPODE_KM - 40));
+    const maxDist = Math.max(1200, Math.min(state.horizonKm - 12, ANTIPODE_KM - 12));
+    const guideInnerDist = Math.max(500, maxDist - 2200);
+    const tickInnerDist = Math.max(600, maxDist - 420);
+    const labelDist = Math.max(500, maxDist - 900);
 
     ctx.strokeStyle = state.theme === 'dark' ? 'rgba(220,230,240,0.45)' : 'rgba(30,42,55,0.45)';
     ctx.fillStyle = state.theme === 'dark' ? 'rgba(225,236,245,0.8)' : 'rgba(23,35,46,0.8)';
@@ -642,25 +822,40 @@ function drawAzimuthIndicator(ctx, width, height) {
     ctx.textBaseline = 'middle';
     ctx.font = '500 9px Verdana, Arial, sans-serif';
 
+    // Thin guide rays every 30 degrees, stretched almost from the target to the border.
+    ctx.save();
+    ctx.lineWidth = 0.7;
+    ctx.strokeStyle = state.theme === 'dark' ? 'rgba(220,230,240,0.28)' : 'rgba(30,42,55,0.28)';
+    for (let b = 0; b < 360; b += 30) {
+        const innerGeo = destinationPoint(state.center[0], state.center[1], b, guideInnerDist);
+        const outerGeo = destinationPoint(state.center[0], state.center[1], b, maxDist);
+        const pInner = projectToCanvas(innerGeo[0], innerGeo[1], width, height, { applyZoom: false });
+        const pOuter = projectToCanvas(outerGeo[0], outerGeo[1], width, height, { applyZoom: false });
+        if (!pInner || !pOuter) continue;
+
+        ctx.beginPath();
+        ctx.moveTo(pInner.x, pInner.y);
+        ctx.lineTo(pOuter.x, pOuter.y);
+        ctx.stroke();
+    }
+    ctx.restore();
+
+    // Fine border ticks every 5 degrees around the visible edge.
     for (let b = 0; b < 360; b += 5) {
         const outerGeo = destinationPoint(state.center[0], state.center[1], b, maxDist);
+        const innerGeo = destinationPoint(state.center[0], state.center[1], b, tickInnerDist);
         const pOuter = projectToCanvas(outerGeo[0], outerGeo[1], width, height, { applyZoom: false });
-        if (!pOuter) continue;
+        const pInner = projectToCanvas(innerGeo[0], innerGeo[1], width, height, { applyZoom: false });
+        if (!pOuter || !pInner) continue;
 
         const isMajor = (b % 30) === 0;
-        const innerDist = Math.max(600, maxDist - (isMajor ? 900 : 520));
-        const innerGeo = destinationPoint(state.center[0], state.center[1], b, innerDist);
-        const pInner = projectToCanvas(innerGeo[0], innerGeo[1], width, height, { applyZoom: false });
-        if (!pInner) continue;
-
-        ctx.lineWidth = isMajor ? 1.1 : 0.6;
+        ctx.lineWidth = isMajor ? 1.0 : 0.45;
         ctx.beginPath();
         ctx.moveTo(pInner.x, pInner.y);
         ctx.lineTo(pOuter.x, pOuter.y);
         ctx.stroke();
 
         if (isMajor) {
-            const labelDist = Math.max(500, maxDist - 1500);
             const labelGeo = destinationPoint(state.center[0], state.center[1], b, labelDist);
             const pLabel = projectToCanvas(labelGeo[0], labelGeo[1], width, height, { applyZoom: false });
             if (pLabel) {
@@ -726,7 +921,12 @@ function drawDxccLabels(ctx, width, height, plan) {
 
         ctx.fillStyle = state.theme === 'dark' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.72)';
         ctx.beginPath();
-        ctx.roundRect(box.x0 - 1, box.y0 - 0.5, labelW + 2, labelH + 1, 3);
+        if (typeof ctx.roundRect === 'function') {
+            ctx.roundRect(box.x0 - 1, box.y0 - 0.5, labelW + 2, labelH + 1, 3);
+        } else {
+            // Fallback for browsers that don't implement roundRect on CanvasRenderingContext2D.
+            ctx.rect(box.x0 - 1, box.y0 - 0.5, labelW + 2, labelH + 1);
+        }
         ctx.fill();
 
         ctx.fillStyle = textColor;
@@ -986,6 +1186,10 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
     if (profile) profile.worldStart = nowMs();
     drawWorldCached(state.ctx, width, height, plan);
     if (profile) profile.worldEnd = nowMs();
+
+    if (getGraylineEnabled()) {
+        drawGrayline(state.ctx, width, height);
+    }
 
     if (profile) profile.spotsStart = nowMs();
     drawSpots(state.ctx, width, height, filteredSpots, resolvedStyle, gridSquares, renderCtx.maxClusterDist);

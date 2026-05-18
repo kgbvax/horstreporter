@@ -14,6 +14,9 @@ const mockMap = {
 vi.mock('../static/map.js', () => ({
     initMap: vi.fn(),
     setTheme: vi.fn(),
+    syncMercatorCountryLayer: vi.fn(async () => {}),
+    syncMercatorGraylineLayer: vi.fn(async () => {}),
+    syncMercatorDxccLabelLayer: vi.fn(async () => {}),
     map: mockMap
 }));
 

@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { loadConfig } from './config.js';
-import { initMap, setTheme, map } from './map.js';
+import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineLayer, syncMercatorDxccLabelLayer } from './map.js';
 import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, setAzimuthEnabled, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled } from './azimuth-runtime.js';
 import { initUI, attachUITooltipEvents } from './ui.js';
 import { updateMapVisualization } from './renderers.js';
@@ -50,14 +50,36 @@ function updateDxccLabelDensity(density) {
     if (isAzimuthEnabled()) scheduleRender();
 }
 
-let azimuthDxccLabelsEnabled = localStorage.getItem('azimuthDxccLabelsEnabled') !== 'false';
-function updateAzimuthDxccLabelsEnabled(enabled) {
-    azimuthDxccLabelsEnabled = Boolean(enabled);
-    localStorage.setItem('azimuthDxccLabelsEnabled', azimuthDxccLabelsEnabled ? 'true' : 'false');
-    setAzimuthDxccLabelsEnabled(azimuthDxccLabelsEnabled);
-    const dxccToggle = document.getElementById('azimuth-dxcc-labels');
-    if (dxccToggle) dxccToggle.checked = azimuthDxccLabelsEnabled;
-    if (isAzimuthEnabled()) scheduleRender();
+const storedUnifiedDxcc = localStorage.getItem('dxccLabelsEnabled');
+const storedMercatorDxcc = localStorage.getItem('mercatorDxccLabelsEnabled');
+const storedAzimuthDxcc = localStorage.getItem('azimuthDxccLabelsEnabled');
+let dxccLabelsEnabled = storedUnifiedDxcc !== null
+    ? storedUnifiedDxcc !== 'false'
+    : storedMercatorDxcc !== null
+        ? storedMercatorDxcc !== 'false'
+        : storedAzimuthDxcc !== null
+            ? storedAzimuthDxcc !== 'false'
+            : false;
+
+function updateDxccLabelsEnabled(enabled) {
+    dxccLabelsEnabled = Boolean(enabled);
+    const serialized = dxccLabelsEnabled ? 'true' : 'false';
+
+    // Keep unified key and legacy keys in sync for backward compatibility.
+    localStorage.setItem('dxccLabelsEnabled', serialized);
+    localStorage.setItem('mercatorDxccLabelsEnabled', serialized);
+    localStorage.setItem('azimuthDxccLabelsEnabled', serialized);
+
+    setAzimuthDxccLabelsEnabled(dxccLabelsEnabled);
+
+    const dxccToggle = document.getElementById('show-dxcc-labels');
+    if (dxccToggle) dxccToggle.checked = dxccLabelsEnabled;
+
+    if (isAzimuthEnabled()) {
+        scheduleRender();
+    } else {
+        void syncMercatorDxccLabelLayer({ force: true });
+    }
 }
 
 const storedDk3jfMode = localStorage.getItem('dk3jfModeEnabled');
@@ -133,6 +155,12 @@ function currentProjection() {
     return document.querySelector('input[name="projection-select"]:checked')?.value || 'mercator';
 }
 
+async function syncMercatorOverlays(force = false) {
+    await syncMercatorCountryLayer({ force });
+    await syncMercatorGraylineLayer({ force });
+    await syncMercatorDxccLabelLayer({ force });
+}
+
 async function applyProjectionMode(projection) {
     if (projection === 'azimuthal') {
         await loadAzimuthWorldGeoJson();
@@ -147,6 +175,7 @@ async function applyProjectionMode(projection) {
     setAzimuthEnabled(false);
     document.getElementById('azimuth-zoom-controls').style.display = 'none';
     if (map) map.invalidateSize();
+    await syncMercatorOverlays(true);
     scheduleRender();
 }
 
@@ -179,13 +208,28 @@ initUI();
     updateAzimuthHorizonKm(azimuthHorizonKm);
     updateAzimuthNs6tIndicator(azimuthNs6tIndicator);
     updateDxccLabelDensity(dxccLabelDensity);
-    updateAzimuthDxccLabelsEnabled(azimuthDxccLabelsEnabled);
+    updateDxccLabelsEnabled(dxccLabelsEnabled);
     await updateDk3jfMode(dk3jfModeEnabled);
 
     const initialProjection = dk3jfModeEnabled ? savedProjection : 'mercator';
     const projRadio = document.querySelector(`input[name="projection-select"][value="${initialProjection}"]`);
     if (projRadio) projRadio.checked = true;
     await applyProjectionMode(initialProjection);
+
+    const showGrayline = localStorage.getItem('showGrayline') === 'true';
+    const colorCountries = localStorage.getItem('colorCountries') === 'true';
+
+    const graylineToggle = document.getElementById('show-grayline');
+    if (graylineToggle) graylineToggle.checked = showGrayline;
+
+    const countriesToggle = document.getElementById('color-countries');
+    if (countriesToggle) countriesToggle.checked = colorCountries;
+
+    const dxccToggle = document.getElementById('show-dxcc-labels');
+    if (dxccToggle) dxccToggle.checked = dxccLabelsEnabled;
+
+    await syncMercatorOverlays(true);
+
     attachMapEvents();
     attachUITooltipEvents();
     
@@ -240,6 +284,9 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
     const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
     setTheme(newTheme);
     setAzimuthTheme(newTheme);
+    if (!isAzimuthEnabled()) {
+        void syncMercatorOverlays(true);
+    }
     if (isAzimuthEnabled()) scheduleRender();
 });
 
@@ -338,10 +385,6 @@ document.getElementById('dxcc-label-density')?.addEventListener('change', (e) =>
     updateDxccLabelDensity(e.target.value);
 });
 
-document.getElementById('azimuth-dxcc-labels')?.addEventListener('change', (e) => {
-    updateAzimuthDxccLabelsEnabled(e.target.checked);
-});
-
 document.getElementById('dk3jf-mode')?.addEventListener('change', async (e) => {
     await updateDk3jfMode(e.target.checked);
 });
@@ -418,6 +461,24 @@ document.getElementById('surroundings')?.addEventListener('change', (e) => {
         btnSubmit.textContent = 'Go';
         document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
     }
+});
+
+document.getElementById('show-grayline')?.addEventListener('change', (e) => {
+    localStorage.setItem('showGrayline', e.target.checked ? 'true' : 'false');
+    if (!isAzimuthEnabled()) {
+        void syncMercatorGraylineLayer({ force: true });
+    }
+});
+
+document.getElementById('color-countries')?.addEventListener('change', (e) => {
+    localStorage.setItem('colorCountries', e.target.checked ? 'true' : 'false');
+    if (!isAzimuthEnabled()) {
+        void syncMercatorCountryLayer({ force: true });
+    }
+});
+
+document.getElementById('show-dxcc-labels')?.addEventListener('change', (e) => {
+    updateDxccLabelsEnabled(e.target.checked);
 });
 
 document.getElementById('btn-geo').addEventListener('click', () => {

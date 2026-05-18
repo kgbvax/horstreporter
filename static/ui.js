@@ -5,6 +5,92 @@ import { getGridResolution, latLngToLocator, getMinSnrMode, getSelectedBand, get
 export function initUI() {
     initInfoOverlay();
     initServerStats();
+    initAutoLocateCoachmark();
+}
+
+function initAutoLocateCoachmark() {
+    const DISMISS_KEY = 'autoLocateCoachmarkDismissed';
+    const LEGACY_REAPPEAR_KEYS = [
+        'autoLocateCoachmarkNextShowAt',
+        'autoLocateCoachmarkDismissedAt',
+        'autoLocateCoachmarkReappearDays'
+    ];
+    const targetInput = document.getElementById('target');
+    const geoButton = document.getElementById('btn-geo');
+    const fetchForm = document.getElementById('fetch-form');
+    const controls = document.getElementById('controls');
+
+    if (!geoButton || !targetInput || !fetchForm) return;
+
+    // Explicitly disable any legacy TTL-based reappearance behavior.
+    LEGACY_REAPPEAR_KEYS.forEach((key) => localStorage.removeItem(key));
+
+    const hasExistingTarget = !!localStorage.getItem('target');
+    if (hasExistingTarget || localStorage.getItem(DISMISS_KEY) === 'true') {
+        return;
+    }
+
+    const coachmark = document.createElement('div');
+    coachmark.id = 'auto-locate-coachmark';
+    coachmark.innerHTML = `
+        <div class="coachmark-text">To get started, share your browser location or enter your Maidenhead locator</div>
+        <div class="coachmark-arrow" aria-hidden="true"></div>
+    `;
+
+    document.body.appendChild(coachmark);
+
+    const dismiss = () => {
+        localStorage.setItem(DISMISS_KEY, 'true');
+        if (coachmark.parentNode) {
+            coachmark.parentNode.removeChild(coachmark);
+        }
+        window.removeEventListener('resize', positionCoachmark);
+        controls?.removeEventListener('scroll', positionCoachmark);
+        fetchForm.removeEventListener('submit', onTargetSubmit, true);
+    };
+
+    const positionCoachmark = () => {
+        if (!coachmark.isConnected) return;
+
+        const r = geoButton.getBoundingClientRect();
+        const margin = 8;
+        const bubbleWidth = coachmark.offsetWidth || 320;
+        const bubbleHeight = coachmark.offsetHeight || 80;
+
+        let left = r.left + (r.width / 2) - (bubbleWidth / 2);
+        left = Math.max(margin, Math.min(window.innerWidth - bubbleWidth - margin, left));
+
+        let top = r.top - bubbleHeight - 14;
+        if (top < margin) {
+            top = Math.min(window.innerHeight - bubbleHeight - margin, r.bottom + 14);
+            coachmark.classList.add('below-target');
+        } else {
+            coachmark.classList.remove('below-target');
+        }
+
+        coachmark.style.left = `${Math.round(left)}px`;
+        coachmark.style.top = `${Math.round(top)}px`;
+
+        const arrow = coachmark.querySelector('.coachmark-arrow');
+        if (arrow) {
+            const targetCenter = r.left + (r.width / 2);
+            const arrowLeft = Math.max(18, Math.min(bubbleWidth - 18, targetCenter - left));
+            arrow.style.left = `${Math.round(arrowLeft)}px`;
+        }
+    };
+
+    const onTargetSubmit = () => {
+        const target = targetInput.value.trim();
+        if (target) {
+            dismiss();
+        }
+    };
+
+    fetchForm.addEventListener('submit', onTargetSubmit, true);
+    window.addEventListener('resize', positionCoachmark);
+    controls?.addEventListener('scroll', positionCoachmark);
+
+    requestAnimationFrame(positionCoachmark);
 }
 
 export function attachUITooltipEvents() {

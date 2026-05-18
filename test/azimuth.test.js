@@ -35,6 +35,26 @@ describe('azimuth.js', () => {
         expect(labels[9].label).toContain('W');
     });
 
+    it('resolves France DXCC prefix even when ISO_A2 is -99', () => {
+        const featureCollection = {
+            type: 'FeatureCollection',
+            features: [
+                {
+                    type: 'Feature',
+                    properties: { ISO_A2: '-99', ISO_A2_EH: 'FR', ADM0_A3: 'FRA', POP_EST: 65000000, LABELRANK: 2, LABEL_X: 2.55, LABEL_Y: 46.69, NAME: 'France' },
+                    geometry: { type: 'Polygon', coordinates: [[[-5, 42], [8, 42], [8, 51], [-5, 51], [-5, 42]]] }
+                }
+            ]
+        };
+
+        const labels = az.selectProminentDxccLabels(featureCollection, [46, 2], {
+            maxLabels: 5,
+            minDistanceKm: 100
+        });
+
+        expect(labels.some(l => l.prefix === 'F')).toBe(true);
+    });
+
     it('selects prominent DXCC labels with LOD distance spacing', () => {
         const featureCollection = {
             type: 'FeatureCollection',
@@ -53,18 +73,25 @@ describe('azimuth.js', () => {
                     type: 'Feature',
                     properties: { ISO_A2: 'IN', POP_EST: 1400000000, LABELRANK: 2, LABEL_X: 79, LABEL_Y: 22, NAME: 'India' },
                     geometry: { type: 'Polygon', coordinates: [[[68, 8], [97, 8], [97, 37], [68, 37], [68, 8]]] }
+                },
+                {
+                    type: 'Feature',
+                    properties: { ISO_A2: 'RU', POP_EST: 144000000, LABELRANK: 2, LABEL_X: 37.6, LABEL_Y: 55.7, NAME: 'Russia' },
+                    geometry: { type: 'Polygon', coordinates: [[[27, 41], [180, 41], [180, 82], [27, 82], [27, 41]]] }
                 }
             ]
         };
 
         const labels = az.selectProminentDxccLabels(featureCollection, [52, 7], {
             maxLabels: 10,
-            minDistanceKm: 100
+            minDistanceKm: 100,
+            includeSupplemental: true
         });
 
         expect(labels.some(l => l.prefix === 'DL')).toBe(true);
         expect(labels.some(l => l.prefix === 'VK')).toBe(true);
         expect(labels.some(l => l.prefix === 'VU')).toBe(true);
+        expect(labels.some(l => l.prefix === 'UA9')).toBe(true);
     });
 
     it('creates deterministic azimuth render plan snapshot', () => {
