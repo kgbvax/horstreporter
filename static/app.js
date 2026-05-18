@@ -111,9 +111,9 @@ async function updateDk3jfMode(enabled) {
         }
 
         const mercatorRadio = document.querySelector('input[name="projection-select"][value="mercator"]');
+        localStorage.setItem('mapProjection', 'mercator');
         if (mercatorRadio && !mercatorRadio.checked) {
             mercatorRadio.checked = true;
-            localStorage.setItem('mapProjection', 'mercator');
             await applyProjectionMode('mercator');
         }
     }
