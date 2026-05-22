@@ -63,6 +63,10 @@ func startMQTT() {
 				m.T = time.Now().Unix()
 			}
 
+			if dxBaseline != nil {
+				dxBaseline.Observe(m)
+			}
+
 			if spotRecorder != nil {
 				if b, err := json.Marshal(m); err == nil {
 					b = append(b, '\n')

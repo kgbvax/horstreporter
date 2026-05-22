@@ -448,3 +448,175 @@ func TestStreamHandlerMaxClientsCapacity(t *testing.T) {
 		}
 	})
 }
+
+func TestDxConditionsHandlerRequiresTarget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(dxConditionsHandler))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestDxConditionsHandlerReturnsScoredPayload(t *testing.T) {
+	origDx := dxBaseline
+	defer func() {
+		dxBaseline = origDx
+	}()
+
+	dxBaseline = newDxBaselineEngine("")
+
+	now := time.Now().Unix()
+	hour := utcHourOfWeek(now)
+	band := normalizeBand("20m")
+
+	for i := 0; i < 800; i++ {
+		key := baselineKey(band, hour, 1, 2)
+		if dxBaseline.buckets[key] == nil {
+			dxBaseline.buckets[key] = &baselineBucket{Band: band, HourOfWeek: hour, DistanceTier: 1, SnrTier: 2}
+		}
+		dxBaseline.buckets[key].Count++
+	}
+
+	hub.Lock()
+	origHistory := hub.history
+	hub.history = []MQTTMessage{
+		{
+			SC: "W1AW",
+			RC: "K1JT",
+			SL: "FN31",
+			RL: "FN20",
+			RP: -9,
+			T:  now - 30,
+			B:  "20m",
+			MD: "FT8",
+		},
+		{
+			SC: "W1AW",
+			RC: "N0CALL",
+			SL: "FN31",
+			RL: "EM10",
+			RP: -6,
+			T:  now - 20,
+			B:  "20m",
+			MD: "FT8",
+		},
+	}
+	hub.Unlock()
+	defer func() {
+		hub.Lock()
+		hub.history = origHistory
+		hub.Unlock()
+	}()
+
+	server := httptest.NewServer(http.HandlerFunc(dxConditionsHandler))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "?target=W1AW&minutes=15")
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var payload map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("failed to decode payload: %v", err)
+	}
+
+	if payload["target"] != "W1AW" {
+		t.Fatalf("expected target W1AW, got %v", payload["target"])
+	}
+
+	if _, ok := payload["overall_score"].(float64); !ok {
+		t.Fatalf("expected overall_score float in response, got %T", payload["overall_score"])
+	}
+
+	bands, ok := payload["bands"].([]interface{})
+	if !ok {
+		t.Fatalf("expected bands list, got %T", payload["bands"])
+	}
+	if len(bands) == 0 {
+		t.Fatalf("expected at least one band condition")
+	}
+}
+
+func TestDxBucketTiering(t *testing.T) {
+	if got := snrTierFromDb(-19); got != 0 {
+		t.Fatalf("expected snr tier 0, got %d", got)
+	}
+	if got := snrTierFromDb(-12); got != 1 {
+		t.Fatalf("expected snr tier 1, got %d", got)
+	}
+	if got := snrTierFromDb(-5); got != 2 {
+		t.Fatalf("expected snr tier 2, got %d", got)
+	}
+	if got := snrTierFromDb(3); got != 3 {
+		t.Fatalf("expected snr tier 3, got %d", got)
+	}
+
+	if got := distanceTierForLocators("JO32", "JO32"); got != 0 {
+		t.Fatalf("expected local distance tier 0, got %d", got)
+	}
+	if got := distanceTierForLocators("JO32", "FN31"); got < 3 {
+		t.Fatalf("expected long-distance tier >=3, got %d", got)
+	}
+}
+
+func TestDxConditionsEvaluateIncludesTrendAndSparkline(t *testing.T) {
+	engine := newDxBaselineEngine("")
+	now := time.Now().Unix()
+
+	for i := 0; i < 200; i++ {
+		engine.Observe(MQTTMessage{
+			T:  now - int64(3600+i*20),
+			SC: "W1AW",
+			RC: "K1JT",
+			SL: "FN31",
+			RL: "JO32",
+			B:  "20m",
+			RP: -8,
+		})
+	}
+
+	history := []MQTTMessage{}
+	for i := 0; i < 30; i++ {
+		history = append(history, MQTTMessage{
+			T:  now - int64(i*40),
+			SC: "W1AW",
+			RC: "DL1ABC",
+			SL: "FN31",
+			RL: "JO32",
+			B:  "20m",
+			RP: -7,
+		})
+	}
+
+	resp := engine.Evaluate("W1AW", false, 20, history, now)
+	if len(resp.Bands) == 0 {
+		t.Fatalf("expected at least one band")
+	}
+
+	b := resp.Bands[0]
+	if b.Band != "20m" {
+		t.Fatalf("expected first band to be 20m, got %q", b.Band)
+	}
+	if b.Trend == "" {
+		t.Fatalf("expected trend to be populated")
+	}
+	if len(b.Sparkline) != dxSparklineBins {
+		t.Fatalf("expected %d sparkline points, got %d", dxSparklineBins, len(b.Sparkline))
+	}
+	if b.UniqueLinks <= 0 {
+		t.Fatalf("expected unique link count to be populated")
+	}
+}

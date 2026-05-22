@@ -106,6 +106,13 @@ function setupDom() {
         <span id="cluster-dist-val">500</span>
 
         <input type="checkbox" id="dk3jf-mode" />
+        <div id="dx-conditions-panel" style="display:none;">
+            <span id="dx-overall-score">—</span>
+            <span id="dx-overall-condition">Waiting for stream...</span>
+            <span id="dx-confidence">—</span>
+            <span id="dx-best-bands">—</span>
+            <ul id="dx-band-list"></ul>
+        </div>
         <input type="checkbox" id="auto-zoom" />
         <input type="checkbox" id="surroundings" />
 
@@ -168,9 +175,12 @@ describe('app.js DK3JF mode behavior', () => {
             getCurrentPosition: vi.fn()
         };
 
-        global.EventSource = vi.fn(function EventSource() {
+        const eventSourceMock = vi.fn(function EventSource() {
             this.close = vi.fn();
+            this.addEventListener = vi.fn();
         });
+        global.EventSource = eventSourceMock;
+        window.EventSource = eventSourceMock;
     });
 
     it('initializes with DK3JF disabled: hides 2m/projection/azimuth options and forces Mercator', async () => {
@@ -187,10 +197,12 @@ describe('app.js DK3JF mode behavior', () => {
         const projectionRow = document.getElementById('projection-switch-row');
         const band2mWrapper = document.getElementById('band-wrapper-2m');
         const azimuthOptionsGroup = document.getElementById('azimuth-options-group');
+        const dxPanel = document.getElementById('dx-conditions-panel');
 
         expect(projectionRow.style.getPropertyValue('display')).toBe('none');
         expect(band2mWrapper.style.getPropertyValue('display')).toBe('none');
         expect(azimuthOptionsGroup.style.getPropertyValue('display')).toBe('none');
+        expect(dxPanel.style.getPropertyValue('display')).toBe('none');
 
         expect(document.querySelector('input[name="projection-select"][value="mercator"]').checked).toBe(true);
         expect(localStorage.getItem('mapProjection')).toBe('mercator');
@@ -208,6 +220,7 @@ describe('app.js DK3JF mode behavior', () => {
         const projectionRow = document.getElementById('projection-switch-row');
         const band2mWrapper = document.getElementById('band-wrapper-2m');
         const azimuthOptionsGroup = document.getElementById('azimuth-options-group');
+        const dxPanel = document.getElementById('dx-conditions-panel');
 
         toggle.checked = true;
         toggle.dispatchEvent(new Event('change', { bubbles: true }));
@@ -216,6 +229,7 @@ describe('app.js DK3JF mode behavior', () => {
         expect(projectionRow.style.getPropertyValue('display')).toBe('');
         expect(band2mWrapper.style.getPropertyValue('display')).toBe('');
         expect(azimuthOptionsGroup.style.getPropertyValue('display')).toBe('');
+        expect(dxPanel.style.getPropertyValue('display')).toBe('');
         expect(localStorage.getItem('dk3jfModeEnabled')).toBe('true');
 
         toggle.checked = false;
@@ -225,6 +239,18 @@ describe('app.js DK3JF mode behavior', () => {
         expect(projectionRow.style.getPropertyValue('display')).toBe('none');
         expect(band2mWrapper.style.getPropertyValue('display')).toBe('none');
         expect(azimuthOptionsGroup.style.getPropertyValue('display')).toBe('none');
+        expect(dxPanel.style.getPropertyValue('display')).toBe('none');
         expect(localStorage.getItem('dk3jfModeEnabled')).toBe('false');
+    });
+
+    it('automatically starts retrieving data on load when a target is remembered', async () => {
+        localStorage.setItem('target', 'W1AW');
+        document.getElementById('target').value = 'W1AW';
+
+        await importAppFresh();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(document.getElementById('btn-submit').textContent).toBe('Stop');
+        expect(document.getElementById('stream-status').innerHTML).toContain('Connecting to Target: W1AW');
     });
 });

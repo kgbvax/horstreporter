@@ -4,6 +4,7 @@ import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineL
 import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, setAzimuthEnabled, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled } from './azimuth-runtime.js';
 import { initUI, attachUITooltipEvents } from './ui.js';
 import { updateMapVisualization } from './renderers.js';
+import { initDxConditionsUI, setDxConditionsVisible, resetDxConditions, startDxPolling, stopDxPolling } from './dx-conditions.js';
 import { latLngToLocator, locatorToBounds, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors } from './utils.js';
 
 // --- Azimuth Zoom State ---
@@ -97,6 +98,14 @@ function setElementVisibility(el, visible) {
     }
 }
 
+function getCurrentDxRequestParams() {
+    const target = document.getElementById('target')?.value?.trim()?.toUpperCase();
+    const minutesRaw = parseInt(document.getElementById('minutes')?.value || '15', 10);
+    const minutes = Number.isFinite(minutesRaw) ? minutesRaw : 15;
+    const surroundings = document.getElementById('surroundings')?.checked === true;
+    return { target, minutes, surroundings };
+}
+
 async function updateDk3jfMode(enabled) {
     dk3jfModeEnabled = Boolean(enabled);
     localStorage.setItem('dk3jfModeEnabled', dk3jfModeEnabled ? 'true' : 'false');
@@ -114,7 +123,12 @@ async function updateDk3jfMode(enabled) {
     const azimuthOptionsGroup = document.getElementById('azimuth-options-group');
     setElementVisibility(azimuthOptionsGroup, dk3jfModeEnabled);
 
+    setDxConditionsVisible(dk3jfModeEnabled);
+
     if (!dk3jfModeEnabled) {
+        stopDxPolling();
+        resetDxConditions();
+
         const band2mEnable = document.querySelector('.band-enable[value="2m"]');
         const band2mRadio = document.querySelector('input[name="band"][value="2m"]');
         const allBandRadio = document.querySelector('input[name="band"][value="all"]');
@@ -138,6 +152,8 @@ async function updateDk3jfMode(enabled) {
             mercatorRadio.checked = true;
             await applyProjectionMode('mercator');
         }
+    } else if (state.eventSource) {
+        startDxPolling(getCurrentDxRequestParams);
     }
 
     scheduleRender();
@@ -150,9 +166,30 @@ const savedProjection = localStorage.getItem('mapProjection') || 'mercator';
 let lastRenderTime = 0;
 let renderTimeoutId = null;
 const MIN_RENDER_INTERVAL_MS = 40;
+let appReadyForAutoStart = false;
+let autoStartTriggered = false;
 
 function currentProjection() {
     return document.querySelector('input[name="projection-select"]:checked')?.value || 'mercator';
+}
+
+function maybeAutoStartSavedTarget() {
+    if (autoStartTriggered || !appReadyForAutoStart || !map) {
+        return;
+    }
+
+    const savedTarget = localStorage.getItem('target');
+    const targetInput = document.getElementById('target');
+    const targetValue = targetInput?.value?.trim();
+    if (!savedTarget || !targetValue) {
+        return;
+    }
+
+    autoStartTriggered = true;
+    const btnSubmit = document.getElementById('btn-submit');
+    if (btnSubmit) btnSubmit.textContent = 'Go';
+
+    document.getElementById('fetch-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
 }
 
 async function syncMercatorOverlays(force = false) {
@@ -198,6 +235,7 @@ export function attachMapEvents() {
 
 // --- Init UI ---
 initUI();
+initDxConditionsUI();
 
 (async () => {
     initMap(initialCenter, initialZoom);
@@ -209,6 +247,7 @@ initUI();
     updateAzimuthNs6tIndicator(azimuthNs6tIndicator);
     updateDxccLabelDensity(dxccLabelDensity);
     updateDxccLabelsEnabled(dxccLabelsEnabled);
+    resetDxConditions();
     await updateDk3jfMode(dk3jfModeEnabled);
 
     const initialProjection = dk3jfModeEnabled ? savedProjection : 'mercator';
@@ -237,10 +276,8 @@ initUI();
     updateMapVisualization(state.liveSpots, parseInt(document.getElementById('minutes')?.value || 15));
     updateCurrentBandDisplay();
 
-    // Automatically trigger analysis on load if a target is saved
-    if (localStorage.getItem('target')) {
-        document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
-    }
+    appReadyForAutoStart = true;
+    maybeAutoStartSavedTarget();
 })();
 
 function updateCurrentBandDisplay() {
@@ -616,6 +653,10 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
             map.removeLayer(state.targetLayer);
             state.targetLayer = null;
         }
+
+        stopDxPolling();
+        resetDxConditions();
+
         btnSubmit.textContent = 'Go';
         document.getElementById('stream-status').innerHTML = 'Status: Not subscribed';
         setFaviconColor('#6c757d');
@@ -694,6 +735,10 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
 
     state.eventSource = new EventSource(`/api/stream?${params.toString()}`);
     setFaviconColor('#ffa500'); // Orange for connecting/waiting
+
+    if (dk3jfModeEnabled) {
+        startDxPolling(getCurrentDxRequestParams);
+    }
     
     let historyLoading = true;
 

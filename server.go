@@ -176,6 +176,60 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(stats)
 }
 
+func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
+	target := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("target")))
+	if target == "" {
+		if call := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("callsign"))); call != "" {
+			target = call
+		} else if loc := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("locator"))); loc != "" {
+			target = loc
+		}
+	}
+
+	if target == "" {
+		http.Error(w, "target required", http.StatusBadRequest)
+		return
+	}
+
+	minutes := defaultDxWindowMinutes
+	if raw := strings.TrimSpace(r.URL.Query().Get("minutes")); raw != "" {
+		if m, err := strconv.Atoi(raw); err == nil && m > 0 {
+			minutes = m
+		}
+	}
+	if minutes > maxDxWindowMinutes {
+		minutes = maxDxWindowMinutes
+	}
+
+	surroundings := r.URL.Query().Get("surroundings") == "true"
+
+	hub.RLock()
+	historyCopy := make([]MQTTMessage, len(hub.history))
+	copy(historyCopy, hub.history)
+	hub.RUnlock()
+
+	resp := dxConditionsResponse{
+		Target:          target,
+		Surroundings:    surroundings,
+		WindowMinutes:   minutes,
+		CurrentHourOfWk: utcHourOfWeek(time.Now().Unix()),
+		GeneratedAt:     time.Now().Unix(),
+		BaselineBuckets: 0,
+		OverallScore:    0,
+		Confidence:      0,
+		Condition:       "Poor",
+		BestBands:       []string{},
+		Bands:           []dxBandCondition{},
+	}
+
+	if dxBaseline != nil {
+		resp = dxBaseline.Evaluate(target, surroundings, minutes, historyCopy, time.Now().Unix())
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
 // noCache is a middleware that sets headers to prevent caching of static files.
 // This is useful for development to ensure the latest files are always served.
 func noCache(h http.Handler) http.Handler {

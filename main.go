@@ -22,6 +22,7 @@ var spotRecorder *lumberjack.Logger
 var staticFiles embed.FS
 
 var compressStream bool
+var dxBaseline *DxBaselineEngine
 
 var maxClients int
 var logLevel = "INFO"
@@ -58,7 +59,15 @@ func main() {
 	logMaxSize := flag.Int("log-max-size", 100, "Maximum size in megabytes of the log file before it gets rotated")
 	flag.IntVar(&maxClients, "max-clients", 150, "Maximum number of concurrent SSE clients (0 = unlimited)")
 	recordSpots := flag.String("record-spots", "", "Path to a file to record all incoming spots as JSONL")
+	dxBaselineFile := flag.String("dx-baseline-file", "dx_baseline.json", "Path to persistent DX baseline bucket storage")
 	flag.Parse()
+
+	dxBaseline = newDxBaselineEngine(strings.TrimSpace(*dxBaselineFile))
+	if err := dxBaseline.Load(); err != nil {
+		logInfo("DX baseline load failed (%s): %v", *dxBaselineFile, err)
+	} else {
+		logInfo("DX baseline loaded from %s (%d buckets)", *dxBaselineFile, dxBaseline.NumBuckets())
+	}
 
 	if *logFile != "" {
 		log.SetOutput(&lumberjack.Logger{
@@ -111,6 +120,12 @@ func main() {
 				hub.history = newHistory
 			}
 			hub.Unlock()
+
+			if dxBaseline != nil {
+				if err := dxBaseline.Save(); err != nil {
+					logInfo("DX baseline save failed: %v", err)
+				}
+			}
 		}
 	}()
 
@@ -130,6 +145,7 @@ func main() {
 	}
 	appMux.HandleFunc("/api/stream", streamHandler)
 	appMux.HandleFunc("/api/stats", statsHandler)
+	appMux.HandleFunc("/api/dx_conditions", dxConditionsHandler)
 
 	if *domain != "" {
 		logInfo("HorstReporter starting HTTPS server with Let's Encrypt for domain %s on port %s...", *domain, *port)

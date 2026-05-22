@@ -292,11 +292,12 @@ function mercatorDxccLabelLimits(zoom) {
     if (zoom >= DXCC_SHOW_ALL_ZOOM_THRESHOLD) {
         return { maxLabels: 2000, minDistanceKm: 0 };
     }
-    if (zoom <= 2) return { maxLabels: 28, minDistanceKm: 1500 };
-    if (zoom <= 3) return { maxLabels: 44, minDistanceKm: 1100 };
-    if (zoom <= 4) return { maxLabels: 62, minDistanceKm: 800 };
-    if (zoom <= 5) return { maxLabels: 84, minDistanceKm: 560 };
-    return { maxLabels: 110, minDistanceKm: 340 };
+    const rel_scale = 0.75;
+    if (zoom <= 2) return { maxLabels: 28, minDistanceKm: round(1500*rel_scale) };
+    if (zoom <= 3) return { maxLabels: 44, minDistanceKm: round(1100*rel_scale) };
+    if (zoom <= 4) return { maxLabels: 62, minDistanceKm: round(800*rel_scale) };
+    if (zoom <= 5) return { maxLabels: 84, minDistanceKm: round(560*rel_scale) };
+    return { maxLabels: 110, minDistanceKm: round(200*rel_scale)};
 }
 
 export async function syncMercatorDxccLabelLayer(options = {}) {

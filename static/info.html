@@ -25,9 +25,17 @@
     <div id="content">Loading information...</div>
    
     <script>
-        fetch('info.md')
+        const params = new URLSearchParams(window.location.search);
+        const rawDoc = params.get('doc') || 'info.md';
+        const safeDoc = /^[a-z0-9._-]+\.md$/i.test(rawDoc) ? rawDoc : 'info.md';
+        const rawTitle = params.get('title') || '';
+        if (rawTitle) {
+            document.title = rawTitle;
+        }
+
+        fetch(safeDoc)
             .then(response => {
-                if (!response.ok) throw new Error("Could not load info.md");
+                if (!response.ok) throw new Error(`Could not load ${safeDoc}`);
                 return response.text();
             })
             .then(text => document.getElementById('content').innerHTML = marked.parse(text))

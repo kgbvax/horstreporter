@@ -181,9 +181,10 @@ body {
 }
 
 /* Info Overlay */
-#info-overlay {
+#info-overlay,
+#dx-info-overlay {
     display: none;
-    position: absolute;
+    position: fixed;
     top: 0;
     left: 0;
     right: 0;
@@ -194,11 +195,11 @@ body {
     justify-content: center;
 }
 
-#info-overlay .info-content {
+#info-overlay .info-content,
+#dx-info-overlay .info-content {
     position: relative;
-    width: 80%;
-    max-width: 800px;
-    height: 80%;
+    width: min(92vw, 1200px);
+    height: min(90vh, 1000px);
     background: var(--bg-color);
     border: 1px solid var(--border-color);
     border-radius: 8px;
@@ -207,7 +208,8 @@ body {
     flex-direction: column;
 }
 
-#info-overlay iframe {
+#info-overlay iframe,
+#dx-info-overlay iframe {
     flex-grow: 1;
     width: 100%;
     border: none;
@@ -215,7 +217,8 @@ body {
     background: var(--bg-color);
 }
 
-#close-info {
+#close-info,
+#close-dx-info {
     position: absolute;
     top: -15px;
     right: -15px;
@@ -309,4 +312,68 @@ body {
     top: 1px;
     border-top: none;
     border-bottom: 8px solid var(--coachmark-bg);
+}
+
+.dx-conditions-panel {
+    background-color: color-mix(in srgb, var(--bg-color) 92%, var(--text-color) 8%);
+    border-color: var(--border-color) !important;
+}
+
+.dx-conditions-panel #dx-overall-score {
+    font-weight: 700;
+    font-size: 1.05rem;
+}
+
+.dx-band-item {
+    margin-bottom: 0.45rem;
+    list-style: none;
+}
+
+.dx-band-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.82rem;
+}
+
+.dx-trend {
+    opacity: 0.9;
+    font-weight: 600;
+}
+
+.dx-band-sub,
+.dx-band-metrics {
+    font-size: 0.74rem;
+    opacity: 0.85;
+    line-height: 1.2;
+}
+
+.dx-sparkline {
+    width: 100%;
+    height: 18px;
+    margin-top: 0.15rem;
+}
+
+.dx-sparkline polyline {
+    fill: none;
+    stroke: color-mix(in srgb, var(--text-color) 72%, #3ea6ff 28%);
+    stroke-width: 1.5;
+}
+
+.dx-info-button {
+    padding: 0.05rem 0.35rem;
+    line-height: 1;
+}
+
+.dx-info-overlay {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 3000;
+    align-items: center;
+    justify-content: center;
 }

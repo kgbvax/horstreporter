@@ -33,6 +33,19 @@
                 <div id="stream-status">Status: Not subscribed</div>
                 <div id="server-stats"></div>
             </div>
+            <div id="dx-conditions-panel" class="dx-conditions-panel border rounded p-2" style="display:none;">
+                <div class="d-flex align-items-center justify-content-between mb-1">
+                    <div class="fw-bold">DX Potential</div>
+                    <button type="button" id="dx-info-toggle" class="btn btn-outline-secondary btn-sm dx-info-button" title="How DX scoring works" aria-label="How DX scoring works">
+                        <i class="fas fa-info-circle"></i>
+                    </button>
+                </div>
+                <div class="small d-flex justify-content-between"><span>Score:</span><span id="dx-overall-score">—</span></div>
+                <div class="small d-flex justify-content-between"><span>Condition:</span><span id="dx-overall-condition">Waiting for stream...</span></div>
+                <div class="small d-flex justify-content-between"><span>Confidence:</span><span id="dx-confidence">—</span></div>
+                <div class="small d-flex justify-content-between"><span>Best bands:</span><span id="dx-best-bands">—</span></div>
+                <ul id="dx-band-list" class="small mb-0 mt-2 ps-3"></ul>
+            </div>
             <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
                 <label class="form-label mb-0">Min SNR:</label>
                 <div class="btn-group w-100" role="group" id="min-snr-group">
@@ -76,7 +89,7 @@
                         </div>
                     </div>
                     <div class="col-12 action-buttons d-flex justify-content-center w-100">
-                        <button type="button" id="btn-cycle" class="btn btn-outline-primary btn-sm w-100" title="Cycle Active Bands"><i class="fas fa-play"></i></button>
+                        <button type="button" id="btn-cycle" class="btn btn-outline-primary btn-sm w-100" title="Cycle Active Bands"><i class="fas fa-play"></i>Cycle Bands</button>
                     </div>
                     <div class="col-12">
                         <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #555555; border: 2px solid transparent; position: relative;">
