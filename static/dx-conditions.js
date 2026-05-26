@@ -50,6 +50,13 @@ function trendGlyph(trend) {
     return '→';
 }
 
+function statusGlyph(status) {
+    if (status === 'green') return '🟢';
+    if (status === 'yellow') return '🟡';
+    if (status === 'red') return '🔴';
+    return '⚪';
+}
+
 function sparklineSvg(points) {
     if (!Array.isArray(points) || points.length === 0) {
         return '';
@@ -100,15 +107,17 @@ function renderBandRows(bands) {
     list.innerHTML = top
         .map((b) => {
             const trend = trendGlyph(b.trend);
+            const status = statusGlyph(b.status);
             const repeatPct = Number(b.repeat_ratio || 0) * 100;
             const longHaulPct = Number(b.long_haul_ratio || 0) * 100;
             return `<li class="dx-band-item">
                 <div class="dx-band-head">
-                    <strong>${b.band}</strong>
+                    <strong>${status} ${b.band}</strong>
                     <span class="dx-trend">${trend} ${b.condition}</span>
                 </div>
-                <div class="dx-band-sub">Score ${Number(b.score || 0).toFixed(1)} · conf ${Number(b.confidence || 0).toFixed(0)}%</div>
+                <div class="dx-band-sub">Score ${Number(b.score || 0).toFixed(1)} · conf ${Number(b.confidence || 0).toFixed(0)}% · mode ${b.mode || 'none'} · dir ${b.dominant_direction || '-'}</div>
                 <div class="dx-band-metrics">uniq ${Number(b.unique_links || 0)} · repeats ${repeatPct.toFixed(0)}% · long ${longHaulPct.toFixed(0)}%</div>
+                <div class="dx-band-metrics">${b.recommendation || ''}</div>
                 ${sparklineSvg(b.sparkline)}
             </li>`;
         })
@@ -122,7 +131,8 @@ export function renderDxConditions(payload) {
 
     setText('dx-overall-score', Number(payload.overall_score || 0).toFixed(1));
     const overallTrend = trendGlyph(payload.trend);
-    setText('dx-overall-condition', `${overallTrend} ${payload.condition || 'Unknown'}`);
+    const overallStatus = statusGlyph(payload.status);
+    setText('dx-overall-condition', `${overallStatus} ${overallTrend} ${payload.condition || 'Unknown'}`);
     setText('dx-confidence', `${Number(payload.confidence || 0).toFixed(0)}%`);
 
     const bestBands = Array.isArray(payload.best_bands) && payload.best_bands.length > 0

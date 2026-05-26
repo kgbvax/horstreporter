@@ -620,3 +620,61 @@ func TestDxConditionsEvaluateIncludesTrendAndSparkline(t *testing.T) {
 		t.Fatalf("expected unique link count to be populated")
 	}
 }
+
+func TestDxConditionsEvaluateIncludesModeStatusAndExtendedMetrics(t *testing.T) {
+	engine := newDxBaselineEngine("")
+	now := time.Now().Unix()
+
+	for i := 0; i < 300; i++ {
+		engine.Observe(MQTTMessage{
+			T:  now - int64(7200+i*15),
+			SC: "W1AW",
+			RC: "DL1ABC",
+			SL: "FN31",
+			RL: "JO32",
+			B:  "20m",
+			RP: 2,
+		})
+	}
+
+	history := make([]MQTTMessage, 0, 20)
+	for i := 0; i < 20; i++ {
+		history = append(history, MQTTMessage{
+			T:  now - int64(i*20),
+			SC: "W1AW",
+			RC: "DL1ABC",
+			SL: "FN31",
+			RL: "JO32",
+			B:  "20m",
+			RP: 3,
+		})
+	}
+
+	resp := engine.Evaluate("W1AW", false, 20, history, now)
+	if len(resp.Bands) == 0 {
+		t.Fatalf("expected at least one band")
+	}
+	b := resp.Bands[0]
+
+	if b.Mode == "" || b.Mode == "none" {
+		t.Fatalf("expected viable mode classification, got %q", b.Mode)
+	}
+	if b.Status == "" {
+		t.Fatalf("expected status to be populated")
+	}
+	if b.SpotsPerMinute <= 0 {
+		t.Fatalf("expected spots_per_minute > 0")
+	}
+	if b.P90DistanceKm <= 0 {
+		t.Fatalf("expected p90_distance_km > 0")
+	}
+	if b.P90Snr <= 0 {
+		t.Fatalf("expected p90_snr > 0")
+	}
+	if b.DominantDirection == "" {
+		t.Fatalf("expected dominant_direction to be set")
+	}
+	if b.Recommendation == "" {
+		t.Fatalf("expected recommendation to be set")
+	}
+}

@@ -1,5 +1,6 @@
-Horstreporter's goal is to make **current** band-openings easy to explore.  
-It is effectively an alternate frontend for <a href="https://www.pskreporter.info" target="_blank">pskreporter</a>. 
+Horstreporter is a tool for HAM radio operators. It's goal is to make **current** HF band conditions easy to explore.  
+It is effectively an alternate frontend for <a href="https://www.pskreporter.info" target="_blank">pskreporter</a>.  
+
 ## Getting Started
 1. Enter your **Locator** (e.g., JO32, FN31AB) or **Callsign** (e.g., W1AW) into the top input box. You can also click the map marker icon <i class="fas fa-map-marker-alt"></i> to auto-detect your location.
 2. Click **Go**. HorstReporter will connect to the live stream and fetch recent FT8/FT4 reports where you or stations in your grid are either the sender or receiver.
@@ -36,9 +37,9 @@ More information may be available in my blog: <a href="https://dl9et.darc.de/tag
 The green plushy dragon in the lower left is called "Horst-Kevin".
 
 ## Implementation note
-In it's core horstreporter subscribes to the pskreporter firehose *once* and does the 1:n fan-out / filtering for each client by itself. This is a explicit choice to not overload the pskreporter servers. Horstreporter also maintains a short history so that new clients don't have to wait for data to arrive from the event stream. Everything else is done in the browser.
+In its core horstreporter subscribes to the pskreporter firehose *once* and does the 1:n fan-out / filtering for each client by itself. This is an explicit choice to not overload the pskreporter servers. Horstreporter also maintains a short history so that new clients don't have to wait for data to arrive from the event stream. Most visualization and interaction logic is done in the browser, while derived DX condition scoring is computed server-side and exposed via `/api/dx_conditions`.
 
-If this should become more than a short experiment, I will release it as  open-source. 
+This project is open-source.
 
 # IMPRINT + PRIVACY
 

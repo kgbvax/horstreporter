@@ -178,10 +178,19 @@ function maybeAutoStartSavedTarget() {
         return;
     }
 
-    const savedTarget = localStorage.getItem('target');
+    const savedTarget = localStorage.getItem('target')?.trim()?.toUpperCase();
     const targetInput = document.getElementById('target');
-    const targetValue = targetInput?.value?.trim();
-    if (!savedTarget || !targetValue) {
+    if (!savedTarget || !targetInput) {
+        return;
+    }
+
+    // Ensure the input is populated from storage even if another init step missed it.
+    if (!targetInput.value?.trim()) {
+        targetInput.value = savedTarget;
+    }
+
+    const targetValue = targetInput.value?.trim()?.toUpperCase();
+    if (!targetValue) {
         return;
     }
 

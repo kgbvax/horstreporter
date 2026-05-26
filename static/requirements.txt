@@ -1,0 +1,376 @@
+1. Purpose
+This document defines the requirements for a software agent that evaluates current HF propagation conditions using PSKReporter data and provides actionable, real-time recommendations for amateur radio operation.
+The system shall:
+
+Assess propagation per HF band
+Classify conditions as:
+
+Above average
+Average
+Below average
+
+
+Provide guidance on:
+
+Which bands to use
+Which bands to avoid
+Which operating modes (SSB, CW, Digital) are feasible
+
+
+Expose all results via Home Assistant sensors
+
+
+2. Scope
+2.1 In Scope
+
+Real-time PSKReporter data processing
+Regional filtering based on Maidenhead grid
+Statistical analysis and scoring
+Historical baseline comparison
+Exposure of results to Home Assistant
+
+2.2 Out of Scope
+
+Prediction models (e.g., VOACAP)
+Antenna or station-specific modeling
+Non-digital propagation sources (unless future extension)
+
+
+3. System Overview
+3.1 High-Level Architecture
+The system shall consist of the following components:
+
+Data Ingestion Layer
+Processing & Enrichment Engine
+Metric Computation Engine
+Baseline Engine
+Scoring & Classification Engine
+Output Adapter (Home Assistant)
+
+
+4. Data Ingestion
+4.1 Input Source
+
+PSKReporter real-time data feed (MQTT or API)
+Optional: historical ADIF logs
+
+4.2 Input Data Structure
+Each spot must contain:
+timestamp
+band
+frequency
+mode
+snr (dB)
+tx_callsign
+tx_grid
+rx_callsign
+rx_grid
+
+
+5. Region Definition
+5.1 Primary Region
+
+Default: Maidenhead 4-character grid (square) (e.g., JO32)
+
+5.2 Secondary Region (optional)
+
+Adjacent grid squares for smoothing
+
+5.3 Inclusion Rule
+A spot shall be included if:
+tx_grid ∈ region OR rx_grid ∈ region
+
+
+6. Time Windows
+6.1 Live Analysis Window
+
+Primary: 10 minutes
+Secondary: 60 minutes (trend & stability)
+
+6.2 Historical Baseline Window
+Grouped by:
+
+Band
+Local hour
+Day of week
+Month or season
+
+
+7. Data Processing
+7.1 Normalization
+
+Convert grid locators to:
+
+Field (2-char)
+Square (4-char)
+
+
+Compute:
+
+Distance between grids
+Azimuth (bearing)
+
+
+
+7.2 Deduplication
+Duplicate spots shall be removed based on:
+time_window + band + tx_call + rx_call + tx_grid + rx_grid
+
+
+8. Metric Computation (per Band)
+8.1 Activity Metrics
+
+spots_per_minute
+unique_tx_stations
+unique_rx_stations
+unique_remote_grids
+
+8.2 Propagation Metrics
+
+max_distance
+median_distance
+p90_distance
+dx_ratio (>3000 km or configured threshold)
+
+8.3 Signal Quality Metrics
+
+median_snr
+p90_snr
+
+8.4 Directional Metrics
+
+Spot distribution by azimuth sector
+Dominant propagation direction
+
+8.5 Confidence Metric
+
+Number of valid spots (n_spots)
+
+
+9. Mode Feasibility
+9.1 SNR Thresholds
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ModeConditionSSBSNR ≥ 0 dBCWSNR ≥ −12 dBDigitalDefault/always
+
+9.2 Ratio Calculation
+ssb_ratio = count(SNR ≥ 0) / total_spots
+cw_ratio  = count(SNR ≥ -12) / total_spots
+
+
+9.3 Mode Classification
+if ssb_ratio ≥ threshold → SSB viable
+elif cw_ratio ≥ threshold → CW viable
+elif n_spots ≥ minimum → Digital viable
+else → No viable mode
+
+
+10. Scoring Model
+10.1 Subscores
+Each band shall have normalized scores:
+
+activity_score
+distance_score
+snr_score
+
+10.2 Weighted Score
+score = 0.45 * distance_score
+      + 0.35 * activity_score
+      + 0.20 * snr_score
+
+10.3 Confidence Adjustment
+score_final = score * confidence_factor
+
+
+11. Baseline Comparison
+11.1 Baseline Model
+For each band:
+
+Store historical distributions per time bucket
+
+11.2 Classification
+Compare score against baseline quantiles:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ConditionRuleGREEN> 75th percentileYELLOW25th–75th percentileRED< 25th percentileGREYinsufficient data
+
+12. Decision Layer
+12.1 Band Recommendation
+System shall output:
+
+Top 3 bands (highest score)
+Worst bands (low score + sufficient confidence)
+
+12.2 Suggested Output Logic
+Per band:
+Band: 20m
+Status: GREEN
+Distance: 2400 km
+Direction: W
+Mode: SSB
+Recommendation: Try DX
+
+
+13. Home Assistant Integration
+13.1 General Requirements
+
+All outputs shall be exposed as sensor entities
+Update interval: ≤ 60 seconds
+Transport:
+
+Preferred: MQTT discovery
+Alternative: REST API
+
+
+Each sensor shall include:
+
+State
+Attributes
+
+
+
+
+13.2 Naming Convention
+sensor.hfprop_<band>_<metric>
+
+
+13.3 Required Sensors per Band
+13.3.1 Status
+State:
+green | yellow | red | grey
+
+13.3.2 Score
+State:
+float
+
+13.3.3 Distance
+State:
+p90 distance (km)
+
+13.3.4 Activity
+State:
+spots per minute
+
+13.3.5 Mode
+State:
+ssb | cw | digital | none
+
+13.3.6 Direction
+State:
+N, NE, E, ...
+
+
+13.4 Global Sensors
+Best Band
+sensor.hfprop_best_band
+
+Recommended Bands
+sensor.hfprop_recommended_bands
+
+Avoid Bands
+sensor.hfprop_avoid_bands
+
+Overall Condition
+sensor.hfprop_overall
+
+
+13.5 MQTT Discovery Requirements
+Agent must publish:
+homeassistant/sensor/.../config
+
+Each config must include:
+
+name
+state_topic
+attributes_topic
+unit_of_measurement (if applicable)
+
+
+13.6 Behavior
+
+Sensors must update atomically per cycle
+Missing data:
+
+status = grey
+mode = none
+
+
+14. Performance Requirements
+
+Update latency: < 30 seconds
+Throughput: ≥ 1000 spots/sec
+Real-time capable
+
+
+15. Error Handling
+The system shall:
+
+Handle missing or incomplete spot data
+Ignore malformed grid locators
+Fallback to GREY state if insufficient data
+
+
+16. Deployment
+The system shall:
+
+Run continuously (24/7)
+Support container deployment (e.g., Docker)
+Integrate with existing MQTT broker
+
+
+17. Future Enhancements
+
+Integration with WSPR / RBN
+Greyline detection
+Machine learning predictions
+Rotor / antenna automation integration
+
+
+18. Acceptance Criteria
+The system is considered successful if:
+
+A user can determine best band in <5 seconds
+Output aligns with real-world experience
+Stable results across varying activity levels
