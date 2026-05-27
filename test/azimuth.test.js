@@ -137,7 +137,7 @@ describe('azimuth.js', () => {
         expect(plan.azimuthLabels).toHaveLength(12);
     });
 
-    it('computes overlay summary correctly for heatmap and active-area styles', () => {
+    it('normalizes unsupported azimuth styles to grid-snr overlay summary', () => {
         const featureCollection = {
             type: 'FeatureCollection',
             features: []
@@ -167,7 +167,7 @@ describe('azimuth.js', () => {
             zoomLevel: 1.8
         });
 
-        expect(heatPlan.overlaySummary).toEqual({ style: 'heatmap', itemCount: 3 });
-        expect(areaPlan.overlaySummary).toEqual({ style: 'active-area', itemCount: 2 });
+        expect(heatPlan.overlaySummary).toEqual({ style: 'grid-snr', itemCount: 3 });
+        expect(areaPlan.overlaySummary).toEqual({ style: 'grid-snr', itemCount: 3 });
     });
 });

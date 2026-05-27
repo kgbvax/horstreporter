@@ -1,151 +1,90 @@
-# DX Potential score
+# DX Potential Score
 
-The **DX Potential** panel answers one practical question:
+## For operators: how to use this panel in practice
 
-> *How promising are current band conditions for longer-distance contacts from my target, compared with what is usually observed at this time?*
+The **DX Potential** panel helps answer one question:
 
-It is a decision aid built from live PSK Reporter spots plus a rolling baseline. It is **not** a propagation oracle.
+> *Which bands are most likely worth trying right now from this target?*
 
-## What the panel shows
+Use it as a **decision aid**, not an oracle.
 
-### Overall score (0–100)
+### What to look at first
 
-Higher values generally mean better current DX structure (distance + activity + decode quality).
+- **Best bands**: quick shortlist for where to start calling.
+- **Score (0–100)**: higher means conditions currently look more favorable.
+- **Confidence (%)**: how trustworthy the score is with current evidence.
+- **Condition**: a compact status summary (green/yellow/red/grey).
+- **Band rows**: each band’s score, confidence, direction, repeat/long-haul behavior, and trend sparkline.
 
-### Overall confidence (0–99%)
+### How to interpret quickly
 
-Confidence rises with:
+- **High score + high confidence** → good candidate to try now.
+- **High score + low confidence** → promising but still uncertain; verify on-air.
+- **Low score + high confidence** → likely poor at the moment.
+- **Grey / low confidence** → not enough data yet.
 
-- enough recent spots,
-- enough baseline support for matching time/band buckets.
+### Practical operating tips
 
-Low confidence means “interesting, but noisy/sparse.”
+- If `surroundings` is enabled for a locator, nearby squares are included and can improve stability.
+- `CW Min dB` acts as a viability floor for DX scoring input.
+	- Spots below that threshold are ignored for DX potential calculations.
+	- This reduces overly optimistic results from very weak reports.
+- Watch **trend** and **baseline history**:
+	- rising trend can signal an opening forming,
+	- larger baseline history generally means more reliable comparisons.
 
-### Overall status + condition
+### Important caveats
 
-Overall status is derived from score and confidence:
+- PSK Reporter coverage varies by geography, time, and active users.
+- A good score is a **probability hint**, not a guaranteed QSO.
+- Always confirm by listening/calling on-air.
 
-- **grey**: no/weak evidence (e.g. very low confidence)
-- **green**: strong
-- **yellow**: usable/mixed
-- **red**: poor
+## For interested hams: how the scoring mechanism works
 
-The label (`Excellent`, `Good`, `Fair`, `Poor`) is mapped from status and score.
+The engine compares **current viable activity** against a **historical baseline** for the same context.
 
-### Best bands
+### 1) Input and filtering
 
-Bands are ranked by score (with confidence as tie-breaker). The panel shows the strongest candidates first.
+For the selected target (plus optional surrounding locator squares):
 
-### Per-band details
+- use spots inside the selected time window,
+- keep matched target-related paths,
+- deduplicate near-duplicates in short time buckets,
+- reject spots below `CW Min dB` for DX potential computations.
 
-Each band row includes:
+### 2) Per-band feature extraction
 
-- status color and trend (rising/stable/falling),
-- score and confidence,
-- suggested operating mode (`ssb`, `cw`, `digital`, `none`),
-- dominant direction,
-- uniqueness/repeat ratio,
-- long-haul ratio,
-- recommendation text,
-- sparkline of recent relative activity.
+For each band, compute metrics including:
 
-## Data and time model
+- activity and uniqueness (spots/min, unique links, repeat ratio),
+- distance profile (avg/median/p90/max, long-haul ratio),
+- SNR profile (avg/median/p90/peak),
+- azimuth direction distribution,
+- recent sparkline/trend behavior.
 
-The model uses:
+### 3) Baseline model
 
-- live PSK Reporter messages (current target only),
-- a configurable recent window (defaults around 20 minutes),
-- persistent baseline buckets by:
-  - band,
-  - hour-of-week,
-  - distance tier,
-  - SNR tier,
-- optional target-surroundings expansion for locator targets.
+Baseline buckets are keyed by context such as:
 
-So the comparison is always “now vs normal for this time slice,” not a global all-time average.
+- band,
+- hour-of-week,
+- distance tier,
+- SNR tier,
+- plus target-aware buckets when available.
 
-## How scoring works (current implementation)
+This makes comparisons time-aware instead of global-only.
 
-## 1) Filter and deduplicate target-relevant events
+### 4) Band scoring and confidence
 
-Only spots matching your callsign/locator target are used (optionally including surrounding locator squares). Short-window deduplication reduces repeated reports.
+Each band gets a raw score from normalized components (distance structure, relative activity, and SNR quality), then confidence scaling is applied based on:
 
-## 2) Build per-band metrics
+- present sample support,
+- baseline support depth.
 
-For each band, the engine tracks:
+Low support reduces confidence and effective score weight.
 
-- links and unique links,
-- spots/minute,
-- distance metrics (avg/median/p90/max),
-- SNR metrics (avg/median/p90/peak),
-- long-haul ratio,
-- direction sectors,
-- trend and sparkline.
+### 5) Status classification and overall roll-up
 
-## 3) Distance and SNR tiers
-
-Distance tiers:
-
-- Tier 0: <500 km
-- Tier 1: 500–1500 km
-- Tier 2: 1500–3000 km
-- Tier 3: 3000–7000 km
-- Tier 4: >7000 km
-
-SNR tiers:
-
-- Tier 0: <= -16 dB
-- Tier 1: -15 to -9 dB
-- Tier 2: -8 to -2 dB
-- Tier 3: > -2 dB
-
-## 4) Compute band score from multiple normalized components
-
-Band score combines:
-
-- distance structure,
-- activity relative to baseline,
-- decode quality,
-- then scales by confidence/support.
-
-The result is clamped to 0–100.
-
-## 5) Compute confidence separately
-
-Confidence is primarily driven by:
-
-- current spot support,
-- baseline support for the matching bucket.
-
-Sparse data lowers confidence even if raw score is high.
-
-## 6) Assign per-band status
-
-Band status uses baseline quantiles (q25/q75) where available:
-
-- **green**: above q75
-- **red**: below q25
-- **yellow**: between q25 and q75
-- **grey**: insufficient support (too few current spots or weak baseline quantile support)
-
-## 7) Build overall result
-
-Overall score/confidence are weighted by per-band activity, then mapped to overall status/condition/trend.
-
-## Caveats
-
-- PSK Reporter reflects reporting activity, not all on-air activity.
-- Regional reporting density is uneven.
-- Operator availability and propagation are related but different.
-- Baseline quality improves with runtime/history.
-
-Use this as “where to look first,” not as a guarantee.
-
-## Practical reading guide
-
-- **High score + high confidence**: good time to check top bands now.
-- **High score + low confidence**: possible opening, verify manually.
-- **Low score + high confidence**: likely genuinely weak/ordinary conditions.
-- **Mixed top bands**: selective openings; try the listed bands in order.
-
-The goal remains simple: quickly point you to bands that are most worth trying **right now**.
+- Band status is classified (green/yellow/red/grey) using baseline quantile context and support checks.
+- Overall score/confidence/trend are weighted combinations of per-band results.
+- Baseline depth is surfaced as **history minutes** and **event count** for transparency.

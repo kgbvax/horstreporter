@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 const (
 	defaultDxWindowMinutes       = 20
+	defaultDxCwViableMinDb       = -15
 	maxDxWindowMinutes           = 180
 	maxDxBaselineEvents          = 250000
 	dxSparklineBins              = 12
@@ -45,6 +47,8 @@ type dxObservedEvent struct {
 type baselineSnapshot struct {
 	Version       int                        `json:"version"`
 	SavedAt       int64                      `json:"saved_at"`
+	FirstEventAt  int64                      `json:"first_event_at,omitempty"`
+	LastEventAt   int64                      `json:"last_event_at,omitempty"`
 	Buckets       map[string]*baselineBucket `json:"buckets"`
 	TargetBuckets map[string]*baselineBucket `json:"target_buckets,omitempty"`
 	Events        []dxObservedEvent          `json:"events,omitempty"`
@@ -55,6 +59,8 @@ type DxBaselineEngine struct {
 	path          string
 	buckets       map[string]*baselineBucket
 	targetBuckets map[string]*baselineBucket
+	firstEventAt  int64
+	lastEventAt   int64
 	events        []dxObservedEvent
 }
 
@@ -96,9 +102,12 @@ type dxConditionsResponse struct {
 	Target           string            `json:"target"`
 	Surroundings     bool              `json:"surroundings"`
 	WindowMinutes    int               `json:"window_minutes"`
+	CwMinDb          int               `json:"cw_min_db"`
 	CurrentHourOfWk  int               `json:"current_hour_of_week"`
 	GeneratedAt      int64             `json:"generated_at"`
 	BaselineBuckets  int               `json:"baseline_buckets"`
+	BaselineEventCnt int               `json:"baseline_event_count"`
+	BaselineHistoryM int               `json:"baseline_history_minutes"`
 	OverallScore     float64           `json:"overall_score"`
 	Confidence       float64           `json:"confidence"`
 	Status           string            `json:"status"`
@@ -178,6 +187,14 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if ts > 0 {
+		if e.firstEventAt == 0 || ts < e.firstEventAt {
+			e.firstEventAt = ts
+		}
+		if ts > e.lastEventAt {
+			e.lastEventAt = ts
+		}
+	}
 
 	e.observeBucket(e.buckets, baselineKey(band, hour, distTier, snrTier), band, hour, distTier, snrTier, distanceKm, float64(m.RP))
 
@@ -257,10 +274,16 @@ func (e *DxBaselineEngine) Load() error {
 		e.targetBuckets[k] = &cp
 	}
 
+	e.firstEventAt = snap.FirstEventAt
+	e.lastEventAt = snap.LastEventAt
+
 	if len(snap.Events) > maxDxBaselineEvents {
 		snap.Events = snap.Events[len(snap.Events)-maxDxBaselineEvents:]
 	}
 	e.events = append([]dxObservedEvent(nil), snap.Events...)
+	if e.firstEventAt == 0 || e.lastEventAt == 0 {
+		e.refreshEventSpanLocked()
+	}
 	return nil
 }
 
@@ -270,19 +293,52 @@ func (e *DxBaselineEngine) Save() error {
 	}
 	e.mu.RLock()
 	snap := baselineSnapshot{
-		Version:       2,
+		Version:       3,
 		SavedAt:       time.Now().Unix(),
+		FirstEventAt:  e.firstEventAt,
+		LastEventAt:   e.lastEventAt,
 		Buckets:       cloneBuckets(e.buckets),
 		TargetBuckets: cloneBuckets(e.targetBuckets),
 		Events:        append([]dxObservedEvent(nil), e.events...),
 	}
 	e.mu.RUnlock()
 
-	data, err := json.MarshalIndent(snap, "", "  ")
+	return writeJSONAtomic(e.path, snap)
+}
+
+func writeJSONAtomic(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(e.path, data, 0o644)
+
+	dir := filepath.Dir(path)
+	if dir == "" {
+		dir = "."
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	return nil
 }
 
 func cloneBuckets(src map[string]*baselineBucket) map[string]*baselineBucket {
@@ -297,7 +353,7 @@ func cloneBuckets(src map[string]*baselineBucket) map[string]*baselineBucket {
 	return out
 }
 
-func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes int, history []MQTTMessage, now int64) dxConditionsResponse {
+func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes int, cwMinDb int, history []MQTTMessage, now int64) dxConditionsResponse {
 	target = normalizeTargetToken(target)
 	if minutes <= 0 {
 		minutes = defaultDxWindowMinutes
@@ -305,11 +361,15 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 	if minutes > maxDxWindowMinutes {
 		minutes = maxDxWindowMinutes
 	}
+	if cwMinDb < -40 || cwMinDb > 20 {
+		cwMinDb = defaultDxCwViableMinDb
+	}
 
 	resp := dxConditionsResponse{
 		Target:           target,
 		Surroundings:     surroundings,
 		WindowMinutes:    minutes,
+		CwMinDb:          cwMinDb,
 		CurrentHourOfWk:  utcHourOfWeek(now),
 		GeneratedAt:      now,
 		Status:           "grey",
@@ -338,6 +398,8 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 	e.mu.RUnlock()
 
 	resp.BaselineBuckets = len(globalBuckets) + len(targetBuckets)
+	resp.BaselineEventCnt = len(events)
+	resp.BaselineHistoryM = baselineHistoryMinutes(e.firstEventAt, e.lastEventAt, events, now)
 
 	cutoff := now - int64(minutes*60)
 	bandAcc := make(map[string]*bandAccumulator)
@@ -349,6 +411,9 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		}
 		ev, matched := extractMatchedBandEvent(m, targets)
 		if !matched {
+			continue
+		}
+		if ev.snr < cwMinDb {
 			continue
 		}
 		if _, exists := dedupSeen[ev.dedupKey]; exists {
@@ -416,7 +481,7 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		baselineSupport := baselineSupportForBand(globalBuckets, targetBuckets, targets, band, resp.CurrentHourOfWk)
 		q25, q75, quantileOK := baselineScoreQuantilesForBand(globalBuckets, targetBuckets, targets, band, resp.CurrentHourOfWk)
 
-		historicalBandSeries := buildBandSparkline(events, targets, band, now)
+		historicalBandSeries := buildBandSparkline(events, targets, band, cwMinDb, now)
 		trend, trendDelta := computeTrend(historicalBandSeries)
 
 		uniqueCount := len(acc.uniqueLinks)
@@ -639,6 +704,58 @@ func classifyRecommendation(status, mode string, dxRatio, spotsPerMin, confidenc
 	return "Avoid for now"
 }
 
+func (e *DxBaselineEngine) refreshEventSpanLocked() {
+	if e == nil {
+		return
+	}
+	e.firstEventAt = 0
+	e.lastEventAt = 0
+	for _, ev := range e.events {
+		if ev.T <= 0 {
+			continue
+		}
+		if e.firstEventAt == 0 || ev.T < e.firstEventAt {
+			e.firstEventAt = ev.T
+		}
+		if ev.T > e.lastEventAt {
+			e.lastEventAt = ev.T
+		}
+	}
+}
+
+func baselineHistoryMinutes(firstEventAt, lastEventAt int64, events []dxObservedEvent, now int64) int {
+	if firstEventAt > 0 && lastEventAt >= firstEventAt {
+		return int((lastEventAt - firstEventAt) / 60)
+	}
+	return baselineHistoryMinutesFromEvents(events, now)
+}
+
+func baselineHistoryMinutesFromEvents(events []dxObservedEvent, now int64) int {
+	if len(events) == 0 {
+		return 0
+	}
+	earliest := now
+	latest := int64(0)
+	for _, e := range events {
+		if e.T <= 0 {
+			continue
+		}
+		if e.T < earliest {
+			earliest = e.T
+		}
+		if e.T > latest {
+			latest = e.T
+		}
+	}
+	if latest == 0 {
+		return 0
+	}
+	if latest < earliest {
+		return 0
+	}
+	return int((latest - earliest) / 60)
+}
+
 func dominantDirection(bins map[string]int) string {
 	best := ""
 	bestN := 0
@@ -818,7 +935,7 @@ func extractMatchedBandEvent(m MQTTMessage, targets []string) (matchedBandEvent,
 	}, true
 }
 
-func buildBandSparkline(events []dxObservedEvent, targets []string, band string, now int64) []float64 {
+func buildBandSparkline(events []dxObservedEvent, targets []string, band string, cwMinDb int, now int64) []float64 {
 	series := make([]float64, dxSparklineBins)
 	if len(events) == 0 {
 		return series
@@ -832,6 +949,9 @@ func buildBandSparkline(events []dxObservedEvent, targets []string, band string,
 			continue
 		}
 		if !eventMatchesTargets(e, targets) {
+			continue
+		}
+		if e.RP < cwMinDb {
 			continue
 		}
 		idx := int((e.T - windowStart) / dxSparklineBinSeconds)

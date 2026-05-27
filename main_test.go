@@ -7,6 +7,8 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -540,6 +542,15 @@ func TestDxConditionsHandlerReturnsScoredPayload(t *testing.T) {
 	if _, ok := payload["overall_score"].(float64); !ok {
 		t.Fatalf("expected overall_score float in response, got %T", payload["overall_score"])
 	}
+	if _, ok := payload["baseline_history_minutes"].(float64); !ok {
+		t.Fatalf("expected baseline_history_minutes in response, got %T", payload["baseline_history_minutes"])
+	}
+	if _, ok := payload["baseline_event_count"].(float64); !ok {
+		t.Fatalf("expected baseline_event_count in response, got %T", payload["baseline_event_count"])
+	}
+	if payload["cw_min_db"].(float64) != -15 {
+		t.Fatalf("expected cw_min_db default -15, got %v", payload["cw_min_db"])
+	}
 
 	bands, ok := payload["bands"].([]interface{})
 	if !ok {
@@ -601,7 +612,7 @@ func TestDxConditionsEvaluateIncludesTrendAndSparkline(t *testing.T) {
 		})
 	}
 
-	resp := engine.Evaluate("W1AW", false, 20, history, now)
+	resp := engine.Evaluate("W1AW", false, 20, -15, history, now)
 	if len(resp.Bands) == 0 {
 		t.Fatalf("expected at least one band")
 	}
@@ -650,7 +661,7 @@ func TestDxConditionsEvaluateIncludesModeStatusAndExtendedMetrics(t *testing.T) 
 		})
 	}
 
-	resp := engine.Evaluate("W1AW", false, 20, history, now)
+	resp := engine.Evaluate("W1AW", false, 20, -15, history, now)
 	if len(resp.Bands) == 0 {
 		t.Fatalf("expected at least one band")
 	}
@@ -676,5 +687,62 @@ func TestDxConditionsEvaluateIncludesModeStatusAndExtendedMetrics(t *testing.T) 
 	}
 	if b.Recommendation == "" {
 		t.Fatalf("expected recommendation to be set")
+	}
+}
+
+func TestDxBaselinePersistenceTracksHistorySpan(t *testing.T) {
+	now := time.Now().Unix()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dx_baseline.json")
+
+	engine := newDxBaselineEngine(path)
+	engine.Observe(MQTTMessage{
+		T:  now - 7200,
+		SC: "W1AW",
+		RC: "K1JT",
+		SL: "FN31",
+		RL: "JO32",
+		B:  "20m",
+		RP: -9,
+	})
+	engine.Observe(MQTTMessage{
+		T:  now - 300,
+		SC: "W1AW",
+		RC: "DL1ABC",
+		SL: "FN31",
+		RL: "JO32",
+		B:  "20m",
+		RP: -6,
+	})
+
+	if err := engine.Save(); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read snapshot failed: %v", err)
+	}
+
+	var snap baselineSnapshot
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		t.Fatalf("unmarshal snapshot failed: %v", err)
+	}
+	if snap.Version < 3 {
+		t.Fatalf("expected version >= 3, got %d", snap.Version)
+	}
+	if snap.FirstEventAt == 0 || snap.LastEventAt == 0 {
+		t.Fatalf("expected first/last event timestamps in snapshot, got %d/%d", snap.FirstEventAt, snap.LastEventAt)
+	}
+
+	loaded := newDxBaselineEngine(path)
+	if err := loaded.Load(); err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+
+	resp := loaded.Evaluate("W1AW", false, 20, -15, nil, now)
+	want := int((snap.LastEventAt - snap.FirstEventAt) / 60)
+	if resp.BaselineHistoryM != want {
+		t.Fatalf("expected baseline history %d min, got %d", want, resp.BaselineHistoryM)
 	}
 }

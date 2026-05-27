@@ -89,6 +89,7 @@ export function resetDxConditions() {
     setText('dx-overall-condition', 'Waiting for stream...');
     setText('dx-confidence', '—');
     setText('dx-best-bands', '—');
+    setText('dx-baseline-history', '—');
 
     const list = document.getElementById('dx-band-list');
     if (list) list.innerHTML = '';
@@ -115,7 +116,7 @@ function renderBandRows(bands) {
                     <strong>${status} ${b.band}</strong>
                     <span class="dx-trend">${trend} ${b.condition}</span>
                 </div>
-                <div class="dx-band-sub">Score ${Number(b.score || 0).toFixed(1)} · conf ${Number(b.confidence || 0).toFixed(0)}% · mode ${b.mode || 'none'} · dir ${b.dominant_direction || '-'}</div>
+                <div class="dx-band-sub">Score ${Number(b.score || 0).toFixed(1)} · conf ${Number(b.confidence || 0).toFixed(0)}% · dir ${b.dominant_direction || '-'}</div>
                 <div class="dx-band-metrics">uniq ${Number(b.unique_links || 0)} · repeats ${repeatPct.toFixed(0)}% · long ${longHaulPct.toFixed(0)}%</div>
                 <div class="dx-band-metrics">${b.recommendation || ''}</div>
                 ${sparklineSvg(b.sparkline)}
@@ -140,13 +141,20 @@ export function renderDxConditions(payload) {
         : '—';
     setText('dx-best-bands', bestBands);
 
+    const baselineMinutes = Number(payload.baseline_history_minutes || 0);
+    const baselineEvents = Number(payload.baseline_event_count || 0);
+    setText('dx-baseline-history', `${baselineMinutes} min · ${baselineEvents} ev`);
+
     renderBandRows(payload.bands);
 }
 
-async function fetchDxConditions({ target, minutes, surroundings }) {
+async function fetchDxConditions({ target, minutes, cwMinDb, surroundings }) {
     const params = new URLSearchParams();
     params.set('target', target);
     params.set('minutes', String(minutes));
+    if (Number.isFinite(Number(cwMinDb))) {
+        params.set('cw_min_db', String(cwMinDb));
+    }
     if (surroundings) {
         params.set('surroundings', 'true');
     }

@@ -560,14 +560,7 @@ export function createAzimuthRenderPlan({ featureCollection, center, spots = [],
         lng: Number(l.lng.toFixed(3))
     }));
 
-    let overlaySummary = { style, itemCount: 0 };
-    if (style === 'grid-snr') {
-        overlaySummary = { style, itemCount: spots.length };
-    } else if (style === 'heatmap') {
-        overlaySummary = { style, itemCount: spots.length };
-    } else if (style === 'active-area') {
-        overlaySummary = { style, itemCount: new Set(spots.map(s => s.band)).size };
-    }
+    const overlaySummary = { style: 'grid-snr', itemCount: spots.length };
 
     return {
         center: [Number(center[0].toFixed(3)), Number(center[1].toFixed(3))],
@@ -614,27 +607,32 @@ function drawWorld(ctx, width, height, plan) {
         ctx.lineWidth = 0.5;
 
         const drawRing = (ring) => {
-            let started = false;
-            let visibleCount = 0;
-            ctx.beginPath();
+            let segment = [];
+            const flush = () => {
+                if (segment.length < 3) {
+                    segment = [];
+                    return;
+                }
+                ctx.beginPath();
+                ctx.moveTo(segment[0].x, segment[0].y);
+                for (let i = 1; i < segment.length; i += 1) {
+                    ctx.lineTo(segment[i].x, segment[i].y);
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                segment = [];
+            };
+
             for (const [lng, lat] of ring) {
                 const p = projectToCanvas(lat, lng, width, height);
                 if (!p) {
-                    started = false;
+                    flush();
                     continue;
                 }
-                if (!started) {
-                    ctx.moveTo(p.x, p.y);
-                    started = true;
-                } else {
-                    ctx.lineTo(p.x, p.y);
-                }
-                visibleCount += 1;
+                segment.push(p);
             }
-            if (visibleCount < 3) return;
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
+            flush();
         };
 
         if (geom.type === 'Polygon') {
@@ -1124,22 +1122,31 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
         return;
     }
 
-    if (style === 'active-area') {
-        drawActiveAreaOverlay(ctx, width, height, filteredSpots, maxClusterDist);
-        return;
-    }
-
     for (const spot of filteredSpots) {
         const p = projectToCanvas(spot.lat, spot.lng, width, height);
         if (!p) continue;
         const color = bandColors[spot.band] || bandColors.all;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, style === 'heatmap' ? 5 : 4, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
         ctx.fillStyle = color;
-        ctx.globalAlpha = style === 'heatmap' ? 0.5 : 0.8;
+        ctx.globalAlpha = 0.8;
         ctx.fill();
     }
     ctx.globalAlpha = 1;
+}
+
+function withHorizonClip(ctx, width, height, drawFn) {
+    const radiusBase = Math.min(width, height) * 0.47;
+    const scale = (radiusBase * state.zoom) / Math.PI;
+    const horizonAngular = Math.min(MAX_VISIBLE_C, state.horizonKm / EARTH_RADIUS_KM);
+    const clipRadius = Math.max(1, scale * horizonAngular);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(width / 2, height / 2, clipRadius, 0, Math.PI * 2);
+    ctx.clip();
+    drawFn();
+    ctx.restore();
 }
 
 export function renderAzimuthScene({ spots = [], style } = {}) {
@@ -1153,7 +1160,8 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
     resizeCanvasToElement(canvas);
 
     state.lastSpots = spots;
-    const resolvedStyle = style || (document.querySelector('input[name="style-select"]:checked')?.value || 'grid-snr');
+    const requestedStyle = style || (document.querySelector('input[name="style-select"]:checked')?.value || 'grid-snr');
+    const resolvedStyle = requestedStyle === 'grid-snr' ? 'grid-snr' : 'grid-snr';
     state.lastStyle = resolvedStyle;
 
     const renderCtx = {
@@ -1183,17 +1191,25 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
 
     if (profile) profile.drawStart = nowMs();
     drawBackground(state.ctx, width, height);
-    if (profile) profile.worldStart = nowMs();
-    drawWorldCached(state.ctx, width, height, plan);
-    if (profile) profile.worldEnd = nowMs();
+    withHorizonClip(state.ctx, width, height, () => {
+        if (profile) profile.worldStart = nowMs();
+        drawWorldCached(state.ctx, width, height, plan);
+        if (profile) profile.worldEnd = nowMs();
 
-    if (getGraylineEnabled()) {
-        drawGrayline(state.ctx, width, height);
-    }
+        if (getGraylineEnabled()) {
+            drawGrayline(state.ctx, width, height);
+        }
 
-    if (profile) profile.spotsStart = nowMs();
-    drawSpots(state.ctx, width, height, filteredSpots, resolvedStyle, gridSquares, renderCtx.maxClusterDist);
-    if (profile) profile.spotsEnd = nowMs();
+        if (profile) profile.spotsStart = nowMs();
+        drawSpots(state.ctx, width, height, filteredSpots, resolvedStyle, gridSquares, renderCtx.maxClusterDist);
+        if (profile) profile.spotsEnd = nowMs();
+
+        if (state.dxccLabelsEnabled) {
+            if (profile) profile.dxccStart = nowMs();
+            drawDxccLabels(state.ctx, width, height, plan);
+            if (profile) profile.dxccEnd = nowMs();
+        }
+    });
 
     if (profile) profile.scaleStart = nowMs();
     if (state.ns6tIndicatorEnabled) {
@@ -1202,12 +1218,6 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
         drawAzimuthLabels(state.ctx, width, height, plan);
     }
     if (profile) profile.scaleEnd = nowMs();
-
-    if (state.dxccLabelsEnabled) {
-        if (profile) profile.dxccStart = nowMs();
-        drawDxccLabels(state.ctx, width, height, plan);
-        if (profile) profile.dxccEnd = nowMs();
-    }
 
     if (profile) {
         const end = nowMs();

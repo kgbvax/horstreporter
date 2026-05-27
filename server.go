@@ -201,6 +201,13 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 		minutes = maxDxWindowMinutes
 	}
 
+	cwMinDb := defaultDxCwViableMinDb
+	if raw := strings.TrimSpace(r.URL.Query().Get("cw_min_db")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil {
+			cwMinDb = v
+		}
+	}
+
 	surroundings := r.URL.Query().Get("surroundings") == "true"
 
 	hub.RLock()
@@ -209,21 +216,24 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 	hub.RUnlock()
 
 	resp := dxConditionsResponse{
-		Target:          target,
-		Surroundings:    surroundings,
-		WindowMinutes:   minutes,
-		CurrentHourOfWk: utcHourOfWeek(time.Now().Unix()),
-		GeneratedAt:     time.Now().Unix(),
-		BaselineBuckets: 0,
-		OverallScore:    0,
-		Confidence:      0,
-		Condition:       "Poor",
-		BestBands:       []string{},
-		Bands:           []dxBandCondition{},
+		Target:           target,
+		Surroundings:     surroundings,
+		WindowMinutes:    minutes,
+		CwMinDb:          cwMinDb,
+		CurrentHourOfWk:  utcHourOfWeek(time.Now().Unix()),
+		GeneratedAt:      time.Now().Unix(),
+		BaselineBuckets:  0,
+		BaselineEventCnt: 0,
+		BaselineHistoryM: 0,
+		OverallScore:     0,
+		Confidence:       0,
+		Condition:        "Poor",
+		BestBands:        []string{},
+		Bands:            []dxBandCondition{},
 	}
 
 	if dxBaseline != nil {
-		resp = dxBaseline.Evaluate(target, surroundings, minutes, historyCopy, time.Now().Unix())
+		resp = dxBaseline.Evaluate(target, surroundings, minutes, cwMinDb, historyCopy, time.Now().Unix())
 	}
 
 	w.Header().Set("Content-Type", "application/json")

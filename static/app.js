@@ -102,8 +102,10 @@ function getCurrentDxRequestParams() {
     const target = document.getElementById('target')?.value?.trim()?.toUpperCase();
     const minutesRaw = parseInt(document.getElementById('minutes')?.value || '15', 10);
     const minutes = Number.isFinite(minutesRaw) ? minutesRaw : 15;
+    const cwMinDbRaw = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
+    const cwMinDb = Number.isFinite(cwMinDbRaw) ? cwMinDbRaw : -15;
     const surroundings = document.getElementById('surroundings')?.checked === true;
-    return { target, minutes, surroundings };
+    return { target, minutes, cwMinDb, surroundings };
 }
 
 async function updateDk3jfMode(enabled) {
@@ -194,11 +196,26 @@ function maybeAutoStartSavedTarget() {
         return;
     }
 
-    autoStartTriggered = true;
     const btnSubmit = document.getElementById('btn-submit');
     if (btnSubmit) btnSubmit.textContent = 'Go';
 
-    document.getElementById('fetch-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    const form = document.getElementById('fetch-form');
+    if (!form) {
+        return;
+    }
+
+    form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+
+    const streamStarted = Boolean(state.eventSource) || document.getElementById('btn-submit')?.textContent === 'Stop';
+    if (streamStarted) {
+        autoStartTriggered = true;
+        return;
+    }
+
+    // If submit wiring was not yet active at this moment, retry shortly.
+    setTimeout(() => {
+        maybeAutoStartSavedTarget();
+    }, 50);
 }
 
 async function syncMercatorOverlays(force = false) {
@@ -207,7 +224,34 @@ async function syncMercatorOverlays(force = false) {
     await syncMercatorDxccLabelLayer({ force });
 }
 
+function syncStyleAvailabilityForProjection(projection) {
+    const gridRadio = document.getElementById('style-grid');
+    const heatmapRadio = document.getElementById('style-heatmap');
+    const activeAreaRadio = document.getElementById('style-area');
+    const disableNonGrid = projection === 'azimuthal';
+
+    [heatmapRadio, activeAreaRadio].forEach((radio) => {
+        if (!radio) return;
+        radio.disabled = disableNonGrid;
+        const label = document.querySelector(`label[for="${radio.id}"]`);
+        if (label) {
+            label.style.opacity = disableNonGrid ? '0.55' : '';
+            label.style.pointerEvents = disableNonGrid ? 'none' : '';
+        }
+    });
+
+    if (disableNonGrid) {
+        const checkedStyle = document.querySelector('input[name="style-select"]:checked')?.value;
+        if (checkedStyle === 'heatmap' || checkedStyle === 'active-area') {
+            if (gridRadio) gridRadio.checked = true;
+            localStorage.setItem('mapStyle', 'grid-snr');
+        }
+    }
+}
+
 async function applyProjectionMode(projection) {
+    syncStyleAvailabilityForProjection(projection);
+
     if (projection === 'azimuthal') {
         await loadAzimuthWorldGeoJson();
         setAzimuthEnabled(true);
@@ -809,3 +853,6 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
         }
     }, 5000);
 });
+
+// Fallback pass in case autostart check happened before submit wiring was ready.
+maybeAutoStartSavedTarget();
