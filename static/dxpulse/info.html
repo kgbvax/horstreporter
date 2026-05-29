@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DXPulse Info</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    body {
+      display: block;
+      height: auto;
+      padding: 20px;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    #content {
+      max-width: 860px;
+      margin: 0 auto;
+      line-height: 1.55;
+    }
+
+    h1, h2, h3 {
+      margin-top: 0;
+    }
+
+    h2, h3 {
+      margin-top: 1.4rem;
+    }
+
+    a {
+      color: #1d4ed8;
+    }
+
+    code {
+      background: rgba(127, 127, 127, 0.16);
+      padding: 0.12rem 0.3rem;
+      border-radius: 0.3rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+    }
+
+    th, td {
+      border: 1px solid rgba(127, 127, 127, 0.22);
+      padding: 0.5rem 0.6rem;
+      text-align: left;
+      vertical-align: top;
+    }
+  </style>
+  <script src="../vendor/js/marked.min.js"></script>
+</head>
+<body>
+  <div id="content">Loading information…</div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const rawDoc = params.get('doc') || 'info.md';
+    const safeDoc = /^[a-z0-9._-]+\.md$/i.test(rawDoc) ? rawDoc : 'info.md';
+    const rawTitle = params.get('title') || '';
+    if (rawTitle) {
+      document.title = rawTitle;
+    }
+
+    fetch(safeDoc)
+      .then((response) => {
+        if (!response.ok) throw new Error(`Could not load ${safeDoc}`);
+        return response.text();
+      })
+      .then((text) => {
+        document.getElementById('content').innerHTML = marked.parse(text);
+      })
+      .catch((err) => {
+        document.getElementById('content').innerHTML = `<p style="color:red;">Error loading info: ${err.message}</p>`;
+      });
+  </script>
+</body>
+</html>

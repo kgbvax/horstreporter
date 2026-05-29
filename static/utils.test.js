@@ -18,6 +18,8 @@ import {
     getSubsolarPoint,
     getSolarZenithAngle,
     getGridResolution,
+    normalizeDxPulseTarget,
+    buildDxPulseUrl,
     getMinSnrMode,
     getSelectedBand,
     getEnabledBands
@@ -55,6 +57,18 @@ describe('utils.js', () => {
             const bounds6 = locatorToBounds('FN31AB');
             expect(bounds6[0][0]).toBeCloseTo(41 + (2.5 / 60)); // lat min
             expect(bounds6[0][1]).toBeCloseTo(-74.0); // lng min
+        });
+
+        it('normalizeDxPulseTarget keeps squares and trims subsquares to 4 characters', () => {
+            expect(normalizeDxPulseTarget('fn31')).toBe('FN31');
+            expect(normalizeDxPulseTarget('fn31ab')).toBe('FN31');
+            expect(normalizeDxPulseTarget('w1aw')).toBe('');
+        });
+
+        it('buildDxPulseUrl builds a DXPulse page URL for locator targets', () => {
+            expect(buildDxPulseUrl({ target: 'fn31ab', minutes: 15, surroundings: true, mode: 'anomaly', lookbackDays: 60 }))
+                .toBe('/dxpulse/?target=FN31&mode=anomaly&minutes=15&lookback_days=60&surroundings=true');
+            expect(buildDxPulseUrl({ target: 'W1AW', minutes: 15 })).toBe('');
         });
 
         it('setFaviconColor updates favicon href when favicon element exists', () => {

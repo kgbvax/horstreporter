@@ -188,8 +188,8 @@ func TestStreamHandlerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to read from stream: %v", err)
 	}
-	if !strings.HasPrefix(line1, "data: {") || !strings.Contains(line1, `"sender":"W1AW"`) {
-		t.Errorf("Expected spot data for W1AW, got: %q", line1)
+	if !strings.HasPrefix(line1, "data: {") || !strings.Contains(line1, `"locator":"FN20"`) || !strings.Contains(line1, `"band":"20m"`) {
+		t.Errorf("Expected trimmed spot data for the matched square, got: %q", line1)
 	}
 
 	// Skip the blank line after data
@@ -206,6 +206,32 @@ func TestStreamHandlerIntegration(t *testing.T) {
 }
 
 func TestStatsHandlerIntegration(t *testing.T) {
+	origDxBaseline := dxBaseline
+	defer func() { dxBaseline = origDxBaseline }()
+
+	dxBaseline = newDxBaselineEngine("")
+	now := time.Now().Unix()
+	dxBaseline.Observe(MQTTMessage{
+		T:  now - 7200,
+		SC: "W1AW",
+		RC: "K1JT",
+		SL: "FN31",
+		RL: "FN20",
+		RP: -15,
+		B:  "20m",
+		MD: "FT8",
+	})
+	dxBaseline.Observe(MQTTMessage{
+		T:  now - 300,
+		SC: "W1AW",
+		RC: "DL1ABC",
+		SL: "FN31",
+		RL: "JO32",
+		RP: -6,
+		B:  "20m",
+		MD: "FT8",
+	})
+
 	// Seed the global hub history and clients
 	hub.Lock()
 	hub.clients = make(map[*Client]bool)
@@ -219,7 +245,7 @@ func TestStatsHandlerIntegration(t *testing.T) {
 			SL: "FN31",
 			RL: "FN20",
 			RP: -15,
-			T:  time.Now().Unix() - 600, // ~10 minutes ago
+			T:  now - 600, // ~10 minutes ago
 			B:  "20m",
 			MD: "FT8",
 		},
@@ -258,6 +284,117 @@ func TestStatsHandlerIntegration(t *testing.T) {
 	historyMins := stats["history_minutes"].(float64)
 	if historyMins < 9 || historyMins > 11 {
 		t.Errorf("Expected history minutes ~10, got %v", historyMins)
+	}
+	if stats["history_retention_minutes"].(float64) <= 0 {
+		t.Fatalf("expected history_retention_minutes to be reported, got %v", stats["history_retention_minutes"])
+	}
+	if got := stats["dx_baseline_event_count"].(float64); got != 2 {
+		t.Fatalf("expected dx_baseline_event_count to be 2, got %v", got)
+	}
+	baselineHistoryMins := stats["dx_baseline_history_minutes"].(float64)
+	if baselineHistoryMins < 114 || baselineHistoryMins > 116 {
+		t.Fatalf("expected dx_baseline_history_minutes ~115, got %v", baselineHistoryMins)
+	}
+	if got := stats["dx_baseline_max_events"].(float64); got != float64(defaultDxBaselineMaxEvents) {
+		t.Fatalf("expected dx_baseline_max_events=%d, got %v", defaultDxBaselineMaxEvents, got)
+	}
+	if _, ok := stats["sessions_total"].(float64); !ok {
+		t.Fatalf("expected sessions_total in stats, got %T", stats["sessions_total"])
+	}
+	if _, ok := stats["session_bytes_total"].(float64); !ok {
+		t.Fatalf("expected session_bytes_total in stats, got %T", stats["session_bytes_total"])
+	}
+	if _, ok := stats["session_bytes_avg"].(float64); !ok {
+		t.Fatalf("expected session_bytes_avg in stats, got %T", stats["session_bytes_avg"])
+	}
+}
+
+func TestDefaultDxBaselineMaxEventsIsOneMillion(t *testing.T) {
+	if defaultDxBaselineMaxEvents != 1000000 {
+		t.Fatalf("expected default dx baseline max events to be 1000000, got %d", defaultDxBaselineMaxEvents)
+	}
+}
+
+func TestPruneLiveHistoryUsesConfiguredRetention(t *testing.T) {
+	hub.Lock()
+	origHistory := hub.history
+	hub.history = []MQTTMessage{
+		{T: 100, SC: "A", RC: "B", SL: "FN31", RL: "FN20", RP: -10, B: "20m", MD: "FT8"},
+		{T: 2000, SC: "A", RC: "B", SL: "FN31", RL: "FN20", RP: -10, B: "20m", MD: "FT8"},
+	}
+	hub.Unlock()
+	defer func() {
+		hub.Lock()
+		hub.history = origHistory
+		hub.Unlock()
+	}()
+
+	pruneLiveHistory(2400, 10)
+
+	hub.RLock()
+	defer hub.RUnlock()
+	if len(hub.history) != 1 {
+		t.Fatalf("expected 1 retained history item, got %d", len(hub.history))
+	}
+	if hub.history[0].T != 2000 {
+		t.Fatalf("expected the newer history item to remain, got %d", hub.history[0].T)
+	}
+}
+
+func TestDxBaselineEventCapIsConfigurable(t *testing.T) {
+	origCap := dxBaselineMaxEvents
+	dxBaselineMaxEvents = 2
+	defer func() { dxBaselineMaxEvents = origCap }()
+
+	engine := newDxBaselineEngine("")
+	now := time.Now().Unix()
+	for i := 0; i < 3; i++ {
+		engine.Observe(MQTTMessage{
+			T:  now - int64(i*60),
+			SC: "W1AW",
+			RC: "K1JT",
+			SL: "FN31",
+			RL: "FN20",
+			RP: -10,
+			B:  "20m",
+			MD: "FT8",
+		})
+	}
+
+	if got := len(engine.events); got != 2 {
+		t.Fatalf("expected baseline event cap to retain 2 events, got %d", got)
+	}
+}
+
+func TestDxBaselineEventCapRetainsNewestInOrder(t *testing.T) {
+	origCap := dxBaselineMaxEvents
+	dxBaselineMaxEvents = 2
+	defer func() { dxBaselineMaxEvents = origCap }()
+
+	engine := newDxBaselineEngine("")
+	base := time.Now().Unix()
+	for i := 0; i < 3; i++ {
+		engine.Observe(MQTTMessage{
+			T:  base + int64(i),
+			SC: "W1AW",
+			RC: "K1JT",
+			SL: "FN31",
+			RL: "FN20",
+			RP: -8,
+			B:  "20m",
+			MD: "FT8",
+		})
+	}
+
+	engine.mu.RLock()
+	events := engine.snapshotEventsLocked()
+	engine.mu.RUnlock()
+
+	if len(events) != 2 {
+		t.Fatalf("expected 2 retained events, got %d", len(events))
+	}
+	if events[0].T != base+1 || events[1].T != base+2 {
+		t.Fatalf("expected newest ordered events [%d,%d], got [%d,%d]", base+1, base+2, events[0].T, events[1].T)
 	}
 }
 
@@ -404,10 +541,81 @@ func TestStreamHandlerValidationAndCompatibility(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Failed to read stream line: %v", err)
 			}
-			if !strings.HasPrefix(line, "data: {") || !strings.Contains(line, `"sender":"W1AW"`) {
-				t.Fatalf("expected sender W1AW in first data event, got %q", line)
+			if !strings.HasPrefix(line, "data: {") || !strings.Contains(line, `"locator":"FN20"`) {
+				t.Fatalf("expected trimmed stream data with locator FN20, got %q", line)
 			}
 		})
+	})
+}
+
+func TestSquareDetailsHandlerAggregatesHoverDetails(t *testing.T) {
+	withHubSnapshot(t, func() {
+		now := time.Now().Unix()
+		hub.Lock()
+		hub.history = []MQTTMessage{
+			{
+				SC: "W1AW",
+				RC: "K1JT",
+				SL: "FN31",
+				RL: "FN20",
+				RP: -8,
+				T:  now - 30,
+				B:  "20m",
+				MD: "FT8",
+			},
+			{
+				SC: "W1AW",
+				RC: "N0CALL",
+				SL: "FN31",
+				RL: "FN20",
+				RP: -4,
+				T:  now - 20,
+				B:  "20m",
+				MD: "FT8",
+			},
+			{
+				SC: "W1AW",
+				RC: "DL1ABC",
+				SL: "FN31",
+				RL: "FN20",
+				RP: -2,
+				T:  now - 10,
+				B:  "40m",
+				MD: "FT8",
+			},
+		}
+		hub.Unlock()
+
+		server := httptest.NewServer(http.HandlerFunc(squareDetailsHandler))
+		defer server.Close()
+
+		resp, err := http.Get(server.URL + "?target=W1AW&locator=FN20&minutes=15&min_snr_mode=cw&cw_min_db=-15&selected_band=all&enabled_bands=20m,40m")
+		if err != nil {
+			t.Fatalf("Failed to make request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+
+		var payload squareDetailsResponse
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			t.Fatalf("failed to decode payload: %v", err)
+		}
+
+		if payload.Locator != "FN20" {
+			t.Fatalf("expected locator FN20, got %q", payload.Locator)
+		}
+		if payload.Count != 3 {
+			t.Fatalf("expected 3 matching reports, got %d", payload.Count)
+		}
+		if payload.BestBand != "20m" {
+			t.Fatalf("expected best band 20m, got %q", payload.BestBand)
+		}
+		if len(payload.TopReports) == 0 {
+			t.Fatal("expected top reports in payload")
+		}
 	})
 }
 
@@ -475,13 +683,13 @@ func TestDxConditionsHandlerReturnsScoredPayload(t *testing.T) {
 	dxBaseline = newDxBaselineEngine("")
 
 	now := time.Now().Unix()
-	hour := utcHourOfWeek(now)
+	hour := utcSlotOfDay(now)
 	band := normalizeBand("20m")
 
 	for i := 0; i < 800; i++ {
 		key := baselineKey(band, hour, 1, 2)
 		if dxBaseline.buckets[key] == nil {
-			dxBaseline.buckets[key] = &baselineBucket{Band: band, HourOfWeek: hour, DistanceTier: 1, SnrTier: 2}
+			dxBaseline.buckets[key] = &baselineBucket{Band: band, SlotOfDay: hour, DistanceTier: 1, SnrTier: 2}
 		}
 		dxBaseline.buckets[key].Count++
 	}
@@ -745,4 +953,89 @@ func TestDxBaselinePersistenceTracksHistorySpan(t *testing.T) {
 	if resp.BaselineHistoryM != want {
 		t.Fatalf("expected baseline history %d min, got %d", want, resp.BaselineHistoryM)
 	}
+}
+
+func TestServerHelperFunctions(t *testing.T) {
+	t.Run("resolveTargetQuery honors compatibility params and surroundings", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/stream?callsign=w1aw&surroundings=true", nil)
+		target, surroundings := resolveTargetQuery(req)
+		if target != "W1AW" {
+			t.Fatalf("expected W1AW target, got %q", target)
+		}
+		if !surroundings {
+			t.Fatal("expected surroundings=true")
+		}
+	})
+
+	t.Run("parseEnabledBands and bandAllowed normalize input", func(t *testing.T) {
+		enabled := parseEnabledBands("20m, 40M ,,6m")
+		if len(enabled) != 3 {
+			t.Fatalf("expected 3 enabled bands, got %d", len(enabled))
+		}
+		if !bandAllowed("20m", "all", enabled) {
+			t.Fatal("expected 20m to be allowed")
+		}
+		if bandAllowed("15m", "all", enabled) {
+			t.Fatal("expected 15m to be filtered out by enabled bands")
+		}
+		if bandAllowed("40m", "20m", enabled) {
+			t.Fatal("expected selectedBand to override and reject 40m")
+		}
+	})
+
+	t.Run("toStreamSpot trims spot payload for SSE", func(t *testing.T) {
+		spot := Spot{Lat: 1.2, Lng: 3.4, SNR: -7, AgeSeconds: 30, Locator: "JO32", Band: "20m"}
+		stream := toStreamSpot(spot)
+		if stream.Locator != "JO32" || stream.Band != "20m" || stream.SNR != -7 {
+			t.Fatalf("unexpected stream spot payload: %+v", stream)
+		}
+	})
+
+	t.Run("noCache adds cache busting headers", func(t *testing.T) {
+		h := noCache(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/static/app.js", nil)
+		h.ServeHTTP(rec, req)
+		res := rec.Result()
+		defer res.Body.Close()
+
+		if got := res.Header.Get("Cache-Control"); got != "no-cache, no-store, must-revalidate" {
+			t.Fatalf("unexpected Cache-Control: %q", got)
+		}
+		if got := res.Header.Get("Pragma"); got != "no-cache" {
+			t.Fatalf("unexpected Pragma: %q", got)
+		}
+		if got := res.Header.Get("Expires"); got != "0" {
+			t.Fatalf("unexpected Expires: %q", got)
+		}
+	})
+}
+
+func TestBuildSquareDetailsResponseEmptyAndFiltered(t *testing.T) {
+	now := time.Now().Unix()
+	history := []MQTTMessage{
+		{T: now - 30, SC: "W1AW", RC: "DL1ABC", SL: "FN31", RL: "JO32", RP: -12, B: "20m", MD: "FT8"},
+		{T: now - 20, SC: "W1AW", RC: "DL1XYZ", SL: "FN31", RL: "JO33", RP: -4, B: "40m", MD: "FT8"},
+	}
+
+	t.Run("returns empty payload when target missing", func(t *testing.T) {
+		resp := buildSquareDetailsResponse("", false, "JO32", 15, "none", 0, -15, "all", nil, history, now)
+		if resp.Count != 0 || resp.BestBand != "" || len(resp.TopReports) != 0 {
+			t.Fatalf("expected empty response, got %+v", resp)
+		}
+	})
+
+	t.Run("applies band and snr filters", func(t *testing.T) {
+		resp := buildSquareDetailsResponse("W1AW", false, "JO32", 15, "ssb", -10, -15, "20m", parseEnabledBands("20m"), history, now)
+		if resp.Count != 0 {
+			t.Fatalf("expected filters to exclude all spots, got %+v", resp)
+		}
+
+		resp = buildSquareDetailsResponse("W1AW", false, "JO33", 15, "none", 0, -15, "40m", parseEnabledBands("40m"), history, now)
+		if resp.Count != 1 || resp.BestBand != "40m" {
+			t.Fatalf("expected one surviving 40m report, got %+v", resp)
+		}
+	})
 }

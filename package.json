@@ -3,11 +3,14 @@
   "name": "horstreporter-frontend",
   "version": "1.0.0",
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run test"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^1.6.1",
     "jsdom": "^24.0.0",
+    "typescript": "^5.5.4",
     "vitest": "^1.2.0"
   }
 }

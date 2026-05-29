@@ -5,7 +5,7 @@ import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzi
 import { initUI, attachUITooltipEvents } from './ui.js';
 import { updateMapVisualization } from './renderers.js';
 import { initDxConditionsUI, setDxConditionsVisible, resetDxConditions, startDxPolling, stopDxPolling } from './dx-conditions.js';
-import { latLngToLocator, locatorToBounds, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors } from './utils.js';
+import { latLngToLocator, locatorToBounds, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, buildDxPulseUrl, normalizeDxPulseTarget } from './utils.js';
 
 // --- Azimuth Zoom State ---
 let azimuthZoom = Number(localStorage.getItem('azimuthZoom') || 1.5);
@@ -47,7 +47,8 @@ function updateDxccLabelDensity(density) {
     if (densityInput && Number(densityInput.value) !== dxccLabelDensity) {
         densityInput.value = String(dxccLabelDensity);
     }
-    document.getElementById('dxcc-label-density-val').textContent = dxccLabelDensity.toFixed(1);
+    const densityVal = document.getElementById('dxcc-label-density-val');
+    if (densityVal) densityVal.textContent = dxccLabelDensity.toFixed(1);
     if (isAzimuthEnabled()) scheduleRender();
 }
 
@@ -175,6 +176,52 @@ function currentProjection() {
     return document.querySelector('input[name="projection-select"]:checked')?.value || 'mercator';
 }
 
+function setDxPulseLinkState(link, href, enabled) {
+    if (!link) return;
+    link.href = enabled ? href : '/dxpulse/';
+    link.classList.toggle('disabled', !enabled);
+    link.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+}
+
+function refreshDxPulseLink() {
+    const qualityLink = document.getElementById('dxpulse-quality-link');
+    const anomalyLink = document.getElementById('dxpulse-anomaly-link');
+    const help = document.getElementById('dxpulse-link-help');
+    if (!qualityLink || !anomalyLink || !help) return;
+
+    const targetValue = document.getElementById('target')?.value || '';
+    const minutes = document.getElementById('minutes')?.value || '15';
+    const surroundings = document.getElementById('surroundings')?.checked === true;
+    const locator = normalizeDxPulseTarget(targetValue);
+    const qualityHref = buildDxPulseUrl({
+        target: targetValue,
+        minutes,
+        surroundings,
+        mode: 'quality',
+        lookbackDays: 45
+    });
+    const anomalyHref = buildDxPulseUrl({
+        target: targetValue,
+        minutes,
+        surroundings,
+        mode: 'anomaly',
+        lookbackDays: 45
+    });
+
+    if (!locator || !qualityHref || !anomalyHref) {
+        setDxPulseLinkState(qualityLink, '/dxpulse/', false);
+        setDxPulseLinkState(anomalyLink, '/dxpulse/', false);
+        help.textContent = targetValue.trim()
+            ? 'DXPulse needs a Maidenhead locator target; callsigns cannot open the matrix directly.'
+            : 'Enter a locator to open the current DXPulse quality or anomaly overview.';
+        return;
+    }
+
+    setDxPulseLinkState(qualityLink, qualityHref, true);
+    setDxPulseLinkState(anomalyLink, anomalyHref, true);
+    help.textContent = `Open DXPulse for ${locator}${surroundings ? ' with adjacent squares' : ''} in quality or anomaly mode.`;
+}
+
 function maybeAutoStartSavedTarget() {
     if (autoStartTriggered || !appReadyForAutoStart || !map) {
         return;
@@ -257,13 +304,15 @@ async function applyProjectionMode(projection) {
         setAzimuthEnabled(true);
         setAzimuthTheme(document.body.getAttribute('data-theme') || 'light');
         setAzimuthZoom(azimuthZoom);
-        document.getElementById('azimuth-zoom-controls').style.display = 'block';
+        const ctrls = document.getElementById('azimuth-zoom-controls');
+        if (ctrls) ctrls.style.display = 'block';
         scheduleRender();
         return;
     }
 
     setAzimuthEnabled(false);
-    document.getElementById('azimuth-zoom-controls').style.display = 'none';
+    const ctrls = document.getElementById('azimuth-zoom-controls');
+    if (ctrls) ctrls.style.display = 'none';
     if (map) map.invalidateSize();
     await syncMercatorOverlays(true);
     scheduleRender();
@@ -328,6 +377,7 @@ initDxConditionsUI();
     // Force an initial render to sync visual band states (colors/opacity) loaded from localStorage
     updateMapVisualization(state.liveSpots, parseInt(document.getElementById('minutes')?.value || 15));
     updateCurrentBandDisplay();
+    refreshDxPulseLink();
 
     appReadyForAutoStart = true;
     maybeAutoStartSavedTarget();
@@ -357,7 +407,7 @@ export function scheduleRender() {
     renderTimeoutId = setTimeout(() => {
         renderTimeoutId = null;
         requestAnimationFrame(() => {
-            const minutes = document.getElementById('minutes').value || 15;
+            const minutes = document.getElementById('minutes')?.value || 15;
             if (isAzimuthEnabled()) {
                 renderAzimuthScene({ spots: state.liveSpots });
             } else {
@@ -369,7 +419,7 @@ export function scheduleRender() {
     }, delay);
 }
 
-document.getElementById('theme-toggle').addEventListener('click', () => {
+document.getElementById('theme-toggle')?.addEventListener('click', () => {
     const currentTheme = document.body.getAttribute('data-theme');
     const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
     setTheme(newTheme);
@@ -382,14 +432,16 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
 
 document.getElementById('hide-sidebar')?.addEventListener('click', () => {
     const controls = document.getElementById('controls');
-    controls.style.marginLeft = '-320px';
-    document.getElementById('show-sidebar').style.display = 'block';
+    if (controls) controls.style.marginLeft = '-320px';
+    const show = document.getElementById('show-sidebar');
+    if (show) show.style.display = 'block';
 });
 
 document.getElementById('show-sidebar')?.addEventListener('click', () => {
     const controls = document.getElementById('controls');
-    controls.style.marginLeft = '0px';
-    document.getElementById('show-sidebar').style.display = 'none';
+    if (controls) controls.style.marginLeft = '0px';
+    const show = document.getElementById('show-sidebar');
+    if (show) show.style.display = 'none';
 });
 
 document.getElementById('controls')?.addEventListener('transitionend', (e) => {
@@ -441,12 +493,22 @@ document.getElementById('min-snr-group')?.addEventListener('change', (e) => {
 });
 
 document.getElementById('ssb-min-db')?.addEventListener('change', () => {
-    localStorage.setItem('ssbMinDb', document.getElementById('ssb-min-db').value);
+    const el = document.getElementById('ssb-min-db');
+    if (el) localStorage.setItem('ssbMinDb', el.value);
     scheduleRender();
 });
 
+document.getElementById('target')?.addEventListener('input', () => {
+    refreshDxPulseLink();
+});
+
+document.getElementById('minutes')?.addEventListener('change', () => {
+    refreshDxPulseLink();
+});
+
 document.getElementById('cw-min-db')?.addEventListener('change', () => {
-    localStorage.setItem('cwMinDb', document.getElementById('cw-min-db').value);
+    const el = document.getElementById('cw-min-db');
+    if (el) localStorage.setItem('cwMinDb', el.value);
     scheduleRender();
 });
 
@@ -454,8 +516,9 @@ document.getElementById('cycle-time')?.addEventListener('change', (e) => {
     localStorage.setItem('cycleTime', e.target.value);
     if (state.cycleInterval) {
         // Restart cycle to pick up the new time
-        document.getElementById('btn-cycle').click();
-        document.getElementById('btn-cycle').click();
+        const btn = document.getElementById('btn-cycle');
+        btn?.click();
+        btn?.click();
     }
 });
 
@@ -468,7 +531,8 @@ document.getElementById('azimuth-ns6t-indicator')?.addEventListener('change', (e
 });
 
 document.getElementById('dxcc-label-density')?.addEventListener('input', (e) => {
-    document.getElementById('dxcc-label-density-val').textContent = e.target.value;
+    const val = document.getElementById('dxcc-label-density-val');
+    if (val) val.textContent = e.target.value;
 });
 
 document.getElementById('dxcc-label-density')?.addEventListener('change', (e) => {
@@ -480,12 +544,13 @@ document.getElementById('dk3jf-mode')?.addEventListener('change', async (e) => {
 });
 
 document.getElementById('cluster-distance')?.addEventListener('input', (e) => {
-    document.getElementById('cluster-dist-val').textContent = e.target.value;
+    const val = document.getElementById('cluster-dist-val');
+    if (val) val.textContent = e.target.value;
     localStorage.setItem('clusterDistance', e.target.value);
     scheduleRender();
 });
 
-document.getElementById('band-container').addEventListener('change', (e) => {
+document.getElementById('band-container')?.addEventListener('change', (e) => {
     if (e && e.isTrusted && state.cycleInterval && e.target && e.target.name === 'band') {
         clearInterval(state.cycleInterval);
         state.cycleInterval = null;
@@ -546,6 +611,7 @@ document.getElementById('auto-zoom')?.addEventListener('change', (e) => {
 
 document.getElementById('surroundings')?.addEventListener('change', (e) => {
     localStorage.setItem('surroundings', e.target.checked);
+    refreshDxPulseLink();
     const btnSubmit = document.getElementById('btn-submit');
     if (btnSubmit && btnSubmit.textContent === 'Stop') {
         btnSubmit.textContent = 'Go';
@@ -571,13 +637,14 @@ document.getElementById('show-dxcc-labels')?.addEventListener('change', (e) => {
     updateDxccLabelsEnabled(e.target.checked);
 });
 
-document.getElementById('btn-geo').addEventListener('click', () => {
+document.getElementById('btn-geo')?.addEventListener('click', () => {
     if (!navigator.geolocation) {
         alert('Geolocation is not supported by your browser.');
         return;
     }
 
     const btn = document.getElementById('btn-geo');
+    if (!btn) return;
     const originalText = btn.innerHTML;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
     btn.disabled = true;
@@ -586,14 +653,16 @@ document.getElementById('btn-geo').addEventListener('click', () => {
         (position) => {
             // Pre-fill with a 4-character locator (square)
             const loc = latLngToLocator(position.coords.latitude, position.coords.longitude, 4);
-            document.getElementById('target').value = loc;
+            const targetEl = document.getElementById('target');
+            if (targetEl) targetEl.value = loc;
             localStorage.setItem('target', loc);
+            refreshDxPulseLink();
             btn.innerHTML = originalText;
             btn.disabled = false;
             
             const btnSubmit = document.getElementById('btn-submit');
             if (btnSubmit) btnSubmit.textContent = 'Go';
-            document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            document.getElementById('fetch-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
         },
         (error) => {
             console.error('Geolocation error:', error);
@@ -608,7 +677,7 @@ document.getElementById('btn-geo').addEventListener('click', () => {
 document.getElementById('btn-center')?.addEventListener('click', () => {
     if (!map) return;
 
-    const target = document.getElementById('target').value.trim().toUpperCase();
+    const target = document.getElementById('target')?.value.trim().toUpperCase() || '';
     const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(target);
     if (isLocator) {
         const bounds = locatorToBounds(target);
@@ -627,8 +696,9 @@ document.getElementById('btn-center')?.addEventListener('click', () => {
     }
 });
 
-document.getElementById('btn-cycle').addEventListener('click', () => {
+document.getElementById('btn-cycle')?.addEventListener('click', () => {
     const btn = document.getElementById('btn-cycle');
+    if (!btn) return;
     if (state.cycleInterval) {
         clearInterval(state.cycleInterval);
         state.cycleInterval = null;
@@ -668,21 +738,21 @@ document.getElementById('btn-cycle').addEventListener('click', () => {
             let nextIndex = (currentIndex + 1) % radios.length;
             
             radios[nextIndex].checked = true;
-            document.getElementById('band-container').dispatchEvent(new Event('change'));
+            document.getElementById('band-container')?.dispatchEvent(new Event('change'));
         }, cycleTimeMs);
     }
 });
 
-document.getElementById('target').addEventListener('keydown', (e) => {
+document.getElementById('target')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
         e.preventDefault();
         const btnSubmit = document.getElementById('btn-submit');
         if (btnSubmit) btnSubmit.textContent = 'Go';
-        document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+        document.getElementById('fetch-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
     }
 });
 
-document.getElementById('fetch-form').addEventListener('submit', (e) => {
+document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!map) return;
 
@@ -711,13 +781,14 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
         resetDxConditions();
 
         btnSubmit.textContent = 'Go';
-        document.getElementById('stream-status').innerHTML = 'Status: Not subscribed';
+        const status = document.getElementById('stream-status');
+        if (status) status.innerHTML = 'Status: Not subscribed';
         setFaviconColor('#6c757d');
         return;
     }
 
-    const target = document.getElementById('target').value.trim().toUpperCase();
-    const minutes = document.getElementById('minutes').value || 15;
+    const target = document.getElementById('target')?.value.trim().toUpperCase() || '';
+    const minutes = document.getElementById('minutes')?.value || 15;
 
     if (!target) {
         alert('Please provide a Callsign or Locator.');
@@ -726,6 +797,7 @@ document.getElementById('fetch-form').addEventListener('submit', (e) => {
 
     localStorage.setItem('target', target);
     localStorage.setItem('minutes', minutes);
+    refreshDxPulseLink();
 
     console.log(`Starting live stream for target: '${target}'`);
 

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DXPulse Experiment</title>
+  <link rel="stylesheet" href="../vendor/css/bootstrap.min.css" />
+  <link rel="stylesheet" href="../vendor/css/all.min.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="container-fluid py-3 dxpulse-shell">
+    <header class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3 mb-3">
+      <div>
+        <h1 class="h3 mb-1">DXPulse Experiment</h1>
+        <p class="text-muted mb-0">Glanceable current conditions by band and region.</p>
+      </div>
+      <div class="d-flex gap-2">
+        <button id="dxpulse-info-toggle" class="btn btn-outline-secondary btn-sm" type="button" title="What DXPulse shows">
+          <i class="fas fa-question-circle"></i>
+          <span class="ms-1">Info</span>
+        </button>
+        <a class="btn btn-outline-secondary btn-sm" href="/">Back to map</a>
+      </div>
+    </header>
+
+    <section class="card shadow-sm mb-3">
+      <div class="card-body">
+        <form id="dxpulse-form" class="row g-2 align-items-end">
+          <div class="col-12 col-md-3">
+            <label for="target" class="form-label">Target square</label>
+            <input id="target" class="form-control" placeholder="FN31" maxlength="4" />
+          </div>
+          <input id="mode" type="hidden" value="quality" />
+          <div class="col-6 col-md-2">
+            <label for="minutes" class="form-label">Window</label>
+            <select id="minutes" class="form-select">
+              <option value="5">5 min</option>
+              <option value="15" selected>15 min</option>
+              <option value="30">30 min</option>
+              <option value="60">60 min</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-2">
+            <label for="lookback" class="form-label">Lookback</label>
+            <select id="lookback" class="form-select">
+              <option value="30">30 d</option>
+              <option value="45" selected>45 d</option>
+              <option value="60">60 d</option>
+              <option value="90">90 d</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-2 d-flex align-items-center gap-2 pt-md-4">
+            <input id="surroundings" class="form-check-input" type="checkbox" />
+            <label for="surroundings" class="form-check-label">Adjacent squares</label>
+          </div>
+          <div class="col-6 col-md-2">
+            <label for="palette" class="form-label">Scale</label>
+            <select id="palette" class="form-select">
+              <option value="horizon">Horizon</option>
+              <option value="viridis">Viridis</option>
+              <option value="plasma">Plasma</option>
+              <option value="inferno">Inferno</option>
+            </select>
+          </div>
+          <div class="col-12 col-md-3">
+            <label class="form-label">Mode</label>
+            <div class="dxpulse-mode-controls" role="group" aria-label="DXPulse mode">
+              <button class="dxpulse-mode-btn" type="button" data-mode="quality" aria-pressed="true">Quality</button>
+              <button class="dxpulse-mode-btn" type="button" data-mode="anomaly" aria-pressed="false">Anomaly</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section class="card shadow-sm">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2 gap-2 flex-wrap">
+          <h2 class="h5 mb-0">Matrix</h2>
+          <div id="meta" class="small text-muted"></div>
+        </div>
+        <div id="color-key" class="dxpulse-color-key mb-2" aria-label="DXPulse color key"></div>
+        <div id="status" class="small text-muted mb-2">Enter a target square to load data.</div>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered align-middle dxpulse-table" id="matrix-table"></table>
+        </div>
+      </div>
+    </section>
+
+    <section class="row g-3 mt-1" id="summary-row">
+      <div class="col-12 col-xl-4">
+        <div class="card shadow-sm h-100">
+          <div class="card-body">
+            <h2 class="h6 text-uppercase text-muted">Best bands</h2>
+            <div id="best-bands" class="vstack gap-2"></div>
+          </div>
+        </div>
+      </div>
+      <div class="col-12 col-xl-4">
+        <div class="card shadow-sm h-100">
+          <div class="card-body">
+            <h2 class="h6 text-uppercase text-muted">Top regions</h2>
+            <div id="top-regions" class="vstack gap-2"></div>
+          </div>
+        </div>
+      </div>
+      <div class="col-12 col-xl-4">
+        <div class="card shadow-sm h-100">
+          <div class="card-body">
+            <h2 class="h6 text-uppercase text-muted">Hot cells</h2>
+            <div id="hot-cells" class="vstack gap-2"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card shadow-sm mt-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2 gap-2 flex-wrap">
+          <div>
+            <h2 class="h5 mb-0">Compact matrix</h2>
+            <div class="small text-muted">Experiment: color-only mini matrix with tooltip details for widget/mobile use.</div>
+          </div>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered align-middle dxpulse-table dxpulse-compact-table" id="compact-matrix-table"></table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="dxpulse-info-overlay" class="dxpulse-info-overlay" aria-hidden="true">
+    <div class="dxpulse-info-dialog" role="dialog" aria-modal="true" aria-labelledby="dxpulse-info-title">
+      <div class="dxpulse-info-header">
+        <h2 id="dxpulse-info-title" class="h5 mb-0">About DXPulse</h2>
+        <button id="dxpulse-info-close" class="btn btn-outline-secondary btn-sm" type="button" aria-label="Close DXPulse info overlay">&times;</button>
+      </div>
+      <iframe src="info.html?doc=info.md&title=DXPulse%20Info" frameborder="0" title="DXPulse information"></iframe>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

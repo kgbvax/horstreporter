@@ -33,31 +33,40 @@ func startMQTT() {
 			return
 		}
 
-		// Extract missing fields from the topic string (PSKReporter omits them in JSON to save bandwidth)
-		// Topic format: pskr/filter/v2/{band}/{mode}/{senderCall}/{receiverCall}/{senderLocator}/{receiverLocator}
-		topicParts := strings.Split(msg.Topic(), "/")
-		if len(topicParts) >= 9 {
-			if m.B == "" && topicParts[3] != "unknown" {
-				m.B = topicParts[3]
-			}
-			if m.MD == "" && topicParts[4] != "unknown" {
-				m.MD = topicParts[4]
-			}
-			if m.SC == "" && topicParts[5] != "unknown" {
-				m.SC = strings.ReplaceAll(topicParts[5], ".", "/") // Slashes in callsigns are replaced by dots in the topic
-			}
-			if m.RC == "" && topicParts[6] != "unknown" {
-				m.RC = strings.ReplaceAll(topicParts[6], ".", "/")
-			}
-			if m.SL == "" && topicParts[7] != "unknown" {
-				m.SL = topicParts[7]
-			}
-			if m.RL == "" && topicParts[8] != "unknown" {
-				m.RL = topicParts[8]
+		if m.B == "" || m.MD == "" || m.SC == "" || m.RC == "" || m.SL == "" || m.RL == "" {
+			// Extract missing fields from the topic string (PSKReporter omits them in JSON to save bandwidth)
+			// Topic format: pskr/filter/v2/{band}/{mode}/{senderCall}/{receiverCall}/{senderLocator}/{receiverLocator}
+			topicParts := strings.Split(msg.Topic(), "/")
+			if len(topicParts) >= 9 {
+				if m.B == "" && topicParts[3] != "unknown" {
+					m.B = topicParts[3]
+				}
+				if m.MD == "" && topicParts[4] != "unknown" {
+					m.MD = topicParts[4]
+				}
+				if m.SC == "" && topicParts[5] != "unknown" {
+					m.SC = strings.ReplaceAll(topicParts[5], ".", "/") // Slashes in callsigns are replaced by dots in the topic
+				}
+				if m.RC == "" && topicParts[6] != "unknown" {
+					m.RC = strings.ReplaceAll(topicParts[6], ".", "/")
+				}
+				if m.SL == "" && topicParts[7] != "unknown" {
+					m.SL = topicParts[7]
+				}
+				if m.RL == "" && topicParts[8] != "unknown" {
+					m.RL = topicParts[8]
+				}
 			}
 		}
 
-		mode := strings.ToUpper(m.MD)
+		m.B = strings.TrimSpace(m.B)
+		m.MD = strings.ToUpper(strings.TrimSpace(m.MD))
+		m.SC = strings.ToUpper(strings.TrimSpace(m.SC))
+		m.RC = strings.ToUpper(strings.TrimSpace(m.RC))
+		m.SL = strings.ToUpper(strings.TrimSpace(m.SL))
+		m.RL = strings.ToUpper(strings.TrimSpace(m.RL))
+
+		mode := m.MD
 		if mode == "FT8" || mode == "FT4" {
 			if m.T == 0 {
 				m.T = time.Now().Unix()
@@ -65,13 +74,6 @@ func startMQTT() {
 
 			if dxBaseline != nil {
 				dxBaseline.Observe(m)
-			}
-
-			if spotRecorder != nil {
-				if b, err := json.Marshal(m); err == nil {
-					b = append(b, '\n')
-					spotRecorder.Write(b)
-				}
 			}
 			hub.broadcastMsg(m)
 		}

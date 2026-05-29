@@ -29,7 +29,7 @@ mkdir -p "/var/log/$APP_NAME"
 # 3. Check and copy the binary
 if [ ! -f "$BINARY_NAME" ]; then
     echo "Error: Binary '$BINARY_NAME' not found in the current directory."
-    echo "Please build it first using ./build_linux_x64.sh"
+    echo "Please build it first using ./build_linux_x64.sh static"
     exit 1
 fi
 
@@ -55,6 +55,8 @@ if [ ! -f "$DEFAULT_CONFIG" ]; then
 # ARGS="-port 80 -compress -pprof"
 # To enable file logging (rotated and gzipped automatically):
 ARGS="-port 80 -port 443 -domain example.com -pprof -log-file /var/log/$APP_NAME/$APP_NAME.log -log-max-age 14 -log-max-size 50"
+# To use PostgreSQL/PostGIS for baseline+raw spots:
+# ARGS="-port 80 -domain example.com -dx-postgres-dsn postgres://dxuser:YOUR_PASSWORD@localhost:5432/dxdata?sslmode=disable"
 EOF
 fi
 

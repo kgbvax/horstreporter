@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -16,7 +17,7 @@ const (
 	defaultDxWindowMinutes       = 20
 	defaultDxCwViableMinDb       = -15
 	maxDxWindowMinutes           = 180
-	maxDxBaselineEvents          = 250000
+	defaultDxBaselineMaxEvents   = 1000000
 	dxSparklineBins              = 12
 	dxSparklineBinSeconds        = 10 * 60
 	dxLongHaulThresholdKm        = 3000.0
@@ -24,14 +25,46 @@ const (
 	dxMinBaselineQuantileSupport = 200
 )
 
+var dxBaselineMaxEvents = defaultDxBaselineMaxEvents
+
+// SlotsOfDay is the number of 30-minute slots in one UTC day: 48.
+// Buckets are aggregated across the week into this 24h × 30min grid;
+// day-of-week is intentionally collapsed because propagation patterns
+// repeat daily, not weekly.
+const SlotsOfDay = 48
+
 type baselineBucket struct {
 	Band         string  `json:"band"`
-	HourOfWeek   int     `json:"hour_of_week"`
+	SlotOfDay    int     `json:"slot_of_day"`
+	Source4      string  `json:"source4,omitempty"`
 	DistanceTier int     `json:"distance_tier"`
 	SnrTier      int     `json:"snr_tier"`
 	Count        int64   `json:"count"`
 	SumDistance  float64 `json:"sum_distance"`
 	SumSNR       float64 `json:"sum_snr"`
+}
+
+// UnmarshalJSON accepts both the v4 "slot_of_day" field and the legacy v3
+// "hour_of_week" field, collapsing the latter to a 30-min slot index via
+// slot = (hour_of_week % 24) * 2 (loses any within-hour or weekday detail
+// the legacy scheme never actually carried).
+func (b *baselineBucket) UnmarshalJSON(data []byte) error {
+	type alias baselineBucket
+	aux := &struct {
+		HourOfWeek *int `json:"hour_of_week,omitempty"`
+		SlotOfDay  *int `json:"slot_of_day,omitempty"`
+		*alias
+	}{alias: (*alias)(b)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	switch {
+	case aux.SlotOfDay != nil:
+		b.SlotOfDay = *aux.SlotOfDay
+	case aux.HourOfWeek != nil:
+		b.SlotOfDay = (*aux.HourOfWeek % 24) * 2
+	}
+	return nil
 }
 
 type dxObservedEvent struct {
@@ -57,10 +90,12 @@ type baselineSnapshot struct {
 type DxBaselineEngine struct {
 	mu            sync.RWMutex
 	path          string
+	store         *dxPostgresStore
 	buckets       map[string]*baselineBucket
 	targetBuckets map[string]*baselineBucket
 	firstEventAt  int64
 	lastEventAt   int64
+	eventsStart   int
 	events        []dxObservedEvent
 }
 
@@ -103,7 +138,7 @@ type dxConditionsResponse struct {
 	Surroundings     bool              `json:"surroundings"`
 	WindowMinutes    int               `json:"window_minutes"`
 	CwMinDb          int               `json:"cw_min_db"`
-	CurrentHourOfWk  int               `json:"current_hour_of_week"`
+	CurrentSlotOfDay int               `json:"current_slot_of_day"`
 	GeneratedAt      int64             `json:"generated_at"`
 	BaselineBuckets  int               `json:"baseline_buckets"`
 	BaselineEventCnt int               `json:"baseline_event_count"`
@@ -152,18 +187,98 @@ type matchedBandEvent struct {
 }
 
 func newDxBaselineEngine(path string) *DxBaselineEngine {
+	initialCap := dxBaselineMaxEvents
+	if initialCap < 0 {
+		initialCap = 0
+	}
+	if initialCap > 4096 {
+		initialCap = 4096
+	}
 	return &DxBaselineEngine{
 		path:          strings.TrimSpace(path),
 		buckets:       make(map[string]*baselineBucket),
 		targetBuckets: make(map[string]*baselineBucket),
-		events:        make([]dxObservedEvent, 0, 4096),
+		events:        make([]dxObservedEvent, 0, initialCap),
 	}
+}
+
+func (e *DxBaselineEngine) EnablePostgres(dsn string) error {
+	st, err := newDxPostgresStore(context.Background(), dsn)
+	if err != nil {
+		return err
+	}
+	if err := st.migrateFromJSONIfNeeded(context.Background(), e.path); err != nil {
+		st.Close()
+		return err
+	}
+	if err := st.ensureDxPulseRegionBaseline(context.Background()); err != nil {
+		st.Close()
+		return err
+	}
+	e.mu.Lock()
+	e.store = st
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *DxBaselineEngine) LoadRecentSpotCache(minutes int, now int64) ([]MQTTMessage, error) {
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return nil, nil
+	}
+	return st.loadRecentSpotCache(minutes, now)
+}
+
+func (e *DxBaselineEngine) LoadSpotsBetween(start, end int64) ([]MQTTMessage, error) {
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return nil, nil
+	}
+	return st.loadSpotsBetween(start, end)
+}
+
+func (e *DxBaselineEngine) LoadDxPulseBaseline(targets []string, lookbackDays int, windowMinutes int, now int64) (map[string]*dxPulseBaselineAccumulator, bool, error) {
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return map[string]*dxPulseBaselineAccumulator{}, false, nil
+	}
+	return st.dxPulseBaselineForTargets(targets, lookbackDays, windowMinutes, now)
 }
 
 func (e *DxBaselineEngine) NumBuckets() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return len(e.buckets) + len(e.targetBuckets)
+}
+
+func (e *DxBaselineEngine) Stats(now int64) (bucketCount, eventCount, historyMinutes int) {
+	if e == nil {
+		return 0, 0, 0
+	}
+
+	e.mu.RLock()
+	st := e.store
+	if st == nil {
+		bucketCount = len(e.buckets) + len(e.targetBuckets)
+		events := e.snapshotEventsLocked()
+		eventCount = len(events)
+		historyMinutes = baselineHistoryMinutes(e.firstEventAt, e.lastEventAt, events, now)
+		e.mu.RUnlock()
+		return bucketCount, eventCount, historyMinutes
+	}
+	e.mu.RUnlock()
+
+	bucketCount, eventCount, historyMinutes, err := st.baselineStats(now)
+	if err != nil {
+		return 0, 0, 0
+	}
+	return bucketCount, eventCount, historyMinutes
 }
 
 func (e *DxBaselineEngine) Observe(m MQTTMessage) {
@@ -173,6 +288,8 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 	}
 	sl := strings.ToUpper(strings.TrimSpace(m.SL))
 	rl := strings.ToUpper(strings.TrimSpace(m.RL))
+	sc := strings.ToUpper(strings.TrimSpace(m.SC))
+	rc := strings.ToUpper(strings.TrimSpace(m.RC))
 	if sl == "" || rl == "" {
 		return
 	}
@@ -180,13 +297,13 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 	if ts <= 0 {
 		ts = time.Now().Unix()
 	}
-	hour := utcHourOfWeek(ts)
+	hour := utcSlotOfDay(ts)
+	source4 := normalizeSource4(sl)
 	distTier := distanceTierForLocators(sl, rl)
 	snrTier := snrTierFromDb(m.RP)
 	distanceKm := distanceKmForLocators(sl, rl)
 
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if ts > 0 {
 		if e.firstEventAt == 0 || ts < e.firstEventAt {
 			e.firstEventAt = ts
@@ -196,40 +313,77 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 		}
 	}
 
-	e.observeBucket(e.buckets, baselineKey(band, hour, distTier, snrTier), band, hour, distTier, snrTier, distanceKm, float64(m.RP))
+	baseKey := baselineKeyWithSource(band, hour, distTier, snrTier, source4)
+	e.observeBucket(e.buckets, baseKey, band, hour, source4, distTier, snrTier, distanceKm, float64(m.RP))
 
-	senderTarget := normalizeTargetToken(m.SC)
-	if senderTarget != "" {
-		e.observeBucket(e.targetBuckets, baselineTargetKey(senderTarget, band, hour, distTier, snrTier), band, hour, distTier, snrTier, distanceKm, float64(m.RP))
+	targetTokens := [4]string{
+		normalizeTargetTokenUpper(sc),
+		normalizeTargetTokenUpper(rc),
+		normalizeTargetTokenUpper(sl),
+		normalizeTargetTokenUpper(rl),
 	}
-	receiverTarget := normalizeTargetToken(m.RC)
-	if receiverTarget != "" {
-		e.observeBucket(e.targetBuckets, baselineTargetKey(receiverTarget, band, hour, distTier, snrTier), band, hour, distTier, snrTier, distanceKm, float64(m.RP))
-	}
-	if isLocator(sl) {
-		e.observeBucket(e.targetBuckets, baselineTargetKey(sl[:4], band, hour, distTier, snrTier), band, hour, distTier, snrTier, distanceKm, float64(m.RP))
-	}
-	if isLocator(rl) {
-		e.observeBucket(e.targetBuckets, baselineTargetKey(rl[:4], band, hour, distTier, snrTier), band, hour, distTier, snrTier, distanceKm, float64(m.RP))
+	for i := range targetTokens {
+		t := targetTokens[i]
+		if t == "" {
+			continue
+		}
+		duplicate := false
+		for j := 0; j < i; j++ {
+			if targetTokens[j] == t {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		e.observeBucket(e.targetBuckets, baselineTargetKeyFromBase(t, baseKey), band, hour, source4, distTier, snrTier, distanceKm, float64(m.RP))
 	}
 
-	e.events = append(e.events, dxObservedEvent{T: ts, B: band, SC: strings.ToUpper(m.SC), RC: strings.ToUpper(m.RC), SL: sl, RL: rl, RP: m.RP})
-	if len(e.events) > maxDxBaselineEvents {
-		drop := len(e.events) - maxDxBaselineEvents
-		if drop < 1 {
-			drop = 1
+	maxEvents := dxBaselineMaxEvents
+	if maxEvents < 0 {
+		maxEvents = 0
+	}
+	if maxEvents < len(e.events) {
+		if maxEvents == 0 {
+			e.events = nil
+			e.eventsStart = 0
+		} else {
+			ordered := e.snapshotEventsLocked()
+			if len(ordered) > maxEvents {
+				ordered = ordered[len(ordered)-maxEvents:]
+			}
+			rebuilt := make([]dxObservedEvent, len(ordered), maxEvents)
+			copy(rebuilt, ordered)
+			e.events = rebuilt
+			e.eventsStart = 0
 		}
-		if drop > len(e.events) {
-			drop = len(e.events)
+	}
+
+	if maxEvents > 0 {
+		ev := dxObservedEvent{T: ts, B: band, SC: sc, RC: rc, SL: sl, RL: rl, RP: m.RP}
+		if len(e.events) < maxEvents {
+			e.events = append(e.events, ev)
+		} else {
+			e.events[e.eventsStart] = ev
+			e.eventsStart++
+			if e.eventsStart >= maxEvents {
+				e.eventsStart = 0
+			}
 		}
-		e.events = append([]dxObservedEvent(nil), e.events[drop:]...)
+	}
+
+	st := e.store
+	e.mu.Unlock()
+	if st != nil {
+		_ = st.observe(m, band, hour, source4, distTier, snrTier, distanceKm, targetTokens)
 	}
 }
 
-func (e *DxBaselineEngine) observeBucket(store map[string]*baselineBucket, key, band string, hour, distTier, snrTier int, distanceKm, snr float64) {
+func (e *DxBaselineEngine) observeBucket(store map[string]*baselineBucket, key, band string, hour int, source4 string, distTier, snrTier int, distanceKm, snr float64) {
 	b := store[key]
 	if b == nil {
-		b = &baselineBucket{Band: band, HourOfWeek: hour, DistanceTier: distTier, SnrTier: snrTier}
+		b = &baselineBucket{Band: band, SlotOfDay: hour, Source4: source4, DistanceTier: distTier, SnrTier: snrTier}
 		store[key] = b
 	}
 	b.Count++
@@ -256,31 +410,30 @@ func (e *DxBaselineEngine) Load() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.buckets = make(map[string]*baselineBucket, len(snap.Buckets))
-	for k, v := range snap.Buckets {
-		if v == nil {
-			continue
-		}
-		cp := *v
-		e.buckets[k] = &cp
-	}
-
-	e.targetBuckets = make(map[string]*baselineBucket, len(snap.TargetBuckets))
-	for k, v := range snap.TargetBuckets {
-		if v == nil {
-			continue
-		}
-		cp := *v
-		e.targetBuckets[k] = &cp
-	}
+	legacy := snap.Version < 5
+	e.buckets = remapBucketsForLoad(snap.Buckets, legacy)
+	e.targetBuckets = remapTargetBucketsForLoad(snap.TargetBuckets, legacy)
 
 	e.firstEventAt = snap.FirstEventAt
 	e.lastEventAt = snap.LastEventAt
 
-	if len(snap.Events) > maxDxBaselineEvents {
-		snap.Events = snap.Events[len(snap.Events)-maxDxBaselineEvents:]
+	maxEvents := dxBaselineMaxEvents
+	if maxEvents < 0 {
+		maxEvents = 0
 	}
-	e.events = append([]dxObservedEvent(nil), snap.Events...)
+	if maxEvents == 0 {
+		e.events = nil
+		e.eventsStart = 0
+		if e.firstEventAt == 0 || e.lastEventAt == 0 {
+			e.refreshEventSpanLocked()
+		}
+		return nil
+	}
+	if len(snap.Events) > maxEvents {
+		snap.Events = snap.Events[len(snap.Events)-maxEvents:]
+	}
+	e.events = append(make([]dxObservedEvent, 0, maxEvents), snap.Events...)
+	e.eventsStart = 0
 	if e.firstEventAt == 0 || e.lastEventAt == 0 {
 		e.refreshEventSpanLocked()
 	}
@@ -293,13 +446,13 @@ func (e *DxBaselineEngine) Save() error {
 	}
 	e.mu.RLock()
 	snap := baselineSnapshot{
-		Version:       3,
+		Version:       5,
 		SavedAt:       time.Now().Unix(),
 		FirstEventAt:  e.firstEventAt,
 		LastEventAt:   e.lastEventAt,
 		Buckets:       cloneBuckets(e.buckets),
 		TargetBuckets: cloneBuckets(e.targetBuckets),
-		Events:        append([]dxObservedEvent(nil), e.events...),
+		Events:        e.snapshotEventsLocked(),
 	}
 	e.mu.RUnlock()
 
@@ -353,6 +506,79 @@ func cloneBuckets(src map[string]*baselineBucket) map[string]*baselineBucket {
 	return out
 }
 
+// remapBucketsForLoad rebuilds the in-memory bucket map from a freshly
+// unmarshalled snapshot. When legacy is true (snapshot version < 4) the
+// existing string keys still embed the old hour-of-week (0..167) integer,
+// while each bucket's SlotOfDay has already been collapsed to 0..47 by
+// baselineBucket.UnmarshalJSON; we rebuild keys from the bucket fields and
+// merge duplicates that now collide on the smaller (band, slot, distTier,
+// snrTier) tuple.
+func remapBucketsForLoad(src map[string]*baselineBucket, legacy bool) map[string]*baselineBucket {
+	out := make(map[string]*baselineBucket, len(src))
+	for k, v := range src {
+		if v == nil {
+			continue
+		}
+		if !legacy {
+			if v.Source4 == "" {
+				v.Source4 = unknownSource4
+			}
+			cp := *v
+			out[k] = &cp
+			continue
+		}
+		source4 := normalizeSource4(v.Source4)
+		newKey := baselineKeyWithSource(v.Band, v.SlotOfDay, v.DistanceTier, v.SnrTier, source4)
+		if existing, ok := out[newKey]; ok {
+			existing.Count += v.Count
+			existing.SumDistance += v.SumDistance
+			existing.SumSNR += v.SumSNR
+			continue
+		}
+		cp := *v
+		cp.Source4 = source4
+		out[newKey] = &cp
+	}
+	return out
+}
+
+// remapTargetBucketsForLoad mirrors remapBucketsForLoad for target buckets,
+// preserving the "<TOKEN>|" prefix that target keys carry.
+func remapTargetBucketsForLoad(src map[string]*baselineBucket, legacy bool) map[string]*baselineBucket {
+	out := make(map[string]*baselineBucket, len(src))
+	for k, v := range src {
+		if v == nil {
+			continue
+		}
+		if !legacy {
+			if v.Source4 == "" {
+				v.Source4 = unknownSource4
+			}
+			cp := *v
+			out[k] = &cp
+			continue
+		}
+		// Extract the token prefix (everything before the first '|').
+		i := strings.IndexByte(k, '|')
+		token := ""
+		if i > 0 {
+			token = k[:i]
+		}
+		source4 := normalizeSource4(v.Source4)
+		newKey := baselineTargetKeyWithSource(token, v.Band, v.SlotOfDay, v.DistanceTier, v.SnrTier, source4)
+		if existing, ok := out[newKey]; ok {
+			existing.Count += v.Count
+			existing.SumDistance += v.SumDistance
+			existing.SumSNR += v.SumSNR
+			continue
+		}
+		cp := *v
+		cp.Source4 = source4
+		out[newKey] = &cp
+	}
+	return out
+}
+
 func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes int, cwMinDb int, history []MQTTMessage, now int64) dxConditionsResponse {
 	target = normalizeTargetToken(target)
 	if minutes <= 0 {
@@ -370,7 +596,7 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		Surroundings:     surroundings,
 		WindowMinutes:    minutes,
 		CwMinDb:          cwMinDb,
-		CurrentHourOfWk:  utcHourOfWeek(now),
+		CurrentSlotOfDay: utcSlotOfDay(now),
 		GeneratedAt:      now,
 		Status:           "grey",
 		Condition:        "Poor",
@@ -392,14 +618,30 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 	}
 
 	e.mu.RLock()
+	st := e.store
 	globalBuckets := cloneBuckets(e.buckets)
 	targetBuckets := cloneBuckets(e.targetBuckets)
-	events := append([]dxObservedEvent(nil), e.events...)
+	events := e.snapshotEventsLocked()
 	e.mu.RUnlock()
 
-	resp.BaselineBuckets = len(globalBuckets) + len(targetBuckets)
-	resp.BaselineEventCnt = len(events)
-	resp.BaselineHistoryM = baselineHistoryMinutes(e.firstEventAt, e.lastEventAt, events, now)
+	var aggGlobalBuckets map[string]*baselineBucket
+	var aggTargetBuckets map[string]*baselineBucket
+	if st == nil {
+		aggGlobalBuckets = aggregateBucketsWithoutSource(globalBuckets)
+		aggTargetBuckets = aggregateTargetBucketsWithoutSource(targetBuckets)
+		resp.BaselineBuckets = len(globalBuckets) + len(targetBuckets)
+		resp.BaselineEventCnt = len(events)
+		resp.BaselineHistoryM = baselineHistoryMinutes(e.firstEventAt, e.lastEventAt, events, now)
+	} else {
+		if b, ev, hm, err := st.baselineStats(now); err == nil {
+			resp.BaselineBuckets = b
+			resp.BaselineEventCnt = ev
+			resp.BaselineHistoryM = hm
+		}
+		if recent, err := st.recentEvents(now); err == nil {
+			events = recent
+		}
+	}
 
 	cutoff := now - int64(minutes*60)
 	bandAcc := make(map[string]*bandAccumulator)
@@ -477,9 +719,26 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 			continue
 		}
 
-		baselineActivity, targetBaselineUsed := baselineActivityForBand(globalBuckets, targetBuckets, targets, band, resp.CurrentHourOfWk)
-		baselineSupport := baselineSupportForBand(globalBuckets, targetBuckets, targets, band, resp.CurrentHourOfWk)
-		q25, q75, quantileOK := baselineScoreQuantilesForBand(globalBuckets, targetBuckets, targets, band, resp.CurrentHourOfWk)
+		baselineActivity := 0.0
+		targetBaselineUsed := false
+		baselineSupport := int64(0)
+		q25, q75, quantileOK := 0.0, 0.0, false
+		if st == nil {
+			baselineActivity, targetBaselineUsed = baselineActivityForBand(aggGlobalBuckets, aggTargetBuckets, targets, band, resp.CurrentSlotOfDay)
+			baselineSupport = baselineSupportForBand(aggGlobalBuckets, aggTargetBuckets, targets, band, resp.CurrentSlotOfDay)
+			q25, q75, quantileOK = baselineScoreQuantilesForBand(aggGlobalBuckets, aggTargetBuckets, targets, band, resp.CurrentSlotOfDay)
+		} else {
+			if act, used, err := st.baselineActivityForBand(targets, band, resp.CurrentSlotOfDay); err == nil {
+				baselineActivity = act
+				targetBaselineUsed = used
+			}
+			if support, err := st.baselineSupportForBand(targets, band, resp.CurrentSlotOfDay); err == nil {
+				baselineSupport = support
+			}
+			if ql, qh, ok, err := st.baselineQuantilesForBand(targets, band, resp.CurrentSlotOfDay); err == nil {
+				q25, q75, quantileOK = ql, qh, ok
+			}
+		}
 
 		historicalBandSeries := buildBandSparkline(events, targets, band, cwMinDb, now)
 		trend, trendDelta := computeTrend(historicalBandSeries)
@@ -721,6 +980,21 @@ func (e *DxBaselineEngine) refreshEventSpanLocked() {
 			e.lastEventAt = ev.T
 		}
 	}
+}
+
+func (e *DxBaselineEngine) snapshotEventsLocked() []dxObservedEvent {
+	if len(e.events) == 0 {
+		return nil
+	}
+	if e.eventsStart <= 0 || e.eventsStart >= len(e.events) {
+		out := make([]dxObservedEvent, len(e.events))
+		copy(out, e.events)
+		return out
+	}
+	out := make([]dxObservedEvent, 0, len(e.events))
+	out = append(out, e.events[e.eventsStart:]...)
+	out = append(out, e.events[:e.eventsStart]...)
+	return out
 }
 
 func baselineHistoryMinutes(firstEventAt, lastEventAt int64, events []dxObservedEvent, now int64) int {
@@ -1072,9 +1346,19 @@ func baselineSupportForBand(global, targetBuckets map[string]*baselineBucket, ta
 	return support
 }
 
-func utcHourOfWeek(ts int64) int {
+func utcSlotOfDay(ts int64) int {
 	t := time.Unix(ts, 0).UTC()
-	return int(t.Weekday())*24 + t.Hour()
+	return t.Hour()*2 + t.Minute()/30
+}
+
+const unknownSource4 = "----"
+
+func normalizeSource4(locator string) string {
+	l := strings.ToUpper(strings.TrimSpace(locator))
+	if len(l) < 4 {
+		return unknownSource4
+	}
+	return l[:4]
 }
 
 func normalizeBand(raw string) string {
@@ -1088,16 +1372,78 @@ func normalizeBand(raw string) string {
 	return b + "m"
 }
 
-func baselineKey(band string, hourOfWeek, distanceTier, snrTier int) string {
-	return band + "|" + itoa(hourOfWeek) + "|" + itoa(distanceTier) + "|" + itoa(snrTier)
+func baselineKey(band string, slotOfDay, distanceTier, snrTier int) string {
+	return band + "|" + itoa(slotOfDay) + "|" + itoa(distanceTier) + "|" + itoa(snrTier)
 }
 
-func baselineTargetKey(target, band string, hourOfWeek, distanceTier, snrTier int) string {
-	return normalizeTargetToken(target) + "|" + baselineKey(band, hourOfWeek, distanceTier, snrTier)
+func baselineKeyWithSource(band string, slotOfDay, distanceTier, snrTier int, source4 string) string {
+	return baselineKey(band, slotOfDay, distanceTier, snrTier) + "|" + normalizeSource4(source4)
+}
+
+func baselineTargetKey(target, band string, slotOfDay, distanceTier, snrTier int) string {
+	return normalizeTargetToken(target) + "|" + baselineKey(band, slotOfDay, distanceTier, snrTier)
+}
+
+func baselineTargetKeyWithSource(target, band string, slotOfDay, distanceTier, snrTier int, source4 string) string {
+	return normalizeTargetToken(target) + "|" + baselineKeyWithSource(band, slotOfDay, distanceTier, snrTier, source4)
+}
+
+func baselineTargetKeyFromBase(target, baseKey string) string {
+	return target + "|" + baseKey
+}
+
+func aggregateBucketsWithoutSource(src map[string]*baselineBucket) map[string]*baselineBucket {
+	out := make(map[string]*baselineBucket, len(src))
+	for _, v := range src {
+		if v == nil {
+			continue
+		}
+		k := baselineKey(v.Band, v.SlotOfDay, v.DistanceTier, v.SnrTier)
+		b := out[k]
+		if b == nil {
+			cp := *v
+			cp.Source4 = ""
+			out[k] = &cp
+			continue
+		}
+		b.Count += v.Count
+		b.SumDistance += v.SumDistance
+		b.SumSNR += v.SumSNR
+	}
+	return out
+}
+
+func aggregateTargetBucketsWithoutSource(src map[string]*baselineBucket) map[string]*baselineBucket {
+	out := make(map[string]*baselineBucket, len(src))
+	for k, v := range src {
+		if v == nil {
+			continue
+		}
+		token := k
+		if i := strings.IndexByte(k, '|'); i > 0 {
+			token = k[:i]
+		}
+		aggKey := baselineTargetKeyFromBase(token, baselineKey(v.Band, v.SlotOfDay, v.DistanceTier, v.SnrTier))
+		b := out[aggKey]
+		if b == nil {
+			cp := *v
+			cp.Source4 = ""
+			out[aggKey] = &cp
+			continue
+		}
+		b.Count += v.Count
+		b.SumDistance += v.SumDistance
+		b.SumSNR += v.SumSNR
+	}
+	return out
 }
 
 func normalizeTargetToken(t string) string {
 	t = strings.ToUpper(strings.TrimSpace(t))
+	return normalizeTargetTokenUpper(t)
+}
+
+func normalizeTargetTokenUpper(t string) string {
 	if t == "" {
 		return ""
 	}

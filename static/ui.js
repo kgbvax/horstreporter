@@ -2,6 +2,15 @@ import { state } from './state.js';
 import { map } from './map.js';
 import { getGridResolution, latLngToLocator, getMinSnrMode, getSelectedBand, getEnabledBands, formatNumber } from './utils.js';
 
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
 export function initUI() {
     initInfoOverlay();
     initServerStats();
@@ -100,69 +109,177 @@ export function attachUITooltipEvents() {
     map.off('mousemove');
     map.off('mouseout');
 
-    map.on('mousemove', function(e) {
-        const res = getGridResolution();
-        const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, res);
+    const hoverCache = new Map();
+    let hoverTimer = null;
+    let hoverController = null;
+    let hoverRequestSeq = 0;
+    let activeHoverKey = '';
+
+    function hideTooltip() {
+        if (hoverTimer) {
+            clearTimeout(hoverTimer);
+            hoverTimer = null;
+        }
+        if (hoverController) {
+            hoverController.abort();
+            hoverController = null;
+        }
+        activeHoverKey = '';
+        tooltip.style.display = 'none';
+    }
+
+    function positionTooltip(e) {
+        tooltip.style.left = (e.originalEvent.pageX + 15) + 'px';
+        tooltip.style.top = (e.originalEvent.pageY + 15) + 'px';
+    }
+
+    function renderLoading(locator) {
+        tooltip.innerHTML = `<strong>${escapeHtml(locator)}</strong><br><span style="opacity:0.85;">Loading hover details…</span>`;
+        tooltip.style.display = 'block';
+    }
+
+    function renderDetails(locator, data) {
+        const count = Number(data?.count || 0);
+        const min = Number.isFinite(Number(data?.min_snr)) ? Number(data.min_snr) : 0;
+        const max = Number.isFinite(Number(data?.max_snr)) ? Number(data.max_snr) : 0;
+        const avg = Number.isFinite(Number(data?.avg_snr)) ? Number(data.avg_snr) : 0;
+        const bestBand = data?.best_band ? escapeHtml(data.best_band) : '—';
+        const topReports = Array.isArray(data?.top_reports) ? data.top_reports : [];
+
+        let reportsHtml = '';
+        if (topReports.length > 0) {
+            reportsHtml = `<hr style="margin: 5px 0; border: 0; border-top: 1px solid var(--tooltip-border);">` +
+                `<span style="font-size: 11px;"><b>Top Reports:</b><br>` +
+                topReports.map((r) => {
+                    const sender = escapeHtml(r.sender || '—');
+                    const receiver = escapeHtml(r.receiver || '—');
+                    const band = escapeHtml(r.band || '—');
+                    const snr = Number.isFinite(Number(r.snr)) ? Number(r.snr) : 0;
+                    return `${sender} / ${receiver} / ${band} / ${snr}dB`;
+                }).join('<br>') +
+                `</span>`;
+        }
+
+        tooltip.innerHTML = `<strong>${escapeHtml(locator)}</strong><br>` +
+            `Min: ${min}dB<br>` +
+            `Max: ${max}dB<br>` +
+            `Avg: ${Math.round(avg)}dB<br>` +
+            `Best Band: ${bestBand}<br>` +
+            `Spots: ${formatNumber(count)}` +
+            reportsHtml;
+        tooltip.style.display = 'block';
+    }
+
+    function buildHoverRequestKey(params) {
+        return [
+            params.target,
+            params.locator,
+            params.minutes,
+            params.surroundings ? '1' : '0',
+            params.minSnrMode,
+            params.ssbMinDb,
+            params.cwMinDb,
+            params.selectedBand,
+            params.enabledBands
+        ].join('|');
+    }
+
+    function getHoverParams(locator) {
+        const target = document.getElementById('target')?.value?.trim()?.toUpperCase() || '';
+        const minutes = parseInt(document.getElementById('minutes')?.value || '15', 10) || 15;
         const minSnrMode = getMinSnrMode();
         const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
         const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
         const selectedBand = getSelectedBand();
-        const enabledBands = getEnabledBands();
+        const enabledBands = Array.from(getEnabledBands()).sort().join(',');
+        const surroundings = document.getElementById('surroundings')?.checked === true;
 
-        const squareSpots = state.liveSpots.filter(s => {
-            if (!s.locator || !s.locator.startsWith(loc)) return false;
-            if (minSnrMode === 'ssb' && s.snr < ssbMinDb) return false;
-            if (minSnrMode === 'cw' && s.snr < cwMinDb) return false;
-            if (!enabledBands.has(s.band)) return false;
-            if (selectedBand !== 'all' && s.band !== selectedBand) return false;
-            return true;
-        });
+        return {
+            target,
+            locator,
+            minutes,
+            minSnrMode,
+            ssbMinDb,
+            cwMinDb,
+            selectedBand,
+            enabledBands,
+            surroundings
+        };
+    }
 
-        if (squareSpots.length > 0) {
-            let min = Math.min(...squareSpots.map(s => s.snr));
-            let max = Math.max(...squareSpots.map(s => s.snr));
-            let avg = Math.round(squareSpots.reduce((sum, s) => sum + s.snr, 0) / squareSpots.length);
-            
-            let bestBand = 'N/A';
-            let bestSnr = -999;
-            squareSpots.forEach(s => {
-                if (s.snr > bestSnr) {
-                    bestSnr = s.snr;
-                    bestBand = s.band;
-                }
-            });
-            
-            squareSpots.sort((a, b) => b.snr - a.snr);
-            
-            let uniqueSpots = [];
-            let seenPairs = new Set();
-            for (let s of squareSpots) {
-                let pairKey = `${s.sender}-${s.receiver}`;
-                if (!seenPairs.has(pairKey)) {
-                    seenPairs.add(pairKey);
-                    uniqueSpots.push(s);
-                    if (uniqueSpots.length >= 10) break;
-                }
-            }
-
-            let reportsHtml = `<hr style="margin: 5px 0; border: 0; border-top: 1px solid var(--tooltip-border);">` +
-                              `<span style="font-size: 11px;"><b>Top Reports:</b><br>`;
-            uniqueSpots.forEach(s => {
-                reportsHtml += `${s.sender} / ${s.receiver} / ${s.snr}dB<br>`;
-            });
-            reportsHtml += `</span>`;
-
-            tooltip.innerHTML = `<strong>${loc}</strong><br>Min: ${min}dB<br>Max: ${max}dB<br>Avg: ${avg}dB<br>Best Band: ${bestBand}<br>Spots: ${formatNumber(squareSpots.length)}${reportsHtml}`;
-            tooltip.style.display = 'block';
-            tooltip.style.left = (e.originalEvent.pageX + 15) + 'px';
-            tooltip.style.top = (e.originalEvent.pageY + 15) + 'px';
-        } else {
-            tooltip.style.display = 'none';
+    async function fetchHoverDetails(params, requestKey) {
+        if (!params.target) {
+            hideTooltip();
+            return;
         }
+
+        if (hoverController) {
+            hoverController.abort();
+        }
+        hoverController = new AbortController();
+        const seq = ++hoverRequestSeq;
+
+        const query = new URLSearchParams();
+        query.set('target', params.target);
+        query.set('locator', params.locator);
+        query.set('minutes', String(params.minutes));
+        if (params.surroundings) query.set('surroundings', 'true');
+        if (params.minSnrMode) query.set('min_snr_mode', params.minSnrMode);
+        if (Number.isFinite(params.ssbMinDb)) query.set('ssb_min_db', String(params.ssbMinDb));
+        if (Number.isFinite(params.cwMinDb)) query.set('cw_min_db', String(params.cwMinDb));
+        if (params.selectedBand) query.set('selected_band', params.selectedBand);
+        if (params.enabledBands) query.set('enabled_bands', params.enabledBands);
+
+        try {
+            const res = await fetch(`/api/square_details?${query.toString()}`, { signal: hoverController.signal });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const payload = await res.json();
+            if (seq !== hoverRequestSeq || requestKey !== activeHoverKey) return;
+            hoverCache.set(requestKey, payload);
+            renderDetails(params.locator, payload);
+        } catch (err) {
+            if (err?.name === 'AbortError') return;
+            if (seq !== hoverRequestSeq || requestKey !== activeHoverKey) return;
+            tooltip.innerHTML = `<strong>${escapeHtml(params.locator)}</strong><br><span style="color: #c00;">Hover details unavailable</span>`;
+            tooltip.style.display = 'block';
+        } finally {
+            if (hoverController?.signal?.aborted) {
+                hoverController = null;
+            }
+        }
+    }
+
+    map.on('mousemove', function(e) {
+        const res = getGridResolution();
+        const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, res);
+        const params = getHoverParams(loc);
+        if (!params.target) {
+            hideTooltip();
+            return;
+        }
+
+        activeHoverKey = buildHoverRequestKey(params);
+        positionTooltip(e);
+
+        const cached = hoverCache.get(activeHoverKey);
+        if (cached) {
+            renderDetails(loc, cached);
+            return;
+        }
+
+        renderLoading(loc);
+
+        if (hoverTimer) {
+            clearTimeout(hoverTimer);
+        }
+        hoverTimer = setTimeout(() => {
+            hoverTimer = null;
+            void fetchHoverDetails(params, activeHoverKey);
+        }, 120);
     });
 
     map.on('mouseout', function() {
-        tooltip.style.display = 'none';
+        hideTooltip();
     });
 }
 

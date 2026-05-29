@@ -22,17 +22,44 @@ const graylineOverlayCache = {
     dataUrl: null
 };
 
-const lightTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    maxZoom: 18,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-});
+// Tile layers are created lazily so this module can be parsed even if the
+// Leaflet global `L` is not yet available at module-evaluation time.
+let lightTileLayer = null;
+let darkTileLayer = null;
 
-const darkTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    maxZoom: 18,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-});
+function getLightTileLayer() {
+    if (!lightTileLayer) {
+        lightTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+            maxZoom: 18,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+        });
+    }
+    return lightTileLayer;
+}
+
+function getDarkTileLayer() {
+    if (!darkTileLayer) {
+        darkTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            maxZoom: 18,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+        });
+    }
+    return darkTileLayer;
+}
 
 export function initMap(initialCenter, initialZoom) {
+    if (typeof L === 'undefined' || !L || typeof L.map !== 'function') {
+        const msg = 'Leaflet (window.L) is not available. Verify vendor/js/leaflet.js loads before app.js.';
+        console.error(msg);
+        const container = document.getElementById('map');
+        if (container) {
+            container.textContent = msg;
+            container.style.padding = '1em';
+            container.style.color = '#c00';
+        }
+        throw new Error(msg);
+    }
+
     if (map) {
         map.remove();
         map = null;
@@ -293,11 +320,11 @@ function mercatorDxccLabelLimits(zoom) {
         return { maxLabels: 2000, minDistanceKm: 0 };
     }
     const rel_scale = 0.75;
-    if (zoom <= 2) return { maxLabels: 28, minDistanceKm: round(1500*rel_scale) };
-    if (zoom <= 3) return { maxLabels: 44, minDistanceKm: round(1100*rel_scale) };
-    if (zoom <= 4) return { maxLabels: 62, minDistanceKm: round(800*rel_scale) };
-    if (zoom <= 5) return { maxLabels: 84, minDistanceKm: round(560*rel_scale) };
-    return { maxLabels: 110, minDistanceKm: round(200*rel_scale)};
+    if (zoom <= 2) return { maxLabels: 28, minDistanceKm: Math.round(1500 * rel_scale) };
+    if (zoom <= 3) return { maxLabels: 44, minDistanceKm: Math.round(1100 * rel_scale) };
+    if (zoom <= 4) return { maxLabels: 62, minDistanceKm: Math.round(800 * rel_scale) };
+    if (zoom <= 5) return { maxLabels: 84, minDistanceKm: Math.round(560 * rel_scale) };
+    return { maxLabels: 110, minDistanceKm: Math.round(200 * rel_scale) };
 }
 
 export async function syncMercatorDxccLabelLayer(options = {}) {
@@ -382,7 +409,7 @@ export function setTheme(theme) {
     currentGraylineLayerKey = null;
     currentDxccLabelLayerKey = null;
 
-    currentTileLayer = theme === 'dark' ? darkTileLayer : lightTileLayer;
+    currentTileLayer = theme === 'dark' ? getDarkTileLayer() : getLightTileLayer();
     if (map) {
         currentTileLayer.addTo(map);
         map.getContainer().style.background = '';

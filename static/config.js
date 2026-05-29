@@ -1,4 +1,31 @@
+// @ts-check
+
+/**
+ * @param {Element | null} el
+ * @returns {HTMLInputElement | null}
+ */
+function asInput(el) {
+    return el instanceof HTMLInputElement ? el : null;
+}
+
+/**
+ * @param {string} id
+ * @returns {HTMLInputElement | null}
+ */
+function inputById(id) {
+    return asInput(document.getElementById(id));
+}
+
+/**
+ * @param {string} selector
+ * @returns {HTMLInputElement | null}
+ */
+function inputByQuery(selector) {
+    return asInput(document.querySelector(selector));
+}
+
 export function loadConfig() {
+    /** @type {[number, number]} */
     let initialCenter = [20, 0];
     let initialZoom = 2;
 
@@ -12,74 +39,89 @@ export function loadConfig() {
     }
 
     try {
-        document.querySelectorAll('.band-enable').forEach(cb => {
-            const savedEnable = localStorage.getItem(`enable-${cb.value}`);
+        document.querySelectorAll('.band-enable').forEach((cb) => {
+            const input = asInput(cb);
+            if (!input) return;
+            const savedEnable = localStorage.getItem(`enable-${input.value}`);
             if (savedEnable !== null) {
-                cb.checked = savedEnable === 'true';
-                const radio = document.querySelector(`input[name="band"][value="${cb.value}"]`);
-                if (radio) radio.disabled = !cb.checked;
+                input.checked = savedEnable === 'true';
+                const radio = inputByQuery(`input[name="band"][value="${input.value}"]`);
+                if (radio) radio.disabled = !input.checked;
             }
         });
 
         const savedTarget = localStorage.getItem('target');
-        if (savedTarget) document.getElementById('target').value = savedTarget;
+        if (savedTarget) {
+            const el = inputById('target');
+            if (el) el.value = savedTarget;
+        }
 
         const savedMinutes = localStorage.getItem('minutes');
-        if (savedMinutes) document.getElementById('minutes').value = savedMinutes;
+        if (savedMinutes) {
+            const el = inputById('minutes');
+            if (el) el.value = savedMinutes;
+        }
 
         const savedMinSnr = localStorage.getItem('minSnrSelect');
         if (savedMinSnr) {
-            const radio = document.querySelector(`input[name="min-snr"][value="${savedMinSnr}"]`);
+            const radio = inputByQuery(`input[name="min-snr"][value="${savedMinSnr}"]`);
             if (radio) radio.checked = true;
         }
 
         const savedStyle = localStorage.getItem('mapStyle');
         if (savedStyle) {
-            const radio = document.querySelector(`input[name="style-select"][value="${savedStyle}"]`);
+            const radio = inputByQuery(`input[name="style-select"][value="${savedStyle}"]`);
             if (radio) radio.checked = true;
         }
 
         const savedProjection = localStorage.getItem('mapProjection');
         if (savedProjection) {
-            const radio = document.querySelector(`input[name="projection-select"][value="${savedProjection}"]`);
+            const radio = inputByQuery(`input[name="projection-select"][value="${savedProjection}"]`);
             if (radio) radio.checked = true;
         }
 
         const savedBand = localStorage.getItem('selectedBand');
         if (savedBand) {
-            const radio = document.querySelector(`input[name="band"][value="${savedBand}"]`);
+            const radio = inputByQuery(`input[name="band"][value="${savedBand}"]`);
             if (radio) radio.checked = true;
         }
 
         const savedSsbMinDb = localStorage.getItem('ssbMinDb');
-        if (savedSsbMinDb !== null && document.getElementById('ssb-min-db')) {
-            document.getElementById('ssb-min-db').value = savedSsbMinDb;
+        if (savedSsbMinDb !== null) {
+            const el = inputById('ssb-min-db');
+            if (el) el.value = savedSsbMinDb;
         }
 
         const savedCwMinDb = localStorage.getItem('cwMinDb');
-        if (savedCwMinDb !== null && document.getElementById('cw-min-db')) {
-            document.getElementById('cw-min-db').value = savedCwMinDb;
+        if (savedCwMinDb !== null) {
+            const el = inputById('cw-min-db');
+            if (el) el.value = savedCwMinDb;
         }
 
         const savedCycleTime = localStorage.getItem('cycleTime');
-        if (savedCycleTime !== null && document.getElementById('cycle-time')) {
-            document.getElementById('cycle-time').value = savedCycleTime;
+        if (savedCycleTime !== null) {
+            const el = inputById('cycle-time');
+            if (el) el.value = savedCycleTime;
         }
 
         const savedClusterDist = localStorage.getItem('clusterDistance');
-        if (savedClusterDist !== null && document.getElementById('cluster-distance')) {
-            document.getElementById('cluster-distance').value = savedClusterDist;
-            document.getElementById('cluster-dist-val').textContent = savedClusterDist;
+        if (savedClusterDist !== null) {
+            const distanceInput = inputById('cluster-distance');
+            if (distanceInput) distanceInput.value = savedClusterDist;
+            const distVal = document.getElementById('cluster-dist-val');
+            if (distVal) distVal.textContent = savedClusterDist;
         }
 
         const savedAutoZoom = localStorage.getItem('autoZoom');
-        if (savedAutoZoom !== null && document.getElementById('auto-zoom')) {
-            document.getElementById('auto-zoom').checked = savedAutoZoom === 'true';
+        if (savedAutoZoom !== null) {
+            const el = inputById('auto-zoom');
+            if (el) el.checked = savedAutoZoom === 'true';
         }
 
         const savedSurroundings = localStorage.getItem('surroundings');
-        if (savedSurroundings !== null && document.getElementById('surroundings')) {
-            document.getElementById('surroundings').checked = savedSurroundings === 'true';
+        if (savedSurroundings !== null) {
+            const el = inputById('surroundings');
+            if (el) el.checked = savedSurroundings === 'true';
         }
     } catch (e) {
         console.error("Error parsing saved form state", e);
