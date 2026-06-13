@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>HorstReporter Info</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="vendor/css/all.min.css">
+    <style>
+        body {
+            display: block;
+            height: auto;
+            padding: 20px;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+        h1, h2 {
+            margin-top: 0;
+        }
+        #content img { max-width: 100%; }
+        #content code { background: rgba(127,127,127,0.2); padding: 2px 4px; border-radius: 4px; }
+    </style>
+    <script src="vendor/js/marked.min.js"></script>
+</head>
+<body>
+    <div id="content">Loading information...</div>
+   
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const rawDoc = params.get('doc') || 'info.md';
+        const safeDoc = /^[a-z0-9._-]+\.md$/i.test(rawDoc) ? rawDoc : 'info.md';
+        const rawTitle = params.get('title') || '';
+        if (rawTitle) {
+            document.title = rawTitle;
+        }
+
+        fetch(safeDoc)
+            .then(response => {
+                if (!response.ok) throw new Error(`Could not load ${safeDoc}`);
+                return response.text();
+            })
+            .then(text => document.getElementById('content').innerHTML = marked.parse(text))
+            .catch(err => document.getElementById('content').innerHTML = `<p style="color:red;">Error loading info: ${err.message}</p>`);
+
+        // Sync the iframe's theme with the parent window
+        try {
+            const parentBody = window.parent.document.body;
+            document.body.setAttribute('data-theme', parentBody.getAttribute('data-theme') || 'light');
+            
+            new MutationObserver((mutations) => {
+                mutations.forEach(m => document.body.setAttribute('data-theme', parentBody.getAttribute('data-theme')));
+            }).observe(parentBody, { attributes: true, attributeFilter: ['data-theme'] });
+        } catch (e) { console.warn("Could not sync theme with parent window:", e); }
+    </script>
+</body>
+</html>

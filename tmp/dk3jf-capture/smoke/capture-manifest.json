@@ -1,0 +1,33 @@
+{
+  "baseUrl": "http://127.0.0.1:18080",
+  "target": "JO32",
+  "minutes": 15,
+  "durationMinutes": 0,
+  "stepSeconds": 60,
+  "width": 1920,
+  "height": 1080,
+  "projection": "mercator",
+  "style": "active-area",
+  "countryColoring": false,
+  "surroundings": false,
+  "dk3jfMode": true,
+  "includeDxcluster": false,
+  "minSnrMode": "ssb",
+  "selectedBand": "all",
+  "enabledBands": "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m,4m,2m",
+  "outputDir": "/Users/ingomar.otter/dev/horstreporter/tmp/dk3jf-capture/smoke",
+  "frames": [
+    {
+      "index": 0,
+      "frameName": "frame_00000.png",
+      "framePath": "/Users/ingomar.otter/dev/horstreporter/tmp/dk3jf-capture/smoke/frame_00000.png",
+      "snapshotAt": 1780929825,
+      "captureState": {
+        "ready": true,
+        "count": 51,
+        "snapshotAt": 1780929825,
+        "generatedAt": 1780929827
+      }
+    }
+  ]
+}

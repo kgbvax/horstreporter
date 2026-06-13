@@ -1,0 +1,37 @@
+{
+  "scenario": "mercator-interaction-flow",
+  "createdAt": "2026-06-02T10:58:57.793Z",
+  "metrics": {
+    "mercator.interaction.zoom_duration_ms": {
+      "count": 5,
+      "minMs": 0.0576250000001437,
+      "maxMs": 0.1645410000000993,
+      "avgMs": 0.09047499999996944,
+      "medianMs": 0.07791699999984303,
+      "p95Ms": 0.14976620000006732
+    },
+    "mercator.interaction.pan_duration_ms": {
+      "count": 5,
+      "minMs": 0.057999999999992724,
+      "maxMs": 0.10133399999995163,
+      "avgMs": 0.07700860000004468,
+      "medianMs": 0.07112500000016553,
+      "p95Ms": 0.09855059999999867
+    }
+  },
+  "counters": {
+    "mercator.interaction.zoom_start": 5,
+    "mercator.interaction.zoom_end": 5,
+    "mercator.interaction.pan_start": 5,
+    "mercator.interaction.pan_end": 5
+  },
+  "metadata": {
+    "interactions": 5,
+    "events": [
+      "zoomstart",
+      "zoomend",
+      "movestart",
+      "moveend"
+    ]
+  }
+}
