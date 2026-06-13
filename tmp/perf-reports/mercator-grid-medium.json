@@ -1,0 +1,57 @@
+{
+  "scenario": "mercator-grid-medium",
+  "createdAt": "2026-06-02T10:58:57.803Z",
+  "metrics": {
+    "mercator.band_labels.total_ms": {
+      "count": 2,
+      "minMs": 0.4547090000000935,
+      "maxMs": 10.27150000000006,
+      "avgMs": 5.363104500000077,
+      "medianMs": 5.363104500000077,
+      "p95Ms": 9.780660450000061
+    },
+    "mercator.grid.aggregate_ms": {
+      "count": 2,
+      "minMs": 0.6582499999999527,
+      "maxMs": 0.7612500000000182,
+      "avgMs": 0.7097499999999854,
+      "medianMs": 0.7097499999999854,
+      "p95Ms": 0.7561000000000149
+    },
+    "mercator.grid.draw_ms": {
+      "count": 2,
+      "minMs": 0.02795800000012605,
+      "maxMs": 0.06141699999989214,
+      "avgMs": 0.044687500000009095,
+      "medianMs": 0.044687500000009095,
+      "p95Ms": 0.059744049999903834
+    },
+    "mercator.grid.total_ms": {
+      "count": 2,
+      "minMs": 0.8358749999999873,
+      "maxMs": 1.1269580000000587,
+      "avgMs": 0.981416500000023,
+      "medianMs": 0.981416500000023,
+      "p95Ms": 1.1124038500000553
+    },
+    "mercator.render.total_ms": {
+      "count": 2,
+      "minMs": 1.4202500000001237,
+      "maxMs": 11.981584000000112,
+      "avgMs": 6.700917000000118,
+      "medianMs": 6.700917000000118,
+      "p95Ms": 11.453517300000112
+    }
+  },
+  "counters": {
+    "mercator.render.style.grid_snr": 2,
+    "mercator.layers.added": 2,
+    "mercator.grid.rectangles_added": 12,
+    "mercator.layers.removed": 1
+  },
+  "metadata": {
+    "spots": 7000,
+    "style": "grid-snr",
+    "iterations": 2
+  }
+}

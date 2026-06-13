@@ -10,6 +10,22 @@
     box-shadow: 0 2px 8px rgba(0,0,0,0.08);
 }
 
+#azimuth-zoom-controls #azimuth-zoom-out.azimuth-zoom-hint {
+    border-color: #e67e22;
+    color: #e67e22;
+    box-shadow: 0 0 0 2px rgba(230, 126, 34, 0.22), 0 2px 10px rgba(230, 126, 34, 0.32);
+    animation: azimuthZoomHintPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes azimuthZoomHintPulse {
+    0%, 100% {
+        box-shadow: 0 0 0 2px rgba(230, 126, 34, 0.16), 0 2px 10px rgba(230, 126, 34, 0.26);
+    }
+    50% {
+        box-shadow: 0 0 0 3px rgba(230, 126, 34, 0.34), 0 4px 14px rgba(230, 126, 34, 0.4);
+    }
+}
+
 .current-band-label {
     font-size: 1.25rem;
     font-weight: 600;
@@ -87,6 +103,16 @@ body {
     display: none;
     z-index: 600;
     pointer-events: auto;
+}
+
+/* Use regular arrow cursor on both map projections (instead of hand/grab). */
+.leaflet-container,
+.leaflet-grab,
+.leaflet-dragging .leaflet-grab,
+.leaflet-dragging .leaflet-grab .leaflet-interactive,
+.leaflet-dragging .leaflet-marker-draggable,
+#azimuth-canvas {
+    cursor: default !important;
 }
 
 .dxcc-entity-marker {
@@ -314,66 +340,238 @@ body {
     border-bottom: 8px solid var(--coachmark-bg);
 }
 
-.dx-conditions-panel {
-    background-color: color-mix(in srgb, var(--bg-color) 92%, var(--text-color) 8%);
-    border-color: var(--border-color) !important;
+.band-lab-summary {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: color-mix(in srgb, var(--bg-color) 92%, var(--text-color) 8%);
 }
 
-.dx-conditions-panel #dx-overall-score {
+.band-lab-summary-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.band-lab-decision-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.band-lab-decision-badge {
+    display: inline-block;
+    font-size: 0.72rem;
     font-weight: 700;
-    font-size: 1.05rem;
+    border-radius: 999px;
+    padding: 2px 8px;
+    border: 1px solid transparent;
 }
 
-.dx-band-item {
-    margin-bottom: 0.45rem;
-    list-style: none;
+.band-lab-decision-badge.is-go {
+    background: rgba(34, 197, 94, 0.15);
+    color: #166534;
+    border-color: rgba(34, 197, 94, 0.35);
 }
 
-.dx-band-head {
+.band-lab-decision-badge.is-watch {
+    background: rgba(245, 158, 11, 0.16);
+    color: #92400e;
+    border-color: rgba(245, 158, 11, 0.35);
+}
+
+.band-lab-decision-badge.is-wait {
+    background: rgba(100, 116, 139, 0.16);
+    color: #334155;
+    border-color: rgba(100, 116, 139, 0.34);
+}
+
+body[data-theme="dark"] .band-lab-decision-badge.is-go {
+    color: #86efac;
+}
+
+body[data-theme="dark"] .band-lab-decision-badge.is-watch {
+    color: #fdba74;
+}
+
+body[data-theme="dark"] .band-lab-decision-badge.is-wait {
+    color: #cbd5e1;
+}
+
+.band-lab-confidence {
+    font-size: 0.72rem;
+    opacity: 0.85;
+}
+
+.band-lab-summary-reco {
+    margin-top: 4px;
+}
+
+.band-lab-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.band-lab-window {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    width: min(820px, calc(100% - 28px));
+    height: min(78vh, calc(100% - 28px));
+    min-width: 460px;
+    min-height: 320px;
+    z-index: 1200;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: 0 6px 22px var(--shadow-color);
+    background: var(--bg-color);
+    overflow: hidden;
+}
+
+.band-lab-window-header {
     display: flex;
     justify-content: space-between;
-    gap: 0.5rem;
-    font-size: 0.82rem;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    border-bottom: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-color) 92%, var(--text-color) 8%);
+    cursor: move;
+    user-select: none;
 }
 
-.dx-trend {
-    opacity: 0.9;
-    font-weight: 600;
+.band-lab-window-header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 
-.dx-band-sub,
-.dx-band-metrics {
+#band-lab-time-range {
+    width: 84px;
+    min-width: 84px;
     font-size: 0.74rem;
-    opacity: 0.85;
-    line-height: 1.2;
+    padding: 0.1rem 1.5rem 0.1rem 0.45rem;
+    line-height: 1.15;
 }
 
-.dx-sparkline {
-    width: 100%;
-    height: 18px;
-    margin-top: 0.15rem;
-}
-
-.dx-sparkline polyline {
-    fill: none;
-    stroke: color-mix(in srgb, var(--text-color) 72%, #3ea6ff 28%);
-    stroke-width: 1.5;
-}
-
-.dx-info-button {
-    padding: 0.05rem 0.35rem;
+.band-lab-window-header button {
     line-height: 1;
+    min-width: 1.9rem;
+    padding: 0.1rem 0.35rem;
 }
 
-.dx-info-overlay {
-    display: none;
+.band-lab-legend-help {
+    margin: 8px 10px 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--bg-color) 91%, var(--text-color) 9%);
+    font-size: 0.72rem;
+    line-height: 1.35;
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--shadow-color) 70%, transparent);
+}
+
+.band-lab-legend-help > div + div {
+    margin-top: 4px;
+}
+
+.band-lab-window-body {
+    height: calc(100% - 40px);
+    overflow: auto;
+    padding: 10px;
+    padding-bottom: 20px;
+}
+
+.band-lab-window-resize {
     position: absolute;
-    top: 0;
-    left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.6);
-    z-index: 3000;
-    align-items: center;
-    justify-content: center;
+    width: 18px;
+    height: 18px;
+    cursor: nwse-resize;
+    background:
+        linear-gradient(135deg, transparent 0 45%, color-mix(in srgb, var(--text-color) 45%, transparent) 45% 52%, transparent 52% 65%, color-mix(in srgb, var(--text-color) 45%, transparent) 65% 72%, transparent 72%);
 }
+
+.band-lab-card {
+    border: 1px solid var(--border-color);
+    border-left: 5px solid #888;
+    border-radius: 10px;
+    padding: 8px;
+    background: color-mix(in srgb, var(--bg-color) 95%, var(--text-color) 5%);
+}
+
+.band-lab-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.band-lab-band {
+    font-weight: 700;
+    font-size: 0.92rem;
+}
+
+.band-lab-meta {
+    font-size: 0.75rem;
+    opacity: 0.82;
+}
+
+.band-lab-card-charts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.band-lab-chart-block {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 6px;
+    background: color-mix(in srgb, var(--bg-color) 96%, var(--text-color) 4%);
+}
+
+.band-lab-chart-title {
+    font-size: 0.72rem;
+    font-weight: 600;
+    opacity: 0.86;
+    margin-bottom: 4px;
+}
+
+.band-lab-chart-block canvas {
+    width: 100%;
+    height: 120px;
+    display: block;
+}
+
+.band-lab-chart-note {
+    margin-top: 4px;
+    font-size: 0.72rem;
+    opacity: 0.78;
+}
+
+.band-lab-card-reco {
+    margin-top: 6px;
+    font-size: 0.76rem;
+    line-height: 1.25;
+    opacity: 0.92;
+}
+
+@media (max-width: 900px) {
+    .band-lab-window {
+        width: min(96vw, calc(100% - 16px));
+        min-width: 320px;
+        top: 8px;
+        right: 8px;
+    }
+
+    .band-lab-card-charts {
+        grid-template-columns: 1fr;
+    }
+}
+

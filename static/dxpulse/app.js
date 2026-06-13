@@ -5,7 +5,7 @@
 /** @typedef {{ band: string, region: string, state: string, label: string, current_spot_count: number, confidence: number, strength: number }} DxPulseSummaryCell */
 /** @typedef {{ target: string, surroundings: boolean, mode: string, mode_label: string, window_minutes: number, generated_at: number, baseline_available: boolean, best_bands: DxPulseSummaryBand[], top_regions: DxPulseSummaryRegion[], hot_cells: DxPulseSummaryCell[] }} DxPulseSummaryResponse */
 
-/** @typedef {{ band: string, region: string, state: string, label: string, color_bucket?: string, current_spot_count: number, current_unique_paths: number, current_unique_remote_grids?: number, confidence: number, baseline_ratio?: number, baseline_expected_spot_count?: number, baseline_support?: number }} DxPulseMatrixCell */
+/** @typedef {{ band: string, region: string, state: string, label: string, color_bucket?: string, current_spot_count: number, current_unique_paths: number, current_unique_remote_grids?: number, avg_snr?: number, median_snr?: number, confidence: number, baseline_ratio?: number, baseline_expected_spot_count?: number, baseline_support?: number }} DxPulseMatrixCell */
 /** @typedef {{ target: string, surroundings: boolean, mode: string, mode_label: string, window_minutes: number, generated_at: number, slot_of_day: number, baseline_lookback_days?: number, baseline_available: boolean, bands: string[], regions: string[], matrix: DxPulseMatrixCell[][] }} DxPulseMatrixResponse */
 
 /** @typedef {{ min: number, max: number }} ScaleRange */
@@ -455,13 +455,13 @@ function renderCell(cell) {
   const mode = String(elements.mode?.value || 'quality').toLowerCase();
   const { color, scaleIndex } = colorForCell(cell, mode);
   const textColor = bestTextColor(color);
-  const scaleInfo = scaleIndex >= 0 ? `scale ${scaleIndex + 1}/16` : 'no propagation';
+  const tooltip = buildCellTooltip(cell, mode, scaleIndex);
   const isNoPropagation = scaleIndex < 0;
 
   if (isNoPropagation) {
     return `
       <td>
-        <div class="dxpulse-cell-fill" style="background:${color}" title="${escapeHtml(scaleInfo)}" aria-label="No propagation"></div>
+        <div class="dxpulse-cell-fill" style="background:${color}" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}"></div>
       </td>
     `;
   }
@@ -469,16 +469,13 @@ function renderCell(cell) {
   const primary = mode === 'anomaly'
     ? escapeHtml(formatAnomalyHeadline(cell))
     : escapeHtml(cell.label || cell.state || 'quiet');
-  const secondary = `${cell.current_spot_count || 0} spots · ${cell.current_unique_paths || 0} paths`;
-  const tertiary = mode === 'anomaly'
-    ? formatAnomalyDetail(cell)
-    : `${Math.round((cell.confidence || 0) * 100)}% conf`;
+  const secondary = `${cell.current_spot_count || 0} spots`;
+
   return `
     <td>
-      <div class="dxpulse-cell-fill" style="background:${color};color:${textColor}" title="${escapeHtml(scaleInfo)}">
+      <div class="dxpulse-cell-fill" style="background:${color};color:${textColor}" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}">
         <div>${primary}</div>
         <small>${escapeHtml(secondary)}</small>
-        <small>${escapeHtml(tertiary)}</small>
       </div>
     </td>
   `;
@@ -507,6 +504,7 @@ function renderCompactCell(cell) {
  */
 function buildCellTooltip(cell, mode, scaleIndex) {
   const lines = [`${cell.band || '—'} → ${cell.region || '—'}`];
+  const confidence = Math.round((Number(cell.confidence || 0)) * 100);
 
   if (scaleIndex < 0 || Number(cell.current_spot_count || 0) <= 0) {
     lines.push('No propagation');
@@ -522,14 +520,39 @@ function buildCellTooltip(cell, mode, scaleIndex) {
   lines.push(`${cell.current_spot_count || 0} spots`);
   lines.push(`${cell.current_unique_paths || 0} paths`);
 
+  const uniqueGrids = Number(cell.current_unique_remote_grids || 0);
+  if (uniqueGrids > 0) {
+    lines.push(`${uniqueGrids} grids`);
+  }
+
+  const avgSnr = Number(cell.avg_snr);
+  if (Number.isFinite(avgSnr) && avgSnr !== 0) {
+    lines.push(`avg SNR ${formatCompactNumber(avgSnr)} dB`);
+  }
+
+  const medianSnr = Number(cell.median_snr);
+  if (Number.isFinite(medianSnr) && medianSnr !== 0) {
+    lines.push(`median SNR ${formatCompactNumber(medianSnr)} dB`);
+  }
+
   if (mode === 'anomaly') {
     const support = Number(cell.baseline_support || 0);
     if (support > 0) {
       lines.push(`${support} baseline events`);
     }
+
+    const expected = Number(cell.baseline_expected_spot_count || 0);
+    if (Number.isFinite(expected) && expected > 0) {
+      lines.push(`expected ${formatCompactNumber(expected)} spots`);
+    }
+
+    const ratio = Number(cell.baseline_ratio || 0);
+    if (Number.isFinite(ratio) && ratio > 0) {
+      lines.push(`ratio ×${formatCompactNumber(ratio)}`);
+    }
   }
 
-  lines.push(`${Math.round((cell.confidence || 0) * 100)}% conf`);
+  lines.push(`${confidence}% conf`);
   return lines.join(' · ');
 }
 

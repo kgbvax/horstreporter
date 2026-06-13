@@ -8,6 +8,8 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -27,7 +29,6 @@ var dxBaseline *DxBaselineEngine
 var streamAccounting = &streamAccountingState{}
 
 const defaultLiveHistoryRetentionMinutes = 120
-const startupSpotCacheBackfillMinutes = 60
 
 var maxClients int
 var logLevel = "INFO"
@@ -71,16 +72,46 @@ func init() {
 	}
 }
 
+func moduleFromCaller(skip int) string {
+	_, file, _, ok := runtime.Caller(skip)
+	if !ok {
+		return "UNKNOWN"
+	}
+	base := filepath.Base(file)
+	name := strings.TrimSuffix(base, filepath.Ext(base))
+	name = strings.ReplaceAll(name, "-", "_")
+	if name == "" {
+		return "UNKNOWN"
+	}
+	return strings.ToUpper(name)
+}
+
+func logWithLevel(level, format string, v ...interface{}) {
+	module := moduleFromCaller(3)
+	prefix := "[" + level + "][" + module + "] " + format
+	log.Printf(prefix, v...)
+}
+
 func logDebug(format string, v ...interface{}) {
 	if logLevel == "DEBUG" {
-		log.Printf("[DEBUG] "+format, v...)
+		logWithLevel("DEBUG", format, v...)
 	}
 }
 
 func logInfo(format string, v ...interface{}) {
 	if logLevel == "DEBUG" || logLevel == "INFO" {
-		log.Printf("[INFO] "+format, v...)
+		logWithLevel("INFO", format, v...)
 	}
+}
+
+func logError(format string, v ...interface{}) {
+	logWithLevel("ERROR", format, v...)
+}
+
+func logFatal(format string, v ...interface{}) {
+	module := moduleFromCaller(3)
+	prefix := "[FATAL][" + module + "] " + format
+	log.Fatalf(prefix, v...)
 }
 
 func main() {
@@ -91,6 +122,7 @@ func main() {
 	dev := flag.Bool("dev", false, "Enable development mode (disables caching of static files)")
 	flag.BoolVar(&compressStream, "compress", false, "Enable gzip compression for the SSE stream")
 	enablePprof := flag.Bool("pprof", false, "Enable pprof profiling on localhost:6060")
+	logLevelFlag := flag.String("log-level", "", "Log level: DEBUG, INFO, WARN (default: INFO if env LOG_LEVEL not set)")
 	logFile := flag.String("log-file", "", "Path to the log file (enables file logging with rotation)")
 	logMaxAge := flag.Int("log-max-age", 30, "Maximum number of days to retain old log files")
 	logMaxBackups := flag.Int("log-max-backups", 7, "Maximum number of old log files to retain")
@@ -99,9 +131,26 @@ func main() {
 	dxBaselineFile := flag.String("dx-baseline-file", "dx_baseline.json", "Path to persistent DX baseline bucket storage")
 	dxPostgresDSN := flag.String("dx-postgres-dsn", defaultDxPostgresDSN, "Postgres DSN for DX baseline and raw spot storage")
 	dxPostgresFailFast := flag.Bool("dx-postgres-fail-fast", true, "Exit immediately when Postgres init/migration fails")
+	dxClusterEnable := flag.Bool("dxcluster-enable", false, "Enable optional DX cluster ingest")
+	dxClusterEndpoint := flag.String("dxcluster-endpoint", "db0erf.de:7300", "DX cluster endpoint in host:port format")
+	dxClusterReconnectSeconds := flag.Int("dxcluster-reconnect-seconds", 15, "Delay before reconnecting to DX cluster after disconnect")
+	dxClusterVerbose := flag.Bool("dxcluster-verbose", false, "Enable verbose DX cluster connection logging")
+	dxClusterUsername := flag.String("dxcluster-username", "", "Callsign sent when connecting to DX cluster")
+	dxClusterPassword := flag.String("dxcluster-password", "", "Optional password sent when connecting to DX cluster")
+	qrzUsernameFlag := flag.String("qrz-username", "", "QRZ username for optional callsign->locator enrichment")
+	qrzPasswordFlag := flag.String("qrz-password", "", "QRZ password for optional callsign->locator enrichment")
 	liveHistoryRetentionFlag := flag.Int("live-history-minutes", defaultLiveHistoryRetentionMinutes, "Maximum age of retained live spots in minutes")
 	dxBaselineMaxEventsFlag := flag.Int("dx-baseline-max-events", defaultDxBaselineMaxEvents, "Maximum number of retained DX baseline events")
+	opModeEnableFlag := flag.Bool("opmode-enable", true, "Deprecated: backend opmode integration endpoints are always enabled")
+	opModeControlEnableFlag := flag.Bool("opmode-control-enable", false, "Allow rotate/control commands in operator mode")
+	opModeAgentURLFlag := flag.String("opmode-agent-url", "", "Deprecated and ignored: backend never proxies to local operator agent")
+	opModeAgentTimeoutMsFlag := flag.Int("opmode-agent-timeout-ms", 1500, "Deprecated and ignored: backend never proxies to local operator agent")
 	flag.Parse()
+
+	// Override logLevel from flag if provided
+	if *logLevelFlag != "" {
+		logLevel = strings.ToUpper(*logLevelFlag)
+	}
 
 	if *liveHistoryRetentionFlag > 0 {
 		liveHistoryRetentionMinutes = *liveHistoryRetentionFlag
@@ -110,23 +159,39 @@ func main() {
 		dxBaselineMaxEvents = *dxBaselineMaxEventsFlag
 	}
 
+	if !*opModeEnableFlag {
+		logInfo("-opmode-enable=false is deprecated and ignored; backend opmode endpoints remain active")
+	}
+	if strings.TrimSpace(*opModeAgentURLFlag) != "" {
+		logInfo("-opmode-agent-url is deprecated and ignored; browser must call local operator agent directly")
+	}
+	if *opModeAgentTimeoutMsFlag != 1500 {
+		logInfo("-opmode-agent-timeout-ms is deprecated and ignored; backend no longer calls operator agent")
+	}
+	configureOpMode(*opModeControlEnableFlag)
+
 	dxBaseline = newDxBaselineEngine(strings.TrimSpace(*dxBaselineFile))
 	if err := dxBaseline.EnablePostgres(strings.TrimSpace(*dxPostgresDSN)); err != nil {
 		if *dxPostgresFailFast {
-			log.Fatalf("DX postgres init failed (dsn=%s, fail-fast=true): %v", strings.TrimSpace(*dxPostgresDSN), err)
+			logFatal("DX postgres init failed (dsn=%s, fail-fast=true): %v", strings.TrimSpace(*dxPostgresDSN), err)
 		}
 		logInfo("DX postgres init failed (dsn=%s, fail-fast=false). Continuing with in-memory fallback: %v", strings.TrimSpace(*dxPostgresDSN), err)
 	} else {
 		logInfo("DX postgres initialized (dsn=%s)", strings.TrimSpace(*dxPostgresDSN))
-		if cached, err := dxBaseline.LoadRecentSpotCache(startupSpotCacheBackfillMinutes, time.Now().Unix()); err != nil {
-			logInfo("Startup spot-cache backfill failed (last %d minutes): %v", startupSpotCacheBackfillMinutes, err)
+		includeDXCluster := *dxClusterEnable
+		backfillMinutes := liveHistoryRetentionMinutes
+		if backfillMinutes <= 0 {
+			backfillMinutes = defaultLiveHistoryRetentionMinutes
+		}
+		if cached, err := dxBaseline.LoadRecentSpotCache(backfillMinutes, time.Now().Unix(), includeDXCluster); err != nil {
+			logInfo("Startup spot-cache backfill failed (last %d minutes, include_dxcluster=%v): %v", backfillMinutes, includeDXCluster, err)
 		} else if len(cached) > 0 {
 			hub.Lock()
 			hub.history = append(make([]MQTTMessage, 0, len(cached)), cached...)
 			hub.Unlock()
-			logInfo("Startup spot-cache backfill loaded %d spots from dx_raw_spots (last %d minutes)", len(cached), startupSpotCacheBackfillMinutes)
+			logInfo("Startup spot-cache backfill loaded %d spots from dx_raw_spots (last %d minutes, include_dxcluster=%v)", len(cached), backfillMinutes, includeDXCluster)
 		} else {
-			logInfo("Startup spot-cache backfill found no spots in dx_raw_spots for the last %d minutes", startupSpotCacheBackfillMinutes)
+			logInfo("Startup spot-cache backfill found no spots in dx_raw_spots for the last %d minutes (include_dxcluster=%v)", backfillMinutes, includeDXCluster)
 		}
 	}
 
@@ -144,11 +209,52 @@ func main() {
 	if *enablePprof {
 		go func() {
 			logInfo("Starting internal pprof server on localhost:6060")
-			log.Println(http.ListenAndServe("localhost:6060", nil))
+			if err := http.ListenAndServe("localhost:6060", nil); err != nil {
+				logError("pprof server exited: %v", err)
+			}
 		}()
 	}
 
 	go startMQTT()
+
+	if *dxClusterEnable {
+		dxClusterUser := strings.TrimSpace(*dxClusterUsername)
+		dxClusterPass := strings.TrimSpace(*dxClusterPassword)
+		if dxClusterUser == "" {
+			dxClusterUser = strings.TrimSpace(os.Getenv("DXCLUSTER_USERNAME"))
+		}
+		if dxClusterPass == "" {
+			dxClusterPass = strings.TrimSpace(os.Getenv("DXCLUSTER_PASSWORD"))
+		}
+
+		qrzUsername := strings.TrimSpace(*qrzUsernameFlag)
+		qrzPassword := strings.TrimSpace(*qrzPasswordFlag)
+		if qrzUsername == "" {
+			qrzUsername = strings.TrimSpace(os.Getenv("QRZ_USERNAME"))
+		}
+		if qrzPassword == "" {
+			qrzPassword = strings.TrimSpace(os.Getenv("QRZ_PASSWORD"))
+		}
+
+		resolver := CallsignLocatorResolver(nil)
+		if qrzUsername != "" && qrzPassword != "" {
+			resolver = newQRZLookupClient(qrzUsername, qrzPassword)
+			logInfo("DX cluster QRZ enrichment enabled")
+		} else {
+			logInfo("DX cluster QRZ enrichment disabled (missing credentials)")
+		}
+
+		reconnectDelay := time.Duration(*dxClusterReconnectSeconds) * time.Second
+		go startDXClusterIngest(dxClusterConfig{
+			Enabled:        true,
+			Endpoint:       strings.TrimSpace(*dxClusterEndpoint),
+			ReconnectDelay: reconnectDelay,
+			Verbose:        *dxClusterVerbose,
+			Username:       dxClusterUser,
+			Password:       dxClusterPass,
+			Resolver:       resolver,
+		})
+	}
 
 	go func() {
 		for range time.Tick(5 * time.Minute) {
@@ -165,17 +271,19 @@ func main() {
 	} else {
 		staticFS, err := fs.Sub(staticFiles, "static")
 		if err != nil {
-			log.Fatal("Failed to load embedded static files:", err)
+			logFatal("Failed to load embedded static files: %v", err)
 		}
 		fileServer = http.FileServer(http.FS(staticFS))
 		appMux.Handle("/", fileServer)
 	}
 	appMux.HandleFunc("/api/stream", streamHandler)
+	appMux.HandleFunc("/api/capture_snapshot", captureSnapshotHandler)
 	appMux.HandleFunc("/api/stats", statsHandler)
 	appMux.HandleFunc("/api/dx_conditions", dxConditionsHandler)
 	appMux.HandleFunc("/api/dxpulse/v1/matrix", dxPulseMatrixHandler)
 	appMux.HandleFunc("/api/dxpulse/v1/summary", dxPulseSummaryHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
+	appMux.HandleFunc("/api/opmode/status", opModeStatusHandler)
 
 	// Mount DXLens (separate module) at /dxlens/. Reads HorstReporter's
 	// in-memory DX baseline via a small adapter; no extra network hops.
@@ -200,13 +308,19 @@ func main() {
 			TLSConfig: m.TLSConfig(),
 			Handler:   appMux,
 		}
-		log.Fatal(server.ListenAndServeTLS("", ""))
+		if err := server.ListenAndServeTLS("", ""); err != nil {
+			logFatal("HTTPS server failed: %v", err)
+		}
 	} else if *certFile != "" && *keyFile != "" {
 		logInfo("HorstReporter starting HTTPS server with provided certs on port %s...", *port)
-		log.Fatal(http.ListenAndServeTLS(":"+*port, *certFile, *keyFile, appMux))
+		if err := http.ListenAndServeTLS(":"+*port, *certFile, *keyFile, appMux); err != nil {
+			logFatal("HTTPS server failed: %v", err)
+		}
 	} else {
 		logInfo("HorstReporter starting HTTP server on port %s...", *port)
-		log.Fatal(http.ListenAndServe(":"+*port, appMux))
+		if err := http.ListenAndServe(":"+*port, appMux); err != nil {
+			logFatal("HTTP server failed: %v", err)
+		}
 	}
 }
 

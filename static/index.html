@@ -14,10 +14,13 @@
     <button id="show-sidebar" class="btn btn-secondary shadow-sm position-absolute" style="top: 15px; left: 0; z-index: 1000; display: none; border-radius: 0 4px 4px 0;" title="Show controls">
         <i class="fas fa-chevron-right"></i>
     </button>
-    <div id="current-band-display" class="h4 m-0 p-2 rounded" style="position: absolute; top: 15px; right: 15px; z-index: 1000; background-color: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); box-shadow: 0 2px 4px var(--shadow-color); transition: background-color 0.3s, color 0.3s; pointer-events: none;">All Bands</div>
+    <div id="top-right-controls" class="d-flex align-items-center gap-2" style="position: absolute; top: 15px; right: 15px; z-index: 1000;">
+        <button id="band-stats-toggle" type="button" class="btn btn-outline-secondary btn-sm" title="Toggle Band Stats">Stats</button>
+        <div id="current-band-display" class="h4 m-0 p-2 rounded" style="background-color: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); box-shadow: 0 2px 4px var(--shadow-color); transition: background-color 0.3s, color 0.3s; pointer-events: none;">All Bands</div>
+    </div>
     <div id="controls" class="d-flex flex-column p-3 bg-light border-end overflow-auto z-1 position-relative" style="width: 320px; transition: margin-left 0.3s, background-color 0.3s, border-color 0.3s;">
         <div class="controls-header d-flex justify-content-between align-items-center mb-3">
-            <h2 class="h4 m-0">horstreporter</h2>
+            <h2 id="app-title" class="h4 m-0">horstreporter</h2>
             <div class="d-flex gap-2">
                 <button id="theme-toggle" class="btn btn-outline-secondary btn-sm" title="Toggle theme"></button>
                 <button type="button" id="hide-sidebar" class="btn btn-outline-secondary btn-sm" title="Hide controls"><i class="fas fa-chevron-left"></i></button>
@@ -29,34 +32,18 @@
                 <button type="button" id="btn-geo" class="btn btn-outline-secondary" title="Use current location"><i class="fas fa-map-marker-alt"></i></button>
                 <button type="submit" id="btn-submit" class="btn btn-primary">Go</button>
             </div>
-            <div class="stats-container d-flex flex-column gap-1 small text-muted">
-                <div id="stream-status">Status: Not subscribed</div>
-                <div id="server-stats"></div>
-            </div>
-            <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
-                <label class="form-label mb-0">Min SNR:</label>
-                <div class="btn-group w-100" role="group" id="min-snr-group">
+            <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap" title="Sets the minimum Signal-to-Noise (SNR) level used to display spots.">
+                <label class="form-label mb-0" title="Sets the minimum Signal-to-Noise (SNR) level used to display spots.">Min SNR:</label>
+                <div class="btn-group w-100" role="group" id="min-snr-group" title="Sets the minimum Signal-to-Noise (SNR) level used to display spots.">
                     <input type="radio" class="btn-check" id="snr-none" name="min-snr" value="none" autocomplete="off">
-                    <label class="btn btn-outline-primary btn-sm" for="snr-none">None</label>
+                    <label class="btn btn-outline-primary btn-sm" for="snr-none">All</label>
                     <input type="radio" class="btn-check" id="snr-cw" name="min-snr" value="cw" autocomplete="off">
-                    <label class="btn btn-outline-primary btn-sm" for="snr-cw">CW</label>
+                    <label class="btn btn-outline-primary btn-sm" for="snr-cw">≥ CW</label>
                      <input type="radio" class="btn-check" id="snr-ssb" name="min-snr" value="ssb" autocomplete="off" checked>
-                    <label class="btn btn-outline-primary btn-sm" for="snr-ssb">SSB</label>
-                </div>
-            </div>
-            <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
-                <label class="form-label mb-0">Style:</label>
-                <div class="btn-group w-100" role="group" id="style-group">
-                    <input type="radio" class="btn-check" id="style-grid" name="style-select" value="grid-snr" autocomplete="off" checked>
-                    <label class="btn btn-outline-primary btn-sm" for="style-grid">Grid</label>
-                    <input type="radio" class="btn-check" id="style-heatmap" name="style-select" value="heatmap" autocomplete="off">
-                    <label class="btn btn-outline-primary btn-sm" for="style-heatmap">Heatmap</label>
-                    <input type="radio" class="btn-check" id="style-area" name="style-select" value="active-area" autocomplete="off">
-                    <label class="btn btn-outline-primary btn-sm" for="style-area">Active Area</label>
+                    <label class="btn btn-outline-primary btn-sm" for="snr-ssb">≥ SSB</label>
                 </div>
             </div>
             <div id="projection-switch-row" class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
-                <label class="form-label mb-0">Projection:</label>
                 <div class="btn-group w-100" role="group" id="projection-group">
                     <input type="radio" class="btn-check" id="proj-mercator" name="projection-select" value="mercator" autocomplete="off" checked>
                     <label class="btn btn-outline-primary btn-sm" for="proj-mercator">Mercator</label>
@@ -64,29 +51,13 @@
                     <label class="btn btn-outline-primary btn-sm" for="proj-azimuthal">Azimuthal</label>
                 </div>
             </div>
-            <div id="dx-conditions-panel" class="dx-conditions-panel border rounded p-2" style="display:none;">
-                <div class="d-flex align-items-center justify-content-between mb-1">
-                    <div class="fw-bold">DX Potential</div>
-                    <button type="button" id="dx-info-toggle" class="btn btn-outline-secondary btn-sm dx-info-button" title="How DX scoring works" aria-label="How DX scoring works">
-                        <i class="fas fa-info-circle"></i>
-                    </button>
+            <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
+                <div class="btn-group w-100" role="group" id="style-group">
+                    <input type="radio" class="btn-check" id="style-grid" name="style-select" value="grid-snr" autocomplete="off" checked>
+                    <label class="btn btn-outline-primary btn-sm" for="style-grid">Grid</label>
+                    <input type="radio" class="btn-check" id="style-area" name="style-select" value="active-area" autocomplete="off">
+                    <label class="btn btn-outline-primary btn-sm" for="style-area">Active Area</label>
                 </div>
-                <div class="small d-flex justify-content-between"><span>Score:</span><span id="dx-overall-score">—</span></div>
-                <div class="small d-flex justify-content-between"><span>Condition:</span><span id="dx-overall-condition">Waiting for stream...</span></div>
-                <div class="small d-flex justify-content-between"><span>Confidence:</span><span id="dx-confidence">—</span></div>
-                <div class="small d-flex justify-content-between"><span>Best bands:</span><span id="dx-best-bands">—</span></div>
-                <div class="small d-flex justify-content-between"><span>Baseline history:</span><span id="dx-baseline-history">—</span></div>
-                <ul id="dx-band-list" class="small mb-0 mt-2 ps-3"></ul>
-            </div>
-            <div class="border rounded p-2 d-flex flex-column gap-1">
-                <div class="d-flex align-items-center justify-content-between gap-2">
-                    <div class="fw-bold">DXPulse</div>
-                    <div class="d-flex gap-1">
-                        <a id="dxpulse-quality-link" class="btn btn-outline-primary btn-sm disabled" href="/dxpulse/" aria-disabled="true">Quality</a>
-                        <a id="dxpulse-anomaly-link" class="btn btn-outline-warning btn-sm disabled" href="/dxpulse/" aria-disabled="true">Anomaly</a>
-                    </div>
-                </div>
-                <div id="dxpulse-link-help" class="small text-muted">Enter a locator to open the current DXPulse overview.</div>
             </div>
             <div class="form-sections d-flex flex-column gap-2">
             <div id="band-container" class="w-100 bg-transparent mb-2" style="font-size: 0.85rem;">
@@ -187,15 +158,13 @@
             <details class="options-panel border-top pt-2 mt-2">
                 <summary class="small fw-bold" style="cursor: pointer;">Options</summary>
                 <div class="options-content d-flex flex-column gap-2 mt-2 small">
-                    <label class="d-flex align-items-center justify-content-between">Show grayline:
-                        <input type="checkbox" id="show-grayline" class="form-check-input m-0" />
-                    </label>
-                    <label class="d-flex align-items-center justify-content-between">Color countries:
-                        <input type="checkbox" id="color-countries" class="form-check-input m-0" />
-                    </label>
                     <label class="d-flex align-items-center justify-content-between">Show DXCC entity labels:
                         <input type="checkbox" id="show-dxcc-labels" class="form-check-input m-0" />
                     </label>
+                      <div class="d-flex flex-column w-100">
+                            <label class="d-flex align-items-center justify-content-between mb-0" for="dxcc-label-density"><span>DXCC Label Density:</span> <span><span id="dxcc-label-density-val">1.0</span>x</span></label>
+                            <input type="range" id="dxcc-label-density" class="form-range" min="0" max="5" step="0.1" value="1.0" />
+                        </div>
                     <label class="d-flex align-items-center justify-content-between">Max Spot Age (min):
                         <input type="number" id="minutes" class="form-control form-control-sm w-auto" value="15" min="1" max="60" style="max-width: 80px;" />
                     </label>
@@ -218,23 +187,40 @@
                     <label class="d-flex align-items-center justify-content-between">Include adjacent squares:
                         <input type="checkbox" id="surroundings" class="form-check-input m-0" />
                     </label>
+                    <label class="d-flex align-items-center justify-content-between">Show dxcluster spots:
+                        <input type="checkbox" id="show-dxcluster-spots" class="form-check-input m-0" />
+                    </label>
+                    <label class="d-flex align-items-center justify-content-between">Country coloring:
+                        <input type="checkbox" id="show-country-coloring" class="form-check-input m-0" />
+                    </label>
+                    <div class="small text-muted" id="opmode-status-row">opmode status: <strong id="opmode-status">disabled</strong></div>
+                    <div class="small text-muted" id="opmode-station-row">station: <strong id="opmode-station">n/a</strong></div>
+                    <div class="small text-muted" id="opmode-heading-row">antenna: <strong id="opmode-heading">n/a</strong></div>
+                    <label class="d-flex align-items-center justify-content-between">Permit antenna control:
+                        <input type="checkbox" id="opmode-allow-control" class="form-check-input m-0" />
+                    </label>
+                    <div class="d-flex align-items-center gap-2">
+                        <select id="opmode-antenna-mode" class="form-select form-select-sm" style="max-width: 160px;">
+                            <option value="forward">forward</option>
+                            <option value="backward">backward</option>
+                            <option value="bidirectional">bidirectional</option>
+                        </select>
+                        <button type="button" id="opmode-antenna-mode-btn" class="btn btn-outline-secondary btn-sm">Set mode</button>
+                    </div>
                     <label class="d-flex align-items-center justify-content-between">DK3JF Mode:
                         <input type="checkbox" id="dk3jf-mode" class="form-check-input m-0" />
                     </label>
                     <div id="azimuth-options-group" class="d-flex flex-column gap-2">
-                        <label class="d-flex align-items-center justify-content-between">Azimuthal horizon (km):
-                            <input type="number" id="azimuth-horizon-km" class="form-control form-control-sm w-auto" value="16000" min="1000" max="20015" step="100" style="max-width: 100px;" />
+                        <label class="d-flex align-items-center justify-content-between">Azimuthal horizon (km, auto):
+                            <input type="number" id="azimuth-horizon-km" class="form-control form-control-sm w-auto" value="16000" min="1000" max="20015" step="100" style="max-width: 100px;" readonly title="Derived automatically from azimuth zoom" />
                         </label>
-                        <label class="d-flex align-items-center justify-content-between">NS6T-style azimuth indicator:
-                            <input type="checkbox" id="azimuth-ns6t-indicator" class="form-check-input m-0" checked />
-                        </label>
-                        <div class="d-flex flex-column w-100">
-                            <label class="d-flex align-items-center justify-content-between mb-0" for="dxcc-label-density"><span>DXCC Label Density:</span> <span><span id="dxcc-label-density-val">1.0</span>x</span></label>
-                            <input type="range" id="dxcc-label-density" class="form-range" min="0" max="5" step="0.1" value="1.0" />
-                        </div>
+                      
                     </div>
                 </div>
             </details>
+            <div class="stats-container d-flex flex-column gap-1 small text-muted border-top pt-2 mt-2">
+                <div id="stream-status">Status: Not subscribed</div>
+            </div>
         </form>
     </div>
     <div id="map-stack" class="flex-grow-1 h-100 position-relative">
@@ -244,11 +230,35 @@
             <button id="azimuth-zoom-in" class="btn btn-outline-secondary btn-sm mb-1" title="Zoom in" tabindex="-1">+</button><br>
             <button id="azimuth-zoom-out" class="btn btn-outline-secondary btn-sm" title="Zoom out" tabindex="-1">−</button>
         </div>
+        <div id="band-lab-window" class="band-lab-window" style="display:none;">
+            <div id="band-lab-window-header" class="band-lab-window-header" title="Drag to move">
+                <span>Band Stats</span>
+                <div class="band-lab-window-header-actions">
+                    <label for="band-lab-time-range" class="visually-hidden">Band Stats time range</label>
+                    <select id="band-lab-time-range" class="form-select form-select-sm" title="Band Stats time range">
+                        <option value="15">15m</option>
+                        <option value="30">30m</option>
+                        <option value="60">1h</option>
+                        <option value="120">2h</option>
+                    </select>
+                    <button id="band-lab-legend-help-toggle" type="button" class="btn btn-sm btn-outline-secondary" title="Show chart legend help" aria-expanded="false" aria-controls="band-lab-legend-help">?</button>
+                    <button id="band-lab-window-close" type="button" class="btn btn-sm btn-outline-secondary" title="Hide Band Stats">×</button>
+                </div>
+            </div>
+            <div id="band-lab-legend-help" class="band-lab-legend-help" style="display:none;" role="status" aria-live="polite">
+                <div><strong>Distance vs SNR:</strong> dots=reports, green dashed=cw -15 dB, orange dashed=phone 0 dB, faint verticals=P50/P90 distance.</div>
+                <div><strong>Reports over time + baseline:</strong> bars=current reports, orange line=trend (sparkline), red dashed=baseline.</div>
+            </div>
+            <div id="band-lab-content" class="band-lab-window-body">
+                <div id="band-lab-summary" class="band-lab-summary small"></div>
+                <div id="band-lab-cards" class="band-lab-cards mt-2"></div>
+            </div>
+            <div id="band-lab-window-resize" class="band-lab-window-resize" title="Drag to resize"></div>
+        </div>
     </div>
     <div id="tooltip"></div>
     <script src="vendor/js/bootstrap.bundle.min.js"></script>
     <script src="vendor/js/leaflet.js"></script>
-    <script src="vendor/js/leaflet-heat.js"></script>
     <script src="vendor/js/turf.min.js"></script>
     <script type="module" src="app.js"></script>
 </body>

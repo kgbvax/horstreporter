@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -82,7 +81,7 @@ func startMQTT() {
 	opts.SetOnConnectHandler(func(c mqtt.Client) {
 		logInfo("Connected to MQTT broker. Subscribing...")
 		if token := c.Subscribe("pskr/filter/v2/#", 0, msgHandler); token.Wait() && token.Error() != nil {
-			log.Printf("MQTT subscribe error: %v", token.Error())
+			logError("MQTT subscribe error: %v", token.Error())
 		} else {
 			logInfo("Subscribed to global PSKReporter MQTT feed")
 		}
@@ -94,6 +93,6 @@ func startMQTT() {
 
 	client := mqtt.NewClient(opts)
 	if token := client.Connect(); token.Wait() && token.Error() != nil {
-		log.Fatalf("MQTT connect error: %v", token.Error())
+		logFatal("MQTT connect error: %v", token.Error())
 	}
 }

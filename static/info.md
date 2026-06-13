@@ -11,7 +11,6 @@ It is effectively an alternate frontend for <a href="https://www.pskreporter.inf
 * **Styles:** Choose how to visualize the data:
     * *Grid:* Groups spots into Maidenhead squares. Color indicates the dominant band, opacity indicates signal strength.
     * *Active Area:* Draws dynamic polygons enclosing clustered spots to show the overall propagation footprint.
-    * *Heatmap:* Shows an intensity heatmap of activity.
 
 * **Band Cycler:** Click the play icon <i class="fas fa-play"></i> under the band list to automatically cycle through currently open bands.
 * **Options:** Expand the Options panel to change maximum spot age, cluster grouping distance, auto-zoom behavior, and more.

@@ -46,8 +46,8 @@
   - **Mercator** (Leaflet)
   - **Azimuthal** (canvas runtime)
 - Style modes:
-  - `grid-snr`, `heatmap`, `active-area` are available in Mercator.
-  - In Azimuthal mode, style is normalized to grid-style rendering; heatmap/active-area are disabled in UI and runtime.
+  - `grid-snr`, `active-area` are available in Mercator.
+  - In Azimuthal mode, style is normalized to grid-style rendering; active-area is disabled in UI and runtime.
 
 ## Runtime and ops notes
 - Static file serving:

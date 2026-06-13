@@ -413,6 +413,41 @@ export function locatorToBounds(locator) {
     return [[lat, lng], [lat + 1, lng + 2]];
 }
 
+export function continentFromLatLng(lat, lng) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+    // Antarctica
+    if (lat <= -60) return 'antarctica';
+
+    // North America (incl. Central America + Greenland)
+    if (lat >= 7 && lng >= -170 && lng <= -20) return 'north-america';
+
+    // South America
+    if (lat < 13 && lat >= -56 && lng >= -92 && lng <= -30) return 'south-america';
+
+    // Europe
+    if (lat >= 35 && lat <= 72 && lng >= -31 && lng <= 60) return 'europe';
+
+    // Africa
+    if (lat >= -35 && lat <= 38 && lng >= -20 && lng <= 55) return 'africa';
+
+    // Asia
+    if (lat >= 5 && lat <= 82 && lng >= 25 && lng <= 180) return 'asia';
+
+    // Oceania (Australia, NZ, Pacific islands)
+    if (lat >= -50 && lat <= 30 && ((lng >= 110 && lng <= 180) || (lng >= -180 && lng <= -140))) return 'oceania';
+
+    return null;
+}
+
+export function continentFromLocator(locator) {
+    const bounds = locatorToBounds(locator);
+    if (!bounds) return null;
+    const lat = (bounds[0][0] + bounds[1][0]) / 2;
+    const lng = (bounds[0][1] + bounds[1][1]) / 2;
+    return continentFromLatLng(lat, lng);
+}
+
 export function setFaviconColor(color) {
     const favicon = document.getElementById('favicon');
     if (favicon) {
@@ -499,15 +534,18 @@ export function getEnabledBands() {
 }
 
 export function getGraylineEnabled() {
-    const toggle = document.getElementById('show-grayline');
-    if (toggle) return toggle.checked;
-    return localStorage.getItem('showGrayline') === 'true';
+    return true;
 }
 
 export function getCountryColoringEnabled() {
-    const toggle = document.getElementById('color-countries');
+    const toggle = document.getElementById('show-country-coloring');
     if (toggle) return toggle.checked;
-    return localStorage.getItem('colorCountries') === 'true';
+
+    const saved = (typeof localStorage !== 'undefined' && localStorage)
+        ? localStorage.getItem('countryColoringEnabled')
+        : null;
+    if (saved === null) return true;
+    return saved === 'true';
 }
 
 export function getMercatorDxccLabelsEnabled() {

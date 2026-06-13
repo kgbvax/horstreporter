@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -659,6 +660,93 @@ func TestStreamHandlerMaxClientsCapacity(t *testing.T) {
 	})
 }
 
+func TestCaptureSnapshotHandlerRequiresTarget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(captureSnapshotHandler))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestCaptureSnapshotHandlerReturnsFilteredSpots(t *testing.T) {
+	withHubSnapshot(t, func() {
+		now := time.Now().Unix()
+		hub.Lock()
+		hub.history = []MQTTMessage{
+			{
+				SC: "W1AW",
+				RC: "K1JT",
+				SL: "FN31",
+				RL: "FN20",
+				RP: -2,
+				T:  now - 20,
+				B:  "20m",
+				MD: "FT8",
+			},
+			{
+				SC: "W1AW",
+				RC: "DL1ABC",
+				SL: "FN31",
+				RL: "JO32",
+				RP: -12,
+				T:  now - 40,
+				B:  "40m",
+				MD: "FT8",
+			},
+			{
+				SC: "W1AW",
+				RC: "N0CALL",
+				SL: "FN31",
+				RL: "EM10",
+				RP: -4,
+				T:  now - 50,
+				B:  "20m",
+				MD: "DXCLUSTER",
+			},
+		}
+		hub.Unlock()
+
+		server := httptest.NewServer(http.HandlerFunc(captureSnapshotHandler))
+		defer server.Close()
+
+		url := server.URL + "?target=W1AW&snapshot_at=" + strconv.FormatInt(now, 10) + "&minutes=15&min_snr_mode=ssb&ssb_min_db=-6&selected_band=20m&enabled_bands=20m&include_dxcluster=false"
+		resp, err := http.Get(url)
+		if err != nil {
+			t.Fatalf("Failed to make request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+
+		var payload captureSnapshotResponse
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			t.Fatalf("failed to decode payload: %v", err)
+		}
+
+		if payload.Target != "W1AW" {
+			t.Fatalf("expected target W1AW, got %q", payload.Target)
+		}
+		if payload.Count != 1 {
+			t.Fatalf("expected 1 filtered spot, got %d", payload.Count)
+		}
+		if len(payload.Spots) != 1 {
+			t.Fatalf("expected exactly one spot in payload, got %d", len(payload.Spots))
+		}
+		if payload.Spots[0].Locator != "FN20" {
+			t.Fatalf("expected retained spot locator FN20, got %q", payload.Spots[0].Locator)
+		}
+	})
+}
+
 func TestDxConditionsHandlerRequiresTarget(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(dxConditionsHandler))
 	defer server.Close()
@@ -1027,15 +1115,15 @@ func TestBuildSquareDetailsResponseEmptyAndFiltered(t *testing.T) {
 		}
 	})
 
-	t.Run("applies band and snr filters", func(t *testing.T) {
+	t.Run("popup stats use all square spots regardless of current band and snr filters", func(t *testing.T) {
 		resp := buildSquareDetailsResponse("W1AW", false, "JO32", 15, "ssb", -10, -15, "20m", parseEnabledBands("20m"), history, now)
-		if resp.Count != 0 {
-			t.Fatalf("expected filters to exclude all spots, got %+v", resp)
+		if resp.Count != 1 || resp.BestBand != "20m" || resp.MinSNR != -12 || resp.MaxSNR != -12 {
+			t.Fatalf("expected square popup stats to include the JO32 spot despite active filters, got %+v", resp)
 		}
 
 		resp = buildSquareDetailsResponse("W1AW", false, "JO33", 15, "none", 0, -15, "40m", parseEnabledBands("40m"), history, now)
 		if resp.Count != 1 || resp.BestBand != "40m" {
-			t.Fatalf("expected one surviving 40m report, got %+v", resp)
+			t.Fatalf("expected JO33 popup stats to reflect its full square contents, got %+v", resp)
 		}
 	})
 }

@@ -16,9 +16,6 @@ curl -sL https://unpkg.com/leaflet/dist/images/marker-icon.png -o static/vendor/
 curl -sL https://unpkg.com/leaflet/dist/images/marker-icon-2x.png -o static/vendor/css/images/marker-icon-2x.png
 curl -sL https://unpkg.com/leaflet/dist/images/marker-shadow.png -o static/vendor/css/images/marker-shadow.png
 
-# Leaflet Heat
-curl -sL https://unpkg.com/leaflet.heat/dist/leaflet-heat.js -o static/vendor/js/leaflet-heat.js
-
 # Turf
 curl -sL https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js -o static/vendor/js/turf.min.js
 

@@ -123,6 +123,28 @@ export function loadConfig() {
             const el = inputById('surroundings');
             if (el) el.checked = savedSurroundings === 'true';
         }
+
+        const savedShowDXClusterSpots = localStorage.getItem('showDXClusterSpots');
+        const legacyShowDxclusterSpots = localStorage.getItem('showDxclusterSpots');
+        const legacyShowSpotsSameRegion = localStorage.getItem('showSpotsSameRegion');
+        const el = inputById('show-dxcluster-spots');
+        if (el) {
+            if (savedShowDXClusterSpots !== null) {
+                el.checked = savedShowDXClusterSpots === 'true';
+            } else if (legacyShowDxclusterSpots !== null) {
+                el.checked = legacyShowDxclusterSpots === 'true';
+            } else if (legacyShowSpotsSameRegion === 'true') {
+                el.checked = true;
+            } else {
+                el.checked = true;
+            }
+        }
+
+        const savedCountryColoring = localStorage.getItem('countryColoringEnabled');
+        const countryColoringEl = inputById('show-country-coloring');
+        if (countryColoringEl) {
+            countryColoringEl.checked = savedCountryColoring === null ? true : savedCountryColoring === 'true';
+        }
     } catch (e) {
         console.error("Error parsing saved form state", e);
     }

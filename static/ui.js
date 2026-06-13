@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, latLngToLocator, getMinSnrMode, getSelectedBand, getEnabledBands, formatNumber } from './utils.js';
+import { getGridResolution, latLngToLocator, locatorToBounds, getMinSnrMode, getSelectedBand, getEnabledBands, formatNumber } from './utils.js';
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -13,7 +13,6 @@ function escapeHtml(value) {
 
 export function initUI() {
     initInfoOverlay();
-    initServerStats();
     initAutoLocateCoachmark();
 }
 
@@ -106,6 +105,8 @@ export function attachUITooltipEvents() {
     const tooltip = document.getElementById('tooltip');
     if (!tooltip || !map) return;
 
+    const HOVER_FETCH_DELAY_MS = 750;
+
     map.off('mousemove');
     map.off('mouseout');
 
@@ -114,6 +115,69 @@ export function attachUITooltipEvents() {
     let hoverController = null;
     let hoverRequestSeq = 0;
     let activeHoverKey = '';
+    let hoverSquareLayer = null;
+    let hoverSquareLocator = '';
+    let hoverSquareTheme = '';
+
+    function getHoverSquareStyle() {
+        const theme = document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+        if (theme === 'dark') {
+            return {
+                color: '#ffe39a',
+                weight: 2,
+                opacity: 1,
+                fillColor: '#ffe39a',
+                fillOpacity: 0.20,
+                interactive: false
+            };
+        }
+
+        return {
+            color: '#cc9a1f',
+            weight: 2,
+            opacity: 0.95,
+            fillColor: '#ffd166',
+            fillOpacity: 0.14,
+            interactive: false
+        };
+    }
+
+    function clearHoverSquareHighlight() {
+        if (!hoverSquareLayer || !map) return;
+        map.removeLayer(hoverSquareLayer);
+        hoverSquareLayer = null;
+        hoverSquareLocator = '';
+        hoverSquareTheme = '';
+    }
+
+    function updateHoverSquareHighlight(locator) {
+        if (!map || !locator) {
+            clearHoverSquareHighlight();
+            return;
+        }
+
+        const theme = document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+        const style = getHoverSquareStyle();
+
+        if (hoverSquareLocator === locator && hoverSquareLayer) {
+            if (hoverSquareTheme !== theme) {
+                hoverSquareLayer.setStyle(style);
+                hoverSquareTheme = theme;
+            }
+            return;
+        }
+
+        const bounds = locatorToBounds(locator);
+        if (!bounds) {
+            clearHoverSquareHighlight();
+            return;
+        }
+
+        clearHoverSquareHighlight();
+        hoverSquareLayer = L.rectangle(bounds, style).addTo(map);
+        hoverSquareLocator = locator;
+        hoverSquareTheme = theme;
+    }
 
     function hideTooltip() {
         if (hoverTimer) {
@@ -126,6 +190,7 @@ export function attachUITooltipEvents() {
         }
         activeHoverKey = '';
         tooltip.style.display = 'none';
+        clearHoverSquareHighlight();
     }
 
     function positionTooltip(e) {
@@ -133,13 +198,12 @@ export function attachUITooltipEvents() {
         tooltip.style.top = (e.originalEvent.pageY + 15) + 'px';
     }
 
-    function renderLoading(locator) {
-        tooltip.innerHTML = `<strong>${escapeHtml(locator)}</strong><br><span style="opacity:0.85;">Loading hover details…</span>`;
-        tooltip.style.display = 'block';
-    }
-
     function renderDetails(locator, data) {
         const count = Number(data?.count || 0);
+        if (count <= 0) {
+            hideTooltip();
+            return;
+        }
         const min = Number.isFinite(Number(data?.min_snr)) ? Number(data.min_snr) : 0;
         const max = Number.isFinite(Number(data?.max_snr)) ? Number(data.max_snr) : 0;
         const avg = Number.isFinite(Number(data?.avg_snr)) ? Number(data.avg_snr) : 0;
@@ -250,8 +314,15 @@ export function attachUITooltipEvents() {
     }
 
     map.on('mousemove', function(e) {
+        if (state.dxClusterHoverActive) {
+            hideTooltip();
+            return;
+        }
+
         const res = getGridResolution();
         const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, res);
+        updateHoverSquareHighlight(loc);
+
         const params = getHoverParams(loc);
         if (!params.target) {
             hideTooltip();
@@ -263,11 +334,15 @@ export function attachUITooltipEvents() {
 
         const cached = hoverCache.get(activeHoverKey);
         if (cached) {
-            renderDetails(loc, cached);
+            if (Number(cached?.count || 0) > 0) {
+                renderDetails(loc, cached);
+            } else {
+                hideTooltip();
+            }
             return;
         }
 
-        renderLoading(loc);
+        tooltip.style.display = 'none';
 
         if (hoverTimer) {
             clearTimeout(hoverTimer);
@@ -275,7 +350,7 @@ export function attachUITooltipEvents() {
         hoverTimer = setTimeout(() => {
             hoverTimer = null;
             void fetchHoverDetails(params, activeHoverKey);
-        }, 120);
+        }, HOVER_FETCH_DELAY_MS);
     });
 
     map.on('mouseout', function() {
@@ -329,6 +404,8 @@ function initInfoOverlay() {
 
 function initServerStats() {
     function updateServerStats() {
+        if (document.hidden) return;
+
         const statsEl = document.getElementById('server-stats');
         if (!statsEl) return;
 
@@ -345,4 +422,9 @@ function initServerStats() {
 
     updateServerStats();
     setInterval(updateServerStats, 10000);
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+            updateServerStats();
+        }
+    });
 }

@@ -4,12 +4,20 @@
   "version": "1.0.0",
   "scripts": {
     "test": "vitest run",
+    "test:perf": "vitest run test/**/*.perf.test.js",
+    "test:perf:mercator": "vitest run test/mercator*.perf.test.js",
+    "test:perf:mercator:report": "HORST_PERF_WRITE_REPORT=1 HORST_PERF_REPORT_DIR=tmp/perf-reports vitest run test/mercator*.perf.test.js",
+    "test:perf:mercator:assert": "node scripts/perf-assert.mjs .perf-baseline.json tmp/perf-reports",
+    "perf:gate:mercator": "node scripts/perf-run-mercator-gate.mjs",
+    "capture:dk3jf:frames": "node scripts/capture-dk3jf-frames.mjs",
+    "capture:dk3jf:movie": "bash scripts/assemble-dk3jf-movie.sh",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run test"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^1.6.1",
     "jsdom": "^24.0.0",
+    "playwright": "^1.54.1",
     "typescript": "^5.5.4",
     "vitest": "^1.2.0"
   }

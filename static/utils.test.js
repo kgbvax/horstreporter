@@ -207,20 +207,36 @@ describe('utils.js', () => {
             expect(enabled.size).toBe(2);
         });
 
-        it('getGraylineEnabled reads from the checkbox when present', () => {
+        it('getGraylineEnabled is always enabled', () => {
             document.body.innerHTML = '<input type="checkbox" id="show-grayline" checked />';
             expect(getGraylineEnabled()).toBe(true);
 
             document.body.innerHTML = '<input type="checkbox" id="show-grayline" />';
-            expect(getGraylineEnabled()).toBe(false);
+            expect(getGraylineEnabled()).toBe(true);
         });
 
-        it('getCountryColoringEnabled reads from the checkbox when present', () => {
-            document.body.innerHTML = '<input type="checkbox" id="color-countries" checked />';
+        it('getCountryColoringEnabled reads checkbox when present and falls back to localStorage', () => {
+            document.body.innerHTML = '';
             expect(getCountryColoringEnabled()).toBe(true);
 
-            document.body.innerHTML = '<input type="checkbox" id="color-countries" />';
+            Object.defineProperty(globalThis, 'localStorage', {
+                configurable: true,
+                value: {
+                    _store: new Map(),
+                    getItem(key) { return this._store.has(key) ? this._store.get(key) : null; },
+                    setItem(key, value) { this._store.set(String(key), String(value)); },
+                    removeItem(key) { this._store.delete(String(key)); }
+                }
+            });
+
+            localStorage.setItem('countryColoringEnabled', 'false');
             expect(getCountryColoringEnabled()).toBe(false);
+
+            document.body.innerHTML = '<input type="checkbox" id="show-country-coloring" />';
+            expect(getCountryColoringEnabled()).toBe(false);
+
+            document.body.innerHTML = '<input type="checkbox" id="show-country-coloring" checked />';
+            expect(getCountryColoringEnabled()).toBe(true);
         });
 
         it('getMercatorDxccLabelsEnabled reads from the checkbox when present', () => {

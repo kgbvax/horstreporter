@@ -5,14 +5,32 @@ import (
 )
 
 type Spot struct {
-	Lat        float64 `json:"lat"`
-	Lng        float64 `json:"lng"`
-	SNR        int     `json:"snr"`
-	AgeSeconds int64   `json:"ageSeconds"`
-	Locator    string  `json:"locator"`
-	Band       string  `json:"band"`
-	Sender     string  `json:"sender"`
-	Receiver   string  `json:"receiver"`
+	Lat             float64 `json:"lat"`
+	Lng             float64 `json:"lng"`
+	SNR             int     `json:"snr"`
+	AgeSeconds      int64   `json:"ageSeconds"`
+	Locator         string  `json:"locator"`
+	ReporterLocator string  `json:"reporterLocator,omitempty"`
+	SourceType      string  `json:"sourceType,omitempty"`
+	Band            string  `json:"band"`
+	Sender          string  `json:"sender"`
+	Receiver        string  `json:"receiver"`
+}
+
+func sourceTypeForMessage(m MQTTMessage) string {
+	mode := strings.ToUpper(strings.TrimSpace(m.MD))
+	if mode == "DXCLUSTER" {
+		return "dxcluster"
+	}
+	return "mqtt"
+}
+
+func reporterLocatorForMessage(m MQTTMessage) string {
+	mode := strings.ToUpper(strings.TrimSpace(m.MD))
+	if mode == "DXCLUSTER" {
+		return strings.ToUpper(strings.TrimSpace(m.SL))
+	}
+	return strings.ToUpper(strings.TrimSpace(m.RL))
 }
 
 // matchCall checks for an exact callsign match, or a match with common prefix/suffix modifiers (e.g., W1AW/P, DL/W1AW)
@@ -88,14 +106,16 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 	}
 
 	return Spot{
-		Lat:        lat,
-		Lng:        lng,
-		SNR:        m.RP,
-		AgeSeconds: age,
-		Locator:    remoteLocator,
-		Band:       m.B,
-		Sender:     m.SC,
-		Receiver:   m.RC,
+		Lat:             lat,
+		Lng:             lng,
+		SNR:             m.RP,
+		AgeSeconds:      age,
+		Locator:         remoteLocator,
+		ReporterLocator: reporterLocatorForMessage(m),
+		SourceType:      sourceTypeForMessage(m),
+		Band:            m.B,
+		Sender:          m.SC,
+		Receiver:        m.RC,
 	}, true
 }
 

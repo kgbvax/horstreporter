@@ -137,7 +137,7 @@ describe('azimuth.js', () => {
         expect(plan.azimuthLabels).toHaveLength(12);
     });
 
-    it('normalizes unsupported azimuth styles to grid-snr overlay summary', () => {
+    it('normalizes non-grid azimuth styles to grid-snr overlay summary', () => {
         const featureCollection = {
             type: 'FeatureCollection',
             features: []
@@ -149,15 +149,6 @@ describe('azimuth.js', () => {
             { locator: 'JO52', snr: 6, band: '20m', lat: 54.0, lng: 9.0 }
         ];
 
-        const heatPlan = az.createAzimuthRenderPlan({
-            featureCollection,
-            center: [52, 7],
-            spots,
-            style: 'heatmap',
-            theme: 'dark',
-            zoomLevel: 1.8
-        });
-
         const areaPlan = az.createAzimuthRenderPlan({
             featureCollection,
             center: [52, 7],
@@ -167,7 +158,6 @@ describe('azimuth.js', () => {
             zoomLevel: 1.8
         });
 
-        expect(heatPlan.overlaySummary).toEqual({ style: 'grid-snr', itemCount: 3 });
         expect(areaPlan.overlaySummary).toEqual({ style: 'grid-snr', itemCount: 3 });
     });
 });

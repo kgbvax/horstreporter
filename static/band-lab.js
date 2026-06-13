@@ -1,0 +1,915 @@
+import { state } from './state.js';
+import { bandColors, formatNumber, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds } from './utils.js';
+
+const ENABLE_KEY = 'bandLabEnabled';
+const UPDATE_THROTTLE_MS = 300;
+const DX_FETCH_INTERVAL_MS = 15000;
+const ACTIVITY_BINS = 12;
+const WINDOW_POS_KEY = 'bandLabWindowPos';
+const WINDOW_SIZE_KEY = 'bandLabWindowSize';
+const TIME_RANGE_KEY = 'bandLabTimeRangeMinutes';
+const BAND_LAB_TIME_RANGE_MINUTES = [15, 30, 60, 120];
+
+const runtime = {
+    enabled: false,
+    initialized: false,
+    lastUpdateAt: 0,
+    updateSeq: 0,
+    lastDxFetchAt: 0,
+    dxCache: null,
+    dxCacheKey: '',
+    dxInFlight: null,
+    dxInFlightKey: '',
+    dxAbortController: null
+};
+
+export function initBandLab() {
+    const toggleButton = document.getElementById('band-stats-toggle');
+    const content = document.getElementById('band-lab-content');
+    const windowEl = document.getElementById('band-lab-window');
+    const closeBtn = document.getElementById('band-lab-window-close');
+    const helpToggle = document.getElementById('band-lab-legend-help-toggle');
+    const helpPanel = document.getElementById('band-lab-legend-help');
+    const timeRangeSelect = document.getElementById('band-lab-time-range');
+    if (!content || !windowEl) return;
+
+    runtime.enabled = localStorage.getItem(ENABLE_KEY) === 'true';
+    setBandStatsVisible(windowEl, toggleButton, runtime.enabled);
+
+    if (timeRangeSelect) {
+        const persistedMinutes = Number(localStorage.getItem(TIME_RANGE_KEY));
+        const fallbackMinutes = Number.parseInt(document.getElementById('minutes')?.value || '15', 10);
+        const initialMinutes = BAND_LAB_TIME_RANGE_MINUTES.includes(persistedMinutes)
+            ? persistedMinutes
+            : BAND_LAB_TIME_RANGE_MINUTES.includes(fallbackMinutes)
+                ? fallbackMinutes
+                : 15;
+        timeRangeSelect.value = String(initialMinutes);
+    }
+
+    restoreWindowPosition(windowEl);
+    restoreWindowSize(windowEl);
+    if (!runtime.initialized) {
+        setupWindowDrag(windowEl);
+        setupWindowResize(windowEl);
+    }
+
+    if (!runtime.initialized) {
+        toggleButton?.addEventListener('click', () => {
+            runtime.enabled = !runtime.enabled;
+            localStorage.setItem(ENABLE_KEY, runtime.enabled ? 'true' : 'false');
+            setBandStatsVisible(windowEl, toggleButton, runtime.enabled);
+            updateBandLab({ force: true });
+        });
+
+        closeBtn?.addEventListener('click', () => {
+            runtime.enabled = false;
+            localStorage.setItem(ENABLE_KEY, 'false');
+            setBandStatsVisible(windowEl, toggleButton, runtime.enabled);
+            setLegendHelpVisible(helpToggle, helpPanel, false);
+        });
+
+        helpToggle?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const expanded = helpToggle.getAttribute('aria-expanded') === 'true';
+            setLegendHelpVisible(helpToggle, helpPanel, !expanded);
+        });
+
+        timeRangeSelect?.addEventListener('change', () => {
+            const nextValue = Number.parseInt(timeRangeSelect.value || '15', 10);
+            if (BAND_LAB_TIME_RANGE_MINUTES.includes(nextValue)) {
+                localStorage.setItem(TIME_RANGE_KEY, String(nextValue));
+            }
+            updateBandLab({ force: true });
+        });
+
+        runtime.initialized = true;
+    }
+
+    updateBandLab({ force: true });
+}
+
+function setBandStatsVisible(windowEl, toggleButton, visible) {
+    windowEl.style.display = visible ? 'block' : 'none';
+    if (!toggleButton) return;
+    toggleButton.classList.toggle('btn-primary', visible);
+    toggleButton.classList.toggle('btn-outline-secondary', !visible);
+    toggleButton.setAttribute('aria-pressed', visible ? 'true' : 'false');
+}
+
+export function updateBandLab(options = {}) {
+    if (!runtime.enabled) return;
+
+    const now = Date.now();
+    const force = options.force === true;
+    if (!force && (now - runtime.lastUpdateAt) < UPDATE_THROTTLE_MS) {
+        return;
+    }
+    runtime.lastUpdateAt = now;
+
+    const summaryEl = document.getElementById('band-lab-summary');
+    const cardsEl = document.getElementById('band-lab-cards');
+    if (!summaryEl || !cardsEl) return;
+
+    const target = String(document.getElementById('target')?.value || '').trim().toUpperCase();
+    const minutes = getBandLabLookbackMinutes();
+    const surroundings = document.getElementById('surroundings')?.checked === true;
+
+    if (!target) {
+        summaryEl.innerHTML = '<div class="text-muted">Enter a target to inspect band conditions.</div>';
+        cardsEl.innerHTML = '';
+        return;
+    }
+
+    const filtered = filterSpots(state.liveSpots, minutes);
+    const grouped = groupSpotsByBand(filtered);
+    const requestSeq = ++runtime.updateSeq;
+    const requestKey = `${target}|${minutes}|${surroundings ? 1 : 0}`;
+    const hasFreshDx = runtime.dxCache && runtime.dxCacheKey === requestKey;
+
+    // Render immediately from live spots to avoid a blank panel while dx_conditions loads.
+    renderSummary(summaryEl, { loading: !hasFreshDx });
+    renderBandCards(cardsEl, grouped, target, minutes);
+
+    void ensureDxConditions(target, minutes, surroundings).then(() => {
+        // Ignore stale async responses after newer updates were scheduled.
+        if (!runtime.enabled || requestSeq !== runtime.updateSeq) return;
+        renderSummary(summaryEl);
+        renderBandCards(cardsEl, grouped, target, minutes);
+    });
+}
+
+function filterSpots(spots, minutes) {
+    const minSnrMode = getMinSnrMode();
+    const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
+    const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
+    const selectedBand = getSelectedBand();
+    const enabledBands = getEnabledBands();
+    const maxAgeSeconds = minutes * 60;
+
+    return spots.filter((spot) => {
+        if (!spot) return false;
+        if (spot.ageSeconds > maxAgeSeconds) return false;
+        if (!enabledBands.has(spot.band)) return false;
+        if (selectedBand !== 'all' && spot.band !== selectedBand) return false;
+        if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return false;
+        if (minSnrMode === 'cw' && spot.snr < cwMinDb) return false;
+        return true;
+    });
+}
+
+export function getBandLabLookbackMinutes() {
+    const selectedValue = Number.parseInt(document.getElementById('band-lab-time-range')?.value || '', 10);
+    if (BAND_LAB_TIME_RANGE_MINUTES.includes(selectedValue)) {
+        return selectedValue;
+    }
+
+    const persisted = Number(localStorage.getItem(TIME_RANGE_KEY));
+    if (BAND_LAB_TIME_RANGE_MINUTES.includes(persisted)) {
+        return persisted;
+    }
+
+    const minutesInputValue = Number.parseInt(document.getElementById('minutes')?.value || '15', 10);
+    if (BAND_LAB_TIME_RANGE_MINUTES.includes(minutesInputValue)) {
+        return minutesInputValue;
+    }
+
+    return 15;
+}
+
+function groupSpotsByBand(spots) {
+    const out = new Map();
+    for (const spot of spots) {
+        const band = String(spot.band || '').trim();
+        if (!band) continue;
+        if (!out.has(band)) out.set(band, []);
+        out.get(band).push(spot);
+    }
+    return out;
+}
+
+function sanitizeBandId(band) {
+    return String(band || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function renderSummary(summaryEl, options = {}) {
+    if (options.loading) {
+        summaryEl.innerHTML = '<div class="text-muted">Updating baseline and trend…</div>';
+        return;
+    }
+
+    const resp = runtime.dxCache;
+    if (!resp) {
+        summaryEl.innerHTML = '<div class="text-muted">Collecting baseline and trend…</div>';
+        return;
+    }
+
+    const score = Number(resp.overall_score || 0);
+    const confidence = Number(resp.confidence || 0);
+    const condition = String(resp.condition || 'Unknown');
+    const bestBands = Array.isArray(resp.best_bands) ? resp.best_bands : [];
+    const recBands = Array.isArray(resp.recommended_bands) ? resp.recommended_bands : [];
+
+    const top = recBands.length > 0 ? recBands : bestBands;
+    const recommendation = top.length > 0
+        ? `Best now: ${top.slice(0, 3).join(', ')}`
+        : 'No clear best band yet';
+
+    const decision = buildGlobalDecision(score, confidence, top.length);
+    const confidencePct = Number.isFinite(confidence) ? Math.round(Math.max(0, Math.min(1, confidence)) * 100) : 0;
+
+    summaryEl.innerHTML = `
+        <div class="band-lab-summary-grid">
+            <div class="band-lab-decision-row">
+                <span class="band-lab-decision-badge ${decision.className}">${escapeHtml(decision.label)}</span>
+                <span class="band-lab-confidence">confidence ${confidencePct}%</span>
+            </div>
+            <div><strong>Condition:</strong> ${escapeHtml(condition)}</div>
+            <div><strong>Score:</strong> ${Number.isFinite(score) ? score.toFixed(1) : 'n/a'}</div>
+            <div class="band-lab-summary-reco"><strong>Decision:</strong> ${escapeHtml(recommendation)}</div>
+        </div>
+    `;
+}
+
+function renderBandCards(cardsEl, grouped, target, minutes) {
+    const bands = Array.from(grouped.keys()).sort((a, b) => compareBand(a, b));
+    if (bands.length === 0) {
+        cardsEl.innerHTML = '<div class="text-muted small">No reports match current filters.</div>';
+        return;
+    }
+
+    const targetCenter = getTargetCenter(target);
+    const dxBands = toBandMetricMap(runtime.dxCache);
+    const globalMaxDistanceKm = targetCenter ? getGlobalMaxDistanceKm(grouped, targetCenter) : null;
+    const allBandCounts = bands.map((band) => (grouped.get(band) || []).length);
+    const totalReportsAllBands = allBandCounts.reduce((sum, n) => sum + n, 0);
+    const maxReportsSingleBand = Math.max(0, ...allBandCounts);
+
+    cardsEl.innerHTML = bands.map((band) => {
+        const points = grouped.get(band) || [];
+        const safeBand = sanitizeBandId(band);
+        const count = points.length;
+        const rec = buildBandRecommendation(band, points, dxBands.get(band), {
+            totalReportsAllBands,
+            maxReportsSingleBand
+        });
+
+        return `
+            <div class="band-lab-card" style="border-left-color: ${bandColors[band] || '#999'};">
+                <div class="band-lab-card-head">
+                    <span class="band-lab-band">${escapeHtml(`${band} - ${rec}`)}</span>
+                    <span class="band-lab-meta">${formatNumber(count)} reports</span>
+                </div>
+                <div class="band-lab-card-charts">
+                    <div class="band-lab-chart-block">
+                        <div class="band-lab-chart-title">Distance vs SNR</div>
+                        <canvas id="band-lab-scatter-${safeBand}" width="230" height="120"></canvas>
+                        ${targetCenter ? '' : '<div class="band-lab-chart-note">Distance plot needs locator target (e.g. JO32).</div>'}
+                    </div>
+                    <div class="band-lab-chart-block">
+                        <div class="band-lab-chart-title">Reports over time + baseline</div>
+                        <canvas id="band-lab-activity-${safeBand}" width="230" height="120"></canvas>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    for (const band of bands) {
+        const safeBand = sanitizeBandId(band);
+        const points = grouped.get(band) || [];
+        drawActivityChart(document.getElementById(`band-lab-activity-${safeBand}`), points, dxBands.get(band), minutes);
+        drawScatterChart(document.getElementById(`band-lab-scatter-${safeBand}`), points, targetCenter, band, globalMaxDistanceKm);
+    }
+}
+
+function getGlobalMaxDistanceKm(grouped, targetCenter) {
+    let maxDistance = 500;
+    for (const points of grouped.values()) {
+        for (const point of points) {
+            const d = haversineKm(targetCenter.lat, targetCenter.lng, Number(point.lat), Number(point.lng));
+            if (Number.isFinite(d)) {
+                maxDistance = Math.max(maxDistance, d);
+            }
+        }
+    }
+    return maxDistance;
+}
+
+function getTargetCenter(target) {
+    if (!/^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(target)) return null;
+    const bounds = locatorToBounds(target);
+    if (!bounds) return null;
+    return {
+        lat: (bounds[0][0] + bounds[1][0]) / 2,
+        lng: (bounds[0][1] + bounds[1][1]) / 2
+    };
+}
+
+function drawScatterChart(canvas, points, targetCenter, band, globalMaxDistanceKm) {
+    const prepared = prepareCanvas(canvas, 230, 120);
+    if (!prepared) return;
+    const { ctx, w, h } = prepared;
+
+    const pad = { l: 30, r: 10, t: 10, b: 20 };
+    const pw = w - pad.l - pad.r;
+    const ph = h - pad.t - pad.b;
+
+    ctx.clearRect(0, 0, w, h);
+    drawChartFrame(ctx, pad, pw, ph);
+
+    if (!targetCenter || points.length === 0) {
+        drawNoData(ctx, w, h, 'no distance data');
+        return;
+    }
+
+    const samples = points
+        .map((p) => ({
+            d: haversineKm(targetCenter.lat, targetCenter.lng, Number(p.lat), Number(p.lng)),
+            s: Number(p.snr || 0)
+        }))
+        .filter((v) => Number.isFinite(v.d) && Number.isFinite(v.s));
+
+    if (samples.length === 0) {
+        drawNoData(ctx, w, h, 'no distance data');
+        return;
+    }
+
+    const maxDist = Math.max(500, Number(globalMaxDistanceKm) || 0, ...samples.map((s) => s.d));
+    const minSnr = Math.min(-20, -15, ...samples.map((s) => s.s));
+    const maxSnr = Math.max(20, 0, ...samples.map((s) => s.s));
+    const snrRange = Math.max(10, maxSnr - minSnr);
+
+    const drawSnrGuide = (snr, color, label) => {
+        const y = pad.t + ph - ((snr - minSnr) / snrRange) * ph;
+        if (!Number.isFinite(y) || y < pad.t || y > (pad.t + ph)) return;
+        ctx.strokeStyle = hexToRgba(color, 0.85);
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(pad.l, y);
+        ctx.lineTo(pad.l + pw, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = hexToRgba(color, 0.95);
+        ctx.font = '10px sans-serif';
+        ctx.fillText(label, pad.l + 3, Math.max(pad.t + 10, y - 2));
+    };
+
+    drawSnrGuide(0, '#f97316', 'phone 0 dB');
+    drawSnrGuide(-15, '#22c55e', 'cw -15 dB');
+
+    const sortedDistances = samples.map((s) => s.d).sort((a, b) => a - b);
+    const p50Dist = quantileSorted(sortedDistances, 0.5);
+    const p90Dist = quantileSorted(sortedDistances, 0.9);
+
+    if (Number.isFinite(p50Dist)) {
+        const x = pad.l + (p50Dist / maxDist) * pw;
+        ctx.strokeStyle = hexToRgba('#64748b', 0.38);
+        ctx.lineWidth = 0.9;
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath();
+        ctx.moveTo(x, pad.t);
+        ctx.lineTo(x, pad.t + ph);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    if (Number.isFinite(p90Dist)) {
+        const x = pad.l + (p90Dist / maxDist) * pw;
+        ctx.strokeStyle = hexToRgba('#64748b', 0.3);
+        ctx.lineWidth = 0.9;
+        ctx.setLineDash([2, 5]);
+        ctx.beginPath();
+        ctx.moveTo(x, pad.t);
+        ctx.lineTo(x, pad.t + ph);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    ctx.fillStyle = hexToRgba(bandColors[band] || '#4f46e5', 0.5);
+    for (const sample of samples) {
+        const x = pad.l + (sample.d / maxDist) * pw;
+        const y = pad.t + ph - ((sample.s - minSnr) / snrRange) * ph;
+        ctx.beginPath();
+        ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    const yTicks = [maxSnr, (maxSnr + minSnr) / 2, minSnr];
+    ctx.fillStyle = hexToRgba('#334155', 0.92);
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    yTicks.forEach((tick) => {
+        const y = pad.t + ph - ((tick - minSnr) / snrRange) * ph;
+        ctx.fillText(`${Math.round(tick)}`, pad.l - 4, y + 3);
+    });
+    ctx.textAlign = 'left';
+
+    const xTicks = buildDistanceTicks(maxDist);
+    ctx.textAlign = 'center';
+    xTicks.forEach((tickKm) => {
+        const x = pad.l + (tickKm / maxDist) * pw;
+        ctx.strokeStyle = hexToRgba('#64748b', 0.35);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, pad.t + ph);
+        ctx.lineTo(x, pad.t + ph + 4);
+        ctx.stroke();
+        ctx.fillStyle = hexToRgba('#334155', 0.9);
+        ctx.fillText(formatKmLabel(tickKm), x, pad.t + ph + 12);
+    });
+    ctx.textAlign = 'left';
+    ctx.fillText('SNR dB', 2, pad.t + 8);
+}
+
+function buildDistanceTicks(maxDistKm) {
+    const targetTickCount = 4;
+    const rawStep = Math.max(250, maxDistKm / targetTickCount);
+    const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+    const normalized = rawStep / magnitude;
+    let step;
+    if (normalized <= 1) step = 1 * magnitude;
+    else if (normalized <= 2) step = 2 * magnitude;
+    else if (normalized <= 5) step = 5 * magnitude;
+    else step = 10 * magnitude;
+
+    const ticks = [];
+    for (let v = 0; v <= maxDistKm + 1e-6; v += step) {
+        ticks.push(v);
+    }
+    const lastTick = ticks[ticks.length - 1] || 0;
+    if (Math.abs(lastTick - maxDistKm) > step * 0.2) {
+        ticks.push(maxDistKm);
+    } else {
+        ticks[ticks.length - 1] = maxDistKm;
+    }
+    return ticks;
+}
+
+function formatKmLabel(km) {
+    const rounded = Math.round(km);
+    if (rounded >= 1000) {
+        return `${Math.round(rounded / 100) / 10}k`;
+    }
+    return String(rounded);
+}
+
+function drawActivityChart(canvas, points, bandMetrics, minutes) {
+    const prepared = prepareCanvas(canvas, 230, 120);
+    if (!prepared) return;
+    const { ctx, w, h } = prepared;
+
+    const pad = { l: 30, r: 10, t: 10, b: 20 };
+    const pw = w - pad.l - pad.r;
+    const ph = h - pad.t - pad.b;
+
+    ctx.clearRect(0, 0, w, h);
+    drawChartFrame(ctx, pad, pw, ph);
+
+    const bins = new Array(ACTIVITY_BINS).fill(0);
+    const totalWindowSec = Math.max(60, minutes * 60);
+    const binSizeSec = totalWindowSec / ACTIVITY_BINS;
+
+    for (const point of points) {
+        const age = Number(point.ageSeconds || 0);
+        if (!Number.isFinite(age) || age < 0 || age > totalWindowSec) continue;
+        const idx = Math.min(ACTIVITY_BINS - 1, Math.floor((totalWindowSec - age) / binSizeSec));
+        bins[idx] += 1;
+    }
+
+    const baselinePerMinute = Number(bandMetrics?.baseline_activity || 0);
+    const baselinePerBin = Math.max(0, baselinePerMinute * (binSizeSec / 60));
+    const sparkline = Array.isArray(bandMetrics?.sparkline) ? bandMetrics.sparkline.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : [];
+    const sparklineMax = sparkline.length > 0 ? Math.max(...sparkline) : 0;
+    const maxBin = Math.max(1, ...bins, baselinePerBin, sparklineMax);
+
+    const yTicks = [maxBin, maxBin / 2, 0];
+    ctx.strokeStyle = hexToRgba('#64748b', 0.2);
+    ctx.lineWidth = 1;
+    for (const tick of yTicks) {
+        const y = pad.t + ph - (tick / maxBin) * ph;
+        ctx.beginPath();
+        ctx.moveTo(pad.l, y);
+        ctx.lineTo(pad.l + pw, y);
+        ctx.stroke();
+    }
+
+    ctx.strokeStyle = hexToRgba('#ef4444', 0.95);
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    const baselineYRaw = pad.t + ph - (baselinePerBin / maxBin) * ph;
+    const baselineY = Math.max(pad.t + 1, Math.min(pad.t + ph - 1, baselineYRaw));
+    ctx.beginPath();
+    ctx.moveTo(pad.l, baselineY);
+    ctx.lineTo(pad.l + pw, baselineY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = hexToRgba('#ef4444', 0.95);
+    ctx.font = '10px sans-serif';
+    ctx.fillText('baseline', Math.min(pad.l + pw - 44, pad.l + 3), Math.max(pad.t + 10, baselineY - 3));
+
+    const barWidth = pw / ACTIVITY_BINS;
+    ctx.fillStyle = hexToRgba('#3b82f6', 0.6);
+    bins.forEach((v, i) => {
+        const bh = (v / maxBin) * ph;
+        const x = pad.l + i * barWidth + 0.7;
+        const y = pad.t + ph - bh;
+        ctx.fillRect(x, y, Math.max(1, barWidth - 1.4), bh);
+    });
+
+    if (sparkline.length >= 2) {
+        ctx.strokeStyle = hexToRgba('#f97316', 0.95);
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        for (let i = 0; i < sparkline.length; i++) {
+            const x = pad.l + (i / (sparkline.length - 1)) * pw;
+            const y = pad.t + ph - (Math.max(0, sparkline[i]) / maxBin) * ph;
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+    }
+
+    ctx.fillStyle = hexToRgba('#334155', 0.95);
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${Math.round(maxBin)}`, pad.l - 4, pad.t + 8);
+    ctx.fillText(`${Math.round(maxBin / 2)}`, pad.l - 4, pad.t + (ph / 2) + 3);
+    ctx.fillText('0', pad.l - 4, pad.t + ph + 3);
+    ctx.textAlign = 'left';
+    ctx.fillText(`-${minutes}m`, pad.l - 8, pad.t + ph + 12);
+    ctx.fillText('now', w - 28, pad.t + ph + 12);
+}
+
+function drawChartFrame(ctx, pad, pw, ph) {
+    ctx.strokeStyle = hexToRgba('#64748b', 0.45);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pad.l, pad.t + ph);
+    ctx.lineTo(pad.l + pw, pad.t + ph);
+    ctx.lineTo(pad.l + pw, pad.t);
+    ctx.stroke();
+}
+
+function drawNoData(ctx, w, h, text) {
+    ctx.fillStyle = hexToRgba('#64748b', 0.9);
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, w / 2, h / 2);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+}
+
+function toBandMetricMap(dxResp) {
+    const map = new Map();
+    const arr = Array.isArray(dxResp?.bands) ? dxResp.bands : [];
+    for (const item of arr) {
+        if (!item || !item.band) continue;
+        map.set(String(item.band), item);
+    }
+    return map;
+}
+
+function compareBand(a, b) {
+    const as = parseBandMeters(a);
+    const bs = parseBandMeters(b);
+    if (!Number.isFinite(as) && !Number.isFinite(bs)) return a.localeCompare(b);
+    if (!Number.isFinite(as)) return 1;
+    if (!Number.isFinite(bs)) return -1;
+    return bs - as;
+}
+
+function parseBandMeters(band) {
+    const m = String(band || '').match(/^(\d+(?:\.\d+)?)m$/i);
+    return m ? Number(m[1]) : Number.NaN;
+}
+
+function buildBandRecommendation(band, points, bandMetrics, sampleContext = {}) {
+    const score = Number(bandMetrics?.score || 0);
+    const confidence = Number(bandMetrics?.confidence || 0);
+    const trend = String(bandMetrics?.trend || '').toLowerCase();
+    const count = points.length;
+    const totalReportsAllBands = Math.max(0, Number(sampleContext.totalReportsAllBands) || 0);
+    const maxReportsSingleBand = Math.max(0, Number(sampleContext.maxReportsSingleBand) || 0);
+
+    if (count < 2) {
+        return 'low sample';
+    }
+
+    let tier = 0; // 0=weak, 1=moderate, 2=strong
+    if (score >= 70 && confidence >= 0.55) {
+        tier = 2;
+    } else if (score >= 50 || (trend === 'improving' && confidence >= 0.35)) {
+        tier = 1;
+    }
+
+    const reportShare = totalReportsAllBands > 0 ? count / totalReportsAllBands : 0;
+    const relativeToLeader = maxReportsSingleBand > 0 ? count / maxReportsSingleBand : 0;
+
+    // Evidence-based downgrades: require enough volume and relative presence.
+    if (count < 8) {
+        tier = Math.max(0, tier - 1);
+    }
+    if (count < 4) {
+        tier = Math.max(0, tier - 1);
+    }
+    if (maxReportsSingleBand >= 40 && relativeToLeader < 0.15) {
+        tier = Math.max(0, tier - 1);
+    }
+    if (totalReportsAllBands >= 120 && reportShare < 0.05) {
+        tier = Math.max(0, tier - 1);
+    }
+
+    const label = tier >= 2 ? 'strong' : tier === 1 ? 'moderate' : 'weak';
+    return label;
+}
+
+function buildGlobalDecision(score, confidence, recommendedCount) {
+    if (score >= 70 && confidence >= 0.55 && recommendedCount > 0) {
+        return { label: 'Worth turning radio on', className: 'is-go' };
+    }
+    if (score >= 50 || confidence >= 0.4) {
+        return { label: 'Maybe — monitor a few minutes', className: 'is-watch' };
+    }
+    return { label: 'Likely low payoff now', className: 'is-wait' };
+}
+
+function quantileSorted(sorted, q) {
+    if (!Array.isArray(sorted) || sorted.length === 0) return Number.NaN;
+    if (sorted.length === 1) return sorted[0];
+    const clampedQ = Math.max(0, Math.min(1, Number(q) || 0));
+    const idx = (sorted.length - 1) * clampedQ;
+    const lo = Math.floor(idx);
+    const hi = Math.ceil(idx);
+    if (lo === hi) return sorted[lo];
+    const t = idx - lo;
+    return sorted[lo] + ((sorted[hi] - sorted[lo]) * t);
+}
+
+function prepareCanvas(canvas, fallbackW, fallbackH) {
+    if (!canvas) return null;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    const cssW = Math.max(1, Math.round(canvas.clientWidth || fallbackW || 230));
+    const cssH = Math.max(1, Math.round(canvas.clientHeight || fallbackH || 120));
+    const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+
+    const pixelW = Math.round(cssW * dpr);
+    const pixelH = Math.round(cssH * dpr);
+    if (canvas.width !== pixelW || canvas.height !== pixelH) {
+        canvas.width = pixelW;
+        canvas.height = pixelH;
+    }
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx, w: cssW, h: cssH };
+}
+
+function setupWindowDrag(windowEl) {
+    const header = document.getElementById('band-lab-window-header');
+    const host = document.getElementById('map-stack') || windowEl.parentElement;
+    if (!header || !host) return;
+
+    let dragging = false;
+    let startMouseX = 0;
+    let startMouseY = 0;
+    let startLeft = 0;
+    let startTop = 0;
+
+    const onMove = (e) => {
+        if (!dragging) return;
+
+        const hostRect = host.getBoundingClientRect();
+        const dx = e.clientX - startMouseX;
+        const dy = e.clientY - startMouseY;
+
+        let nextLeft = startLeft + dx;
+        let nextTop = startTop + dy;
+
+        const maxLeft = Math.max(0, hostRect.width - windowEl.offsetWidth);
+        const maxTop = Math.max(0, hostRect.height - windowEl.offsetHeight);
+        nextLeft = Math.max(0, Math.min(maxLeft, nextLeft));
+        nextTop = Math.max(0, Math.min(maxTop, nextTop));
+
+        windowEl.style.right = 'auto';
+        windowEl.style.left = `${Math.round(nextLeft)}px`;
+        windowEl.style.top = `${Math.round(nextTop)}px`;
+    };
+
+    const stopDrag = () => {
+        if (!dragging) return;
+        dragging = false;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', stopDrag);
+        persistWindowPosition(windowEl);
+    };
+
+    header.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        const target = e.target instanceof Element ? e.target : null;
+        if (target?.closest('button, select')) return;
+        dragging = true;
+        startMouseX = e.clientX;
+        startMouseY = e.clientY;
+        const hostRect = host.getBoundingClientRect();
+        const windowRect = windowEl.getBoundingClientRect();
+        startLeft = windowRect.left - hostRect.left;
+        startTop = windowRect.top - hostRect.top;
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', stopDrag);
+        e.preventDefault();
+    });
+}
+
+function setLegendHelpVisible(helpToggle, helpPanel, visible) {
+    if (!helpToggle || !helpPanel) return;
+    helpPanel.style.display = visible ? 'block' : 'none';
+    helpToggle.setAttribute('aria-expanded', visible ? 'true' : 'false');
+}
+
+function setupWindowResize(windowEl) {
+    const handle = document.getElementById('band-lab-window-resize');
+    const host = document.getElementById('map-stack') || windowEl.parentElement;
+    if (!handle || !host) return;
+
+    const MIN_W = 320;
+    const MIN_H = 260;
+
+    let resizing = false;
+    let startMouseX = 0;
+    let startMouseY = 0;
+    let startWidth = 0;
+    let startHeight = 0;
+
+    const onMove = (e) => {
+        if (!resizing) return;
+
+        const hostRect = host.getBoundingClientRect();
+        const panelRect = windowEl.getBoundingClientRect();
+        const panelLeftInHost = panelRect.left - hostRect.left;
+        const panelTopInHost = panelRect.top - hostRect.top;
+        const maxW = Math.max(MIN_W, hostRect.width - panelLeftInHost);
+        const maxH = Math.max(MIN_H, hostRect.height - panelTopInHost);
+
+        const nextWidth = Math.max(MIN_W, Math.min(maxW, startWidth + (e.clientX - startMouseX)));
+        const nextHeight = Math.max(MIN_H, Math.min(maxH, startHeight + (e.clientY - startMouseY)));
+
+        windowEl.style.width = `${Math.round(nextWidth)}px`;
+        windowEl.style.height = `${Math.round(nextHeight)}px`;
+    };
+
+    const stopResize = () => {
+        if (!resizing) return;
+        resizing = false;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', stopResize);
+        persistWindowSize(windowEl);
+    };
+
+    handle.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        resizing = true;
+        startMouseX = e.clientX;
+        startMouseY = e.clientY;
+        startWidth = windowEl.offsetWidth;
+        startHeight = windowEl.offsetHeight;
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', stopResize);
+        e.preventDefault();
+        e.stopPropagation();
+    });
+}
+
+function persistWindowPosition(windowEl) {
+    const left = parseInt(windowEl.style.left || '0', 10);
+    const top = parseInt(windowEl.style.top || '0', 10);
+    localStorage.setItem(WINDOW_POS_KEY, JSON.stringify({ left, top }));
+}
+
+function restoreWindowPosition(windowEl) {
+    const raw = localStorage.getItem(WINDOW_POS_KEY);
+    if (!raw) return;
+    try {
+        const parsed = JSON.parse(raw);
+        const left = Number(parsed?.left);
+        const top = Number(parsed?.top);
+        if (Number.isFinite(left) && Number.isFinite(top)) {
+            windowEl.style.right = 'auto';
+            windowEl.style.left = `${Math.max(0, Math.round(left))}px`;
+            windowEl.style.top = `${Math.max(0, Math.round(top))}px`;
+        }
+    } catch {
+        // ignore invalid persisted values
+    }
+}
+
+function persistWindowSize(windowEl) {
+    const width = windowEl.offsetWidth;
+    const height = windowEl.offsetHeight;
+    localStorage.setItem(WINDOW_SIZE_KEY, JSON.stringify({ width, height }));
+}
+
+function restoreWindowSize(windowEl) {
+    const raw = localStorage.getItem(WINDOW_SIZE_KEY);
+    if (!raw) return;
+    try {
+        const parsed = JSON.parse(raw);
+        const width = Number(parsed?.width);
+        const height = Number(parsed?.height);
+        if (Number.isFinite(width) && width >= 320) {
+            windowEl.style.width = `${Math.round(width)}px`;
+        }
+        if (Number.isFinite(height) && height >= 260) {
+            windowEl.style.height = `${Math.round(height)}px`;
+        }
+    } catch {
+        // ignore invalid persisted values
+    }
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function hexToRgba(hex, alpha = 1) {
+    const c = String(hex || '').replace('#', '').trim();
+    if (c.length !== 6) return `rgba(100,116,139,${alpha})`;
+    const r = Number.parseInt(c.slice(0, 2), 16);
+    const g = Number.parseInt(c.slice(2, 4), 16);
+    const b = Number.parseInt(c.slice(4, 6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+    const toRad = (v) => (v * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+    const a = (Math.sin(dLat / 2) ** 2) +
+        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * (Math.sin(dLng / 2) ** 2);
+    return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+async function ensureDxConditions(target, minutes, surroundings) {
+    const key = `${target}|${minutes}|${surroundings ? 1 : 0}`;
+    const now = Date.now();
+
+    if (runtime.dxCache && runtime.dxCacheKey === key && (now - runtime.lastDxFetchAt) < DX_FETCH_INTERVAL_MS) {
+        return runtime.dxCache;
+    }
+
+    if (runtime.dxInFlight) {
+        if (runtime.dxInFlightKey === key) {
+            return runtime.dxInFlight;
+        }
+        runtime.dxAbortController?.abort();
+    }
+
+    const controller = new AbortController();
+    runtime.dxAbortController = controller;
+    runtime.dxInFlightKey = key;
+    runtime.dxInFlight = (async () => {
+        try {
+            const params = new URLSearchParams();
+            params.set('target', target);
+            params.set('minutes', String(minutes));
+            if (surroundings) params.set('surroundings', 'true');
+
+            const response = await fetch(`/api/dx_conditions?${params.toString()}`, { signal: controller.signal });
+            if (!response.ok) throw new Error(`dx_conditions HTTP ${response.status}`);
+            const payload = await response.json();
+            runtime.dxCache = payload;
+            runtime.dxCacheKey = key;
+            runtime.lastDxFetchAt = Date.now();
+            return payload;
+        } catch (err) {
+            if (err?.name === 'AbortError') {
+                return runtime.dxCache;
+            }
+            if (!runtime.dxCache) {
+                console.warn('Band Lab dx_conditions fetch failed:', err);
+            }
+            return runtime.dxCache;
+        } finally {
+            if (runtime.dxAbortController === controller) {
+                runtime.dxAbortController = null;
+            }
+            runtime.dxInFlight = null;
+            runtime.dxInFlightKey = '';
+        }
+    })();
+
+    return runtime.dxInFlight;
+}

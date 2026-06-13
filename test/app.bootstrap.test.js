@@ -25,6 +25,9 @@ vi.mock('../static/azimuth-runtime.js', () => ({
     isAzimuthEnabled: vi.fn(() => false),
     loadAzimuthWorldGeoJson: vi.fn(async () => ({})),
     renderAzimuthScene: vi.fn(),
+    setAzimuthAntennaOverlay: vi.fn(),
+    getAzimuthLatLngFromClientPoint: vi.fn(() => null),
+    getAzimuthCenter: vi.fn(() => [52, 7]),
     setAzimuthCenter: vi.fn(),
     setAzimuthEnabled: vi.fn(),
     setAzimuthTheme: vi.fn(),
@@ -48,7 +51,13 @@ vi.mock('../static/ui.js', () => ({
 }));
 
 vi.mock('../static/renderers.js', () => ({
-    updateMapVisualization: vi.fn()
+    updateMapVisualization: vi.fn(),
+    updateBandLabels: vi.fn()
+}));
+
+vi.mock('../static/band-lab.js', () => ({
+    initBandLab: vi.fn(),
+    updateBandLab: vi.fn()
 }));
 
 vi.mock('../static/state.js', () => ({

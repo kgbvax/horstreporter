@@ -30,6 +30,9 @@ vi.mock('../static/azimuth-runtime.js', () => ({
     isAzimuthEnabled: vi.fn(() => azimuthEnabled),
     loadAzimuthWorldGeoJson: vi.fn(async () => ({})),
     renderAzimuthScene: vi.fn(),
+    setAzimuthAntennaOverlay: vi.fn(),
+    getAzimuthLatLngFromClientPoint: vi.fn(() => null),
+    getAzimuthCenter: vi.fn(() => [52, 7]),
     setAzimuthCenter: vi.fn(),
     setAzimuthEnabled: setAzimuthEnabledMock,
     setAzimuthTheme: vi.fn(),
@@ -48,7 +51,13 @@ vi.mock('../static/ui.js', () => ({
 }));
 
 vi.mock('../static/renderers.js', () => ({
-    updateMapVisualization: vi.fn()
+    updateMapVisualization: vi.fn(),
+    updateBandLabels: vi.fn()
+}));
+
+vi.mock('../static/band-lab.js', () => ({
+    initBandLab: vi.fn(),
+    updateBandLab: vi.fn()
 }));
 
 vi.mock('../static/state.js', () => ({
@@ -106,13 +115,6 @@ function setupDom() {
         <span id="cluster-dist-val">500</span>
 
         <input type="checkbox" id="dk3jf-mode" />
-        <div id="dx-conditions-panel" style="display:none;">
-            <span id="dx-overall-score">—</span>
-            <span id="dx-overall-condition">Waiting for stream...</span>
-            <span id="dx-confidence">—</span>
-            <span id="dx-best-bands">—</span>
-            <ul id="dx-band-list"></ul>
-        </div>
         <input type="checkbox" id="auto-zoom" />
         <input type="checkbox" id="surroundings" />
 
@@ -170,6 +172,7 @@ describe('app.js DK3JF mode behavior', () => {
         installLocalStorageMock();
         localStorage.clear();
         setupDom();
+        window.history.replaceState({}, '', '/');
 
         global.navigator.geolocation = {
             getCurrentPosition: vi.fn()
@@ -181,9 +184,19 @@ describe('app.js DK3JF mode behavior', () => {
         });
         global.EventSource = eventSourceMock;
         window.EventSource = eventSourceMock;
+
+        global.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({
+                snapshot_at: Math.floor(Date.now() / 1000),
+                generated_at: Math.floor(Date.now() / 1000),
+                spots: [{ lat: 52.5, lng: 7.0, snr: -6, ageSeconds: 0, locator: 'JO32', band: '20m' }]
+            }),
+            text: async () => ''
+        }));
     });
 
-    it('initializes with DK3JF disabled: hides 2m/projection/azimuth options and forces Mercator', async () => {
+    it('initializes with DK3JF disabled: keeps projection/azimuth options available and only disables 2m', async () => {
         localStorage.setItem('dk3jfModeEnabled', 'false');
         localStorage.setItem('mapProjection', 'azimuthal');
 
@@ -197,22 +210,20 @@ describe('app.js DK3JF mode behavior', () => {
         const projectionRow = document.getElementById('projection-switch-row');
         const band2mWrapper = document.getElementById('band-wrapper-2m');
         const azimuthOptionsGroup = document.getElementById('azimuth-options-group');
-        const dxPanel = document.getElementById('dx-conditions-panel');
 
-        expect(projectionRow.style.getPropertyValue('display')).toBe('none');
+        expect(projectionRow.style.getPropertyValue('display')).toBe('');
         expect(band2mWrapper.style.getPropertyValue('display')).toBe('none');
-        expect(azimuthOptionsGroup.style.getPropertyValue('display')).toBe('none');
-        expect(dxPanel.style.getPropertyValue('display')).toBe('none');
+        expect(azimuthOptionsGroup.style.getPropertyValue('display')).toBe('');
 
-        expect(document.querySelector('input[name="projection-select"][value="mercator"]').checked).toBe(true);
-        expect(localStorage.getItem('mapProjection')).toBe('mercator');
+        expect(document.querySelector('input[name="projection-select"][value="azimuthal"]').checked).toBe(true);
+        expect(localStorage.getItem('mapProjection')).toBe('azimuthal');
 
         expect(document.querySelector('.band-enable[value="2m"]').checked).toBe(false);
         expect(document.querySelector('input[name="band"][value="2m"]').disabled).toBe(true);
         expect(document.querySelector('input[name="band"][value="all"]').checked).toBe(true);
     });
 
-    it('shows and re-hides DK3JF controlled sections when toggled', async () => {
+    it('keeps projection/azimuth options visible while toggling DK3JF-specific 2m controls', async () => {
         localStorage.setItem('dk3jfModeEnabled', 'false');
         await importAppFresh();
 
@@ -220,7 +231,6 @@ describe('app.js DK3JF mode behavior', () => {
         const projectionRow = document.getElementById('projection-switch-row');
         const band2mWrapper = document.getElementById('band-wrapper-2m');
         const azimuthOptionsGroup = document.getElementById('azimuth-options-group');
-        const dxPanel = document.getElementById('dx-conditions-panel');
 
         toggle.checked = true;
         toggle.dispatchEvent(new Event('change', { bubbles: true }));
@@ -229,17 +239,15 @@ describe('app.js DK3JF mode behavior', () => {
         expect(projectionRow.style.getPropertyValue('display')).toBe('');
         expect(band2mWrapper.style.getPropertyValue('display')).toBe('');
         expect(azimuthOptionsGroup.style.getPropertyValue('display')).toBe('');
-        expect(dxPanel.style.getPropertyValue('display')).toBe('');
         expect(localStorage.getItem('dk3jfModeEnabled')).toBe('true');
 
         toggle.checked = false;
         toggle.dispatchEvent(new Event('change', { bubbles: true }));
         await Promise.resolve();
 
-        expect(projectionRow.style.getPropertyValue('display')).toBe('none');
+        expect(projectionRow.style.getPropertyValue('display')).toBe('');
         expect(band2mWrapper.style.getPropertyValue('display')).toBe('none');
-        expect(azimuthOptionsGroup.style.getPropertyValue('display')).toBe('none');
-        expect(dxPanel.style.getPropertyValue('display')).toBe('none');
+        expect(azimuthOptionsGroup.style.getPropertyValue('display')).toBe('');
         expect(localStorage.getItem('dk3jfModeEnabled')).toBe('false');
     });
 
@@ -253,4 +261,5 @@ describe('app.js DK3JF mode behavior', () => {
         expect(document.getElementById('btn-submit').textContent).toBe('Stop');
         expect(document.getElementById('stream-status').innerHTML).toContain('Connecting to Target: W1AW');
     });
+
 });

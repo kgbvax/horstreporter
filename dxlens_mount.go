@@ -70,8 +70,6 @@ func buildDxlensSnapshot(e *DxBaselineEngine) *dxlens.Snapshot {
 			DistanceTier: v.DistanceTier,
 			SnrTier:      v.SnrTier,
 			Count:        v.Count,
-			SumDistance:  v.SumDistance,
-			SumSNR:       v.SumSNR,
 		}
 	}
 	target := make(map[string]*dxlens.Bucket, len(e.targetBuckets))
@@ -85,8 +83,6 @@ func buildDxlensSnapshot(e *DxBaselineEngine) *dxlens.Snapshot {
 			DistanceTier: v.DistanceTier,
 			SnrTier:      v.SnrTier,
 			Count:        v.Count,
-			SumDistance:  v.SumDistance,
-			SumSNR:       v.SumSNR,
 		}
 	}
 	events := e.snapshotEventsLocked()

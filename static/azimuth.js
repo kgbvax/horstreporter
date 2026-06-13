@@ -218,7 +218,6 @@ export function createAzimuthRenderPlan({ featureCollection, center, spots = [],
 
     let itemCount = 0;
     if (style === 'grid-snr') itemCount = spots.length;
-    else if (style === 'heatmap') itemCount = spots.length;
     else if (style === 'active-area') itemCount = new Set(spots.map(s => s.band)).size;
 
     return {
@@ -331,21 +330,6 @@ function drawGridOverlay(ctx, width, height, spots) {
         ctx.strokeStyle = color;
         ctx.lineWidth = 1;
         ctx.stroke();
-    }
-}
-
-function drawHeatOverlay(ctx, width, height, spots) {
-    for (const spot of spots) {
-        const p = projectToCanvas(state.center, [spot.lat, spot.lng], width, height, 1);
-        if (!p) continue;
-        const color = bandColors[spot.band] || bandColors.all;
-        const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 20);
-        grad.addColorStop(0, `${color}cc`);
-        grad.addColorStop(1, `${color}00`);
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 20, 0, Math.PI * 2);
-        ctx.fill();
     }
 }
 
@@ -471,7 +455,6 @@ export async function renderAzimuthScene({ spots = [], style } = {}) {
 
     const filtered = getFilteredSpots(spots);
     if (state.lastStyle === 'grid-snr') drawGridOverlay(ctx, width, height, filtered);
-    else if (state.lastStyle === 'heatmap') drawHeatOverlay(ctx, width, height, filtered);
     else if (state.lastStyle === 'active-area') drawActiveAreaOverlay(ctx, width, height, filtered);
 
     drawDxccLabels(ctx, width, height);

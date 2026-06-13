@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "updatedAt": "2026-06-02",
+  "notes": "Initial Mercator profiling budgets for draw/zoom/pan regression checks. Tune after repeated local + CI calibration runs.",
+  "scenarios": {
+    "mercator-grid-medium": {
+      "dataset": {
+        "spots": 4500,
+        "style": "grid-snr"
+      },
+      "thresholds": {
+        "mercator.grid.total_ms.p95": 900,
+        "mercator.render.total_ms.p95": 1200
+      }
+    },
+    "mercator-style-burst": {
+      "dataset": {
+        "spots": 4500,
+        "styles": ["grid-snr", "active-area"],
+        "iterations": 6
+      },
+      "thresholds": {
+        "mercator.render.total_ms.median": 900
+      }
+    },
+    "mercator-interaction-flow": {
+      "dataset": {
+        "interactions": 5,
+        "events": ["zoomstart", "zoomend", "movestart", "moveend"]
+      },
+      "thresholds": {
+        "mercator.interaction.zoom_duration_ms.p95": 200,
+        "mercator.interaction.pan_duration_ms.p95": 200
+      }
+    }
+  }
+}

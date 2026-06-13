@@ -7,6 +7,7 @@ export let currentDxccLabelLayer = null;
 
 import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint } from './utils.js';
 import { selectProminentDxccLabels } from './azimuth-runtime.js';
+import { endPerfTimer, incrementPerfCounter, startPerfTimer } from './perf.js';
 
 let worldGeoJsonData = null;
 let worldGeoJsonPromise = null;
@@ -330,6 +331,8 @@ function mercatorDxccLabelLimits(zoom) {
 export async function syncMercatorDxccLabelLayer(options = {}) {
     if (!map) return;
 
+    const syncTimer = startPerfTimer();
+
     const revision = ++dxccSyncRevision;
 
     const enabled = options.enabled ?? getMercatorDxccLabelsEnabled();
@@ -339,6 +342,7 @@ export async function syncMercatorDxccLabelLayer(options = {}) {
 
     if (!enabled || projection !== 'mercator') {
         removeDxccLabelLayer();
+        endPerfTimer('mercator.dxcc.sync_total_ms', syncTimer);
         return;
     }
 
@@ -348,20 +352,34 @@ export async function syncMercatorDxccLabelLayer(options = {}) {
     const key = `${theme}:${zoom.toFixed(2)}:${center.lat.toFixed(2)}:${center.lng.toFixed(2)}`;
 
     if (!force && currentDxccLabelLayer && currentDxccLabelLayerKey === key) {
+        endPerfTimer('mercator.dxcc.sync_total_ms', syncTimer);
         return;
     }
 
     removeDxccLabelLayer();
 
+    const loadTimer = startPerfTimer();
     const geoJson = await loadWorldGeoJson();
-    if (revision !== dxccSyncRevision) return;
-    if (!geoJson?.features?.length) return;
+    endPerfTimer('mercator.dxcc.geojson_load_ms', loadTimer);
+    if (revision !== dxccSyncRevision) {
+        endPerfTimer('mercator.dxcc.sync_total_ms', syncTimer);
+        return;
+    }
+    if (!geoJson?.features?.length) {
+        endPerfTimer('mercator.dxcc.sync_total_ms', syncTimer);
+        return;
+    }
 
     const { maxLabels, minDistanceKm } = mercatorDxccLabelLimits(zoom);
+    const selectionTimer = startPerfTimer();
     const labels = selectProminentDxccLabels(geoJson, [center.lat, center.lng], { maxLabels, minDistanceKm, includeSupplemental: true })
         .filter(label => bounds.contains([label.lat, label.lng]));
+    endPerfTimer('mercator.dxcc.select_labels_ms', selectionTimer);
 
-    if (!labels.length) return;
+    if (!labels.length) {
+        endPerfTimer('mercator.dxcc.sync_total_ms', syncTimer);
+        return;
+    }
 
     currentDxccLabelLayer = L.layerGroup([], { pane: 'dxcc-label-pane' });
     labels.forEach(label => {
@@ -372,11 +390,16 @@ export async function syncMercatorDxccLabelLayer(options = {}) {
             icon: buildDxccLabelIcon(label, theme)
         }).addTo(currentDxccLabelLayer);
     });
+    incrementPerfCounter('mercator.dxcc.labels_added', labels.length);
 
-    if (revision !== dxccSyncRevision) return;
+    if (revision !== dxccSyncRevision) {
+        endPerfTimer('mercator.dxcc.sync_total_ms', syncTimer);
+        return;
+    }
 
     currentDxccLabelLayer.addTo(map);
     currentDxccLabelLayerKey = key;
+    endPerfTimer('mercator.dxcc.sync_total_ms', syncTimer);
 }
 
 export function setTheme(theme) {
