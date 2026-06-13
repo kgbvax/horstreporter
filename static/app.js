@@ -1,41 +1,400 @@
 import { state } from './state.js';
 import { loadConfig } from './config.js';
 import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineLayer, syncMercatorDxccLabelLayer } from './map.js';
-import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, setAzimuthEnabled, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled } from './azimuth-runtime.js';
+import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, getAzimuthCenter, setAzimuthEnabled, setAzimuthDragging, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled, getAzimuthLatLngFromClientPoint, getAzimuthHiddenGridSquaresCount } from './azimuth-runtime.js';
 import { initUI, attachUITooltipEvents } from './ui.js';
-import { updateMapVisualization } from './renderers.js';
-import { initDxConditionsUI, setDxConditionsVisible, resetDxConditions, startDxPolling, stopDxPolling } from './dx-conditions.js';
-import { latLngToLocator, locatorToBounds, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, buildDxPulseUrl, normalizeDxPulseTarget } from './utils.js';
+import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
+import { updateMapVisualization, updateBandLabels } from './renderers.js';
+import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled } from './utils.js';
+import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
+import { initOpMode, isOpModeActive, setBeamTargetFromMapClick } from './opmode.js';
 
 // --- Azimuth Zoom State ---
-let azimuthZoom = Number(localStorage.getItem('azimuthZoom') || 1.5);
+const AZIMUTH_MAX_HORIZON_KM = 20015;
+const AZIMUTH_MIN_ZOOM = 1.0;
+const AZIMUTH_MAX_ZOOM = 5.0;
+let suppressAzimuthClickUntil = 0;
+
+function parseBoolParam(raw, fallback = false) {
+    if (raw == null || raw === '') return fallback;
+    const normalized = String(raw).trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function parseCaptureConfig() {
+    const params = new URLSearchParams(window.location.search || '');
+    const enabled = parseBoolParam(params.get('capture'), false) || params.get('mode') === 'capture';
+    if (!enabled) return null;
+
+    const target = (params.get('target') || 'JO32').trim().toUpperCase();
+    const minutes = Math.max(1, Math.min(720, Number.parseInt(params.get('minutes') || '15', 10) || 15));
+    const snapshotAt = Number.parseInt(params.get('snapshot_at') || '', 10);
+
+    const projection = (params.get('projection') || 'mercator').trim().toLowerCase() === 'azimuthal' ? 'azimuthal' : 'mercator';
+    const style = (params.get('style') || 'active-area').trim().toLowerCase() === 'grid-snr' ? 'grid-snr' : 'active-area';
+    const minSnrMode = (params.get('min_snr_mode') || 'ssb').trim().toLowerCase();
+    const selectedBand = (params.get('selected_band') || 'all').trim().toLowerCase();
+    const enabledBandsCsv = (params.get('enabled_bands') || '').trim();
+    const includeDxcluster = parseBoolParam(params.get('include_dxcluster'), false);
+
+    return {
+        enabled: true,
+        target,
+        minutes,
+        snapshotAt: Number.isFinite(snapshotAt) ? snapshotAt : null,
+        surroundings: parseBoolParam(params.get('surroundings'), false),
+        projection,
+        style,
+        minSnrMode: minSnrMode === 'cw' || minSnrMode === 'ssb' ? minSnrMode : 'none',
+        ssbMinDb: Number.parseInt(params.get('ssb_min_db') || '0', 10),
+        cwMinDb: Number.parseInt(params.get('cw_min_db') || '-15', 10),
+        selectedBand,
+        enabledBandsCsv,
+        includeDxcluster,
+        countryColoring: parseBoolParam(params.get('country_coloring'), true),
+        dk3jfMode: parseBoolParam(params.get('dk3jf_mode'), true)
+    };
+}
+
+const captureConfig = parseCaptureConfig();
+if (captureConfig?.enabled) {
+    window.__horstCaptureReady = false;
+}
+
+const storedAzimuthZoomRaw = localStorage.getItem('azimuthZoom');
+const storedAzimuthHorizonKmRaw = localStorage.getItem('azimuthHorizonKm');
+const storedAzimuthZoom = storedAzimuthZoomRaw === null ? Number.NaN : Number(storedAzimuthZoomRaw);
+const storedAzimuthHorizonKm = storedAzimuthHorizonKmRaw === null ? Number.NaN : Number(storedAzimuthHorizonKmRaw);
+let azimuthZoom = clampAzimuthZoom(
+    Number.isFinite(storedAzimuthZoom)
+        ? storedAzimuthZoom
+        : Number.isFinite(storedAzimuthHorizonKm)
+            ? (AZIMUTH_MAX_HORIZON_KM / clampAzimuthHorizonKm(storedAzimuthHorizonKm))
+            : 1.5
+);
+
+function getAzimuthHorizonKmForZoom(zoom) {
+    const safeZoom = Math.max(AZIMUTH_MIN_ZOOM, Number(zoom) || 1.5);
+    return clampAzimuthHorizonKm(AZIMUTH_MAX_HORIZON_KM / safeZoom);
+}
+
+function toRadians(value) {
+    return (Number(value) || 0) * (Math.PI / 180);
+}
+
+function angularDistanceRad(aLat, aLng, bLat, bLng) {
+    const lat1 = toRadians(aLat);
+    const lat2 = toRadians(bLat);
+    const dLat = lat2 - lat1;
+    const dLng = toRadians((Number(bLng) || 0) - (Number(aLng) || 0));
+
+    const sinDLat = Math.sin(dLat / 2);
+    const sinDLng = Math.sin(dLng / 2);
+    const h = (sinDLat * sinDLat) + (Math.cos(lat1) * Math.cos(lat2) * sinDLng * sinDLng);
+    return 2 * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h)));
+}
+
+function getAzimuthFilteredRenderableSpots() {
+    const minSnrMode = getMinSnrMode();
+    const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
+    const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
+    const selectedBand = getSelectedBand();
+    const enabledBands = getEnabledBands();
+
+    return getRenderableMapSpots(state.liveSpots).filter((spot) => {
+        if (!Number.isFinite(Number(spot?.lat)) || !Number.isFinite(Number(spot?.lng))) return false;
+        if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return false;
+        if (minSnrMode === 'cw' && spot.snr < cwMinDb) return false;
+        if (!enabledBands.has(spot.band)) return false;
+        if (selectedBand !== 'all' && spot.band !== selectedBand) return false;
+        return true;
+    });
+}
+
+function fitAzimuthToAllRenderableSpots() {
+    const spots = getAzimuthFilteredRenderableSpots();
+    if (!spots.length) return;
+
+    const avgLat = spots.reduce((acc, s) => acc + Number(s.lat), 0) / spots.length;
+    const meanSin = spots.reduce((acc, s) => acc + Math.sin(toRadians(Number(s.lng))), 0) / spots.length;
+    const meanCos = spots.reduce((acc, s) => acc + Math.cos(toRadians(Number(s.lng))), 0) / spots.length;
+    const avgLng = normalizeLongitude(Math.atan2(meanSin, meanCos) * (180 / Math.PI));
+    const center = [Math.max(-89.5, Math.min(89.5, avgLat)), avgLng];
+
+    let maxAngularDistance = 0;
+    for (const spot of spots) {
+        const d = angularDistanceRad(center[0], center[1], Number(spot.lat), Number(spot.lng));
+        if (Number.isFinite(d) && d > maxAngularDistance) {
+            maxAngularDistance = d;
+        }
+    }
+
+    // Apply a small margin so outermost spots are not clipped at the horizon edge.
+    const fitAngular = Math.max(0.01, maxAngularDistance * 1.08);
+    const targetZoom = clampAzimuthZoom(Math.PI / fitAngular);
+
+    setAzimuthCenter(center);
+    updateAzimuthZoom(targetZoom);
+}
+
+function syncAzimuthZoomUi() {
+    const horizonInput = document.getElementById('azimuth-horizon-km');
+    if (horizonInput) {
+        const horizonKm = getAzimuthHorizonKmForZoom(azimuthZoom);
+        const horizonRounded = Math.round(horizonKm);
+        if (Number(horizonInput.value) !== horizonRounded) {
+            horizonInput.value = String(horizonRounded);
+        }
+    }
+
+    const zoomOutButton = document.getElementById('azimuth-zoom-out');
+    if (zoomOutButton) {
+        zoomOutButton.disabled = azimuthZoom <= AZIMUTH_MIN_ZOOM + 1e-6;
+    }
+
+    const zoomInButton = document.getElementById('azimuth-zoom-in');
+    if (zoomInButton) {
+        zoomInButton.disabled = azimuthZoom >= AZIMUTH_MAX_ZOOM - 1e-6;
+    }
+
+    syncAzimuthZoomOutHint();
+}
+
+function syncAzimuthZoomOutHint() {
+    const zoomOutButton = document.getElementById('azimuth-zoom-out');
+    if (!zoomOutButton) return;
+
+    const hasHiddenSquares = isAzimuthEnabled() && getAzimuthHiddenGridSquaresCount() > 0;
+    zoomOutButton.classList.toggle('azimuth-zoom-hint', hasHiddenSquares);
+    if (hasHiddenSquares) {
+        zoomOutButton.title = 'Zoom out to reveal additional squares currently outside the viewport';
+    } else {
+        zoomOutButton.title = 'Zoom out';
+    }
+}
+
 function updateAzimuthZoom(newZoom) {
     azimuthZoom = clampAzimuthZoom(newZoom);
     localStorage.setItem('azimuthZoom', azimuthZoom);
     setAzimuthZoom(azimuthZoom);
+    const horizonKm = getAzimuthHorizonKmForZoom(azimuthZoom);
+    localStorage.setItem('azimuthHorizonKm', horizonKm);
+    setAzimuthHorizonKm(horizonKm);
+    syncAzimuthZoomUi();
     if (isAzimuthEnabled()) scheduleRender();
 }
 
-let azimuthHorizonKm = Number(localStorage.getItem('azimuthHorizonKm') || 16000);
 function updateAzimuthHorizonKm(newHorizonKm) {
-    azimuthHorizonKm = clampAzimuthHorizonKm(newHorizonKm);
-    localStorage.setItem('azimuthHorizonKm', azimuthHorizonKm);
-    setAzimuthHorizonKm(azimuthHorizonKm);
-    const horizonInput = document.getElementById('azimuth-horizon-km');
-    if (horizonInput && Number(horizonInput.value) !== azimuthHorizonKm) {
-        horizonInput.value = String(azimuthHorizonKm);
-    }
-    if (isAzimuthEnabled()) scheduleRender();
+    const horizonKm = clampAzimuthHorizonKm(newHorizonKm);
+    const derivedZoom = clampAzimuthZoom(AZIMUTH_MAX_HORIZON_KM / horizonKm);
+    updateAzimuthZoom(derivedZoom);
 }
 
-let azimuthNs6tIndicator = localStorage.getItem('azimuthNs6tIndicator') !== 'false';
-function updateAzimuthNs6tIndicator(enabled) {
-    azimuthNs6tIndicator = Boolean(enabled);
-    localStorage.setItem('azimuthNs6tIndicator', azimuthNs6tIndicator ? 'true' : 'false');
-    setAzimuthNs6tIndicatorEnabled(azimuthNs6tIndicator);
-    const indicatorInput = document.getElementById('azimuth-ns6t-indicator');
-    if (indicatorInput) indicatorInput.checked = azimuthNs6tIndicator;
-    if (isAzimuthEnabled()) scheduleRender();
+function attachProjectionGestureZoomEvents() {
+    const azimuthCanvas = document.getElementById('azimuth-canvas');
+    const canvases = [azimuthCanvas].filter(Boolean);
+    if (!canvases.length) return;
+
+    const AZIMUTH_DRAG_CLICK_SUPPRESS_MS = 220;
+    const AZIMUTH_DRAG_MOVE_THRESHOLD_PX = 4;
+
+    const touchZoomState = {
+        active: false,
+        startDistance: 0,
+        startZoom: 1
+    };
+
+    const dragState = {
+        active: false,
+        startClientX: 0,
+        startClientY: 0,
+        startCenterLat: 0,
+        startCenterLng: 0,
+        moved: false
+    };
+
+    const setDraggingCursor = (dragging) => {
+        if (!azimuthCanvas) return;
+        azimuthCanvas.style.cursor = 'default';
+    };
+
+    const beginDrag = (clientX, clientY) => {
+        if (!isAzimuthEnabled()) return;
+
+        const canvasCenter = getAzimuthCenter();
+        setAzimuthDragging(true);
+
+        dragState.active = true;
+        dragState.startClientX = clientX;
+        dragState.startClientY = clientY;
+        dragState.startCenterLat = Number(canvasCenter[0]) || 0;
+        dragState.startCenterLng = Number(canvasCenter[1]) || 0;
+        dragState.moved = false;
+        setDraggingCursor(true);
+    };
+
+    const updateDrag = (clientX, clientY) => {
+        if (!dragState.active || !isAzimuthEnabled()) return;
+
+        const movedPx = Math.hypot(clientX - dragState.startClientX, clientY - dragState.startClientY);
+        if (movedPx >= AZIMUTH_DRAG_MOVE_THRESHOLD_PX) {
+            dragState.moved = true;
+        }
+
+        const dx = clientX - dragState.startClientX;
+        const dy = clientY - dragState.startClientY;
+
+        const canvas = azimuthCanvas;
+        const width = canvas?.clientWidth || canvas?.offsetWidth || 1;
+        const height = canvas?.clientHeight || canvas?.offsetHeight || 1;
+        const radiusBase = Math.min(width, height) * 0.47;
+        const radPerPx = radiusBase > 0 ? (Math.PI / (radiusBase * azimuthZoom)) : 0;
+
+        const deltaLatDeg = (dy * radPerPx) * (180 / Math.PI);
+        const baseLatRad = (dragState.startCenterLat * Math.PI) / 180;
+        const cosBaseLat = Math.max(0.15, Math.abs(Math.cos(baseLatRad)));
+        const deltaLngDeg = ((dx * radPerPx) * (180 / Math.PI)) / cosBaseLat;
+
+        const nextLat = Math.max(-89.5, Math.min(89.5, dragState.startCenterLat + deltaLatDeg));
+        const nextLng = normalizeLongitude(dragState.startCenterLng - deltaLngDeg);
+        setAzimuthCenter([nextLat, nextLng]);
+        scheduleRender();
+    };
+
+    const endDrag = () => {
+        if (!dragState.active) return;
+
+        setAzimuthDragging(false);
+
+        if (dragState.moved) {
+            suppressAzimuthClickUntil = Date.now() + AZIMUTH_DRAG_CLICK_SUPPRESS_MS;
+        }
+
+        dragState.active = false;
+        dragState.startClientX = 0;
+        dragState.startClientY = 0;
+        dragState.startCenterLat = 0;
+        dragState.startCenterLng = 0;
+        dragState.moved = false;
+        setDraggingCursor(false);
+    };
+
+    const touchDistance = (touches) => {
+        if (!touches || touches.length < 2) return 0;
+        const dx = touches[0].clientX - touches[1].clientX;
+        const dy = touches[0].clientY - touches[1].clientY;
+        return Math.hypot(dx, dy);
+    };
+
+    const onWheel = (e) => {
+        if (!isAzimuthEnabled()) return;
+
+        e.preventDefault();
+
+        const baseStep = 0.16;
+        const magnitude = Math.max(0.5, Math.min(3.0, Math.abs(e.deltaY) / 120));
+        const step = baseStep * magnitude;
+
+        if (e.deltaY < 0) {
+            updateAzimuthZoom(azimuthZoom + step);
+        } else if (e.deltaY > 0) {
+            updateAzimuthZoom(azimuthZoom - step);
+        }
+    };
+
+    const onTouchStart = (e) => {
+        if (!isAzimuthEnabled()) {
+            touchZoomState.active = false;
+            endDrag();
+            return;
+        }
+
+        if (e.touches.length === 1) {
+            touchZoomState.active = false;
+            beginDrag(e.touches[0].clientX, e.touches[0].clientY);
+            e.preventDefault();
+            return;
+        }
+
+        if (e.touches.length !== 2) {
+            touchZoomState.active = false;
+            endDrag();
+            return;
+        }
+
+        endDrag();
+
+        const distance = touchDistance(e.touches);
+        if (!distance) {
+            touchZoomState.active = false;
+            return;
+        }
+
+        touchZoomState.active = true;
+        touchZoomState.startDistance = distance;
+        touchZoomState.startZoom = azimuthZoom;
+        e.preventDefault();
+    };
+
+    const onTouchMove = (e) => {
+        if (dragState.active && e.touches.length === 1) {
+            updateDrag(e.touches[0].clientX, e.touches[0].clientY);
+            e.preventDefault();
+            return;
+        }
+
+        if (!touchZoomState.active || e.touches.length !== 2) return;
+
+        const distance = touchDistance(e.touches);
+        if (!distance || !touchZoomState.startDistance) return;
+
+        const pinchScale = distance / touchZoomState.startDistance;
+        const nextZoom = touchZoomState.startZoom * pinchScale;
+        updateAzimuthZoom(nextZoom);
+
+        e.preventDefault();
+    };
+
+    const onTouchEndOrCancel = () => {
+        if (dragState.active) {
+            endDrag();
+        }
+        touchZoomState.active = false;
+        touchZoomState.startDistance = 0;
+    };
+
+    const onMouseDown = (e) => {
+        if (e.button !== 0) return;
+        beginDrag(e.clientX, e.clientY);
+        if (dragState.active) e.preventDefault();
+    };
+
+    const onMouseMove = (e) => {
+        if (!dragState.active) return;
+        updateDrag(e.clientX, e.clientY);
+        e.preventDefault();
+    };
+
+    const onMouseUp = () => {
+        endDrag();
+    };
+
+    canvases.forEach((canvas) => {
+        canvas.style.touchAction = 'none';
+        canvas.addEventListener('wheel', onWheel, { passive: false });
+        canvas.addEventListener('mousedown', onMouseDown);
+        canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+        canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+        canvas.addEventListener('touchend', onTouchEndOrCancel, { passive: false });
+        canvas.addEventListener('touchcancel', onTouchEndOrCancel, { passive: false });
+    });
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+}
+
+function enableAzimuthNs6tIndicatorAlways() {
+    setAzimuthNs6tIndicatorEnabled(true);
 }
 
 let dxccLabelDensity = Number(localStorage.getItem('dxccLabelDensity') || 1.0);
@@ -99,16 +458,6 @@ function setElementVisibility(el, visible) {
     }
 }
 
-function getCurrentDxRequestParams() {
-    const target = document.getElementById('target')?.value?.trim()?.toUpperCase();
-    const minutesRaw = parseInt(document.getElementById('minutes')?.value || '15', 10);
-    const minutes = Number.isFinite(minutesRaw) ? minutesRaw : 15;
-    const cwMinDbRaw = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
-    const cwMinDb = Number.isFinite(cwMinDbRaw) ? cwMinDbRaw : -15;
-    const surroundings = document.getElementById('surroundings')?.checked === true;
-    return { target, minutes, cwMinDb, surroundings };
-}
-
 async function updateDk3jfMode(enabled) {
     dk3jfModeEnabled = Boolean(enabled);
     localStorage.setItem('dk3jfModeEnabled', dk3jfModeEnabled ? 'true' : 'false');
@@ -120,18 +469,7 @@ async function updateDk3jfMode(enabled) {
     const band2mWrapper = document.getElementById('band-wrapper-2m');
     setElementVisibility(band2mWrapper, dk3jfModeEnabled);
 
-    const projectionRow = document.getElementById('projection-switch-row');
-    setElementVisibility(projectionRow, dk3jfModeEnabled);
-
-    const azimuthOptionsGroup = document.getElementById('azimuth-options-group');
-    setElementVisibility(azimuthOptionsGroup, dk3jfModeEnabled);
-
-    setDxConditionsVisible(dk3jfModeEnabled);
-
     if (!dk3jfModeEnabled) {
-        stopDxPolling();
-        resetDxConditions();
-
         const band2mEnable = document.querySelector('.band-enable[value="2m"]');
         const band2mRadio = document.querySelector('input[name="band"][value="2m"]');
         const allBandRadio = document.querySelector('input[name="band"][value="all"]');
@@ -149,17 +487,58 @@ async function updateDk3jfMode(enabled) {
             }
         }
 
-        const mercatorRadio = document.querySelector('input[name="projection-select"][value="mercator"]');
-        localStorage.setItem('mapProjection', 'mercator');
-        if (mercatorRadio && !mercatorRadio.checked) {
-            mercatorRadio.checked = true;
-            await applyProjectionMode('mercator');
-        }
-    } else if (state.eventSource) {
-        startDxPolling(getCurrentDxRequestParams);
     }
 
     scheduleRender();
+}
+
+async function fetchSnapshotFrame(config, snapshotAt) {
+    if (!config?.enabled) return { spots: [] };
+
+    const params = new URLSearchParams();
+    params.set('target', config.target);
+    params.set('minutes', String(config.minutes));
+    params.set('surroundings', config.surroundings ? 'true' : 'false');
+    params.set('min_snr_mode', config.minSnrMode);
+    params.set('ssb_min_db', String(config.ssbMinDb));
+    params.set('cw_min_db', String(config.cwMinDb));
+    params.set('selected_band', config.selectedBand);
+    if (config.enabledBandsCsv) params.set('enabled_bands', config.enabledBandsCsv);
+    params.set('include_dxcluster', config.includeDxcluster ? 'true' : 'false');
+    if (Number.isFinite(snapshotAt)) {
+        params.set('snapshot_at', String(snapshotAt));
+    }
+
+    const response = await fetch(`/api/capture_snapshot?${params.toString()}`);
+    if (!response.ok) {
+        const msg = await response.text();
+        throw new Error(`snapshot request failed (${response.status}): ${msg}`);
+    }
+
+    return response.json();
+}
+
+async function loadSnapshotFrame(config, snapshotAt, readyKey = 'capture') {
+    const payload = await fetchSnapshotFrame(config, snapshotAt);
+    state.liveSpots = Array.isArray(payload?.spots) ? payload.spots : [];
+
+    scheduleRender();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    const stamp = payload?.snapshot_at ?? snapshotAt ?? null;
+    const statusEl = document.getElementById('stream-status');
+    const spotCountLabel = formatNumber(state.liveSpots.length);
+    if (statusEl) {
+        statusEl.innerHTML = `Status: Capture Snapshot ready (Spots: ${spotCountLabel})`;
+    }
+    window.__horstCaptureReady = {
+        ready: true,
+        count: state.liveSpots.length,
+        snapshotAt: stamp,
+        generatedAt: payload?.generated_at ?? null
+    };
+
+    return payload;
 }
 
 // --- Init Configuration & Map ---
@@ -171,58 +550,97 @@ let renderTimeoutId = null;
 const MIN_RENDER_INTERVAL_MS = 40;
 let appReadyForAutoStart = false;
 let autoStartTriggered = false;
+let softPauseStartedAtMs = 0;
 
 function currentProjection() {
     return document.querySelector('input[name="projection-select"]:checked')?.value || 'mercator';
 }
 
-function setDxPulseLinkState(link, href, enabled) {
-    if (!link) return;
-    link.href = enabled ? href : '/dxpulse/';
-    link.classList.toggle('disabled', !enabled);
-    link.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+function getRenderableMapSpots(spots) {
+    const showDXClusterSpots = document.getElementById('show-dxcluster-spots')?.checked !== false;
+    if (showDXClusterSpots) return spots;
+
+    return spots.filter((spot) => String(spot?.sourceType || '').toLowerCase() !== 'dxcluster');
 }
 
-function refreshDxPulseLink() {
-    const qualityLink = document.getElementById('dxpulse-quality-link');
-    const anomalyLink = document.getElementById('dxpulse-anomaly-link');
-    const help = document.getElementById('dxpulse-link-help');
-    if (!qualityLink || !anomalyLink || !help) return;
+function getCurrentMaxSpotAgeSeconds() {
+    const streamMaxAge = (parseInt(document.getElementById('minutes')?.value || '15', 10) || 15) * 60;
+    const bandLabMaxAge = getBandLabLookbackMinutes() * 60;
+    return Math.max(streamMaxAge, bandLabMaxAge);
+}
 
-    const targetValue = document.getElementById('target')?.value || '';
-    const minutes = document.getElementById('minutes')?.value || '15';
-    const surroundings = document.getElementById('surroundings')?.checked === true;
-    const locator = normalizeDxPulseTarget(targetValue);
-    const qualityHref = buildDxPulseUrl({
-        target: targetValue,
-        minutes,
-        surroundings,
-        mode: 'quality',
-        lookbackDays: 45
-    });
-    const anomalyHref = buildDxPulseUrl({
-        target: targetValue,
-        minutes,
-        surroundings,
-        mode: 'anomaly',
-        lookbackDays: 45
-    });
+function applySoftPause() {
+    if (state.softPaused) return;
 
-    if (!locator || !qualityHref || !anomalyHref) {
-        setDxPulseLinkState(qualityLink, '/dxpulse/', false);
-        setDxPulseLinkState(anomalyLink, '/dxpulse/', false);
-        help.textContent = targetValue.trim()
-            ? 'DXPulse needs a Maidenhead locator target; callsigns cannot open the matrix directly.'
-            : 'Enter a locator to open the current DXPulse quality or anomaly overview.';
+    state.softPaused = true;
+    softPauseStartedAtMs = Date.now();
+
+    if (renderTimeoutId) {
+        clearTimeout(renderTimeoutId);
+        renderTimeoutId = null;
+    }
+    state.renderPending = false;
+}
+
+function resumeFromSoftPause() {
+    if (!state.softPaused) return;
+
+    state.softPaused = false;
+
+    const pausedForSec = Math.max(0, Math.floor((Date.now() - softPauseStartedAtMs) / 1000));
+    softPauseStartedAtMs = 0;
+
+    if (pausedForSec > 0 && state.liveSpots.length > 0) {
+        const maxAge = getCurrentMaxSpotAgeSeconds();
+        state.liveSpots.forEach((s) => {
+            s.ageSeconds += pausedForSec;
+        });
+        state.liveSpots = state.liveSpots.filter((s) => s.ageSeconds <= maxAge);
+    }
+
+    scheduleRender();
+    updateBandLab({ force: true });
+}
+
+function syncSoftPauseWithVisibility() {
+    if (document.hidden) {
+        applySoftPause();
+    } else {
+        resumeFromSoftPause();
+    }
+}
+
+function getActiveTargetCenter() {
+    const rawTarget = document.getElementById('target')?.value?.trim()?.toUpperCase() || '';
+    const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(rawTarget);
+    if (!isLocator) return null;
+
+    const bounds = locatorToBounds(rawTarget);
+    if (!bounds) return null;
+
+    const lat = (bounds[0][0] + bounds[1][0]) / 2;
+    const lng = (bounds[0][1] + bounds[1][1]) / 2;
+    return [lat, lng];
+}
+
+function syncProjectionCenterToActiveTarget() {
+    const targetCenter = getActiveTargetCenter();
+    if (!targetCenter) return;
+
+    const projection = currentProjection();
+    if (projection === 'azimuthal') {
+        setAzimuthCenter(targetCenter);
+    } else {
         return;
     }
 
-    setDxPulseLinkState(qualityLink, qualityHref, true);
-    setDxPulseLinkState(anomalyLink, anomalyHref, true);
-    help.textContent = `Open DXPulse for ${locator}${surroundings ? ' with adjacent squares' : ''} in quality or anomaly mode.`;
+    scheduleRender();
 }
 
 function maybeAutoStartSavedTarget() {
+    if (captureConfig?.enabled) {
+        return;
+    }
     if (autoStartTriggered || !appReadyForAutoStart || !map) {
         return;
     }
@@ -266,18 +684,17 @@ function maybeAutoStartSavedTarget() {
 }
 
 async function syncMercatorOverlays(force = false) {
-    await syncMercatorCountryLayer({ force });
+    await syncMercatorCountryLayer({ force, enabled: getCountryColoringEnabled() });
     await syncMercatorGraylineLayer({ force });
     await syncMercatorDxccLabelLayer({ force });
 }
 
 function syncStyleAvailabilityForProjection(projection) {
     const gridRadio = document.getElementById('style-grid');
-    const heatmapRadio = document.getElementById('style-heatmap');
     const activeAreaRadio = document.getElementById('style-area');
     const disableNonGrid = projection === 'azimuthal';
 
-    [heatmapRadio, activeAreaRadio].forEach((radio) => {
+    [activeAreaRadio].forEach((radio) => {
         if (!radio) return;
         radio.disabled = disableNonGrid;
         const label = document.querySelector(`label[for="${radio.id}"]`);
@@ -289,82 +706,349 @@ function syncStyleAvailabilityForProjection(projection) {
 
     if (disableNonGrid) {
         const checkedStyle = document.querySelector('input[name="style-select"]:checked')?.value;
-        if (checkedStyle === 'heatmap' || checkedStyle === 'active-area') {
+        if (checkedStyle === 'active-area') {
             if (gridRadio) gridRadio.checked = true;
             localStorage.setItem('mapStyle', 'grid-snr');
         }
     }
 }
 
+function syncProjectionOptionVisibility(projection) {
+    const azimuthCtrls = document.getElementById('azimuth-zoom-controls');
+    if (azimuthCtrls) azimuthCtrls.style.display = projection === 'azimuthal' ? 'block' : 'none';
+}
+
 async function applyProjectionMode(projection) {
     syncStyleAvailabilityForProjection(projection);
+    syncProjectionOptionVisibility(projection);
+    const targetCenter = getActiveTargetCenter();
 
     if (projection === 'azimuthal') {
         await loadAzimuthWorldGeoJson();
         setAzimuthEnabled(true);
         setAzimuthTheme(document.body.getAttribute('data-theme') || 'light');
         setAzimuthZoom(azimuthZoom);
-        const ctrls = document.getElementById('azimuth-zoom-controls');
-        if (ctrls) ctrls.style.display = 'block';
+        if (targetCenter) {
+            setAzimuthCenter(targetCenter);
+        }
         scheduleRender();
         return;
     }
 
     setAzimuthEnabled(false);
-    const ctrls = document.getElementById('azimuth-zoom-controls');
-    if (ctrls) ctrls.style.display = 'none';
+    syncAzimuthZoomOutHint();
     if (map) map.invalidateSize();
     await syncMercatorOverlays(true);
     scheduleRender();
 }
 
+function applyCaptureConfigToControls(config) {
+    if (!config?.enabled) return;
+
+    const targetEl = document.getElementById('target');
+    if (targetEl) targetEl.value = config.target;
+
+    const minutesEl = document.getElementById('minutes');
+    if (minutesEl) minutesEl.value = String(config.minutes);
+
+    const surroundingsEl = document.getElementById('surroundings');
+    if (surroundingsEl) surroundingsEl.checked = Boolean(config.surroundings);
+
+    const ssbEl = document.getElementById('ssb-min-db');
+    if (ssbEl && Number.isFinite(config.ssbMinDb)) ssbEl.value = String(config.ssbMinDb);
+
+    const cwEl = document.getElementById('cw-min-db');
+    if (cwEl && Number.isFinite(config.cwMinDb)) cwEl.value = String(config.cwMinDb);
+
+    const minSnrRadio = document.querySelector(`input[name="min-snr"][value="${config.minSnrMode}"]`);
+    if (minSnrRadio) minSnrRadio.checked = true;
+
+    const styleRadio = document.querySelector(`input[name="style-select"][value="${config.style}"]`);
+    if (styleRadio) styleRadio.checked = true;
+
+    const projectionRadio = document.querySelector(`input[name="projection-select"][value="${config.projection}"]`);
+    if (projectionRadio) projectionRadio.checked = true;
+
+    const selectedBandRadio = document.querySelector(`input[name="band"][value="${config.selectedBand}"]`)
+        || document.querySelector('input[name="band"][value="all"]');
+    if (selectedBandRadio) selectedBandRadio.checked = true;
+
+    const enabledBandsSet = new Set(
+        config.enabledBandsCsv
+            .split(',')
+            .map((part) => part.trim().toLowerCase())
+            .filter(Boolean)
+    );
+
+    document.querySelectorAll('.band-enable').forEach((cb) => {
+        const band = String(cb?.value || '').toLowerCase();
+        if (!band) return;
+        if (enabledBandsSet.size === 0) {
+            cb.checked = true;
+        } else {
+            cb.checked = enabledBandsSet.has(band);
+        }
+        const radio = document.querySelector(`input[name="band"][value="${band}"]`);
+        if (radio) radio.disabled = !cb.checked;
+    });
+
+    const showDxclusterEl = document.getElementById('show-dxcluster-spots');
+    if (showDxclusterEl) showDxclusterEl.checked = config.includeDxcluster;
+
+    const countryColoringEl = document.getElementById('show-country-coloring');
+    if (countryColoringEl) countryColoringEl.checked = Boolean(config.countryColoring);
+
+    updateCurrentBandDisplay();
+}
+
+async function runCaptureBootstrap(config) {
+    if (!config?.enabled) return;
+
+    if (state.eventSource) {
+        state.eventSource.close();
+        state.eventSource = null;
+    }
+    if (state.renderInterval) {
+        clearInterval(state.renderInterval);
+        state.renderInterval = null;
+    }
+
+    const params = new URLSearchParams();
+    params.set('target', config.target);
+    params.set('minutes', String(config.minutes));
+    params.set('surroundings', config.surroundings ? 'true' : 'false');
+    params.set('min_snr_mode', config.minSnrMode);
+    params.set('ssb_min_db', String(config.ssbMinDb));
+    params.set('cw_min_db', String(config.cwMinDb));
+    params.set('selected_band', config.selectedBand);
+    if (config.enabledBandsCsv) params.set('enabled_bands', config.enabledBandsCsv);
+    params.set('include_dxcluster', config.includeDxcluster ? 'true' : 'false');
+    if (Number.isFinite(config.snapshotAt)) {
+        params.set('snapshot_at', String(config.snapshotAt));
+    }
+
+    const statusEl = document.getElementById('stream-status');
+    if (statusEl) statusEl.innerHTML = 'Status: Capture snapshot loading...';
+
+    const response = await fetch(`/api/capture_snapshot?${params.toString()}`);
+    if (!response.ok) {
+        const msg = await response.text();
+        throw new Error(`capture snapshot request failed (${response.status}): ${msg}`);
+    }
+
+    const payload = await response.json();
+    state.liveSpots = Array.isArray(payload?.spots) ? payload.spots : [];
+
+    scheduleRender();
+
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (statusEl) {
+        statusEl.innerHTML = `Status: Capture snapshot ready (Spots: ${formatNumber(state.liveSpots.length)})`;
+    }
+    window.__horstCaptureReady = {
+        ready: true,
+        count: state.liveSpots.length,
+        snapshotAt: payload?.snapshot_at ?? null,
+        generatedAt: payload?.generated_at ?? null
+    };
+}
+
 export function attachMapEvents() {
+    let zoomStartedAt = 0;
+    let panStartedAt = 0;
+    let mercatorInteractionSettleTimerId = null;
+    const MERCATOR_INTERACTION_SETTLE_MS = 90;
+
+    const startMercatorInteraction = () => {
+        if (currentProjection() !== 'mercator') return;
+        if (mercatorInteractionSettleTimerId) {
+            clearTimeout(mercatorInteractionSettleTimerId);
+            mercatorInteractionSettleTimerId = null;
+        }
+        state.mercatorInteractionActive = true;
+    };
+
+    const finishMercatorInteraction = () => {
+        if (currentProjection() !== 'mercator') return;
+
+        if (mercatorInteractionSettleTimerId) {
+            clearTimeout(mercatorInteractionSettleTimerId);
+        }
+
+        mercatorInteractionSettleTimerId = setTimeout(() => {
+            mercatorInteractionSettleTimerId = null;
+            state.mercatorInteractionActive = false;
+            if (state.mercatorRenderDeferred) {
+                state.mercatorRenderDeferred = false;
+                scheduleRender();
+            }
+        }, MERCATOR_INTERACTION_SETTLE_MS);
+    };
+
+    const markMercatorInteraction = () => {
+        if (currentProjection() !== 'mercator') return;
+        state.lastMercatorInteractionAt = Date.now();
+    };
+
+    map.on('zoomstart', () => {
+        if (currentProjection() !== 'mercator') return;
+        zoomStartedAt = startPerfTimer();
+        incrementPerfCounter('mercator.interaction.zoom_start', 1);
+        startMercatorInteraction();
+        markMercatorInteraction();
+    });
+    map.on('zoomend', () => {
+        if (currentProjection() !== 'mercator') return;
+        endPerfTimer('mercator.interaction.zoom_duration_ms', zoomStartedAt);
+        zoomStartedAt = 0;
+        incrementPerfCounter('mercator.interaction.zoom_end', 1);
+        finishMercatorInteraction();
+    });
+
+    map.on('movestart', () => {
+        if (currentProjection() !== 'mercator') return;
+        panStartedAt = startPerfTimer();
+        incrementPerfCounter('mercator.interaction.pan_start', 1);
+        startMercatorInteraction();
+        markMercatorInteraction();
+    });
+    map.on('moveend', () => {
+        if (currentProjection() !== 'mercator') return;
+        endPerfTimer('mercator.interaction.pan_duration_ms', panStartedAt);
+        panStartedAt = 0;
+        incrementPerfCounter('mercator.interaction.pan_end', 1);
+        finishMercatorInteraction();
+    });
+
+    const setTargetAndRestart = (locator) => {
+        if (!locator) return;
+        const targetInput = document.getElementById('target');
+        if (!targetInput) return;
+
+        targetInput.value = locator;
+        const btnSubmit = document.getElementById('btn-submit');
+        if (btnSubmit) btnSubmit.textContent = 'Go'; // Force a clean restart
+        document.getElementById('fetch-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    };
+
+    const CLICK_TO_DBLCLICK_DELAY_MS = 260;
+    let pendingMercatorSingleClickTimer = null;
+
+    const clearPendingMercatorSingleClick = () => {
+        if (pendingMercatorSingleClickTimer) {
+            clearTimeout(pendingMercatorSingleClickTimer);
+            pendingMercatorSingleClickTimer = null;
+        }
+    };
+
+    const submitBeamTargetFromLatLng = (lat, lng, locatorLabel = '') => {
+        if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
+        void setBeamTargetFromMapClick({
+            lat,
+            lng,
+            label: locatorLabel
+        });
+    };
+
+    if (map?.doubleClickZoom && typeof map.doubleClickZoom.disable === 'function') {
+        map.doubleClickZoom.disable();
+    }
+
     map.on('click', function(e) {
         if (currentProjection() === 'azimuthal') {
             return;
         }
 
-        const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, 4);
-        const targetInput = document.getElementById('target');
-        if (targetInput) {
-            targetInput.value = loc;
-            const btnSubmit = document.getElementById('btn-submit');
-            if (btnSubmit) btnSubmit.textContent = 'Go'; // Force a clean restart
-            document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+        clearPendingMercatorSingleClick();
+        if (!isOpModeActive()) {
+            return;
         }
+
+        const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, 4);
+        pendingMercatorSingleClickTimer = setTimeout(() => {
+            pendingMercatorSingleClickTimer = null;
+            submitBeamTargetFromLatLng(e.latlng.lat, e.latlng.lng, loc);
+        }, CLICK_TO_DBLCLICK_DELAY_MS);
+    });
+
+    map.on('dblclick', function(e) {
+        if (currentProjection() === 'azimuthal') {
+            return;
+        }
+
+        clearPendingMercatorSingleClick();
+        const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, 4);
+        setTargetAndRestart(loc);
+    });
+
+    const azimuthCanvas = document.getElementById('azimuth-canvas');
+    if (!azimuthCanvas || azimuthCanvas.dataset.targetingBound === 'true') return;
+
+    let pendingAzimuthSingleClickTimer = null;
+    const clearPendingAzimuthSingleClick = () => {
+        if (pendingAzimuthSingleClickTimer) {
+            clearTimeout(pendingAzimuthSingleClickTimer);
+            pendingAzimuthSingleClickTimer = null;
+        }
+    };
+
+    azimuthCanvas.dataset.targetingBound = 'true';
+    azimuthCanvas.addEventListener('click', (e) => {
+        if (!isAzimuthEnabled()) return;
+        if (Date.now() < suppressAzimuthClickUntil) return;
+
+        clearPendingAzimuthSingleClick();
+        const point = getAzimuthLatLngFromClientPoint(e.clientX, e.clientY);
+        if (!point) return;
+
+        if (!isOpModeActive()) return;
+
+        const loc = latLngToLocator(point.lat, point.lng, 4);
+        pendingAzimuthSingleClickTimer = setTimeout(() => {
+            pendingAzimuthSingleClickTimer = null;
+            submitBeamTargetFromLatLng(point.lat, point.lng, loc);
+        }, CLICK_TO_DBLCLICK_DELAY_MS);
+    });
+
+    azimuthCanvas.addEventListener('dblclick', (e) => {
+        if (!isAzimuthEnabled()) return;
+        if (Date.now() < suppressAzimuthClickUntil) return;
+
+        clearPendingAzimuthSingleClick();
+        const point = getAzimuthLatLngFromClientPoint(e.clientX, e.clientY);
+        if (!point) return;
+
+        const loc = latLngToLocator(point.lat, point.lng, 4);
+        setTargetAndRestart(loc);
     });
 }
 
 // --- Init UI ---
 initUI();
-initDxConditionsUI();
+
+if (captureConfig?.enabled) {
+    applyCaptureConfigToControls(captureConfig);
+}
 
 (async () => {
+    installPerfDebugApi();
     initMap(initialCenter, initialZoom);
     initAzimuthCanvas();
+    attachProjectionGestureZoomEvents();
     setTheme(savedTheme);
     setAzimuthTheme(savedTheme);
     setAzimuthCenter(initialCenter);
-    updateAzimuthHorizonKm(azimuthHorizonKm);
-    updateAzimuthNs6tIndicator(azimuthNs6tIndicator);
+    updateAzimuthZoom(azimuthZoom);
+    enableAzimuthNs6tIndicatorAlways();
     updateDxccLabelDensity(dxccLabelDensity);
     updateDxccLabelsEnabled(dxccLabelsEnabled);
-    resetDxConditions();
     await updateDk3jfMode(dk3jfModeEnabled);
 
-    const initialProjection = dk3jfModeEnabled ? savedProjection : 'mercator';
+    const initialProjection = captureConfig?.enabled ? captureConfig.projection : savedProjection;
     const projRadio = document.querySelector(`input[name="projection-select"][value="${initialProjection}"]`);
     if (projRadio) projRadio.checked = true;
     await applyProjectionMode(initialProjection);
-
-    const showGrayline = localStorage.getItem('showGrayline') === 'true';
-    const colorCountries = localStorage.getItem('colorCountries') === 'true';
-
-    const graylineToggle = document.getElementById('show-grayline');
-    if (graylineToggle) graylineToggle.checked = showGrayline;
-
-    const countriesToggle = document.getElementById('color-countries');
-    if (countriesToggle) countriesToggle.checked = colorCountries;
+    syncProjectionCenterToActiveTarget();
 
     const dxccToggle = document.getElementById('show-dxcc-labels');
     if (dxccToggle) dxccToggle.checked = dxccLabelsEnabled;
@@ -373,11 +1057,25 @@ initDxConditionsUI();
 
     attachMapEvents();
     attachUITooltipEvents();
+    initOpMode({ requestRender: scheduleRender });
+    initBandLab();
     
     // Force an initial render to sync visual band states (colors/opacity) loaded from localStorage
-    updateMapVisualization(state.liveSpots, parseInt(document.getElementById('minutes')?.value || 15));
+    scheduleRender();
     updateCurrentBandDisplay();
-    refreshDxPulseLink();
+
+    if (captureConfig?.enabled) {
+        await updateDk3jfMode(captureConfig.dk3jfMode);
+        try {
+            await runCaptureBootstrap(captureConfig);
+        } catch (err) {
+            console.error('Snapshot mode bootstrap failed:', err);
+            const statusEl = document.getElementById('stream-status');
+            const errorText = String(err?.message || err);
+            window.__horstCaptureReady = { ready: false, error: errorText };
+            if (statusEl) statusEl.innerHTML = `Status: Capture snapshot failed (${errorText})`;
+        }
+    }
 
     appReadyForAutoStart = true;
     maybeAutoStartSavedTarget();
@@ -394,6 +1092,14 @@ function updateCurrentBandDisplay() {
 }
 
 export function scheduleRender() {
+    if (state.softPaused) return;
+
+    if (!isAzimuthEnabled() && currentProjection() === 'mercator' && state.mercatorInteractionActive) {
+        state.mercatorRenderDeferred = true;
+        return;
+    }
+
+    const scheduleStart = perfNow();
     const now = Date.now();
     const timeSinceLastRender = now - lastRenderTime;
     const delay = Math.max(0, MIN_RENDER_INTERVAL_MS - timeSinceLastRender);
@@ -407,14 +1113,32 @@ export function scheduleRender() {
     renderTimeoutId = setTimeout(() => {
         renderTimeoutId = null;
         requestAnimationFrame(() => {
-            const minutes = document.getElementById('minutes')?.value || 15;
-            if (isAzimuthEnabled()) {
-                renderAzimuthScene({ spots: state.liveSpots });
-            } else {
-                updateMapVisualization(state.liveSpots, parseInt(minutes));
+            if (state.softPaused) {
+                state.renderPending = false;
+                return;
             }
+
+            const rafStart = perfNow();
+            incrementPerfCounter('render.schedule.calls', 1);
+            endPerfTimer('render.schedule.queue_delay_ms', scheduleStart);
+
+            const minutes = document.getElementById('minutes')?.value || 15;
+            const renderSpots = getRenderableMapSpots(state.liveSpots);
+            if (isAzimuthEnabled()) {
+                updateBandLabels(renderSpots);
+                renderAzimuthScene({ spots: renderSpots });
+                syncAzimuthZoomOutHint();
+                endPerfTimer('render.azimuth.frame_ms', rafStart);
+            } else {
+                const mercatorTimer = startPerfTimer();
+                updateMapVisualization(renderSpots, parseInt(minutes));
+                endPerfTimer('render.mercator.frame_ms', mercatorTimer);
+            }
+
+            endPerfTimer('render.frame.total_ms', rafStart);
             lastRenderTime = Date.now();
             state.renderPending = false;
+            updateBandLab();
         });
     }, delay);
 }
@@ -471,11 +1195,27 @@ document.getElementById('azimuth-zoom-in')?.addEventListener('click', () => {
 document.getElementById('azimuth-zoom-out')?.addEventListener('click', () => {
     updateAzimuthZoom(azimuthZoom - 0.2);
 });
+document.getElementById('azimuth-zoom-out')?.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isAzimuthEnabled()) return;
+    fitAzimuthToAllRenderableSpots();
+});
+document.getElementById('azimuth-zoom-in')?.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isAzimuthEnabled()) return;
+    updateAzimuthZoom(AZIMUTH_MAX_ZOOM);
+});
 
 // Keyboard +/- for azimuth zoom
 window.addEventListener('keydown', (e) => {
+    const targetTag = String(e.target?.tagName || '').toUpperCase();
+    if (targetTag === 'INPUT' || targetTag === 'TEXTAREA' || targetTag === 'SELECT' || e.target?.isContentEditable) {
+        return;
+    }
+
     if (!isAzimuthEnabled()) return;
-    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
     if (e.key === '+' || e.key === '=') {
         updateAzimuthZoom(azimuthZoom + 0.2);
         e.preventDefault();
@@ -499,11 +1239,7 @@ document.getElementById('ssb-min-db')?.addEventListener('change', () => {
 });
 
 document.getElementById('target')?.addEventListener('input', () => {
-    refreshDxPulseLink();
-});
-
-document.getElementById('minutes')?.addEventListener('change', () => {
-    refreshDxPulseLink();
+    syncProjectionCenterToActiveTarget();
 });
 
 document.getElementById('cw-min-db')?.addEventListener('change', () => {
@@ -523,11 +1259,8 @@ document.getElementById('cycle-time')?.addEventListener('change', (e) => {
 });
 
 document.getElementById('azimuth-horizon-km')?.addEventListener('change', (e) => {
+    // Keep backward compatibility: if edited manually, convert horizon request into zoom.
     updateAzimuthHorizonKm(e.target.value);
-});
-
-document.getElementById('azimuth-ns6t-indicator')?.addEventListener('change', (e) => {
-    updateAzimuthNs6tIndicator(e.target.checked);
 });
 
 document.getElementById('dxcc-label-density')?.addEventListener('input', (e) => {
@@ -563,6 +1296,7 @@ document.getElementById('band-container')?.addEventListener('change', (e) => {
     }
     localStorage.setItem('selectedBand', getSelectedBand());
     updateCurrentBandDisplay();
+    updateBandLab({ force: true });
     scheduleRender();
 });
 
@@ -578,6 +1312,7 @@ document.querySelectorAll('.band-enable').forEach(cb => {
             }
         }
         localStorage.setItem(`enable-${band}`, e.target.checked);
+        updateBandLab({ force: true });
         scheduleRender();
     });
 });
@@ -611,7 +1346,6 @@ document.getElementById('auto-zoom')?.addEventListener('change', (e) => {
 
 document.getElementById('surroundings')?.addEventListener('change', (e) => {
     localStorage.setItem('surroundings', e.target.checked);
-    refreshDxPulseLink();
     const btnSubmit = document.getElementById('btn-submit');
     if (btnSubmit && btnSubmit.textContent === 'Stop') {
         btnSubmit.textContent = 'Go';
@@ -619,17 +1353,17 @@ document.getElementById('surroundings')?.addEventListener('change', (e) => {
     }
 });
 
-document.getElementById('show-grayline')?.addEventListener('change', (e) => {
-    localStorage.setItem('showGrayline', e.target.checked ? 'true' : 'false');
-    if (!isAzimuthEnabled()) {
-        void syncMercatorGraylineLayer({ force: true });
-    }
+document.getElementById('show-dxcluster-spots')?.addEventListener('change', (e) => {
+    localStorage.setItem('showDXClusterSpots', e.target.checked);
+    scheduleRender();
 });
 
-document.getElementById('color-countries')?.addEventListener('change', (e) => {
-    localStorage.setItem('colorCountries', e.target.checked ? 'true' : 'false');
+document.getElementById('show-country-coloring')?.addEventListener('change', (e) => {
+    localStorage.setItem('countryColoringEnabled', e.target.checked ? 'true' : 'false');
     if (!isAzimuthEnabled()) {
-        void syncMercatorCountryLayer({ force: true });
+        void syncMercatorCountryLayer({ force: true, enabled: e.target.checked });
+    } else {
+        scheduleRender();
     }
 });
 
@@ -656,7 +1390,6 @@ document.getElementById('btn-geo')?.addEventListener('click', () => {
             const targetEl = document.getElementById('target');
             if (targetEl) targetEl.value = loc;
             localStorage.setItem('target', loc);
-            refreshDxPulseLink();
             btn.innerHTML = originalText;
             btn.disabled = false;
             
@@ -777,13 +1510,11 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
             state.targetLayer = null;
         }
 
-        stopDxPolling();
-        resetDxConditions();
-
         btnSubmit.textContent = 'Go';
         const status = document.getElementById('stream-status');
         if (status) status.innerHTML = 'Status: Not subscribed';
         setFaviconColor('#6c757d');
+        updateBandLab({ force: true });
         return;
     }
 
@@ -797,7 +1528,6 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     localStorage.setItem('target', target);
     localStorage.setItem('minutes', minutes);
-    refreshDxPulseLink();
 
     console.log(`Starting live stream for target: '${target}'`);
 
@@ -860,16 +1590,12 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     state.eventSource = new EventSource(`/api/stream?${params.toString()}`);
     setFaviconColor('#ffa500'); // Orange for connecting/waiting
-
-    if (dk3jfModeEnabled) {
-        startDxPolling(getCurrentDxRequestParams);
-    }
     
     let historyLoading = true;
 
     state.eventSource.onopen = () => {
         console.log("Connected to live MQTT stream");
-        statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong></br><span style="color: orange;">(Fetching history...)</span> <div class="spinner"></div>`;
+        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: orange;">(Fetching history...)</span> <div class="spinner"></div>`;
         setFaviconColor('#ffa500'); // Orange until data arrives
     };
 
@@ -882,7 +1608,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     state.eventSource.addEventListener('history_end', () => {
         historyLoading = false;
-        statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)})</span>`;
+        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)})</span>`;
         lastStatusUpdate = Date.now();
         scheduleRender();
     });
@@ -898,9 +1624,9 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         const now = Date.now();
         if (now - lastStatusUpdate > 250) {
             if (historyLoading) {
-                statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: orange;">Fetching history (Spots: ${formatNumber(totalReceived)})</span> <div class="spinner"></div>`;
+                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: orange;">Fetching history (Spots: ${formatNumber(totalReceived)})</span> <div class="spinner"></div>`;
             } else {
-                statusEl.innerHTML = `Status: Subscribed to <strong>${currentSub}</strong> </br> <span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)})</span>`;
+                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)})</span>`;
             }
             lastStatusUpdate = now;
         }
@@ -917,8 +1643,12 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
     };
 
     state.renderInterval = setInterval(() => {
+        if (state.softPaused) return;
+
         if (state.liveSpots.length > 0) {
-            const maxAge = parseInt(minutes) * 60;
+            const streamMaxAge = (parseInt(minutes, 10) || 15) * 60;
+            const bandLabMaxAge = getBandLabLookbackMinutes() * 60;
+            const maxAge = Math.max(streamMaxAge, bandLabMaxAge);
             state.liveSpots.forEach(s => s.ageSeconds += 5); 
             state.liveSpots = state.liveSpots.filter(s => s.ageSeconds <= maxAge);
             scheduleRender();
@@ -926,5 +1656,10 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
     }, 5000);
 });
 
+document.addEventListener('visibilitychange', syncSoftPauseWithVisibility);
+window.addEventListener('pageshow', syncSoftPauseWithVisibility);
+window.addEventListener('focus', syncSoftPauseWithVisibility);
+
 // Fallback pass in case autostart check happened before submit wiring was ready.
 maybeAutoStartSavedTarget();
+syncSoftPauseWithVisibility();

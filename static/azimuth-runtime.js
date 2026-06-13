@@ -1,9 +1,11 @@
-import { bandColors, getEnabledBands, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution } from './utils.js';
+import { bandColors, getCountryColoringEnabled, getEnabledBands, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution } from './utils.js';
 
 const EARTH_RADIUS_KM = 6371;
 const ANTIPODE_KM = Math.PI * EARTH_RADIUS_KM;
 const MAX_VISIBLE_C = Math.PI - 0.02;
 const DXCC_SHOW_ALL_ZOOM_THRESHOLD = 5.0;
+const AZIMUTH_SCALE_CLEARANCE_PX = 12;
+const GRAYLINE_RECOMPUTE_MIN_INTERVAL_MS = 320;
 
 const PALETTE_LIGHT = [
     '#FBEFF0', '#FBD3D1', '#FEE5DA', '#FFE2B7', '#FFFBD4', '#E8EDAD', '#E4F0DB',
@@ -92,11 +94,30 @@ const state = {
     countryFillCache: new Map(),
     graylineOverlayCache: {
         key: '',
-        canvas: null
+        canvas: null,
+        computedAtMs: 0
+    },
+    gridCellProjectionCache: {
+        key: '',
+        cells: new Map()
     },
     worldLayerCache: {
         key: '',
         canvas: null
+    },
+    hiddenGridSquaresCount: 0,
+    isDragging: false,
+    antennaOverlay: {
+        enabled: false,
+        stationLat: null,
+        stationLng: null,
+        stationLocator: '',
+        stationName: '',
+        azimuthDeg: 0,
+        beamwidth3dBDeg: 60,
+        mode: 'forward',
+        pendingTargetBearingDeg: null,
+        pendingTargetLabel: ''
     }
 };
 
@@ -104,12 +125,23 @@ export function isAzimuthEnabled() {
     return state.enabled;
 }
 
+export function getAzimuthHiddenGridSquaresCount() {
+    return Math.max(0, Number(state.hiddenGridSquaresCount) || 0);
+}
+
 export function setAzimuthEnabled(enabled) {
     state.enabled = Boolean(enabled);
     const mapEl = typeof document !== 'undefined' ? document.getElementById('map') : null;
     const canvas = ensureCanvas();
     if (mapEl) mapEl.style.display = state.enabled ? 'none' : 'block';
-    if (canvas) canvas.style.display = state.enabled ? 'block' : 'none';
+    if (canvas) {
+        canvas.style.display = state.enabled ? 'block' : 'none';
+        canvas.style.pointerEvents = state.enabled ? 'auto' : 'none';
+    }
+}
+
+export function setAzimuthDragging(dragging) {
+    state.isDragging = Boolean(dragging);
 }
 
 export function setAzimuthTheme(theme) {
@@ -120,6 +152,10 @@ export function setAzimuthCenter(center) {
     if (Array.isArray(center) && center.length === 2) {
         state.center = [Number(center[0]) || 0, normalizeLng(Number(center[1]) || 0)];
     }
+}
+
+export function getAzimuthCenter() {
+    return [state.center[0], state.center[1]];
 }
 
 export function setAzimuthZoom(z) {
@@ -140,6 +176,38 @@ export function setAzimuthDxccLabelDensity(density) {
 
 export function setAzimuthDxccLabelsEnabled(enabled) {
     state.dxccLabelsEnabled = Boolean(enabled);
+}
+
+export function setAzimuthAntennaOverlay(overlay = {}) {
+    const toFiniteOrNull = (value) => {
+        if (value === null || value === undefined || value === '') return null;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    };
+
+    const enabled = Boolean(overlay.enabled);
+    const stationLat = Number(overlay.stationLat);
+    const stationLng = Number(overlay.stationLng);
+    const azimuthDeg = Number(overlay.azimuthDeg);
+    const beamwidth3dBDeg = Number(overlay.beamwidth3dBDeg);
+    const pendingTargetBearingDeg = toFiniteOrNull(overlay.pendingTargetBearingDeg);
+    const modeRaw = String(overlay.mode || 'forward').toLowerCase();
+    const mode = modeRaw === 'backward' || modeRaw === 'bidirectional' ? modeRaw : 'forward';
+
+    state.antennaOverlay = {
+        enabled: enabled && Number.isFinite(stationLat) && Number.isFinite(stationLng) && Number.isFinite(azimuthDeg),
+        stationLat: Number.isFinite(stationLat) ? stationLat : null,
+        stationLng: Number.isFinite(stationLng) ? normalizeLng(stationLng) : null,
+        stationLocator: String(overlay.stationLocator || ''),
+        stationName: String(overlay.stationName || ''),
+        azimuthDeg: Number.isFinite(azimuthDeg) ? ((azimuthDeg % 360) + 360) % 360 : 0,
+        beamwidth3dBDeg: Number.isFinite(beamwidth3dBDeg) ? Math.max(5, Math.min(180, beamwidth3dBDeg)) : 60,
+        mode,
+        pendingTargetBearingDeg: Number.isFinite(pendingTargetBearingDeg)
+            ? ((pendingTargetBearingDeg % 360) + 360) % 360
+            : null,
+        pendingTargetLabel: String(overlay.pendingTargetLabel || '')
+    };
 }
 
 export function clampAzimuthZoom(z) {
@@ -181,7 +249,7 @@ function ensureCanvas() {
     state.canvas = document.getElementById('azimuth-canvas');
     if (!state.canvas) return null;
     state.ctx = state.canvas.getContext('2d');
-    state.canvas.style.pointerEvents = 'none';
+    state.canvas.style.pointerEvents = state.enabled ? 'auto' : 'none';
     if (!state.enabled) state.canvas.style.display = 'none';
     return state.canvas;
 }
@@ -393,18 +461,58 @@ function countryFillForFeature(feature, theme) {
     return countryFillForKey(featureKey(feature), theme);
 }
 
-function collectGridSquares(spots, resolution) {
+function collectGridSquares(spots, resolution, visibleSpots = spots) {
     const squareData = {};
     spots.forEach(spot => {
+        if (String(spot?.sourceType || '').toLowerCase() === 'dxcluster') return;
         let loc = (spot.locator || '').substring(0, resolution);
         if (loc.length < resolution) loc = (spot.locator || '').substring(0, 4);
         if (loc.length < 4) return;
-        if (!squareData[loc]) squareData[loc] = { snrSum: 0, count: 0, bands: {} };
+        if (!squareData[loc]) squareData[loc] = { snrSum: 0, count: 0, maxSnr: -Infinity, visibleCount: 0, bands: {} };
         squareData[loc].snrSum += spot.snr;
         squareData[loc].count += 1;
+        squareData[loc].maxSnr = Math.max(squareData[loc].maxSnr, Number(spot.snr));
+    });
+
+    visibleSpots.forEach(spot => {
+        if (String(spot?.sourceType || '').toLowerCase() === 'dxcluster') return;
+        let loc = (spot.locator || '').substring(0, resolution);
+        if (loc.length < resolution) loc = (spot.locator || '').substring(0, 4);
+        if (loc.length < 4 || !squareData[loc]) return;
+        squareData[loc].visibleCount += 1;
         squareData[loc].bands[spot.band] = (squareData[loc].bands[spot.band] || 0) + 1;
     });
+
+    Object.keys(squareData).forEach((loc) => {
+        if (squareData[loc].visibleCount <= 0) {
+            delete squareData[loc];
+        }
+    });
+
     return squareData;
+}
+
+function drawDxClusterSpots(ctx, width, height, filteredSpots) {
+    const dxClusterSpots = filteredSpots.filter((spot) => String(spot?.sourceType || '').toLowerCase() === 'dxcluster');
+    for (const spot of dxClusterSpots) {
+        const p = projectToCanvas(spot.lat, spot.lng, width, height);
+        if (!p) continue;
+        const color = bandColors[spot.band] || bandColors.all;
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4.3, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.95;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.95;
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1;
 }
 
 function computeConvexHullRing(coords) {
@@ -575,11 +683,12 @@ export function createAzimuthRenderPlan({ featureCollection, center, spots = [],
 
 function projectToCanvas(lat, lng, width, height, options = {}) {
     const applyZoom = options.applyZoom !== false;
+    const enforceHorizon = options.enforceHorizon !== false;
     const p = projectAeqdNormalized(state.center, [lat, lng]);
     if (!p.visible) return null;
 
     const distanceKm = p.c * EARTH_RADIUS_KM;
-    if (distanceKm > state.horizonKm) return null;
+    if (enforceHorizon && distanceKm > state.horizonKm) return null;
 
     const radius = Math.min(width, height) * 0.47;
     const scale = (radius * (applyZoom ? state.zoom : 1)) / Math.PI;
@@ -594,45 +703,87 @@ function drawBackground(ctx, width, height) {
 
 function drawWorld(ctx, width, height, plan) {
     if (!state.worldGeoJson?.features?.length) return;
+    const countryColoringEnabled = getCountryColoringEnabled();
     const featureFill = plan.countryFillMap || new Map();
+    const fallbackLandFill = state.theme === 'dark' ? '#8a94a1' : '#e6ebf1';
     for (const feature of state.worldGeoJson.features) {
         const key = featureKey(feature);
         const fill = featureFill.get(key);
         if (!fill) continue;
         const geom = feature.geometry;
         if (!geom) continue;
-        ctx.fillStyle = fill;
+        ctx.fillStyle = countryColoringEnabled ? fill : fallbackLandFill;
         ctx.globalAlpha = state.theme === 'dark' ? 0.52 : 0.64;
         ctx.strokeStyle = state.theme === 'dark' ? '#263340' : '#30353a';
         ctx.lineWidth = 0.5;
 
         const drawRing = (ring) => {
+            const discontinuityPx = Math.max(24, Math.min(width, height) * 0.34);
             let segment = [];
-            const flush = () => {
-                if (segment.length < 3) {
+            let hadBreak = false;
+            let prevLng = null;
+            let prevLat = null;
+
+            const flush = (isBreak = true) => {
+                if (segment.length < 2) {
+                    if (isBreak) hadBreak = true;
                     segment = [];
                     return;
                 }
+
                 ctx.beginPath();
                 ctx.moveTo(segment[0].x, segment[0].y);
                 for (let i = 1; i < segment.length; i += 1) {
                     ctx.lineTo(segment[i].x, segment[i].y);
                 }
-                ctx.closePath();
-                ctx.fill();
+
+                const first = segment[0];
+                const last = segment[segment.length - 1];
+                const closingDistance = Math.hypot(last.x - first.x, last.y - first.y);
+                const canFill = !hadBreak && segment.length >= 3 && closingDistance <= discontinuityPx;
+
+                if (canFill) {
+                    ctx.closePath();
+                    ctx.fill();
+                }
                 ctx.stroke();
+
+                if (isBreak) hadBreak = true;
                 segment = [];
             };
 
             for (const [lng, lat] of ring) {
-                const p = projectToCanvas(lat, lng, width, height);
+                const p = projectToCanvas(lat, lng, width, height, { enforceHorizon: false });
                 if (!p) {
-                    flush();
+                    flush(true);
+                    prevLng = null;
+                    prevLat = null;
                     continue;
                 }
+
+                if (segment.length > 0) {
+                    const prevPoint = segment[segment.length - 1];
+                    const jumpPx = Math.hypot(p.x - prevPoint.x, p.y - prevPoint.y);
+                    const wrapsDateline = prevLng !== null && Math.abs(lng - prevLng) > 180;
+                    const hasPrevGeo = prevLat !== null && prevLng !== null;
+                    let midpointInvisible = false;
+                    if (hasPrevGeo) {
+                        const dLng = normalizeLng(lng - prevLng);
+                        const midLat = (prevLat + lat) / 2;
+                        const midLng = normalizeLng(prevLng + (dLng / 2));
+                        midpointInvisible = !projectToCanvas(midLat, midLng, width, height, { enforceHorizon: false });
+                    }
+
+                    if (wrapsDateline || jumpPx > discontinuityPx || midpointInvisible) {
+                        flush(true);
+                    }
+                }
+
                 segment.push(p);
+                prevLng = lng;
+                prevLat = lat;
             }
-            flush();
+            flush(false);
         };
 
         if (geom.type === 'Polygon') {
@@ -645,9 +796,49 @@ function drawWorld(ctx, width, height, plan) {
 }
 
 function getWorldLayerCacheKey(width, height) {
+    // Item 5: use reduced center precision during drag to reuse cached world layer
+    // across small movements, avoiding per-frame GeoJSON re-projection
+    const precision = state.isDragging ? 1 : 3;
+    const cLat = Number(state.center[0]).toFixed(precision);
+    const cLng = Number(state.center[1]).toFixed(precision);
+    const countryColoring = getCountryColoringEnabled() ? 'on' : 'off';
+    return `${width}x${height}:${state.theme}:${state.zoom.toFixed(2)}:${state.horizonKm}:${cLat}:${cLng}:${countryColoring}`;
+}
+
+function getGridCellProjectionCacheKey(width, height) {
     const cLat = Number(state.center[0]).toFixed(3);
     const cLng = Number(state.center[1]).toFixed(3);
-    return `${width}x${height}:${state.theme}:${state.zoom.toFixed(2)}:${state.horizonKm}:${cLat}:${cLng}`;
+    return `${width}x${height}:${state.zoom.toFixed(2)}:${state.horizonKm}:${cLat}:${cLng}`;
+}
+
+function getProjectedGridCellCorners(locator, width, height) {
+    const cacheKey = getGridCellProjectionCacheKey(width, height);
+    if (state.gridCellProjectionCache.key !== cacheKey) {
+        state.gridCellProjectionCache.key = cacheKey;
+        state.gridCellProjectionCache.cells = new Map();
+    }
+
+    const cached = state.gridCellProjectionCache.cells.get(locator);
+    if (cached) return cached;
+
+    const bounds = locatorToBounds(locator);
+    if (!bounds) return null;
+
+    const south = bounds[0][0];
+    const west = bounds[0][1];
+    const north = bounds[1][0];
+    const east = bounds[1][1];
+
+    const corners = [
+        projectToCanvas(south, west, width, height),
+        projectToCanvas(south, east, width, height),
+        projectToCanvas(north, east, width, height),
+        projectToCanvas(north, west, width, height)
+    ];
+
+    const projected = corners.some((pt) => !pt) ? null : corners;
+    state.gridCellProjectionCache.cells.set(locator, projected);
+    return projected;
 }
 
 function drawWorldCached(ctx, width, height, plan) {
@@ -729,6 +920,27 @@ function unprojectFromCanvas(x, y, width, height, options = {}) {
     };
 }
 
+export function getAzimuthLatLngFromClientPoint(clientX, clientY) {
+    const canvas = ensureCanvas();
+    if (!canvas || typeof canvas.getBoundingClientRect !== 'function') return null;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = Number(clientX) - rect.left;
+    const y = Number(clientY) - rect.top;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return null;
+
+    const width = canvas.clientWidth || rect.width || 1;
+    const height = canvas.clientHeight || rect.height || 1;
+    const geo = unprojectFromCanvas(x, y, width, height);
+    if (!geo) return null;
+
+    const distanceKm = geo.c * EARTH_RADIUS_KM;
+    if (distanceKm > state.horizonKm) return null;
+
+    return { lat: geo.lat, lng: geo.lng };
+}
+
 function hexToRgb(hex) {
     const value = String(hex || '').replace('#', '');
     if (value.length !== 6) return [0, 0, 0];
@@ -753,9 +965,20 @@ function blendOverlayColors(base, color, alpha) {
 
 function drawGrayline(ctx, width, height) {
     const bucket = Math.floor(Date.now() / (5 * 60 * 1000));
+    const nowMs = Date.now();
     const key = `${width}x${height}:${state.theme}:${state.zoom.toFixed(2)}:${state.horizonKm}:${state.center[0].toFixed(3)}:${state.center[1].toFixed(3)}:${bucket}`;
 
     if (state.graylineOverlayCache.key === key && state.graylineOverlayCache.canvas) {
+        ctx.drawImage(state.graylineOverlayCache.canvas, 0, 0, width, height);
+        return;
+    }
+
+    // During active pan/zoom interaction, recomputing grayline every frame is expensive.
+    // Reuse the last overlay briefly and refresh at a bounded cadence.
+    if (
+        state.graylineOverlayCache.canvas &&
+        (nowMs - (state.graylineOverlayCache.computedAtMs || 0)) < GRAYLINE_RECOMPUTE_MIN_INTERVAL_MS
+    ) {
         ctx.drawImage(state.graylineOverlayCache.canvas, 0, 0, width, height);
         return;
     }
@@ -772,36 +995,62 @@ function drawGrayline(ctx, width, height) {
     const subsolarPoint = getSubsolarPoint(new Date(bucket * 5 * 60 * 1000));
     const twilightFill = hexToRgb(state.theme === 'dark' ? '#9a8371' : '#b08b72');
     const nightFill = hexToRgb(state.theme === 'dark' ? '#01050a' : '#182534');
-    const imageData = overlayCtx.createImageData(width, height);
-    const data = imageData.data;
+    const maxDim = Math.max(width, height);
+    const sampleScale = Math.max(0.2, Math.min(0.4, 900 / Math.max(1, maxDim)));
+    const sampleWidth = Math.max(1, Math.round(width * sampleScale));
+    const sampleHeight = Math.max(1, Math.round(height * sampleScale));
+    const sampleImageData = overlayCtx.createImageData(sampleWidth, sampleHeight);
+    const sampleData = sampleImageData.data;
+    const alphaNoiseFloor = 0.018;
 
-    for (let y = 0; y < height; y += 1) {
-        for (let x = 0; x < width; x += 1) {
-            const geo = unprojectFromCanvas(x + 0.5, y + 0.5, width, height);
+    for (let sy = 0; sy < sampleHeight; sy += 1) {
+        const py = ((sy + 0.5) / sampleHeight) * height;
+        for (let sx = 0; sx < sampleWidth; sx += 1) {
+            const px = ((sx + 0.5) / sampleWidth) * width;
+            const geo = unprojectFromCanvas(px, py, width, height);
             if (!geo) continue;
 
             const distanceKm = geo.c * EARTH_RADIUS_KM;
             if (distanceKm > state.horizonKm) continue;
 
             const { graylineOpacity, nightOpacity } = getGraylineOverlayOpacities(geo.lat, geo.lng, subsolarPoint);
-            if (graylineOpacity <= 0 && nightOpacity <= 0) continue;
+            const g = graylineOpacity > alphaNoiseFloor ? graylineOpacity : 0;
+            const n = nightOpacity > alphaNoiseFloor ? nightOpacity : 0;
+            if (g <= 0 && n <= 0) continue;
 
             let pixel = { r: 0, g: 0, b: 0, a: 0 };
-            pixel = blendOverlayColors(pixel, twilightFill, graylineOpacity);
-            pixel = blendOverlayColors(pixel, nightFill, nightOpacity);
+            pixel = blendOverlayColors(pixel, twilightFill, g);
+            pixel = blendOverlayColors(pixel, nightFill, n);
+            if (pixel.a <= alphaNoiseFloor) continue;
 
-            const offset = (y * width * 4) + (x * 4);
-            data[offset] = Math.round(pixel.r);
-            data[offset + 1] = Math.round(pixel.g);
-            data[offset + 2] = Math.round(pixel.b);
-            data[offset + 3] = Math.round(pixel.a * 255);
+            const offset = (sy * sampleWidth * 4) + (sx * 4);
+            sampleData[offset] = Math.round(pixel.r);
+            sampleData[offset + 1] = Math.round(pixel.g);
+            sampleData[offset + 2] = Math.round(pixel.b);
+            sampleData[offset + 3] = Math.round(pixel.a * 255);
         }
     }
 
-    overlayCtx.putImageData(imageData, 0, 0);
+    const sampleCanvas = typeof OffscreenCanvas !== 'undefined'
+        ? new OffscreenCanvas(Math.max(1, sampleWidth), Math.max(1, sampleHeight))
+        : document.createElement('canvas');
+    sampleCanvas.width = Math.max(1, sampleWidth);
+    sampleCanvas.height = Math.max(1, sampleHeight);
+    const sampleCtx = sampleCanvas.getContext('2d');
+    if (!sampleCtx) return;
+
+    sampleCtx.putImageData(sampleImageData, 0, 0);
+
+    overlayCtx.clearRect(0, 0, width, height);
+    // Avoid global tint bleed caused by smoothing transparent/tinted samples over large distances.
+    overlayCtx.imageSmoothingEnabled = false;
+    overlayCtx.imageSmoothingQuality = 'low';
+    overlayCtx.drawImage(sampleCanvas, 0, 0, width, height);
+
     state.graylineOverlayCache = {
         key,
-        canvas: overlayCanvas
+        canvas: overlayCanvas,
+        computedAtMs: nowMs
     };
     ctx.drawImage(overlayCanvas, 0, 0, width, height);
 }
@@ -809,83 +1058,116 @@ function drawGrayline(ctx, width, height) {
 function drawAzimuthIndicator(ctx, width, height) {
     const centerX = width / 2;
     const centerY = height / 2;
-    const maxDist = Math.max(1200, Math.min(state.horizonKm - 12, ANTIPODE_KM - 12));
-    const guideInnerDist = Math.max(500, maxDist - 2200);
-    const tickInnerDist = Math.max(600, maxDist - 420);
-    const labelDist = Math.max(500, maxDist - 900);
 
-    ctx.strokeStyle = state.theme === 'dark' ? 'rgba(220,230,240,0.45)' : 'rgba(30,42,55,0.45)';
-    ctx.fillStyle = state.theme === 'dark' ? 'rgba(225,236,245,0.8)' : 'rgba(23,35,46,0.8)';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = '500 9px Verdana, Arial, sans-serif';
+    // Fixed screen-space radius (intentionally does not depend on map zoom).
+    const radius = Math.min(width, height) * 0.47;
+    const outerRadius = Math.max(8, radius - 1);
+    const majorTickInner = Math.max(0, outerRadius - 11);  // 30°
+    const mediumTickInner = Math.max(0, outerRadius - 8);  // 10°
+    const minorTickInner = Math.max(0, outerRadius - 6);   // 2°
+    const labelRadius = Math.max(0, outerRadius - 19);
+    const spokeRadius = Math.max(0, outerRadius - 0.5);
 
-    // Thin guide rays every 30 degrees, stretched almost from the target to the border.
+    const ringColor = state.theme === 'dark' ? 'rgba(220,230,240,0.52)' : 'rgba(30,42,55,0.52)';
+    const tickColor = state.theme === 'dark' ? 'rgba(220,230,240,0.72)' : 'rgba(23,35,46,0.72)';
+    const minorTickColor = state.theme === 'dark' ? 'rgba(220,230,240,0.34)' : 'rgba(23,35,46,0.34)';
+    const spokeColor = state.theme === 'dark' ? 'rgba(220,230,240,0.38)' : 'rgba(30,42,55,0.38)';
+    const textColor = state.theme === 'dark' ? 'rgba(235,243,250,0.88)' : 'rgba(20,32,44,0.88)';
+
     ctx.save();
-    ctx.lineWidth = 0.7;
-    ctx.strokeStyle = state.theme === 'dark' ? 'rgba(220,230,240,0.28)' : 'rgba(30,42,55,0.28)';
-    for (let b = 0; b < 360; b += 30) {
-        const innerGeo = destinationPoint(state.center[0], state.center[1], b, guideInnerDist);
-        const outerGeo = destinationPoint(state.center[0], state.center[1], b, maxDist);
-        const pInner = projectToCanvas(innerGeo[0], innerGeo[1], width, height, { applyZoom: false });
-        const pOuter = projectToCanvas(outerGeo[0], outerGeo[1], width, height, { applyZoom: false });
-        if (!pInner || !pOuter) continue;
+
+    // Circular scale ring.
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, outerRadius, 0, Math.PI * 2);
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
+
+    // NS6T-style helper spokes: draw full spokes every 10° and
+    // emphasize cardinal N/S/E/W lines.
+    for (let bearing = 0; bearing < 360; bearing += 10) {
+        const angle = degToRad(bearing - 90);
+        const cosA = Math.cos(angle);
+        const sinA = Math.sin(angle);
+        const isCardinal = bearing === 0 || bearing === 90 || bearing === 180 || bearing === 270;
+        const isMajor = bearing % 30 === 0;
 
         ctx.beginPath();
-        ctx.moveTo(pInner.x, pInner.y);
-        ctx.lineTo(pOuter.x, pOuter.y);
+        ctx.moveTo(centerX, centerY);
+        ctx.lineTo(centerX + (spokeRadius * cosA), centerY + (spokeRadius * sinA));
+        ctx.strokeStyle = spokeColor;
+        ctx.lineWidth = isCardinal ? 1.9 : isMajor ? 1.15 : 0.85;
+        ctx.globalAlpha = isCardinal ? 0.72 : isMajor ? 0.50 : 0.34;
         ctx.stroke();
     }
-    ctx.restore();
 
-    // Fine border ticks every 5 degrees around the visible edge.
-    for (let b = 0; b < 360; b += 5) {
-        const outerGeo = destinationPoint(state.center[0], state.center[1], b, maxDist);
-        const innerGeo = destinationPoint(state.center[0], state.center[1], b, tickInnerDist);
-        const pOuter = projectToCanvas(outerGeo[0], outerGeo[1], width, height, { applyZoom: false });
-        const pInner = projectToCanvas(innerGeo[0], innerGeo[1], width, height, { applyZoom: false });
-        if (!pOuter || !pInner) continue;
+    // 2° minor subdivisions (skip 10° and 30° positions).
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = minorTickColor;
+    for (let bearing = 0; bearing < 360; bearing += 2) {
+        if (bearing % 10 === 0) continue;
+        const angle = degToRad(bearing - 90);
+        const cosA = Math.cos(angle);
+        const sinA = Math.sin(angle);
 
-        const isMajor = (b % 30) === 0;
-        ctx.lineWidth = isMajor ? 1.0 : 0.45;
         ctx.beginPath();
-        ctx.moveTo(pInner.x, pInner.y);
-        ctx.lineTo(pOuter.x, pOuter.y);
-        ctx.stroke();
-
-        if (isMajor) {
-            const labelGeo = destinationPoint(state.center[0], state.center[1], b, labelDist);
-            const pLabel = projectToCanvas(labelGeo[0], labelGeo[1], width, height, { applyZoom: false });
-            if (pLabel) {
-                const text = b === 0 ? 'N' : b === 90 ? 'E' : b === 180 ? 'S' : b === 270 ? 'W' : `${b}°`;
-                ctx.fillText(text, pLabel.x, pLabel.y);
-            }
-        }
-    }
-
-    const ringDist = Math.max(1000, maxDist - 1800);
-    for (let r = 1; r <= 3; r++) {
-        const dist = (ringDist * r) / 3;
-        ctx.beginPath();
-        let started = false;
-        for (let b = 0; b <= 360; b += 2) {
-            const geo = destinationPoint(state.center[0], state.center[1], b, dist);
-            const p = projectToCanvas(geo[0], geo[1], width, height, { applyZoom: false });
-            if (!p) {
-                started = false;
-                continue;
-            }
-            if (!started) {
-                ctx.moveTo(p.x, p.y);
-                started = true;
-            } else {
-                ctx.lineTo(p.x, p.y);
-            }
-        }
-        ctx.strokeStyle = state.theme === 'dark' ? 'rgba(220,230,240,0.14)' : 'rgba(20,30,40,0.12)';
+        ctx.moveTo(centerX + (minorTickInner * cosA), centerY + (minorTickInner * sinA));
+        ctx.lineTo(centerX + (outerRadius * cosA), centerY + (outerRadius * sinA));
         ctx.lineWidth = 0.6;
         ctx.stroke();
     }
+
+    // 10° medium subdivisions (skip major 30° positions).
+    ctx.strokeStyle = tickColor;
+    for (let bearing = 0; bearing < 360; bearing += 10) {
+        if (bearing % 30 === 0) continue;
+        const angle = degToRad(bearing - 90);
+        const cosA = Math.cos(angle);
+        const sinA = Math.sin(angle);
+
+        ctx.beginPath();
+        ctx.moveTo(centerX + (mediumTickInner * cosA), centerY + (mediumTickInner * sinA));
+        ctx.lineTo(centerX + (outerRadius * cosA), centerY + (outerRadius * sinA));
+        ctx.lineWidth = 0.95;
+        ctx.stroke();
+    }
+
+    // 30° major ticks + labels.
+    ctx.strokeStyle = tickColor;
+    ctx.fillStyle = textColor;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (let bearing = 0; bearing < 360; bearing += 30) {
+        const angle = degToRad(bearing - 90);
+        const cosA = Math.cos(angle);
+        const sinA = Math.sin(angle);
+        const cardinal = bearing === 0 ? 'N' : bearing === 90 ? 'E' : bearing === 180 ? 'S' : bearing === 270 ? 'W' : '';
+
+        const x0 = centerX + (majorTickInner * cosA);
+        const y0 = centerY + (majorTickInner * sinA);
+        const x1 = centerX + (outerRadius * cosA);
+        const y1 = centerY + (outerRadius * sinA);
+
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.lineWidth = cardinal ? 2.0 : 1.4;
+        ctx.stroke();
+
+        const lx = centerX + (labelRadius * cosA);
+        const ly = centerY + (labelRadius * sinA);
+
+        if (cardinal) {
+            ctx.font = '700 11px Verdana, Arial, sans-serif';
+            ctx.fillText(cardinal, lx, ly);
+        } else {
+            ctx.font = '500 9px Verdana, Arial, sans-serif';
+            ctx.fillText(`${bearing}°`, lx, ly);
+        }
+    }
+
+    ctx.restore();
 }
 
 function drawDxccLabels(ctx, width, height, plan) {
@@ -930,6 +1212,280 @@ function drawDxccLabels(ctx, width, height, plan) {
         ctx.fillStyle = textColor;
         ctx.fillText(label.prefix, p.x, p.y);
     }
+}
+
+function drawTargetHighlight(ctx, width, height) {
+    if (typeof document === 'undefined') return;
+
+    const rawTarget = document.getElementById('target')?.value?.trim()?.toUpperCase() || '';
+    const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(rawTarget);
+    if (!isLocator) return;
+
+    const bounds = locatorToBounds(rawTarget);
+    if (!bounds) return;
+
+    const lat0 = bounds[0][0];
+    const lng0 = bounds[0][1];
+    const lat1 = bounds[1][0];
+    const lng1 = bounds[1][1];
+
+    if (rawTarget.length === 4) {
+        const corners = [
+            [lat0, lng0],
+            [lat1, lng0],
+            [lat1, lng1],
+            [lat0, lng1]
+        ].map(([lat, lng]) => projectToCanvas(lat, lng, width, height));
+
+        if (corners.some((p) => !p)) return;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(corners[0].x, corners[0].y);
+        for (let i = 1; i < corners.length; i += 1) {
+            ctx.lineTo(corners[i].x, corners[i].y);
+        }
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.10)';
+        ctx.strokeStyle = '#ff2d2d';
+        ctx.lineWidth = 2.2;
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+        return;
+    }
+
+    const centerLat = (lat0 + lat1) / 2;
+    const centerLng = (lng0 + lng1) / 2;
+    const p = projectToCanvas(centerLat, centerLng, width, height);
+    if (!p) return;
+
+    const size = 7;
+    ctx.save();
+    ctx.strokeStyle = '#ff2d2d';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(p.x - size, p.y - size);
+    ctx.lineTo(p.x + size, p.y + size);
+    ctx.moveTo(p.x + size, p.y - size);
+    ctx.lineTo(p.x - size, p.y + size);
+    ctx.stroke();
+    ctx.restore();
+}
+
+function drawAntennaDirectionalLobe(ctx, width, height, station, centerBearingDeg, beamwidthDeg, radiusKm, fillStyle, lineStyle) {
+    const half = Math.max(2, beamwidthDeg / 2);
+    const leftBearing = ((centerBearingDeg - half) % 360 + 360) % 360;
+    const rightBearing = ((centerBearingDeg + half) % 360 + 360) % 360;
+
+    const sampleGeodesic = (bearingDeg, maxDistanceKm, segments = 24) => {
+        const pts = [{ x: station.x, y: station.y }];
+        for (let i = 1; i <= segments; i += 1) {
+            const d = (maxDistanceKm * i) / segments;
+            const [lat, lng] = destinationPoint(station.lat, station.lng, bearingDeg, d);
+            const p = projectToCanvas(lat, lng, width, height);
+            if (!p) break;
+            pts.push(p);
+        }
+        return pts;
+    };
+
+    const leftEdge = sampleGeodesic(leftBearing, radiusKm, 24);
+    const rightEdge = sampleGeodesic(rightBearing, radiusKm, 24);
+    if (leftEdge.length < 2 || rightEdge.length < 2) return;
+
+    const arcSegments = [];
+    let currentArcSegment = [];
+    const arcSteps = Math.max(8, Math.ceil(beamwidthDeg / 3));
+    for (let i = 0; i <= arcSteps; i += 1) {
+        const t = i / arcSteps;
+        const b = ((leftBearing + (beamwidthDeg * t)) % 360 + 360) % 360;
+        const [lat, lng] = destinationPoint(station.lat, station.lng, b, radiusKm);
+        const p = projectToCanvas(lat, lng, width, height);
+        if (p) {
+            currentArcSegment.push(p);
+        } else if (currentArcSegment.length > 0) {
+            arcSegments.push(currentArcSegment);
+            currentArcSegment = [];
+        }
+    }
+    if (currentArcSegment.length > 0) {
+        arcSegments.push(currentArcSegment);
+    }
+
+    const leftTip = leftEdge[leftEdge.length - 1];
+    const rightTip = rightEdge[rightEdge.length - 1];
+    const distance = (a, b) => Math.hypot((a?.x ?? 0) - (b?.x ?? 0), (a?.y ?? 0) - (b?.y ?? 0));
+
+    let arcPoints = [];
+    if (arcSegments.length > 0) {
+        let bestSegment = null;
+        let bestScore = Number.POSITIVE_INFINITY;
+        for (const seg of arcSegments) {
+            if (seg.length < 2) continue;
+            const score = distance(leftTip, seg[0]) + distance(rightTip, seg[seg.length - 1]);
+            if (score < bestScore) {
+                bestScore = score;
+                bestSegment = seg;
+            }
+        }
+        arcPoints = bestSegment || [];
+    }
+
+    if (arcPoints.length < 2) {
+        arcPoints = [leftTip, rightTip];
+    }
+
+    const rightInward = rightEdge.slice().reverse().slice(1);
+    const jumpLimit = Math.max(24, Math.min(width, height) * 0.35);
+    const leftArcConnectOk = distance(leftTip, arcPoints[0]) <= jumpLimit;
+    const rightArcConnectOk = distance(rightTip, arcPoints[arcPoints.length - 1]) <= jumpLimit;
+
+    ctx.save();
+    if (leftArcConnectOk && rightArcConnectOk) {
+        ctx.beginPath();
+        ctx.moveTo(station.x, station.y);
+        for (const p of leftEdge.slice(1)) {
+            ctx.lineTo(p.x, p.y);
+        }
+        for (const p of arcPoints.slice(1)) {
+            ctx.lineTo(p.x, p.y);
+        }
+        for (const p of rightInward) {
+            ctx.lineTo(p.x, p.y);
+        }
+        ctx.closePath();
+        ctx.fillStyle = fillStyle;
+        ctx.fill();
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(station.x, station.y);
+    for (const p of leftEdge.slice(1)) {
+        ctx.lineTo(p.x, p.y);
+    }
+    if (leftArcConnectOk && rightArcConnectOk) {
+        for (const p of arcPoints.slice(1)) {
+            ctx.lineTo(p.x, p.y);
+        }
+    }
+    for (const p of rightInward) {
+        ctx.lineTo(p.x, p.y);
+    }
+    ctx.moveTo(leftTip.x, leftTip.y);
+    if (leftArcConnectOk && rightArcConnectOk) {
+        for (const p of arcPoints.slice(1)) {
+            ctx.lineTo(p.x, p.y);
+        }
+    }
+    ctx.strokeStyle = lineStyle;
+    ctx.lineWidth = 1.7;
+    ctx.stroke();
+    ctx.restore();
+}
+
+function drawAntennaOverlay(ctx, width, height) {
+    const overlay = state.antennaOverlay;
+    if (!overlay?.enabled) return;
+
+    const stationPoint = projectToCanvas(overlay.stationLat, overlay.stationLng, width, height);
+    if (!stationPoint) return;
+
+    const station = {
+        lat: overlay.stationLat,
+        lng: overlay.stationLng,
+        x: stationPoint.x,
+        y: stationPoint.y
+    };
+
+    const radiusKm = Math.max(1000, Math.min(state.horizonKm * 0.9, 12000));
+    const heading = overlay.azimuthDeg;
+    const beamwidth = overlay.beamwidth3dBDeg;
+    const isDark = state.theme === 'dark';
+
+    const forwardFill = isDark ? 'rgba(255, 196, 84, 0.10)' : 'rgba(255, 161, 64, 0.12)';
+    const backwardFill = isDark ? 'rgba(111, 185, 255, 0.09)' : 'rgba(63, 137, 255, 0.08)';
+    const forwardLine = isDark ? 'rgba(255, 222, 155, 0.92)' : 'rgba(184, 82, 0, 0.95)';
+    const backwardLine = isDark ? 'rgba(155, 209, 255, 0.92)' : 'rgba(20, 91, 187, 0.95)';
+
+    if (overlay.mode === 'forward' || overlay.mode === 'bidirectional') {
+        drawAntennaDirectionalLobe(ctx, width, height, station, heading, beamwidth, radiusKm, forwardFill, forwardLine);
+    }
+    if (overlay.mode === 'backward' || overlay.mode === 'bidirectional') {
+        drawAntennaDirectionalLobe(ctx, width, height, station, heading + 180, beamwidth, radiusKm, backwardFill, backwardLine);
+    }
+
+    const drawBearingCurve = (bearingDeg, dashed = false) => {
+        const points = [];
+        const segments = 28;
+        for (let i = 0; i <= segments; i += 1) {
+            const d = (radiusKm * i) / segments;
+            const [lat, lng] = destinationPoint(station.lat, station.lng, bearingDeg, d);
+            const p = projectToCanvas(lat, lng, width, height);
+            if (!p) break;
+            points.push(p);
+        }
+        if (points.length < 2) return;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i += 1) {
+            ctx.lineTo(points[i].x, points[i].y);
+        }
+
+        if (dashed) {
+            // Use a stable highlight style (glow + dotted line) instead of animated
+            // dash offset to avoid jitter when render cadence is irregular.
+            ctx.strokeStyle = isDark ? 'rgba(112, 223, 255, 0.26)' : 'rgba(0, 123, 170, 0.22)';
+            ctx.lineWidth = 4.2;
+            ctx.setLineDash([]);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i += 1) {
+                ctx.lineTo(points[i].x, points[i].y);
+            }
+            ctx.strokeStyle = isDark ? 'rgba(130, 232, 255, 0.98)' : 'rgba(0, 123, 170, 0.96)';
+            ctx.lineWidth = 1.8;
+            ctx.lineCap = 'round';
+            ctx.setLineDash([1.2, 6.2]);
+            ctx.stroke();
+
+            const tip = points[points.length - 1];
+            if (tip) {
+                ctx.beginPath();
+                ctx.arc(tip.x, tip.y, 2.8, 0, Math.PI * 2);
+                ctx.fillStyle = isDark ? 'rgba(130, 232, 255, 0.95)' : 'rgba(0, 123, 170, 0.9)';
+                ctx.fill();
+            }
+        } else {
+            ctx.strokeStyle = isDark ? 'rgba(255, 228, 181, 0.95)' : 'rgba(125, 56, 0, 0.95)';
+            ctx.lineWidth = 0.9;
+            ctx.setLineDash([]);
+        }
+        if (!dashed) ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+    };
+
+    drawBearingCurve(heading, false);
+
+    if (Number.isFinite(overlay.pendingTargetBearingDeg)) {
+        const angularDelta = Math.abs((((overlay.pendingTargetBearingDeg - heading + 540) % 360) - 180));
+        const shouldShowTargetLine = angularDelta > 20;
+        if (shouldShowTargetLine) {
+            drawBearingCurve(overlay.pendingTargetBearingDeg, true);
+        }
+    }
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(station.x, station.y, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = isDark ? '#ffe0ab' : '#8b3a00';
+    ctx.fill();
+    ctx.restore();
 }
 
 function drawActiveAreaOverlay(ctx, width, height, filteredSpots, maxClusterDist) {
@@ -1097,15 +1653,18 @@ function drawActiveAreaOverlay(ctx, width, height, filteredSpots, maxClusterDist
 function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClusterDist) {
     if (style === 'grid-snr') {
         const squares = gridSquares || collectGridSquares(filteredSpots, getGridResolution());
+        let hiddenSquares = 0;
         for (const loc of Object.keys(squares)) {
-            const bounds = locatorToBounds(loc);
-            if (!bounds) continue;
-            const lat = (bounds[0][0] + bounds[1][0]) / 2;
-            const lng = (bounds[0][1] + bounds[1][1]) / 2;
-            const p = projectToCanvas(lat, lng, width, height);
-            if (!p) continue;
+            const corners = getProjectedGridCellCorners(loc, width, height);
+            if (!corners) {
+                hiddenSquares += 1;
+                continue;
+            }
+
             const entry = squares[loc];
-            const avgSnr = entry.snrSum / Math.max(1, entry.count);
+            const maxSnr = Number.isFinite(entry.maxSnr)
+                ? entry.maxSnr
+                : (entry.snrSum / Math.max(1, entry.count));
             let dominantBand = 'all';
             let maxCount = 0;
             for (const band of Object.keys(entry.bands)) {
@@ -1115,14 +1674,26 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
                 }
             }
             ctx.fillStyle = bandColors[dominantBand] || bandColors.all;
-            ctx.globalAlpha = avgSnr >= 10 ? 0.9 : avgSnr >= 0 ? 0.65 : 0.35;
-            ctx.fillRect(p.x - 4, p.y - 4, 8, 8);
+            ctx.globalAlpha = maxSnr >= 10 ? 0.72 : maxSnr >= 0 ? 0.45 : 0.22;
+
+            ctx.beginPath();
+            ctx.moveTo(corners[0].x, corners[0].y);
+            for (let i = 1; i < corners.length; i += 1) {
+                ctx.lineTo(corners[i].x, corners[i].y);
+            }
+            ctx.closePath();
+            ctx.fill();
         }
+        state.hiddenGridSquaresCount = hiddenSquares;
+        drawDxClusterSpots(ctx, width, height, filteredSpots);
         ctx.globalAlpha = 1;
         return;
     }
 
+    state.hiddenGridSquaresCount = 0;
+
     for (const spot of filteredSpots) {
+        if (String(spot?.sourceType || '').toLowerCase() === 'dxcluster') continue;
         const p = projectToCanvas(spot.lat, spot.lng, width, height);
         if (!p) continue;
         const color = bandColors[spot.band] || bandColors.all;
@@ -1132,6 +1703,7 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
         ctx.globalAlpha = 0.8;
         ctx.fill();
     }
+    drawDxClusterSpots(ctx, width, height, filteredSpots);
     ctx.globalAlpha = 1;
 }
 
@@ -1139,7 +1711,9 @@ function withHorizonClip(ctx, width, height, drawFn) {
     const radiusBase = Math.min(width, height) * 0.47;
     const scale = (radiusBase * state.zoom) / Math.PI;
     const horizonAngular = Math.min(MAX_VISIBLE_C, state.horizonKm / EARTH_RADIUS_KM);
-    const clipRadius = Math.max(1, scale * horizonAngular);
+    const rawClipRadius = scale * horizonAngular;
+    const maxInsideScaleRadius = Math.max(1, radiusBase - AZIMUTH_SCALE_CLEARANCE_PX);
+    const clipRadius = Math.max(1, Math.min(rawClipRadius, maxInsideScaleRadius));
 
     ctx.save();
     ctx.beginPath();
@@ -1173,8 +1747,15 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
         maxClusterDist: Math.max(100, parseInt(document.getElementById('cluster-distance')?.value || '500', 10) || 500)
     };
 
+    state.hiddenGridSquaresCount = 0;
+
+    if (profile) profile.filterStart = nowMs();
     const filteredSpots = getFilteredSpots(spots, renderCtx);
-    const gridSquares = resolvedStyle === 'grid-snr' ? collectGridSquares(filteredSpots, getGridResolution()) : null;
+    if (profile) profile.filterEnd = nowMs();
+
+    if (profile) profile.gridStart = nowMs();
+    const gridSquares = resolvedStyle === 'grid-snr' ? collectGridSquares(spots, getGridResolution(), filteredSpots) : null;
+    if (profile) profile.gridEnd = nowMs();
 
     const width = canvas.clientWidth || 1;
     const height = canvas.clientHeight || 1;
@@ -1197,7 +1778,9 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
         if (profile) profile.worldEnd = nowMs();
 
         if (getGraylineEnabled()) {
+            if (profile) profile.graylineStart = nowMs();
             drawGrayline(state.ctx, width, height);
+            if (profile) profile.graylineEnd = nowMs();
         }
 
         if (profile) profile.spotsStart = nowMs();
@@ -1209,6 +1792,12 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
             drawDxccLabels(state.ctx, width, height, plan);
             if (profile) profile.dxccEnd = nowMs();
         }
+
+        if (profile) profile.targetStart = nowMs();
+        drawTargetHighlight(state.ctx, width, height);
+        if (profile) profile.targetEnd = nowMs();
+
+        drawAntennaOverlay(state.ctx, width, height);
     });
 
     if (profile) profile.scaleStart = nowMs();
@@ -1224,10 +1813,16 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
         // eslint-disable-next-line no-console
         console.debug('[azimuthProfile]', {
             totalMs: Number((end - profile.start).toFixed(2)),
+            filterMs: Number(((profile.filterEnd || end) - (profile.filterStart || profile.start)).toFixed(2)),
+            gridMs: Number(((profile.gridEnd || end) - (profile.gridStart || profile.start)).toFixed(2)),
             planMs: Number(((profile.planEnd || end) - (profile.planStart || profile.start)).toFixed(2)),
             worldMs: Number(((profile.worldEnd || end) - (profile.worldStart || profile.start)).toFixed(2)),
+            graylineMs: profile.graylineStart
+                ? Number(((profile.graylineEnd || end) - profile.graylineStart).toFixed(2))
+                : 0,
             spotsMs: Number(((profile.spotsEnd || end) - (profile.spotsStart || profile.start)).toFixed(2)),
             scaleMs: Number(((profile.scaleEnd || end) - (profile.scaleStart || profile.start)).toFixed(2)),
+            targetMs: Number(((profile.targetEnd || end) - (profile.targetStart || profile.start)).toFixed(2)),
             dxccMs: state.dxccLabelsEnabled
                 ? Number(((profile.dxccEnd || end) - (profile.dxccStart || profile.start)).toFixed(2))
                 : 0,
