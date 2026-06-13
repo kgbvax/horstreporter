@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -15,14 +13,56 @@ import (
 
 const defaultDxPostgresDSN = "postgres://dxuser@localhost:5432/dxdata?sslmode=disable"
 
+const (
+	dxBaselineFlushInterval   = 2000 * time.Millisecond
+	dxBaselineFlushMaxPending = 2048
+)
+
 type dxPostgresStore struct {
 	pool *pgxpool.Pool
+
+	mu            sync.Mutex
+	pendingGlobal map[baselineGlobalKey]baselineDelta
+	pendingTarget map[baselineTargetDeltaKey]baselineDelta
+	pendingRegion map[dxPulseRegionBaselineDailyKey]int64
+	pendingCount    int
+	pendingRawSpots []rawSpotRow
+
+	flushCh chan struct{}
+	stopCh  chan struct{}
+	wg      sync.WaitGroup
+}
+
+type baselineDelta struct {
+	Count int64
+}
+
+type baselineGlobalKey struct {
+	Band         string
+	SlotOfDay    int
+	Source4      string
+	DistanceTier int
+	SnrTier      int
+}
+
+type baselineTargetDeltaKey struct {
+	TargetToken  string
+	Band         string
+	SlotOfDay    int
+	Source4      string
+	DistanceTier int
+	SnrTier      int
 }
 
 type baselinePair struct {
 	DistanceTier int
 	SnrTier      int
 	Count        int64
+}
+
+type rawSpotRow struct {
+	m    MQTTMessage
+	band string
 }
 
 type dxPulseRegionBaselineDailyKey struct {
@@ -46,17 +86,191 @@ func newDxPostgresStore(ctx context.Context, dsn string) (*dxPostgresStore, erro
 		return nil, err
 	}
 	st := &dxPostgresStore{pool: pool}
+	st.pendingGlobal = make(map[baselineGlobalKey]baselineDelta, 2048)
+	st.pendingTarget = make(map[baselineTargetDeltaKey]baselineDelta, 4096)
+	st.pendingRegion = make(map[dxPulseRegionBaselineDailyKey]int64, 2048)
+	st.pendingRawSpots = make([]rawSpotRow, 0, 512)
+	st.flushCh = make(chan struct{}, 1)
+	st.stopCh = make(chan struct{})
 	if err := st.initSchema(ctx); err != nil {
 		pool.Close()
 		return nil, err
 	}
+	st.startBatchFlusher()
 	return st, nil
 }
 
 func (s *dxPostgresStore) Close() {
-	if s != nil && s.pool != nil {
+	if s == nil {
+		return
+	}
+	close(s.stopCh)
+	s.wg.Wait()
+	if s.pool != nil {
 		s.pool.Close()
 	}
+}
+
+func (s *dxPostgresStore) startBatchFlusher() {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(dxBaselineFlushInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.flushPendingWithTimeout(4 * time.Second)
+			case <-s.flushCh:
+				s.flushPendingWithTimeout(4 * time.Second)
+			case <-s.stopCh:
+				s.flushPendingWithTimeout(5 * time.Second)
+				return
+			}
+		}
+	}()
+}
+
+func (s *dxPostgresStore) signalFlush() {
+	select {
+	case s.flushCh <- struct{}{}:
+	default:
+	}
+}
+
+func (s *dxPostgresStore) flushPendingWithTimeout(timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := s.flushPending(ctx); err != nil {
+		logDebug("DX postgres baseline batch flush failed: %v", err)
+	}
+	if err := s.flushRawSpots(ctx); err != nil {
+		logDebug("DX postgres raw spot batch flush failed: %v", err)
+	}
+}
+
+func (s *dxPostgresStore) flushPending(ctx context.Context) error {
+	s.mu.Lock()
+	if len(s.pendingGlobal) == 0 && len(s.pendingTarget) == 0 && len(s.pendingRegion) == 0 {
+		s.mu.Unlock()
+		return nil
+	}
+
+	global := s.pendingGlobal
+	target := s.pendingTarget
+	region := s.pendingRegion
+	globalCount := len(global)
+	targetCount := len(target)
+	regionCount := len(region)
+	s.pendingGlobal = make(map[baselineGlobalKey]baselineDelta, len(global)/2+16)
+	s.pendingTarget = make(map[baselineTargetDeltaKey]baselineDelta, len(target)/2+16)
+	s.pendingRegion = make(map[dxPulseRegionBaselineDailyKey]int64, len(region)/2+16)
+	s.pendingCount = 0
+	s.mu.Unlock()
+
+	started := time.Now()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		s.mergePendingBack(global, target, region)
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	batch := &pgx.Batch{}
+	queued := 0
+
+	for k, d := range global {
+		batch.Queue(`
+			INSERT INTO dx_baseline_global (band, slot_of_day, source4, distance_tier, snr_tier, count)
+			VALUES ($1,$2,$3,$4,$5,$6)
+			ON CONFLICT (band, slot_of_day, source4, distance_tier, snr_tier)
+			DO UPDATE SET
+				count = dx_baseline_global.count + EXCLUDED.count
+		`, k.Band, k.SlotOfDay, k.Source4, k.DistanceTier, k.SnrTier, d.Count)
+		queued++
+	}
+
+	for k, d := range target {
+		batch.Queue(`
+			INSERT INTO dx_baseline_target (target_token, band, slot_of_day, source4, distance_tier, snr_tier, count)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
+			ON CONFLICT (target_token, band, slot_of_day, source4, distance_tier, snr_tier)
+			DO UPDATE SET
+				count = dx_baseline_target.count + EXCLUDED.count
+		`, k.TargetToken, k.Band, k.SlotOfDay, k.Source4, k.DistanceTier, k.SnrTier, d.Count)
+		queued++
+	}
+
+	for k, v := range region {
+		batch.Queue(`
+			INSERT INTO dx_region_baseline_daily (target_grid4, band, slot_of_day, region, day_index, spot_count)
+			VALUES ($1,$2,$3,$4,$5,$6)
+			ON CONFLICT (target_grid4, band, slot_of_day, region, day_index)
+			DO UPDATE SET spot_count = dx_region_baseline_daily.spot_count + EXCLUDED.spot_count
+		`, k.TargetGrid4, k.Band, k.SlotOfDay, k.Region, k.DayIndex, v)
+		queued++
+	}
+
+	if queued > 0 {
+		br := tx.SendBatch(ctx, batch)
+		for i := 0; i < queued; i++ {
+			if _, err := br.Exec(); err != nil {
+				_ = br.Close()
+				s.mergePendingBack(global, target, region)
+				return err
+			}
+		}
+		if err := br.Close(); err != nil {
+			s.mergePendingBack(global, target, region)
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		s.mergePendingBack(global, target, region)
+		return err
+	}
+	logDebug("DX postgres baseline batch flushed: global=%d target=%d region=%d total=%d in %s", globalCount, targetCount, regionCount, globalCount+targetCount+regionCount, time.Since(started).Round(time.Millisecond))
+	return nil
+}
+
+func (s *dxPostgresStore) mergePendingBack(global map[baselineGlobalKey]baselineDelta, target map[baselineTargetDeltaKey]baselineDelta, region map[dxPulseRegionBaselineDailyKey]int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for k, d := range global {
+		e := s.pendingGlobal[k]
+		e.Count += d.Count
+		s.pendingGlobal[k] = e
+		s.pendingCount++
+	}
+	for k, d := range target {
+		e := s.pendingTarget[k]
+		e.Count += d.Count
+		s.pendingTarget[k] = e
+		s.pendingCount++
+	}
+	for k, v := range region {
+		s.pendingRegion[k] += v
+		s.pendingCount++
+	}
+}
+
+func dedupeTargetTokens(targetTokens [4]string) []string {
+	seen := make(map[string]struct{}, len(targetTokens))
+	out := make([]string, 0, len(targetTokens))
+	for i := range targetTokens {
+		t := normalizeTargetTokenUpper(targetTokens[i])
+		if t == "" {
+			continue
+		}
+		if _, exists := seen[t]; exists {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out
 }
 
 func (s *dxPostgresStore) initSchema(ctx context.Context) error {
@@ -69,11 +283,8 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			distance_tier INTEGER NOT NULL,
 			snr_tier INTEGER NOT NULL,
 			count BIGINT NOT NULL,
-			sum_distance DOUBLE PRECISION NOT NULL,
-			sum_snr DOUBLE PRECISION NOT NULL,
 			PRIMARY KEY (band, slot_of_day, source4, distance_tier, snr_tier)
 		);`,
-		`CREATE INDEX IF NOT EXISTS idx_dx_baseline_global_band_slot ON dx_baseline_global (band, slot_of_day);`,
 		`CREATE TABLE IF NOT EXISTS dx_baseline_target (
 			target_token TEXT NOT NULL,
 			band TEXT NOT NULL,
@@ -82,11 +293,12 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			distance_tier INTEGER NOT NULL,
 			snr_tier INTEGER NOT NULL,
 			count BIGINT NOT NULL,
-			sum_distance DOUBLE PRECISION NOT NULL,
-			sum_snr DOUBLE PRECISION NOT NULL,
 			PRIMARY KEY (target_token, band, slot_of_day, source4, distance_tier, snr_tier)
 		);`,
-		`CREATE INDEX IF NOT EXISTS idx_dx_baseline_target_token_band_slot ON dx_baseline_target (target_token, band, slot_of_day);`,
+		`ALTER TABLE dx_baseline_global DROP COLUMN IF EXISTS sum_distance;`,
+		`ALTER TABLE dx_baseline_global DROP COLUMN IF EXISTS sum_snr;`,
+		`ALTER TABLE dx_baseline_target DROP COLUMN IF EXISTS sum_distance;`,
+		`ALTER TABLE dx_baseline_target DROP COLUMN IF EXISTS sum_snr;`,
 		`CREATE TABLE IF NOT EXISTS dx_raw_spots (
 			id BIGSERIAL PRIMARY KEY,
 			spot_time BIGINT NOT NULL,
@@ -98,7 +310,11 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			mode TEXT NOT NULL,
 			signal_report_db INTEGER NOT NULL,
 			source_grid4 TEXT NOT NULL,
-			spot_geom geometry(Point, 4326)
+			spot_geom geometry(Point, 4326),
+			source_type TEXT NOT NULL DEFAULT 'mqtt',
+			spotter_callsign TEXT NOT NULL DEFAULT '',
+			frequency_khz DOUBLE PRECISION,
+			comment TEXT NOT NULL DEFAULT ''
 		);`,
 		`DO $$
 		BEGIN
@@ -164,8 +380,13 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			END IF;
 		END
 		$$;`,
+		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'mqtt';`,
+		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS spotter_callsign TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS frequency_khz DOUBLE PRECISION;`,
+		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS comment TEXT NOT NULL DEFAULT '';`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_spot_time ON dx_raw_spots (spot_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_band_spot_time ON dx_raw_spots (band, spot_time);`,
+		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_source_type_spot_time ON dx_raw_spots (source_type, spot_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_spot_geom ON dx_raw_spots USING GIST (spot_geom);`,
 		`CREATE TABLE IF NOT EXISTS dx_region_baseline_daily (
 			target_grid4 TEXT NOT NULL,
@@ -176,7 +397,6 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			spot_count BIGINT NOT NULL,
 			PRIMARY KEY (target_grid4, band, slot_of_day, region, day_index)
 		);`,
-		`CREATE INDEX IF NOT EXISTS idx_dx_region_baseline_lookup ON dx_region_baseline_daily (target_grid4, band, slot_of_day, region, day_index);`,
 		`CREATE TABLE IF NOT EXISTS dx_meta (
 			k TEXT PRIMARY KEY,
 			v TEXT NOT NULL
@@ -187,138 +407,92 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
-}
 
-func (s *dxPostgresStore) isEmpty(ctx context.Context) (bool, error) {
-	var total int64
-	err := s.pool.QueryRow(ctx, `
-		SELECT
-			(SELECT COUNT(*) FROM dx_baseline_global) +
-			(SELECT COUNT(*) FROM dx_baseline_target) +
-			(SELECT COUNT(*) FROM dx_raw_spots)
-	`).Scan(&total)
-	if err != nil {
-		return false, err
-	}
-	return total == 0, nil
-}
-
-func (s *dxPostgresStore) migrateFromJSONIfNeeded(ctx context.Context, jsonPath string) error {
-	empty, err := s.isEmpty(ctx)
-	if err != nil {
-		return err
-	}
-	if !empty {
-		return nil
-	}
-	jsonPath = strings.TrimSpace(jsonPath)
-	if jsonPath == "" {
-		return nil
-	}
-	raw, err := os.ReadFile(jsonPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-	var snap baselineSnapshot
-	if err := json.Unmarshal(raw, &snap); err != nil {
-		return err
+	type optionalMaintenanceStmt struct {
+		name string
+		sql  string
 	}
 
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	for _, b := range snap.Buckets {
-		if b == nil {
-			continue
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO dx_baseline_global (band, slot_of_day, source4, distance_tier, snr_tier, count, sum_distance, sum_snr)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-			ON CONFLICT (band, slot_of_day, source4, distance_tier, snr_tier)
-			DO UPDATE SET
-				count = dx_baseline_global.count + EXCLUDED.count,
-				sum_distance = dx_baseline_global.sum_distance + EXCLUDED.sum_distance,
-				sum_snr = dx_baseline_global.sum_snr + EXCLUDED.sum_snr
-		`, normalizeBand(b.Band), b.SlotOfDay, normalizeSource4(b.Source4), b.DistanceTier, b.SnrTier, b.Count, b.SumDistance, b.SumSNR); err != nil {
-			return err
-		}
-	}
-	for k, b := range snap.TargetBuckets {
-		if b == nil {
-			continue
-		}
-		target := k
-		if i := strings.IndexByte(k, '|'); i > 0 {
-			target = k[:i]
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO dx_baseline_target (target_token, band, slot_of_day, source4, distance_tier, snr_tier, count, sum_distance, sum_snr)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-			ON CONFLICT (target_token, band, slot_of_day, source4, distance_tier, snr_tier)
-			DO UPDATE SET
-				count = dx_baseline_target.count + EXCLUDED.count,
-				sum_distance = dx_baseline_target.sum_distance + EXCLUDED.sum_distance,
-				sum_snr = dx_baseline_target.sum_snr + EXCLUDED.sum_snr
-		`, normalizeTargetToken(target), normalizeBand(b.Band), b.SlotOfDay, normalizeSource4(b.Source4), b.DistanceTier, b.SnrTier, b.Count, b.SumDistance, b.SumSNR); err != nil {
-			return err
-		}
-	}
-	for _, ev := range snap.Events {
-		s4 := normalizeSource4(ev.SL)
-		lat, lon := locatorToLatLng(s4)
-		_, err := tx.Exec(ctx, `
-			INSERT INTO dx_raw_spots (
-				spot_time, band, sender_callsign, receiver_callsign,
-				sender_locator, receiver_locator, mode, signal_report_db,
-				source_grid4, spot_geom
-			)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
-				CASE WHEN $10::float8 = 0 AND $11::float8 = 0 THEN NULL
-				ELSE ST_SetSRID(ST_MakePoint($11, $10), 4326) END)
-		`, ev.T, normalizeBand(ev.B), strings.ToUpper(ev.SC), strings.ToUpper(ev.RC), strings.ToUpper(ev.SL), strings.ToUpper(ev.RL), "", ev.RP, s4, lat, lon)
-		if err != nil {
-			return err
-		}
+	optional := []optionalMaintenanceStmt{
+		{
+			name: "drop legacy idx_dx_raw_spots_t",
+			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_raw_spots_t;`,
+		},
+		{
+			name: "drop legacy idx_dx_raw_spots_band_t",
+			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_raw_spots_band_t;`,
+		},
+		{
+			name: "drop legacy idx_dx_raw_spots_geom",
+			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_raw_spots_geom;`,
+		},
+		{
+			name: "drop redundant idx_dx_baseline_global_band_slot",
+			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_baseline_global_band_slot;`,
+		},
+		{
+			name: "drop redundant idx_dx_baseline_target_token_band_slot",
+			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_baseline_target_token_band_slot;`,
+		},
+		{
+			name: "drop redundant idx_dx_region_baseline_lookup",
+			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_region_baseline_lookup;`,
+		},
+		{
+			name: "tune autovacuum dx_baseline_target",
+			sql: `ALTER TABLE dx_baseline_target SET (
+				autovacuum_vacuum_scale_factor = 0.01,
+				autovacuum_vacuum_threshold = 50000,
+				autovacuum_analyze_scale_factor = 0.005,
+				autovacuum_analyze_threshold = 50000
+			);`,
+		},
+		{
+			name: "tune autovacuum dx_baseline_global",
+			sql: `ALTER TABLE dx_baseline_global SET (
+				autovacuum_vacuum_scale_factor = 0.02,
+				autovacuum_vacuum_threshold = 20000,
+				autovacuum_analyze_scale_factor = 0.01,
+				autovacuum_analyze_threshold = 20000
+			);`,
+		},
+		{
+			name: "tune autovacuum dx_region_baseline_daily",
+			sql: `ALTER TABLE dx_region_baseline_daily SET (
+				autovacuum_vacuum_scale_factor = 0.02,
+				autovacuum_vacuum_threshold = 20000,
+				autovacuum_analyze_scale_factor = 0.01,
+				autovacuum_analyze_threshold = 20000
+			);`,
+		},
 	}
 
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO dx_meta (k,v) VALUES ('json_migrated_at',$1)
-		ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v
-	`, fmt.Sprintf("%d", time.Now().Unix())); err != nil {
-		return err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return err
+	for _, st := range optional {
+		if _, err := s.pool.Exec(ctx, st.sql); err != nil {
+			logInfo("DX postgres optional schema maintenance skipped (%s): %v", st.name, err)
+		}
 	}
 	return nil
 }
 
 func (s *dxPostgresStore) ensureDxPulseRegionBaseline(ctx context.Context) error {
-	var baselineRows int64
-	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM dx_region_baseline_daily`).Scan(&baselineRows); err != nil {
+	var baselineExists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM dx_region_baseline_daily LIMIT 1)`).Scan(&baselineExists); err != nil {
 		return err
 	}
-	if baselineRows > 0 {
+	if baselineExists {
 		return nil
 	}
 
-	var rawRows int64
-	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM dx_raw_spots`).Scan(&rawRows); err != nil {
+	var rawExists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM dx_raw_spots LIMIT 1)`).Scan(&rawExists); err != nil {
 		return err
 	}
-	if rawRows == 0 {
+	if !rawExists {
 		return nil
 	}
 
-	logInfo("DXPulse region baseline backfill starting from %d raw spots", rawRows)
+	logInfo("DXPulse region baseline backfill starting from existing raw spots")
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT spot_time, band, sender_locator, receiver_locator
@@ -451,11 +625,11 @@ func (s *dxPostgresStore) dxPulseBaselineForTargets(targets []string, lookbackDa
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	var baselineRows int64
-	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM dx_region_baseline_daily`).Scan(&baselineRows); err != nil {
+	var baselineExists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM dx_region_baseline_daily LIMIT 1)`).Scan(&baselineExists); err != nil {
 		return nil, false, err
 	}
-	if baselineRows == 0 {
+	if !baselineExists {
 		return map[string]*dxPulseBaselineAccumulator{}, false, nil
 	}
 
@@ -495,77 +669,149 @@ func (s *dxPostgresStore) dxPulseBaselineForTargets(targets []string, lookbackDa
 	return out, true, rows.Err()
 }
 
-func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay int, source4 string, distTier, snrTier int, distanceKm float64, targetTokens [4]string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay int, source4 string, distTier, snrTier int, targetTokens [4]string) error {
+	uniqueTargets := dedupeTargetTokens(targetTokens)
 
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO dx_baseline_global (band, slot_of_day, source4, distance_tier, snr_tier, count, sum_distance, sum_snr)
-		VALUES ($1,$2,$3,$4,$5,1,$6,$7)
-		ON CONFLICT (band, slot_of_day, source4, distance_tier, snr_tier)
-		DO UPDATE SET
-			count = dx_baseline_global.count + 1,
-			sum_distance = dx_baseline_global.sum_distance + EXCLUDED.sum_distance,
-			sum_snr = dx_baseline_global.sum_snr + EXCLUDED.sum_snr
-	`, band, slotOfDay, source4, distTier, snrTier, distanceKm, float64(m.RP))
-	if err != nil {
-		return err
+	s.mu.Lock()
+	gk := baselineGlobalKey{
+		Band:         band,
+		SlotOfDay:    slotOfDay,
+		Source4:      source4,
+		DistanceTier: distTier,
+		SnrTier:      snrTier,
 	}
+	gd := s.pendingGlobal[gk]
+	gd.Count += 1
+	s.pendingGlobal[gk] = gd
+	s.pendingCount++
 
-	for i := range targetTokens {
-		t := normalizeTargetTokenUpper(targetTokens[i])
-		if t == "" {
-			continue
+	for _, t := range uniqueTargets {
+		tk := baselineTargetDeltaKey{
+			TargetToken:  t,
+			Band:         band,
+			SlotOfDay:    slotOfDay,
+			Source4:      source4,
+			DistanceTier: distTier,
+			SnrTier:      snrTier,
 		}
-		duplicate := false
-		for j := 0; j < i; j++ {
-			if normalizeTargetTokenUpper(targetTokens[j]) == t {
-				duplicate = true
-				break
-			}
-		}
-		if duplicate {
-			continue
-		}
-		if _, err := s.pool.Exec(ctx, `
-			INSERT INTO dx_baseline_target (target_token, band, slot_of_day, source4, distance_tier, snr_tier, count, sum_distance, sum_snr)
-			VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8)
-			ON CONFLICT (target_token, band, slot_of_day, source4, distance_tier, snr_tier)
-			DO UPDATE SET
-				count = dx_baseline_target.count + 1,
-				sum_distance = dx_baseline_target.sum_distance + EXCLUDED.sum_distance,
-				sum_snr = dx_baseline_target.sum_snr + EXCLUDED.sum_snr
-		`, t, band, slotOfDay, source4, distTier, snrTier, distanceKm, float64(m.RP)); err != nil {
-			return err
-		}
-	}
-
-	lat, lon := locatorToLatLng(source4)
-	_, err = s.pool.Exec(ctx, `
-		INSERT INTO dx_raw_spots (
-			spot_time, band, sender_callsign, receiver_callsign,
-			sender_locator, receiver_locator, mode, signal_report_db,
-			source_grid4, spot_geom
-		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
-			CASE WHEN $10::float8 = 0 AND $11::float8 = 0 THEN NULL
-			ELSE ST_SetSRID(ST_MakePoint($11, $10), 4326) END)
-	`, m.T, band, m.SC, m.RC, m.SL, m.RL, m.MD, m.RP, source4, lat, lon)
-	if err != nil {
-		return err
+		td := s.pendingTarget[tk]
+		td.Count += 1
+		s.pendingTarget[tk] = td
+		s.pendingCount++
 	}
 
 	for _, key := range dxPulseRegionBaselineKeysForSpot(m.T, band, m.SL, m.RL) {
-		if _, err := s.pool.Exec(ctx, `
-			INSERT INTO dx_region_baseline_daily (target_grid4, band, slot_of_day, region, day_index, spot_count)
-			VALUES ($1,$2,$3,$4,$5,1)
-			ON CONFLICT (target_grid4, band, slot_of_day, region, day_index)
-			DO UPDATE SET spot_count = dx_region_baseline_daily.spot_count + 1
-		`, key.TargetGrid4, key.Band, key.SlotOfDay, key.Region, key.DayIndex); err != nil {
+		s.pendingRegion[key] += 1
+		s.pendingCount++
+	}
+
+	s.pendingRawSpots = append(s.pendingRawSpots, rawSpotRow{m: m, band: band})
+	shouldFlush := s.pendingCount >= dxBaselineFlushMaxPending
+	s.mu.Unlock()
+
+	if shouldFlush {
+		s.signalFlush()
+	}
+	return nil
+}
+
+func (s *dxPostgresStore) flushRawSpots(ctx context.Context) error {
+	s.mu.Lock()
+	if len(s.pendingRawSpots) == 0 {
+		s.mu.Unlock()
+		return nil
+	}
+	rows := s.pendingRawSpots
+	s.pendingRawSpots = make([]rawSpotRow, 0, len(rows)/2+16)
+	s.mu.Unlock()
+
+	batch := &pgx.Batch{}
+	for _, row := range rows {
+		source4 := normalizeSource4(row.m.SL)
+		lat, lon := locatorToLatLng(source4)
+		batch.Queue(`
+			INSERT INTO dx_raw_spots (
+				spot_time, band, sender_callsign, receiver_callsign,
+				sender_locator, receiver_locator, mode, signal_report_db,
+				source_grid4, spot_geom,
+				source_type, spotter_callsign, frequency_khz, comment
+			)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
+				CASE WHEN $10::float8 = 0 AND $11::float8 = 0 THEN NULL
+				ELSE ST_SetSRID(ST_MakePoint($11, $10), 4326) END,
+				$12,$13,$14,$15)
+		`,
+			row.m.T,
+			row.band,
+			strings.ToUpper(strings.TrimSpace(row.m.SC)),
+			strings.ToUpper(strings.TrimSpace(row.m.RC)),
+			strings.ToUpper(strings.TrimSpace(row.m.SL)),
+			strings.ToUpper(strings.TrimSpace(row.m.RL)),
+			strings.ToUpper(strings.TrimSpace(row.m.MD)),
+			row.m.RP,
+			source4,
+			lat,
+			lon,
+			"mqtt",
+			"",
+			(*float64)(nil),
+			"",
+		)
+	}
+	br := s.pool.SendBatch(ctx, batch)
+	for range rows {
+		if _, err := br.Exec(); err != nil {
+			_ = br.Close()
 			return err
 		}
 	}
-	return nil
+	return br.Close()
+}
+
+func (s *dxPostgresStore) insertRawSpot(ctx context.Context, m MQTTMessage, band, sourceType, spotter string, frequencyKHz *float64, comment string) error {
+	if band == "" {
+		band = normalizeBand(m.B)
+	}
+	if band == "" {
+		band = "unknown"
+	}
+
+	source4 := normalizeSource4(m.SL)
+	lat, lon := locatorToLatLng(source4)
+
+	if strings.TrimSpace(sourceType) == "" {
+		sourceType = "mqtt"
+	}
+
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO dx_raw_spots (
+			spot_time, band, sender_callsign, receiver_callsign,
+			sender_locator, receiver_locator, mode, signal_report_db,
+			source_grid4, spot_geom,
+			source_type, spotter_callsign, frequency_khz, comment
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
+			CASE WHEN $10::float8 = 0 AND $11::float8 = 0 THEN NULL
+			ELSE ST_SetSRID(ST_MakePoint($11, $10), 4326) END,
+			$12,$13,$14,$15)
+	`,
+		m.T,
+		band,
+		strings.ToUpper(strings.TrimSpace(m.SC)),
+		strings.ToUpper(strings.TrimSpace(m.RC)),
+		strings.ToUpper(strings.TrimSpace(m.SL)),
+		strings.ToUpper(strings.TrimSpace(m.RL)),
+		strings.ToUpper(strings.TrimSpace(m.MD)),
+		m.RP,
+		source4,
+		lat,
+		lon,
+		strings.ToLower(strings.TrimSpace(sourceType)),
+		strings.ToUpper(strings.TrimSpace(spotter)),
+		frequencyKHz,
+		strings.TrimSpace(comment),
+	)
+	return err
 }
 
 func (s *dxPostgresStore) bandPairs(ctx context.Context, table string, targets []string, band string, slot int) ([]baselinePair, error) {
@@ -786,6 +1032,10 @@ func (s *dxPostgresStore) baselineStats(now int64) (int, int, int, error) {
 }
 
 func (s *dxPostgresStore) loadSpotsBetween(start, end int64) ([]MQTTMessage, error) {
+	return s.loadSpotsBetweenWithSourceFilter(start, end, true)
+}
+
+func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, includeDXCluster bool) ([]MQTTMessage, error) {
 	if end <= 0 {
 		end = time.Now().Unix()
 	}
@@ -802,8 +1052,9 @@ func (s *dxPostgresStore) loadSpotsBetween(start, end int64) ([]MQTTMessage, err
 			band, mode, signal_report_db
 		FROM dx_raw_spots
 		WHERE spot_time BETWEEN $1 AND $2
+		  AND ($3::bool OR LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster')
 		ORDER BY spot_time ASC
-	`, start, end)
+	`, start, end, includeDXCluster)
 	if err != nil {
 		return nil, err
 	}
@@ -820,7 +1071,7 @@ func (s *dxPostgresStore) loadSpotsBetween(start, end int64) ([]MQTTMessage, err
 	return out, rows.Err()
 }
 
-func (s *dxPostgresStore) loadRecentSpotCache(minutes int, now int64) ([]MQTTMessage, error) {
+func (s *dxPostgresStore) loadRecentSpotCache(minutes int, now int64, includeDXCluster bool) ([]MQTTMessage, error) {
 	if minutes <= 0 {
 		minutes = 60
 	}
@@ -828,5 +1079,5 @@ func (s *dxPostgresStore) loadRecentSpotCache(minutes int, now int64) ([]MQTTMes
 		now = time.Now().Unix()
 	}
 	windowStart := now - int64(minutes*60)
-	return s.loadSpotsBetween(windowStart, now)
+	return s.loadSpotsBetweenWithSourceFilter(windowStart, now, includeDXCluster)
 }

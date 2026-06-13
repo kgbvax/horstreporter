@@ -30,12 +30,14 @@ func (w *countingResponseWriter) Flush() {
 }
 
 type streamSpot struct {
-	Lat        float64 `json:"lat"`
-	Lng        float64 `json:"lng"`
-	SNR        int     `json:"snr"`
-	AgeSeconds int64   `json:"ageSeconds"`
-	Locator    string  `json:"locator"`
-	Band       string  `json:"band"`
+	Lat             float64 `json:"lat"`
+	Lng             float64 `json:"lng"`
+	SNR             int     `json:"snr"`
+	AgeSeconds      int64   `json:"ageSeconds"`
+	Locator         string  `json:"locator"`
+	ReporterLocator string  `json:"reporterLocator,omitempty"`
+	SourceType      string  `json:"sourceType,omitempty"`
+	Band            string  `json:"band"`
 }
 
 type squareDetailReport struct {
@@ -86,6 +88,12 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		send:    make(chan Spot, 10000), // Buffer to handle initial history dump
 	}
 
+	now := time.Now().Unix()
+	cutoff := now - historySeconds
+
+	// Add client and copy the relevant history window under the write lock.
+	// matchAndCreateSpot processing happens outside the lock so broadcastMsg
+	// is not stalled for the duration of the history scan.
 	hub.Lock()
 	if maxClients > 0 && len(hub.clients) >= maxClients {
 		hub.Unlock()
@@ -102,20 +110,19 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	streamAccounting.startSession()
 	logInfo("New client stream started for targets: %v (History: %d mins)", targets, minutes)
 
-	now := time.Now().Unix()
-	cutoff := now - historySeconds
-	var historySpots []Spot
-
 	idx := sort.Search(len(hub.history), func(i int) bool {
 		return hub.history[i].T >= cutoff
 	})
+	historyWindow := make([]MQTTMessage, len(hub.history)-idx)
+	copy(historyWindow, hub.history[idx:])
+	hub.Unlock()
 
-	for i := idx; i < len(hub.history); i++ {
-		if spot, ok := matchAndCreateSpot(client, hub.history[i], now); ok {
+	var historySpots []Spot
+	for _, msg := range historyWindow {
+		if spot, ok := matchAndCreateSpot(client, msg, now); ok {
 			historySpots = append(historySpots, spot)
 		}
 	}
-	hub.Unlock()
 
 	var cw *countingResponseWriter
 	defer func() {
@@ -203,12 +210,17 @@ func squareDetailsHandler(w http.ResponseWriter, r *http.Request) {
 	selectedBand := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("selected_band")))
 	enabledBands := parseEnabledBands(r.URL.Query().Get("enabled_bands"))
 
+	now := time.Now().Unix()
+	cutoff := now - int64(minutes*60)
 	hub.RLock()
-	historyCopy := make([]MQTTMessage, len(hub.history))
-	copy(historyCopy, hub.history)
+	idx := sort.Search(len(hub.history), func(i int) bool {
+		return hub.history[i].T >= cutoff
+	})
+	historyCopy := make([]MQTTMessage, len(hub.history)-idx)
+	copy(historyCopy, hub.history[idx:])
 	hub.RUnlock()
 
-	resp := buildSquareDetailsResponse(target, surroundings, locator, minutes, minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands, historyCopy, time.Now().Unix())
+	resp := buildSquareDetailsResponse(target, surroundings, locator, minutes, minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands, historyCopy, now)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -228,12 +240,14 @@ func resolveTargetQuery(r *http.Request) (string, bool) {
 
 func toStreamSpot(spot Spot) streamSpot {
 	return streamSpot{
-		Lat:        spot.Lat,
-		Lng:        spot.Lng,
-		SNR:        spot.SNR,
-		AgeSeconds: spot.AgeSeconds,
-		Locator:    spot.Locator,
-		Band:       spot.Band,
+		Lat:             spot.Lat,
+		Lng:             spot.Lng,
+		SNR:             spot.SNR,
+		AgeSeconds:      spot.AgeSeconds,
+		Locator:         spot.Locator,
+		ReporterLocator: spot.ReporterLocator,
+		SourceType:      spot.SourceType,
+		Band:            spot.Band,
 	}
 }
 
@@ -298,15 +312,6 @@ func buildSquareDetailsResponse(target string, surroundings bool, locator string
 
 	for _, m := range history {
 		if m.T < cutoff || m.T > now {
-			continue
-		}
-		if minSnrMode == "ssb" && m.RP < ssbMinDb {
-			continue
-		}
-		if minSnrMode == "cw" && m.RP < cwMinDb {
-			continue
-		}
-		if !bandAllowed(strings.ToLower(strings.TrimSpace(m.B)), selectedBand, enabledBands) {
 			continue
 		}
 
@@ -391,6 +396,7 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	hub.RUnlock()
 	started, completed, active, bytesTotal, avgBytes := streamAccounting.snapshot()
+	dxConnAttempts, dxConnected, dxLinesSeen, dxParsed, dxPersisted, dxForwarded, dxDroppedNoLoc := dxClusterAccounting.snapshot()
 	dxBaselineEventCount := 0
 	dxBaselineHistoryMinutes := 0
 	if dxBaseline != nil {
@@ -411,6 +417,13 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		DxBaselineEventCount int     `json:"dx_baseline_event_count"`
 		DxBaselineHistoryM   int     `json:"dx_baseline_history_minutes"`
 		DxBaselineMaxEvents  int     `json:"dx_baseline_max_events"`
+		DxClusterConnAttempt int64   `json:"dxcluster_connect_attempts"`
+		DxClusterConnected   int64   `json:"dxcluster_connected_sessions"`
+		DxClusterLinesSeen   int64   `json:"dxcluster_lines_seen"`
+		DxClusterParsed      int64   `json:"dxcluster_parsed_spots"`
+		DxClusterPersisted   int64   `json:"dxcluster_persisted_spots"`
+		DxClusterForwarded   int64   `json:"dxcluster_live_forwarded"`
+		DxClusterDroppedLoc  int64   `json:"dxcluster_dropped_no_locator"`
 	}{
 		ActiveConnections:    numClients,
 		HistorySize:          historySize,
@@ -425,6 +438,13 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		DxBaselineEventCount: dxBaselineEventCount,
 		DxBaselineHistoryM:   dxBaselineHistoryMinutes,
 		DxBaselineMaxEvents:  dxBaselineMaxEvents,
+		DxClusterConnAttempt: dxConnAttempts,
+		DxClusterConnected:   dxConnected,
+		DxClusterLinesSeen:   dxLinesSeen,
+		DxClusterParsed:      dxParsed,
+		DxClusterPersisted:   dxPersisted,
+		DxClusterForwarded:   dxForwarded,
+		DxClusterDroppedLoc:  dxDroppedNoLoc,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -465,9 +485,14 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 
 	surroundings := r.URL.Query().Get("surroundings") == "true"
 
+	now := time.Now().Unix()
+	cutoff := now - int64(minutes*60)
 	hub.RLock()
-	historyCopy := make([]MQTTMessage, len(hub.history))
-	copy(historyCopy, hub.history)
+	idx := sort.Search(len(hub.history), func(i int) bool {
+		return hub.history[i].T >= cutoff
+	})
+	historyCopy := make([]MQTTMessage, len(hub.history)-idx)
+	copy(historyCopy, hub.history[idx:])
 	hub.RUnlock()
 
 	resp := dxConditionsResponse{
@@ -475,8 +500,8 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 		Surroundings:     surroundings,
 		WindowMinutes:    minutes,
 		CwMinDb:          cwMinDb,
-		CurrentSlotOfDay: utcSlotOfDay(time.Now().Unix()),
-		GeneratedAt:      time.Now().Unix(),
+		CurrentSlotOfDay: utcSlotOfDay(now),
+		GeneratedAt:      now,
 		BaselineBuckets:  0,
 		BaselineEventCnt: 0,
 		BaselineHistoryM: 0,
@@ -488,7 +513,7 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dxBaseline != nil {
-		resp = dxBaseline.Evaluate(target, surroundings, minutes, cwMinDb, historyCopy, time.Now().Unix())
+		resp = dxBaseline.Evaluate(target, surroundings, minutes, cwMinDb, historyCopy, now)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

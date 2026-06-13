@@ -34,14 +34,12 @@ var dxBaselineMaxEvents = defaultDxBaselineMaxEvents
 const SlotsOfDay = 48
 
 type baselineBucket struct {
-	Band         string  `json:"band"`
-	SlotOfDay    int     `json:"slot_of_day"`
-	Source4      string  `json:"source4,omitempty"`
-	DistanceTier int     `json:"distance_tier"`
-	SnrTier      int     `json:"snr_tier"`
-	Count        int64   `json:"count"`
-	SumDistance  float64 `json:"sum_distance"`
-	SumSNR       float64 `json:"sum_snr"`
+	Band         string `json:"band"`
+	SlotOfDay    int    `json:"slot_of_day"`
+	Source4      string `json:"source4,omitempty"`
+	DistanceTier int    `json:"distance_tier"`
+	SnrTier      int    `json:"snr_tier"`
+	Count        int64  `json:"count"`
 }
 
 // UnmarshalJSON accepts both the v4 "slot_of_day" field and the legacy v3
@@ -207,10 +205,6 @@ func (e *DxBaselineEngine) EnablePostgres(dsn string) error {
 	if err != nil {
 		return err
 	}
-	if err := st.migrateFromJSONIfNeeded(context.Background(), e.path); err != nil {
-		st.Close()
-		return err
-	}
 	if err := st.ensureDxPulseRegionBaseline(context.Background()); err != nil {
 		st.Close()
 		return err
@@ -221,14 +215,14 @@ func (e *DxBaselineEngine) EnablePostgres(dsn string) error {
 	return nil
 }
 
-func (e *DxBaselineEngine) LoadRecentSpotCache(minutes int, now int64) ([]MQTTMessage, error) {
+func (e *DxBaselineEngine) LoadRecentSpotCache(minutes int, now int64, includeDXCluster bool) ([]MQTTMessage, error) {
 	e.mu.RLock()
 	st := e.store
 	e.mu.RUnlock()
 	if st == nil {
 		return nil, nil
 	}
-	return st.loadRecentSpotCache(minutes, now)
+	return st.loadRecentSpotCache(minutes, now, includeDXCluster)
 }
 
 func (e *DxBaselineEngine) LoadSpotsBetween(start, end int64) ([]MQTTMessage, error) {
@@ -301,7 +295,6 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 	source4 := normalizeSource4(sl)
 	distTier := distanceTierForLocators(sl, rl)
 	snrTier := snrTierFromDb(m.RP)
-	distanceKm := distanceKmForLocators(sl, rl)
 
 	e.mu.Lock()
 	if ts > 0 {
@@ -314,7 +307,7 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 	}
 
 	baseKey := baselineKeyWithSource(band, hour, distTier, snrTier, source4)
-	e.observeBucket(e.buckets, baseKey, band, hour, source4, distTier, snrTier, distanceKm, float64(m.RP))
+	e.observeBucket(e.buckets, baseKey, band, hour, source4, distTier, snrTier)
 
 	targetTokens := [4]string{
 		normalizeTargetTokenUpper(sc),
@@ -337,7 +330,7 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 		if duplicate {
 			continue
 		}
-		e.observeBucket(e.targetBuckets, baselineTargetKeyFromBase(t, baseKey), band, hour, source4, distTier, snrTier, distanceKm, float64(m.RP))
+		e.observeBucket(e.targetBuckets, baselineTargetKeyFromBase(t, baseKey), band, hour, source4, distTier, snrTier)
 	}
 
 	maxEvents := dxBaselineMaxEvents
@@ -376,19 +369,33 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 	st := e.store
 	e.mu.Unlock()
 	if st != nil {
-		_ = st.observe(m, band, hour, source4, distTier, snrTier, distanceKm, targetTokens)
+		_ = st.observe(m, band, hour, source4, distTier, snrTier, targetTokens)
 	}
 }
 
-func (e *DxBaselineEngine) observeBucket(store map[string]*baselineBucket, key, band string, hour int, source4 string, distTier, snrTier int, distanceKm, snr float64) {
+func (e *DxBaselineEngine) PersistRawSpot(m MQTTMessage, sourceType, spotter string, frequencyKHz *float64, comment string) {
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return
+	}
+
+	band := normalizeBand(m.B)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := st.insertRawSpot(ctx, m, band, sourceType, spotter, frequencyKHz, comment); err != nil {
+		logDebug("DX raw spot persistence failed (source=%s): %v", sourceType, err)
+	}
+}
+
+func (e *DxBaselineEngine) observeBucket(store map[string]*baselineBucket, key, band string, hour int, source4 string, distTier, snrTier int) {
 	b := store[key]
 	if b == nil {
 		b = &baselineBucket{Band: band, SlotOfDay: hour, Source4: source4, DistanceTier: distTier, SnrTier: snrTier}
 		store[key] = b
 	}
 	b.Count++
-	b.SumDistance += distanceKm
-	b.SumSNR += snr
 }
 
 func (e *DxBaselineEngine) Load() error {
@@ -531,8 +538,6 @@ func remapBucketsForLoad(src map[string]*baselineBucket, legacy bool) map[string
 		newKey := baselineKeyWithSource(v.Band, v.SlotOfDay, v.DistanceTier, v.SnrTier, source4)
 		if existing, ok := out[newKey]; ok {
 			existing.Count += v.Count
-			existing.SumDistance += v.SumDistance
-			existing.SumSNR += v.SumSNR
 			continue
 		}
 		cp := *v
@@ -568,8 +573,6 @@ func remapTargetBucketsForLoad(src map[string]*baselineBucket, legacy bool) map[
 		newKey := baselineTargetKeyWithSource(token, v.Band, v.SlotOfDay, v.DistanceTier, v.SnrTier, source4)
 		if existing, ok := out[newKey]; ok {
 			existing.Count += v.Count
-			existing.SumDistance += v.SumDistance
-			existing.SumSNR += v.SumSNR
 			continue
 		}
 		cp := *v
@@ -1253,15 +1256,11 @@ func buildBandSparkline(events []dxObservedEvent, targets []string, band string,
 }
 
 func eventMatchesTargets(e dxObservedEvent, targets []string) bool {
-	sc := strings.ToUpper(strings.TrimSpace(e.SC))
-	rc := strings.ToUpper(strings.TrimSpace(e.RC))
-	sl := strings.ToUpper(strings.TrimSpace(e.SL))
-	rl := strings.ToUpper(strings.TrimSpace(e.RL))
 	for _, t := range targets {
-		if matchCall(sc, t) || matchCall(rc, t) {
+		if matchCall(e.SC, t) || matchCall(e.RC, t) {
 			return true
 		}
-		if isLocator(t) && (strings.HasPrefix(sl, t) || strings.HasPrefix(rl, t)) {
+		if isLocator(t) && (strings.HasPrefix(e.SL, t) || strings.HasPrefix(e.RL, t)) {
 			return true
 		}
 	}
@@ -1407,8 +1406,6 @@ func aggregateBucketsWithoutSource(src map[string]*baselineBucket) map[string]*b
 			continue
 		}
 		b.Count += v.Count
-		b.SumDistance += v.SumDistance
-		b.SumSNR += v.SumSNR
 	}
 	return out
 }
@@ -1432,8 +1429,6 @@ func aggregateTargetBucketsWithoutSource(src map[string]*baselineBucket) map[str
 			continue
 		}
 		b.Count += v.Count
-		b.SumDistance += v.SumDistance
-		b.SumSNR += v.SumSNR
 	}
 	return out
 }
