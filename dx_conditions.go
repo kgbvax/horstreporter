@@ -727,11 +727,11 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		baselineSupport := int64(0)
 		q25, q75, quantileOK := 0.0, 0.0, false
 		if st == nil {
-			baselineActivity, targetBaselineUsed = baselineActivityForBand(aggGlobalBuckets, aggTargetBuckets, targets, band, resp.CurrentSlotOfDay)
+			baselineActivity, targetBaselineUsed = baselineActivityForBand(aggGlobalBuckets, aggTargetBuckets, targets, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM)
 			baselineSupport = baselineSupportForBand(aggGlobalBuckets, aggTargetBuckets, targets, band, resp.CurrentSlotOfDay)
 			q25, q75, quantileOK = baselineScoreQuantilesForBand(aggGlobalBuckets, aggTargetBuckets, targets, band, resp.CurrentSlotOfDay)
 		} else {
-			if act, used, err := st.baselineActivityForBand(targets, band, resp.CurrentSlotOfDay); err == nil {
+			if act, used, err := st.baselineActivityForBand(targets, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM); err == nil {
 				baselineActivity = act
 				targetBaselineUsed = used
 			}
@@ -1290,35 +1290,46 @@ func computeTrend(series []float64) (string, float64) {
 	return "stable", round2(delta / 10.0)
 }
 
-func baselineActivityForBand(global, targetBuckets map[string]*baselineBucket, targets []string, band string, hour int) (float64, bool) {
+// baselineActivityForBand returns the expected spots/minute for a given band
+// and 30-minute slot, normalised by how many days of history are in the
+// baseline so the value stays comparable to the live spotsPerMin rate.
+func baselineActivityForBand(global, targetBuckets map[string]*baselineBucket, targets []string, band string, hour int, historyMinutes int) (float64, bool) {
 	total := 0.0
-	count := 0.0
 	for _, t := range targets {
 		for d := 0; d <= 4; d++ {
 			for s := 0; s <= 3; s++ {
 				if b := targetBuckets[baselineTargetKey(t, band, hour, d, s)]; b != nil {
 					total += float64(b.Count)
-					count++
 				}
 			}
 		}
 	}
-	if count > 0 {
-		return (total / count) / 60.0, true
+	if total > 0 {
+		return normalizeBaselineToSpotsPerMinute(total, historyMinutes), true
 	}
 
 	for d := 0; d <= 4; d++ {
 		for s := 0; s <= 3; s++ {
 			if b := global[baselineKey(band, hour, d, s)]; b != nil {
 				total += float64(b.Count)
-				count++
 			}
 		}
 	}
-	if count == 0 {
+	if total == 0 {
 		return 0, false
 	}
-	return (total / count) / 60.0, false
+	return normalizeBaselineToSpotsPerMinute(total, historyMinutes), false
+}
+
+// normalizeBaselineToSpotsPerMinute converts a raw cumulative bucket count
+// into an expected spots/minute rate. Each slot_of_day is a 30-minute window
+// that repeats once per UTC day, so the denominator is historyDays × 30 min.
+func normalizeBaselineToSpotsPerMinute(totalCount float64, historyMinutes int) float64 {
+	historyDays := float64(historyMinutes) / float64(24*60)
+	if historyDays < 1 {
+		historyDays = 1
+	}
+	return totalCount / (historyDays * 30.0)
 }
 
 func baselineSupportForBand(global, targetBuckets map[string]*baselineBucket, targets []string, band string, hour int) int64 {

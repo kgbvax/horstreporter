@@ -849,7 +849,7 @@ func (s *dxPostgresStore) bandPairs(ctx context.Context, table string, targets [
 	return out, rows.Err()
 }
 
-func (s *dxPostgresStore) baselineActivityForBand(targets []string, band string, slot int) (float64, bool, error) {
+func (s *dxPostgresStore) baselineActivityForBand(targets []string, band string, slot int, historyMinutes int) (float64, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	targetPairs, err := s.bandPairs(ctx, "dx_baseline_target", targets, band, slot)
@@ -861,7 +861,7 @@ func (s *dxPostgresStore) baselineActivityForBand(targets []string, band string,
 		for _, p := range targetPairs {
 			total += float64(p.Count)
 		}
-		return (total / float64(len(targetPairs))) / 60.0, true, nil
+		return normalizeBaselineToSpotsPerMinute(total, historyMinutes), true, nil
 	}
 	globalPairs, err := s.bandPairs(ctx, "dx_baseline_global", nil, band, slot)
 	if err != nil {
@@ -874,7 +874,7 @@ func (s *dxPostgresStore) baselineActivityForBand(targets []string, band string,
 	for _, p := range globalPairs {
 		total += float64(p.Count)
 	}
-	return (total / float64(len(globalPairs))) / 60.0, false, nil
+	return normalizeBaselineToSpotsPerMinute(total, historyMinutes), false, nil
 }
 
 func (s *dxPostgresStore) baselineSupportForBand(targets []string, band string, slot int) (int64, error) {
