@@ -436,6 +436,9 @@ function updateDxccLabelsEnabled(enabled) {
     const dxccToggle = document.getElementById('show-dxcc-labels');
     if (dxccToggle) dxccToggle.checked = dxccLabelsEnabled;
 
+    const densityRow = document.getElementById('dxcc-density-row');
+    if (densityRow) densityRow.style.display = dxccLabelsEnabled ? '' : 'none';
+
     if (isAzimuthEnabled()) {
         scheduleRender();
     } else {
@@ -689,27 +692,14 @@ async function syncMercatorOverlays(force = false) {
     await syncMercatorDxccLabelLayer({ force });
 }
 
-function syncStyleAvailabilityForProjection(projection) {
-    const gridRadio = document.getElementById('style-grid');
+function syncStyleAvailabilityForProjection(_projection) {
     const activeAreaRadio = document.getElementById('style-area');
-    const disableNonGrid = projection === 'azimuthal';
-
-    [activeAreaRadio].forEach((radio) => {
-        if (!radio) return;
-        radio.disabled = disableNonGrid;
-        const label = document.querySelector(`label[for="${radio.id}"]`);
-        if (label) {
-            label.style.opacity = disableNonGrid ? '0.55' : '';
-            label.style.pointerEvents = disableNonGrid ? 'none' : '';
-        }
-    });
-
-    if (disableNonGrid) {
-        const checkedStyle = document.querySelector('input[name="style-select"]:checked')?.value;
-        if (checkedStyle === 'active-area') {
-            if (gridRadio) gridRadio.checked = true;
-            localStorage.setItem('mapStyle', 'grid-snr');
-        }
+    if (!activeAreaRadio) return;
+    activeAreaRadio.disabled = false;
+    const label = document.querySelector(`label[for="${activeAreaRadio.id}"]`);
+    if (label) {
+        label.style.opacity = '';
+        label.style.pointerEvents = '';
     }
 }
 
@@ -749,16 +739,28 @@ function applyCaptureConfigToControls(config) {
     if (targetEl) targetEl.value = config.target;
 
     const minutesEl = document.getElementById('minutes');
-    if (minutesEl) minutesEl.value = String(config.minutes);
+    if (minutesEl) {
+        minutesEl.value = String(config.minutes);
+        const minutesVal = document.getElementById('minutes-val');
+        if (minutesVal) minutesVal.textContent = config.minutes;
+    }
 
     const surroundingsEl = document.getElementById('surroundings');
     if (surroundingsEl) surroundingsEl.checked = Boolean(config.surroundings);
 
     const ssbEl = document.getElementById('ssb-min-db');
-    if (ssbEl && Number.isFinite(config.ssbMinDb)) ssbEl.value = String(config.ssbMinDb);
+    if (ssbEl && Number.isFinite(config.ssbMinDb)) {
+        ssbEl.value = String(config.ssbMinDb);
+        const ssbVal = document.getElementById('ssb-min-db-val');
+        if (ssbVal) ssbVal.textContent = config.ssbMinDb;
+    }
 
     const cwEl = document.getElementById('cw-min-db');
-    if (cwEl && Number.isFinite(config.cwMinDb)) cwEl.value = String(config.cwMinDb);
+    if (cwEl && Number.isFinite(config.cwMinDb)) {
+        cwEl.value = String(config.cwMinDb);
+        const cwVal = document.getElementById('cw-min-db-val');
+        if (cwVal) cwVal.textContent = config.cwMinDb;
+    }
 
     const minSnrRadio = document.querySelector(`input[name="min-snr"][value="${config.minSnrMode}"]`);
     if (minSnrRadio) minSnrRadio.checked = true;
@@ -1156,7 +1158,7 @@ document.getElementById('theme-toggle')?.addEventListener('click', () => {
 
 document.getElementById('hide-sidebar')?.addEventListener('click', () => {
     const controls = document.getElementById('controls');
-    if (controls) controls.style.marginLeft = '-320px';
+    if (controls) controls.style.marginLeft = '-' + controls.offsetWidth + 'px';
     const show = document.getElementById('show-sidebar');
     if (show) show.style.display = 'block';
 });
@@ -1232,9 +1234,13 @@ document.getElementById('min-snr-group')?.addEventListener('change', (e) => {
     }
 });
 
-document.getElementById('ssb-min-db')?.addEventListener('change', () => {
+document.getElementById('ssb-min-db')?.addEventListener('input', () => {
     const el = document.getElementById('ssb-min-db');
-    if (el) localStorage.setItem('ssbMinDb', el.value);
+    if (el) {
+        localStorage.setItem('ssbMinDb', el.value);
+        const val = document.getElementById('ssb-min-db-val');
+        if (val) val.textContent = el.value;
+    }
     scheduleRender();
 });
 
@@ -1242,14 +1248,30 @@ document.getElementById('target')?.addEventListener('input', () => {
     syncProjectionCenterToActiveTarget();
 });
 
-document.getElementById('cw-min-db')?.addEventListener('change', () => {
+document.getElementById('cw-min-db')?.addEventListener('input', () => {
     const el = document.getElementById('cw-min-db');
-    if (el) localStorage.setItem('cwMinDb', el.value);
+    if (el) {
+        localStorage.setItem('cwMinDb', el.value);
+        const val = document.getElementById('cw-min-db-val');
+        if (val) val.textContent = el.value;
+    }
     scheduleRender();
 });
 
-document.getElementById('cycle-time')?.addEventListener('change', (e) => {
+document.getElementById('minutes')?.addEventListener('input', (e) => {
+    const val = document.getElementById('minutes-val');
+    if (val) val.textContent = e.target.value;
+    localStorage.setItem('minutes', e.target.value);
+    scheduleRender();
+});
+
+document.getElementById('cycle-time')?.addEventListener('input', (e) => {
+    const val = document.getElementById('cycle-time-val');
+    if (val) val.textContent = e.target.value;
     localStorage.setItem('cycleTime', e.target.value);
+});
+
+document.getElementById('cycle-time')?.addEventListener('change', (e) => {
     if (state.cycleInterval) {
         // Restart cycle to pick up the new time
         const btn = document.getElementById('btn-cycle');
@@ -1369,6 +1391,11 @@ document.getElementById('show-country-coloring')?.addEventListener('change', (e)
 
 document.getElementById('show-dxcc-labels')?.addEventListener('change', (e) => {
     updateDxccLabelsEnabled(e.target.checked);
+});
+
+document.getElementById('opmode-allow-control')?.addEventListener('change', (e) => {
+    const group = document.getElementById('opmode-controls-group');
+    if (group) group.style.display = e.target.checked ? '' : 'none';
 });
 
 document.getElementById('btn-geo')?.addEventListener('click', () => {
@@ -1588,6 +1615,14 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     if (btnSubmit) btnSubmit.textContent = 'Stop';
 
+    // On mobile, hide sidebar after submitting so the map is immediately visible
+    if (window.innerWidth <= 575) {
+        const controls = document.getElementById('controls');
+        const showBtn = document.getElementById('show-sidebar');
+        if (controls) controls.style.marginLeft = '-' + controls.offsetWidth + 'px';
+        if (showBtn) showBtn.style.display = 'block';
+    }
+
     state.eventSource = new EventSource(`/api/stream?${params.toString()}`);
     setFaviconColor('#ffa500'); // Orange for connecting/waiting
     
@@ -1663,3 +1698,19 @@ window.addEventListener('focus', syncSoftPauseWithVisibility);
 // Fallback pass in case autostart check happened before submit wiring was ready.
 maybeAutoStartSavedTarget();
 syncSoftPauseWithVisibility();
+
+// Sync opmode controls visibility (initOpMode may have set checkbox from localStorage)
+requestAnimationFrame(() => {
+    const opGroup = document.getElementById('opmode-controls-group');
+    if (opGroup) {
+        opGroup.style.display = document.getElementById('opmode-allow-control')?.checked ? '' : 'none';
+    }
+
+    // Auto-hide sidebar on mobile at startup
+    if (window.innerWidth <= 575) {
+        const controls = document.getElementById('controls');
+        const showBtn = document.getElementById('show-sidebar');
+        if (controls) controls.style.marginLeft = '-' + controls.offsetWidth + 'px';
+        if (showBtn) showBtn.style.display = 'block';
+    }
+});

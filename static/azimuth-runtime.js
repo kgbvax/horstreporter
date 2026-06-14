@@ -6,6 +6,12 @@ const MAX_VISIBLE_C = Math.PI - 0.02;
 const DXCC_SHOW_ALL_ZOOM_THRESHOLD = 5.0;
 const AZIMUTH_SCALE_CLEARANCE_PX = 12;
 const GRAYLINE_RECOMPUTE_MIN_INTERVAL_MS = 320;
+// Active-area SNR field: value assigned to grid vertices with no nearby data,
+// and the "data presence" contour just above it that forms the smooth outer
+// boundary. NO_DATA sits far below any real SNR so the presence iso-line
+// interpolates a sub-cell falloff between data and empty space.
+const AZIMUTH_FIELD_NO_DATA = -100;
+const AZIMUTH_FIELD_PRESENCE = -40;
 
 const PALETTE_LIGHT = [
     '#FBEFF0', '#FBD3D1', '#FEE5DA', '#FFE2B7', '#FFFBD4', '#E8EDAD', '#E4F0DB',
@@ -1650,6 +1656,179 @@ function drawActiveAreaOverlay(ctx, width, height, filteredSpots, maxClusterDist
     }
 }
 
+// buildAzimuthSnrField interpolates a continuous SNR surface from the
+// projected spots using inverse-distance weighting (IDW). Spots are projected
+// into canvas space first, so the azimuthal projection's distortion is handled
+// implicitly. The field is sampled on a regular grid and masked to where data
+// actually supports an estimate: a vertex is only "valid" if at least one spot
+// lies within `radius` pixels of it. Returns null when there is nothing to draw.
+function buildAzimuthSnrField(filteredSpots, width, height, step, radius) {
+    // Reports from one grid square all project to the same pixel; aggregate
+    // them into a single weighted point so the wider smoothing kernel stays
+    // cheap. Each aggregated point carries the mean SNR, a report count (used
+    // as a weight multiplier), and the dominant band at that location.
+    const agg = new Map();
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const spot of filteredSpots) {
+        if (String(spot?.sourceType || '').toLowerCase() === 'dxcluster') continue;
+        const lat = Number(spot.lat), lng = Number(spot.lng), snr = Number(spot.snr);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(snr)) continue;
+        const p = projectToCanvas(lat, lng, width, height);
+        if (!p) continue;
+        const kx = Math.round(p.x), ky = Math.round(p.y);
+        const key = kx + ',' + ky;
+        let a = agg.get(key);
+        if (!a) { a = { x: kx, y: ky, snrSum: 0, n: 0, bands: {} }; agg.set(key, a); }
+        a.snrSum += snr;
+        a.n += 1;
+        a.bands[spot.band || 'all'] = (a.bands[spot.band || 'all'] || 0) + 1;
+        if (kx < minX) minX = kx;
+        if (ky < minY) minY = ky;
+        if (kx > maxX) maxX = kx;
+        if (ky > maxY) maxY = ky;
+    }
+    if (agg.size === 0) return null;
+
+    const pts = [];
+    for (const a of agg.values()) {
+        let bestBand = 'all', bestCount = -1;
+        for (const b in a.bands) if (a.bands[b] > bestCount) { bestCount = a.bands[b]; bestBand = b; }
+        pts.push({ x: a.x, y: a.y, snr: a.snrSum / a.n, n: a.n, band: bestBand });
+    }
+
+    // Bucket index for O(1) neighbour lookup (bucket size == search radius).
+    const bucket = Math.max(1, radius);
+    const buckets = new Map();
+    const bkey = (bx, by) => bx + ',' + by;
+    for (const p of pts) {
+        const bx = Math.floor((p.x - minX) / bucket);
+        const by = Math.floor((p.y - minY) / bucket);
+        const k = bkey(bx, by);
+        let arr = buckets.get(k);
+        if (!arr) { arr = []; buckets.set(k, arr); }
+        arr.push(p);
+    }
+
+    // Sample grid spans the data bounding box padded by one search radius so
+    // the estimate can fall off smoothly beyond the outermost spots. A Gaussian
+    // kernel blends neighbouring grid squares into continuous regions, and a
+    // small background prior pulls the estimate toward NO_DATA where reports
+    // are sparse — so the outer boundary tapers smoothly instead of cliff-edging
+    // at the search radius, and there are no blocky cell edges anywhere.
+    const x0 = minX - radius, y0 = minY - radius;
+    const cols = Math.max(2, Math.ceil((maxX + radius - x0) / step) + 1);
+    const rows = Math.max(2, Math.ceil((maxY + radius - y0) / step) + 1);
+    const snr = new Float32Array(cols * rows);
+    const bandIdx = new Array(cols * rows);
+    const r2 = radius * radius;
+    const sigma = radius / 2.2;
+    const twoSigma2 = 2 * sigma * sigma;
+    const PRIOR = 0.02;
+
+    for (let j = 0; j < rows; j++) {
+        const vy = y0 + j * step;
+        const by = Math.floor((vy - minY) / bucket);
+        for (let i = 0; i < cols; i++) {
+            const vx = x0 + i * step;
+            const bx = Math.floor((vx - minX) / bucket);
+            let wsum = 0, vsum = 0;
+            let bestBand = 'all', bestBandW = -1;
+            const bandW = {};
+            for (let dby = -1; dby <= 1; dby++) {
+                for (let dbx = -1; dbx <= 1; dbx++) {
+                    const nb = buckets.get(bkey(bx + dbx, by + dby));
+                    if (!nb) continue;
+                    for (const p of nb) {
+                        const dx = p.x - vx, dy = p.y - vy;
+                        const d2 = dx * dx + dy * dy;
+                        if (d2 > r2) continue;
+                        const w = Math.exp(-d2 / twoSigma2) * p.n;
+                        wsum += w;
+                        vsum += w * p.snr;
+                        const bw = (bandW[p.band] || 0) + w;
+                        bandW[p.band] = bw;
+                        if (bw > bestBandW) { bestBandW = bw; bestBand = p.band; }
+                    }
+                }
+            }
+            const idx = j * cols + i;
+            // Regularised estimate: blends toward NO_DATA when total weight is
+            // small, giving a smooth taper at the edges.
+            snr[idx] = (vsum + AZIMUTH_FIELD_NO_DATA * PRIOR) / (wsum + PRIOR);
+            if (wsum > 0) bandIdx[idx] = bestBand;
+        }
+    }
+    return { cols, rows, step, x0, y0, snr, bandIdx };
+}
+
+// cellAbove returns the polygon (as {x,y} points) of the part of one grid cell
+// where the field value is >= threshold, using marching-squares edge
+// interpolation so contour boundaries are smooth rather than blocky.
+function cellAbove(threshold, cx, cy, cv) {
+    const out = [];
+    for (let i = 0; i < 4; i++) {
+        const n = (i + 1) % 4;
+        const vi = cv[i], vn = cv[n];
+        const insideI = vi >= threshold;
+        if (insideI) out.push({ x: cx[i], y: cy[i] });
+        if (insideI !== (vn >= threshold)) {
+            const f = (threshold - vi) / (vn - vi);
+            out.push({ x: cx[i] + f * (cx[n] - cx[i]), y: cy[i] + f * (cy[n] - cy[i]) });
+        }
+    }
+    return out;
+}
+
+// fillAzimuthContours renders the interpolated SNR field as stacked filled
+// contour zones. The lowest threshold is the data-presence contour that wraps
+// the field with a smooth outer boundary; the 0 dB and 10 dB breakpoints (the
+// same ones grid-SNR uses) are layered on top. Lower zones are painted first
+// (faint) so stronger signals read brighter, and every boundary is an
+// interpolated iso-line, so there are no blocky cell edges anywhere.
+function fillAzimuthContours(ctx, field) {
+    if (!field) return;
+    const { cols, rows, step, x0, y0, snr, bandIdx } = field;
+    const layers = [
+        { t: AZIMUTH_FIELD_PRESENCE, alpha: 0.22 },
+        { t: 0, alpha: 0.30 },
+        { t: 10, alpha: 0.40 }
+    ];
+    const ci = [0, 1, 1, 0];
+    const cj = [0, 0, 1, 1];
+
+    for (const layer of layers) {
+        for (let j = 0; j < rows - 1; j++) {
+            for (let i = 0; i < cols - 1; i++) {
+                const i00 = j * cols + i;
+                const i10 = j * cols + i + 1;
+                const i11 = (j + 1) * cols + i + 1;
+                const i01 = (j + 1) * cols + i;
+
+                const cv = [snr[i00], snr[i10], snr[i11], snr[i01]];
+                const cx = [x0 + i * step, x0 + (i + 1) * step, x0 + (i + 1) * step, x0 + i * step];
+                const cy = [y0 + j * step, y0 + j * step, y0 + (j + 1) * step, y0 + (j + 1) * step];
+                const poly = cellAbove(layer.t, cx, cy, cv);
+                if (!poly || poly.length < 3) continue;
+
+                // Hue follows the dominant band of the cell's strongest corner.
+                let best = 0;
+                for (let k = 1; k < 4; k++) if (cv[k] > cv[best]) best = k;
+                const bandCornerIdx = (j + cj[best]) * cols + (i + ci[best]);
+                const band = bandIdx[bandCornerIdx] || 'all';
+
+                ctx.fillStyle = bandColors[band] || bandColors.all;
+                ctx.globalAlpha = layer.alpha;
+                ctx.beginPath();
+                ctx.moveTo(poly[0].x, poly[0].y);
+                for (let k = 1; k < poly.length; k++) ctx.lineTo(poly[k].x, poly[k].y);
+                ctx.closePath();
+                ctx.fill();
+            }
+        }
+    }
+    ctx.globalAlpha = 1;
+}
+
 function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClusterDist) {
     if (style === 'grid-snr') {
         const squares = gridSquares || collectGridSquares(filteredSpots, getGridResolution());
@@ -1685,6 +1864,20 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
             ctx.fill();
         }
         state.hiddenGridSquaresCount = hiddenSquares;
+        drawDxClusterSpots(ctx, width, height, filteredSpots);
+        ctx.globalAlpha = 1;
+        return;
+    }
+
+    if (style === 'active-area') {
+        // Interpolate a continuous SNR surface and render it as filled contour
+        // zones. Sample resolution and search radius scale with the canvas.
+        const minDim = Math.min(width, height);
+        const step = Math.max(8, Math.min(16, Math.round(minDim / 95)));
+        const radius = step * 4;
+        const field = buildAzimuthSnrField(filteredSpots, width, height, step, radius);
+        fillAzimuthContours(ctx, field);
+        state.hiddenGridSquaresCount = 0;
         drawDxClusterSpots(ctx, width, height, filteredSpots);
         ctx.globalAlpha = 1;
         return;
@@ -1735,7 +1928,7 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
 
     state.lastSpots = spots;
     const requestedStyle = style || (document.querySelector('input[name="style-select"]:checked')?.value || 'grid-snr');
-    const resolvedStyle = requestedStyle === 'grid-snr' ? 'grid-snr' : 'grid-snr';
+    const resolvedStyle = requestedStyle === 'active-area' ? 'active-area' : 'grid-snr';
     state.lastStyle = resolvedStyle;
 
     const renderCtx = {

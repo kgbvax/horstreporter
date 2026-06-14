@@ -142,10 +142,10 @@ func (s *dxPostgresStore) flushPendingWithTimeout(timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := s.flushPending(ctx); err != nil {
-		logDebug("DX postgres baseline batch flush failed: %v", err)
+		logInfo("DX postgres baseline batch flush failed: %v", err)
 	}
 	if err := s.flushRawSpots(ctx); err != nil {
-		logDebug("DX postgres raw spot batch flush failed: %v", err)
+		logInfo("DX postgres raw spot batch flush failed: %v", err)
 	}
 }
 
@@ -384,6 +384,7 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS spotter_callsign TEXT NOT NULL DEFAULT '';`,
 		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS frequency_khz DOUBLE PRECISION;`,
 		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS comment TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS spot_geom geometry(Point, 4326);`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_spot_time ON dx_raw_spots (spot_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_band_spot_time ON dx_raw_spots (band, spot_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_source_type_spot_time ON dx_raw_spots (source_type, spot_time);`,
