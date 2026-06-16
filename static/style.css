@@ -603,3 +603,70 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     }
 }
 
+.hot-band-indicator {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 950;
+    display: flex;
+    gap: 6px;
+    pointer-events: none;
+    max-width: calc(100% - 320px);
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.hot-band-indicator.is-hidden {
+    display: none;
+}
+
+.hot-band-pill {
+    pointer-events: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 14px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    line-height: 1.2;
+    background-color: var(--hot-band-bg, rgba(85, 85, 85, 0.18));
+    color: var(--text-color);
+    border: 1px solid var(--hot-band-border, rgba(85, 85, 85, 0.6));
+    cursor: pointer;
+    user-select: none;
+    box-shadow: 0 1px 3px var(--shadow-color);
+    backdrop-filter: blur(2px);
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.hot-band-pill:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px var(--shadow-color);
+}
+
+.hot-band-pill:focus-visible {
+    outline: 2px solid var(--hot-band-border, #555);
+    outline-offset: 2px;
+}
+
+.hot-band-pill .hot-band-glyph {
+    font-size: 0.95rem;
+    line-height: 1;
+}
+
+.hot-band-pill .hot-band-name {
+    font-weight: 600;
+}
+
+.hot-band-pill .hot-band-reason {
+    opacity: 0.85;
+}
+
+.hot-band-pill.is-priority-high {
+    border-width: 2px;
+    padding: 3px 10px;
+    background-color: var(--hot-band-bg-strong, rgba(85, 85, 85, 0.28));
+}
+

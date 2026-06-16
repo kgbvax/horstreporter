@@ -520,6 +520,59 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
+	target, surroundings := resolveTargetQuery(r)
+	if target == "" {
+		http.Error(w, "target required", http.StatusBadRequest)
+		return
+	}
+
+	minutes := defaultDxWindowMinutes
+	if raw := strings.TrimSpace(r.URL.Query().Get("minutes")); raw != "" {
+		if m, err := strconv.Atoi(raw); err == nil && m > 0 {
+			minutes = m
+		}
+	}
+	if minutes > maxDxWindowMinutes {
+		minutes = maxDxWindowMinutes
+	}
+
+	cwMinDb := defaultDxCwViableMinDb
+	if raw := strings.TrimSpace(r.URL.Query().Get("cw_min_db")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil {
+			cwMinDb = v
+		}
+	}
+
+	currentBand := normalizeBand(strings.TrimSpace(r.URL.Query().Get("current_band")))
+
+	now := time.Now().Unix()
+	cutoff := now - int64(minutes*60)
+	hub.RLock()
+	idx := sort.Search(len(hub.history), func(i int) bool {
+		return hub.history[i].T >= cutoff
+	})
+	historyCopy := make([]MQTTMessage, len(hub.history)-idx)
+	copy(historyCopy, hub.history[idx:])
+	hub.RUnlock()
+
+	resp := hotBandsResponse{
+		Target:           target,
+		Surroundings:     surroundings,
+		CurrentBand:      currentBand,
+		CurrentSlotOfDay: utcSlotOfDay(now),
+		GeneratedAt:      now,
+		Recommendations:  []hotBandRecommendation{},
+	}
+
+	if dxBaseline != nil {
+		resp = dxBaseline.HotBands(target, surroundings, minutes, cwMinDb, currentBand, historyCopy, now)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
 // noCache is a middleware that sets headers to prevent caching of static files.
 // This is useful for development to ensure the latest files are always served.
 func noCache(h http.Handler) http.Handler {

@@ -4,6 +4,7 @@ import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineL
 import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, getAzimuthCenter, setAzimuthEnabled, setAzimuthDragging, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled, getAzimuthLatLngFromClientPoint, getAzimuthHiddenGridSquaresCount } from './azimuth-runtime.js';
 import { initUI, attachUITooltipEvents } from './ui.js';
 import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
+import { initHotBandIndicator } from './hot-band-indicator.js';
 import { updateMapVisualization, updateBandLabels } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
@@ -14,6 +15,14 @@ const AZIMUTH_MAX_HORIZON_KM = 20015;
 const AZIMUTH_MIN_ZOOM = 1.0;
 const AZIMUTH_MAX_ZOOM = 5.0;
 let suppressAzimuthClickUntil = 0;
+let hotBandIndicator = null;
+
+function switchToBand(band) {
+    const radio = document.querySelector(`input[name="band"][value="${band}"]`);
+    if (!radio || radio.disabled) return;
+    radio.checked = true;
+    radio.dispatchEvent(new Event('change', { bubbles: true }));
+}
 
 function parseBoolParam(raw, fallback = false) {
     if (raw == null || raw === '') return fallback;
@@ -1061,7 +1070,13 @@ if (captureConfig?.enabled) {
     attachUITooltipEvents();
     initOpMode({ requestRender: scheduleRender });
     initBandLab();
-    
+    hotBandIndicator = initHotBandIndicator({
+        getTarget: () => document.getElementById('target')?.value?.trim()?.toUpperCase() || '',
+        getSurroundings: () => Boolean(document.getElementById('surroundings')?.checked),
+        getCurrentBand: () => getSelectedBand(),
+        onBandSwitch: switchToBand,
+    });
+
     // Force an initial render to sync visual band states (colors/opacity) loaded from localStorage
     scheduleRender();
     updateCurrentBandDisplay();
@@ -1320,6 +1335,8 @@ document.getElementById('band-container')?.addEventListener('change', (e) => {
     updateCurrentBandDisplay();
     updateBandLab({ force: true });
     scheduleRender();
+    hotBandIndicator?.rerender();
+    hotBandIndicator?.refresh();
 });
 
 document.querySelectorAll('.band-enable').forEach(cb => {
@@ -1373,6 +1390,7 @@ document.getElementById('surroundings')?.addEventListener('change', (e) => {
         btnSubmit.textContent = 'Go';
         document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
     }
+    hotBandIndicator?.refresh();
 });
 
 document.getElementById('show-dxcluster-spots')?.addEventListener('change', (e) => {
@@ -1625,6 +1643,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     state.eventSource = new EventSource(`/api/stream?${params.toString()}`);
     setFaviconColor('#ffa500'); // Orange for connecting/waiting
+    hotBandIndicator?.refresh();
     
     let historyLoading = true;
 

@@ -1351,6 +1351,105 @@ func normalizeBaselineToSpotsPerMinute(totalCount float64, historyMinutes int) f
 	return totalCount / (historyDays * 30.0)
 }
 
+// distanceTierBounds returns the lower/upper km bound for a distance tier.
+// Tier 4 is unbounded above; we cap it at 12000 km so p90 interpolation
+// produces a usable number (~ slightly past the antipodal half-circle).
+func distanceTierBounds(tier int) (lo, hi float64) {
+	switch tier {
+	case 0:
+		return 0, 500
+	case 1:
+		return 500, 1500
+	case 2:
+		return 1500, 3000
+	case 3:
+		return 3000, 7000
+	default:
+		return 7000, 12000
+	}
+}
+
+// baselineP90DistanceForBand returns the tier-weighted p90 path length for a
+// band+slot, summed across all SNR tiers. Falls back from target buckets to
+// global. Used by the hot-bands recommender to detect DX surges: a band whose
+// live p90 distance is meaningfully above its historical p90 for the same
+// target and slot is open along an unusually long path.
+//
+// Tier counts are converted to a piecewise-uniform distribution over the
+// tier's [lo, hi] bound and the 90th percentile interpolated within the tier
+// where the cumulative weight crosses 0.9 of the total.
+func baselineP90DistanceForBand(global, targetBuckets map[string]*baselineBucket, targets []string, band string, hour int) (float64, bool) {
+	tierCounts := [5]int64{}
+	collectFromTarget := func() bool {
+		any := false
+		for _, t := range targets {
+			for d := 0; d <= 4; d++ {
+				for s := 0; s <= 3; s++ {
+					if b := targetBuckets[baselineTargetKey(t, band, hour, d, s)]; b != nil && b.Count > 0 {
+						tierCounts[d] += b.Count
+						any = true
+					}
+				}
+			}
+		}
+		return any
+	}
+	collectFromGlobal := func() {
+		for d := 0; d <= 4; d++ {
+			for s := 0; s <= 3; s++ {
+				if b := global[baselineKey(band, hour, d, s)]; b != nil && b.Count > 0 {
+					tierCounts[d] += b.Count
+				}
+			}
+		}
+	}
+
+	used := collectFromTarget()
+	if !used {
+		collectFromGlobal()
+	}
+	return p90FromTierCounts(tierCounts), used
+}
+
+func p90FromTierCounts(tierCounts [5]int64) float64 {
+	var total int64
+	for _, c := range tierCounts {
+		total += c
+	}
+	if total == 0 {
+		return 0
+	}
+	q90 := 0.9 * float64(total)
+	cum := int64(0)
+	for d := 0; d < 5; d++ {
+		c := tierCounts[d]
+		if c <= 0 {
+			continue
+		}
+		if float64(cum+c) >= q90 {
+			lo, hi := distanceTierBounds(d)
+			frac := (q90 - float64(cum)) / float64(c)
+			if frac < 0 {
+				frac = 0
+			}
+			if frac > 1 {
+				frac = 1
+			}
+			return lo + frac*(hi-lo)
+		}
+		cum += c
+	}
+	// Numerically: cumulative reached 1.0 without crossing 0.9 — last
+	// non-empty tier owns p90. Return its upper bound.
+	for d := 4; d >= 0; d-- {
+		if tierCounts[d] > 0 {
+			_, hi := distanceTierBounds(d)
+			return hi
+		}
+	}
+	return 0
+}
+
 func baselineSupportForBand(global, targetBuckets map[string]*baselineBucket, targets []string, band string, hour int) int64 {
 	var support int64
 	for _, t := range targets {

@@ -282,6 +282,7 @@ func main() {
 	appMux.HandleFunc("/api/capture_snapshot", captureSnapshotHandler)
 	appMux.HandleFunc("/api/stats", statsHandler)
 	appMux.HandleFunc("/api/dx_conditions", dxConditionsHandler)
+	appMux.HandleFunc("/api/hot_bands", hotBandsHandler)
 	appMux.HandleFunc("/api/dxpulse/v1/matrix", dxPulseMatrixHandler)
 	appMux.HandleFunc("/api/dxpulse/v1/summary", dxPulseSummaryHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)

@@ -876,6 +876,41 @@ func (s *dxPostgresStore) baselineActivityForBand(targets []string, band string,
 	return normalizeBaselineToSpotsPerMinute(total, historyMinutes), false, nil
 }
 
+// baselineP90DistanceForBand returns the tier-weighted p90 path length for a
+// (band, slot), summed across all SNR tiers. Falls back from target buckets to
+// global when the target has no rows. See dx_conditions.go:p90FromTierCounts
+// for the interpolation method.
+func (s *dxPostgresStore) baselineP90DistanceForBand(targets []string, band string, slot int) (float64, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	targetPairs, err := s.bandPairs(ctx, "dx_baseline_target", targets, band, slot)
+	if err != nil {
+		return 0, false, err
+	}
+	var tiers [5]int64
+	used := false
+	for _, p := range targetPairs {
+		if p.DistanceTier < 0 || p.DistanceTier > 4 || p.Count <= 0 {
+			continue
+		}
+		tiers[p.DistanceTier] += p.Count
+		used = true
+	}
+	if !used {
+		globalPairs, err := s.bandPairs(ctx, "dx_baseline_global", nil, band, slot)
+		if err != nil {
+			return 0, false, err
+		}
+		for _, p := range globalPairs {
+			if p.DistanceTier < 0 || p.DistanceTier > 4 || p.Count <= 0 {
+				continue
+			}
+			tiers[p.DistanceTier] += p.Count
+		}
+	}
+	return p90FromTierCounts(tiers), used, nil
+}
+
 func (s *dxPostgresStore) baselineSupportForBand(targets []string, band string, slot int) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
