@@ -53,6 +53,42 @@ func newDxlensProvider(engine *DxBaselineEngine, ttl time.Duration) *dxlensProvi
 	return &dxlensProvider{engine: engine, ttl: ttl}
 }
 
+// Recent24hForTokens implements dxlens api.Recent24hForTokensLookup. Reads
+// the last 24h of spots from dx_raw_spots filtered by token match — used
+// by the rose's target+recent_24h and target+compare paths.
+func (p *dxlensProvider) Recent24hForTokens(tokens []string, now int64) []*dxlens.Recent24hCell {
+	if p == nil || p.engine == nil || len(tokens) == 0 {
+		return nil
+	}
+	p.mu.Lock()
+	store := p.engine.store
+	p.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	rows, err := store.recent24hBandSlotCountsForTokens(tokens, now)
+	if err != nil {
+		logInfo("DXLens recent-24h-for-tokens query failed (tokens=%v): %v", tokens, err)
+		return nil
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	out := make([]*dxlens.Recent24hCell, 0, len(rows))
+	for _, r := range rows {
+		band := normalizeBand(r.Band)
+		if band == "" {
+			continue
+		}
+		out = append(out, &dxlens.Recent24hCell{
+			Band:      band,
+			SlotOfDay: r.SlotOfDay,
+			Count:     r.Count,
+		})
+	}
+	return out
+}
+
 // TargetBucketsMulti returns the long-term per-target bucket aggregate for a
 // set of target tokens in a single PG query. Implements dxlens
 // api.TargetBucketsMultiLookup; preferred over per-token TargetBuckets when

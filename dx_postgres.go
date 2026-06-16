@@ -1107,6 +1107,65 @@ type recent24hBandSlotRow struct {
 	Count     int64
 }
 
+// recent24hBandSlotCountsForTokens returns spot counts per (band, slot_of_day)
+// for the 24h ending at `now`, restricted to spots whose sender/receiver
+// callsign or 4-char locator prefix matches one of the supplied tokens.
+// Used to populate the target+recent_24h and target+compare paths so the
+// rose has data immediately after a restart (the in-memory event buffer
+// takes hours to accumulate 24h of spots at typical rates).
+func (s *dxPostgresStore) recent24hBandSlotCountsForTokens(tokens []string, now int64) ([]recent24hBandSlotRow, error) {
+	if s == nil || len(tokens) == 0 {
+		return nil, nil
+	}
+	if now <= 0 {
+		now = time.Now().Unix()
+	}
+	norm := make([]string, 0, len(tokens))
+	seen := make(map[string]struct{}, len(tokens))
+	for _, t := range tokens {
+		u := strings.ToUpper(strings.TrimSpace(t))
+		if u == "" {
+			continue
+		}
+		if _, dup := seen[u]; dup {
+			continue
+		}
+		seen[u] = struct{}{}
+		norm = append(norm, u)
+	}
+	if len(norm) == 0 {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	start := now - 24*60*60
+	rows, err := s.pool.Query(ctx, `
+		SELECT band,
+		       ((spot_time / 1800) % 48)::int AS slot_of_day,
+		       COUNT(*)::bigint
+		FROM dx_raw_spots
+		WHERE spot_time BETWEEN $1 AND $2
+		  AND (sender_callsign = ANY($3)
+		    OR receiver_callsign = ANY($3)
+		    OR substring(sender_locator from 1 for 4) = ANY($3)
+		    OR substring(receiver_locator from 1 for 4) = ANY($3))
+		GROUP BY band, slot_of_day
+	`, start, now, norm)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]recent24hBandSlotRow, 0, 256)
+	for rows.Next() {
+		var r recent24hBandSlotRow
+		if err := rows.Scan(&r.Band, &r.SlotOfDay, &r.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // recent24hBandSlotCounts returns spot counts per (band, slot_of_day) for the
 // 24 hours ending at `now`. Slot-of-day is in 30-minute UTC bins (0..47).
 //
