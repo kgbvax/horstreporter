@@ -36,7 +36,6 @@ const SlotsOfDay = 48
 type baselineBucket struct {
 	Band         string `json:"band"`
 	SlotOfDay    int    `json:"slot_of_day"`
-	Source4      string `json:"source4,omitempty"`
 	DistanceTier int    `json:"distance_tier"`
 	SnrTier      int    `json:"snr_tier"`
 	Count        int64  `json:"count"`
@@ -45,12 +44,15 @@ type baselineBucket struct {
 // UnmarshalJSON accepts both the v4 "slot_of_day" field and the legacy v3
 // "hour_of_week" field, collapsing the latter to a 30-min slot index via
 // slot = (hour_of_week % 24) * 2 (loses any within-hour or weekday detail
-// the legacy scheme never actually carried).
+// the legacy scheme never actually carried). The v5 `source4` field is
+// silently ignored — v6 drops the dimension entirely and the load path
+// re-aggregates legacy keys via remapBucketsForLoad.
 func (b *baselineBucket) UnmarshalJSON(data []byte) error {
 	type alias baselineBucket
 	aux := &struct {
-		HourOfWeek *int `json:"hour_of_week,omitempty"`
-		SlotOfDay  *int `json:"slot_of_day,omitempty"`
+		HourOfWeek *int    `json:"hour_of_week,omitempty"`
+		SlotOfDay  *int    `json:"slot_of_day,omitempty"`
+		Source4    *string `json:"source4,omitempty"` // accepted for legacy, ignored
 		*alias
 	}{alias: (*alias)(b)}
 	if err := json.Unmarshal(data, aux); err != nil {
@@ -235,6 +237,21 @@ func (e *DxBaselineEngine) LoadSpotsBetween(start, end int64) ([]MQTTMessage, er
 	return st.loadSpotsBetween(start, end)
 }
 
+// PruneRawSpotsOlderThan removes raw spots older than the given Unix
+// timestamp from the persistent store. No-op if Postgres isn't configured.
+func (e *DxBaselineEngine) PruneRawSpotsOlderThan(cutoff int64) (int64, error) {
+	if e == nil {
+		return 0, nil
+	}
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return 0, nil
+	}
+	return st.pruneRawSpotsOlderThan(cutoff)
+}
+
 func (e *DxBaselineEngine) LoadDxPulseBaseline(targets []string, lookbackDays int, windowMinutes int, now int64) (map[string]*dxPulseBaselineAccumulator, bool, error) {
 	e.mu.RLock()
 	st := e.store
@@ -292,7 +309,6 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 		ts = time.Now().Unix()
 	}
 	hour := utcSlotOfDay(ts)
-	source4 := normalizeSource4(sl)
 	distTier := distanceTierForLocators(sl, rl)
 	snrTier := snrTierFromDb(m.RP)
 
@@ -306,8 +322,8 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 		}
 	}
 
-	baseKey := baselineKeyWithSource(band, hour, distTier, snrTier, source4)
-	e.observeBucket(e.buckets, baseKey, band, hour, source4, distTier, snrTier)
+	baseKey := baselineKey(band, hour, distTier, snrTier)
+	e.observeBucket(e.buckets, baseKey, band, hour, distTier, snrTier)
 
 	targetTokens := [4]string{
 		normalizeTargetTokenUpper(sc),
@@ -330,7 +346,7 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 		if duplicate {
 			continue
 		}
-		e.observeBucket(e.targetBuckets, baselineTargetKeyFromBase(t, baseKey), band, hour, source4, distTier, snrTier)
+		e.observeBucket(e.targetBuckets, baselineTargetKeyFromBase(t, baseKey), band, hour, distTier, snrTier)
 	}
 
 	maxEvents := dxBaselineMaxEvents
@@ -369,7 +385,7 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 	st := e.store
 	e.mu.Unlock()
 	if st != nil {
-		_ = st.observe(m, band, hour, source4, distTier, snrTier, targetTokens)
+		_ = st.observe(m, band, hour, distTier, snrTier, targetTokens)
 	}
 }
 
@@ -389,10 +405,10 @@ func (e *DxBaselineEngine) PersistRawSpot(m MQTTMessage, sourceType, spotter str
 	}
 }
 
-func (e *DxBaselineEngine) observeBucket(store map[string]*baselineBucket, key, band string, hour int, source4 string, distTier, snrTier int) {
+func (e *DxBaselineEngine) observeBucket(store map[string]*baselineBucket, key, band string, hour, distTier, snrTier int) {
 	b := store[key]
 	if b == nil {
-		b = &baselineBucket{Band: band, SlotOfDay: hour, Source4: source4, DistanceTier: distTier, SnrTier: snrTier}
+		b = &baselineBucket{Band: band, SlotOfDay: hour, DistanceTier: distTier, SnrTier: snrTier}
 		store[key] = b
 	}
 	b.Count++
@@ -417,7 +433,12 @@ func (e *DxBaselineEngine) Load() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	legacy := snap.Version < 5
+	// Any snapshot before v6 had source4 in the key (and used full 4-char
+	// locator target tokens). remapBucketsForLoad / remapTargetBucketsForLoad
+	// strip source4 and collapse to the v6 key shape; the target variant also
+	// runs the locator-block collapse so JO32/JO33 from older saves get
+	// summed into JO22.
+	legacy := snap.Version < 6
 	e.buckets = remapBucketsForLoad(snap.Buckets, legacy)
 	e.targetBuckets = remapTargetBucketsForLoad(snap.TargetBuckets, legacy)
 
@@ -453,7 +474,7 @@ func (e *DxBaselineEngine) Save() error {
 	}
 	e.mu.RLock()
 	snap := baselineSnapshot{
-		Version:       5,
+		Version:       6,
 		SavedAt:       time.Now().Unix(),
 		FirstEventAt:  e.firstEventAt,
 		LastEventAt:   e.lastEventAt,
@@ -514,71 +535,60 @@ func cloneBuckets(src map[string]*baselineBucket) map[string]*baselineBucket {
 }
 
 // remapBucketsForLoad rebuilds the in-memory bucket map from a freshly
-// unmarshalled snapshot. When legacy is true (snapshot version < 4) the
-// existing string keys still embed the old hour-of-week (0..167) integer,
-// while each bucket's SlotOfDay has already been collapsed to 0..47 by
-// baselineBucket.UnmarshalJSON; we rebuild keys from the bucket fields and
-// merge duplicates that now collide on the smaller (band, slot, distTier,
-// snrTier) tuple.
+// unmarshalled snapshot using the current key shape. When legacy is true
+// (snapshot version < 6) the existing keys may embed a source4 segment
+// and the bucket's Source4 field may be set — both are discarded; entries
+// that collide on the new (band, slot, distTier, snrTier) tuple sum.
 func remapBucketsForLoad(src map[string]*baselineBucket, legacy bool) map[string]*baselineBucket {
 	out := make(map[string]*baselineBucket, len(src))
-	for k, v := range src {
+	for _, v := range src {
 		if v == nil {
 			continue
 		}
-		if !legacy {
-			if v.Source4 == "" {
-				v.Source4 = unknownSource4
-			}
-			cp := *v
-			out[k] = &cp
-			continue
-		}
-		source4 := normalizeSource4(v.Source4)
-		newKey := baselineKeyWithSource(v.Band, v.SlotOfDay, v.DistanceTier, v.SnrTier, source4)
+		newKey := baselineKey(v.Band, v.SlotOfDay, v.DistanceTier, v.SnrTier)
 		if existing, ok := out[newKey]; ok {
 			existing.Count += v.Count
 			continue
 		}
 		cp := *v
-		cp.Source4 = source4
 		out[newKey] = &cp
 	}
+	_ = legacy // both branches collapse to the same shape now
 	return out
 }
 
-// remapTargetBucketsForLoad mirrors remapBucketsForLoad for target buckets,
-// preserving the "<TOKEN>|" prefix that target keys carry.
+// remapTargetBucketsForLoad mirrors remapBucketsForLoad for target buckets.
+// In addition to stripping source4, legacy snapshots may carry full
+// 4-character locator tokens (e.g. JO32); these are collapsed to their 2×2
+// block (JO22) via normalizeTargetTokenUpper so the on-disk format matches
+// the new in-memory and DB shape.
 func remapTargetBucketsForLoad(src map[string]*baselineBucket, legacy bool) map[string]*baselineBucket {
 	out := make(map[string]*baselineBucket, len(src))
 	for k, v := range src {
 		if v == nil {
 			continue
 		}
-		if !legacy {
-			if v.Source4 == "" {
-				v.Source4 = unknownSource4
-			}
-			cp := *v
-			out[k] = &cp
-			continue
-		}
-		// Extract the token prefix (everything before the first '|').
+		// Extract the token prefix (everything before the first '|') from
+		// either legacy "<TOKEN>|<band>|<slot>|<dist>|<snr>|<source4>" or
+		// v6 "<TOKEN>|<band>|<slot>|<dist>|<snr>" key shapes.
 		i := strings.IndexByte(k, '|')
 		token := ""
 		if i > 0 {
 			token = k[:i]
 		}
-		source4 := normalizeSource4(v.Source4)
-		newKey := baselineTargetKeyWithSource(token, v.Band, v.SlotOfDay, v.DistanceTier, v.SnrTier, source4)
+		token = normalizeTargetTokenUpper(token)
+		if token == "" {
+			continue
+		}
+		newKey := baselineTargetKeyFromBase(token, baselineKey(v.Band, v.SlotOfDay, v.DistanceTier, v.SnrTier))
 		if existing, ok := out[newKey]; ok {
 			existing.Count += v.Count
 			continue
 		}
 		cp := *v
-		cp.Source4 = source4
 		out[newKey] = &cp
 	}
+	_ = legacy // both branches collapse to the same shape now
 	return out
 }
 
@@ -620,6 +630,14 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		targets = getSurroundingSquares(target)
 	}
 
+	// baselineTargets is the deduped, block-normalised version of `targets`.
+	// Baseline storage (in-memory and Postgres) keys locator tokens by their
+	// 2×2 block anchor (JO32→JO22), so a literal lookup with the raw
+	// surrounding squares would miss every block whose anchor wasn't itself
+	// in the surroundings list. Live-spot matching keeps `targets` because
+	// prefix-matching against 6-char locators needs the user-facing squares.
+	baselineTargets := normalizeTargetsForBaseline(targets)
+
 	e.mu.RLock()
 	st := e.store
 	globalBuckets := cloneBuckets(e.buckets)
@@ -630,8 +648,9 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 	var aggGlobalBuckets map[string]*baselineBucket
 	var aggTargetBuckets map[string]*baselineBucket
 	if st == nil {
-		aggGlobalBuckets = aggregateBucketsWithoutSource(globalBuckets)
-		aggTargetBuckets = aggregateTargetBucketsWithoutSource(targetBuckets)
+		// v6: keys already exclude source4, so the maps are usable directly.
+		aggGlobalBuckets = globalBuckets
+		aggTargetBuckets = targetBuckets
 		resp.BaselineBuckets = len(globalBuckets) + len(targetBuckets)
 		resp.BaselineEventCnt = len(events)
 		resp.BaselineHistoryM = baselineHistoryMinutes(e.firstEventAt, e.lastEventAt, events, now)
@@ -727,18 +746,18 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		baselineSupport := int64(0)
 		q25, q75, quantileOK := 0.0, 0.0, false
 		if st == nil {
-			baselineActivity, targetBaselineUsed = baselineActivityForBand(aggGlobalBuckets, aggTargetBuckets, targets, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM)
-			baselineSupport = baselineSupportForBand(aggGlobalBuckets, aggTargetBuckets, targets, band, resp.CurrentSlotOfDay)
-			q25, q75, quantileOK = baselineScoreQuantilesForBand(aggGlobalBuckets, aggTargetBuckets, targets, band, resp.CurrentSlotOfDay)
+			baselineActivity, targetBaselineUsed = baselineActivityForBand(aggGlobalBuckets, aggTargetBuckets, baselineTargets, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM)
+			baselineSupport = baselineSupportForBand(aggGlobalBuckets, aggTargetBuckets, baselineTargets, band, resp.CurrentSlotOfDay)
+			q25, q75, quantileOK = baselineScoreQuantilesForBand(aggGlobalBuckets, aggTargetBuckets, baselineTargets, band, resp.CurrentSlotOfDay)
 		} else {
-			if act, used, err := st.baselineActivityForBand(targets, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM); err == nil {
+			if act, used, err := st.baselineActivityForBand(baselineTargets, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM); err == nil {
 				baselineActivity = act
 				targetBaselineUsed = used
 			}
-			if support, err := st.baselineSupportForBand(targets, band, resp.CurrentSlotOfDay); err == nil {
+			if support, err := st.baselineSupportForBand(baselineTargets, band, resp.CurrentSlotOfDay); err == nil {
 				baselineSupport = support
 			}
-			if ql, qh, ok, err := st.baselineQuantilesForBand(targets, band, resp.CurrentSlotOfDay); err == nil {
+			if ql, qh, ok, err := st.baselineQuantilesForBand(baselineTargets, band, resp.CurrentSlotOfDay); err == nil {
 				q25, q75, quantileOK = ql, qh, ok
 			}
 		}
@@ -1361,8 +1380,15 @@ func utcSlotOfDay(ts int64) int {
 	return t.Hour()*2 + t.Minute()/30
 }
 
+// unknownSource4 is the sentinel for a missing/short source locator. Used by
+// dx_raw_spots persistence and dx_region_baseline_daily keying — the
+// baseline buckets no longer carry source4 since v6.
 const unknownSource4 = "----"
 
+// normalizeSource4 returns the first 4 characters of an upper-cased
+// Maidenhead-like locator, or unknownSource4 for malformed/short inputs.
+// Used by raw-spot ingest and the region baseline; NOT used by the
+// baseline_global/target aggregates anymore.
 func normalizeSource4(locator string) string {
 	l := strings.ToUpper(strings.TrimSpace(locator))
 	if len(l) < 4 {
@@ -1386,62 +1412,12 @@ func baselineKey(band string, slotOfDay, distanceTier, snrTier int) string {
 	return band + "|" + itoa(slotOfDay) + "|" + itoa(distanceTier) + "|" + itoa(snrTier)
 }
 
-func baselineKeyWithSource(band string, slotOfDay, distanceTier, snrTier int, source4 string) string {
-	return baselineKey(band, slotOfDay, distanceTier, snrTier) + "|" + normalizeSource4(source4)
-}
-
 func baselineTargetKey(target, band string, slotOfDay, distanceTier, snrTier int) string {
 	return normalizeTargetToken(target) + "|" + baselineKey(band, slotOfDay, distanceTier, snrTier)
 }
 
-func baselineTargetKeyWithSource(target, band string, slotOfDay, distanceTier, snrTier int, source4 string) string {
-	return normalizeTargetToken(target) + "|" + baselineKeyWithSource(band, slotOfDay, distanceTier, snrTier, source4)
-}
-
 func baselineTargetKeyFromBase(target, baseKey string) string {
 	return target + "|" + baseKey
-}
-
-func aggregateBucketsWithoutSource(src map[string]*baselineBucket) map[string]*baselineBucket {
-	out := make(map[string]*baselineBucket, len(src))
-	for _, v := range src {
-		if v == nil {
-			continue
-		}
-		k := baselineKey(v.Band, v.SlotOfDay, v.DistanceTier, v.SnrTier)
-		b := out[k]
-		if b == nil {
-			cp := *v
-			cp.Source4 = ""
-			out[k] = &cp
-			continue
-		}
-		b.Count += v.Count
-	}
-	return out
-}
-
-func aggregateTargetBucketsWithoutSource(src map[string]*baselineBucket) map[string]*baselineBucket {
-	out := make(map[string]*baselineBucket, len(src))
-	for k, v := range src {
-		if v == nil {
-			continue
-		}
-		token := k
-		if i := strings.IndexByte(k, '|'); i > 0 {
-			token = k[:i]
-		}
-		aggKey := baselineTargetKeyFromBase(token, baselineKey(v.Band, v.SlotOfDay, v.DistanceTier, v.SnrTier))
-		b := out[aggKey]
-		if b == nil {
-			cp := *v
-			cp.Source4 = ""
-			out[aggKey] = &cp
-			continue
-		}
-		b.Count += v.Count
-	}
-	return out
 }
 
 func normalizeTargetToken(t string) string {
@@ -1449,16 +1425,70 @@ func normalizeTargetToken(t string) string {
 	return normalizeTargetTokenUpper(t)
 }
 
+// normalizeTargetTokenUpper canonicalises a target token (callsign or
+// Maidenhead locator). Callsigns pass through unchanged. 4+ char locators
+// are collapsed to a 2×2 block by flooring each grid-square digit to its
+// nearest even value, so JO32/JO33/JO42/JO43 all map to JO22/JO22/JO42/JO42
+// — matching the storage shape that drops source4 + the 2×2 collapse.
+// Inputs shorter than 4 chars or with invalid digits pass through.
 func normalizeTargetTokenUpper(t string) string {
 	if t == "" {
 		return ""
 	}
-	if isLocator(t) {
-		if len(t) >= 4 {
-			return t[:4]
-		}
+	if isLocator(t) && len(t) >= 4 {
+		return locatorBlockToken(t)
 	}
 	return t
+}
+
+// normalizeTargetsForBaseline maps a list of target tokens through
+// normalizeTargetTokenUpper (which collapses 4-char locators to their 2×2
+// block anchor) and dedupes the result. Used to convert a user-facing
+// surroundings list like [JO21, JO22, JO23, JO31, JO32, JO33, JO41, JO42,
+// JO43] into the block-anchor set [JO20, JO22, JO40, JO42] before looking
+// up keys in the block-keyed baseline store.
+//
+// Callsign tokens pass through unchanged; locator tokens collapse.
+// Input is expected to already be upper-cased.
+func normalizeTargetsForBaseline(targets []string) []string {
+	if len(targets) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(targets))
+	out := make([]string, 0, len(targets))
+	for _, t := range targets {
+		n := normalizeTargetTokenUpper(strings.ToUpper(strings.TrimSpace(t)))
+		if n == "" {
+			continue
+		}
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
+		out = append(out, n)
+	}
+	return out
+}
+
+// locatorBlockToken returns the 2×2-block anchor for a 4-char Maidenhead
+// locator: keep the field (chars 0..1), and floor each grid-square digit
+// (chars 2..3) to the nearest even number. Examples:
+//
+//	JO22 -> JO22, JO33 -> JO22, JO43 -> JO42, JO89 -> JO88.
+//
+// Inputs that don't match the [A-R][A-R][0-9][0-9] pattern in the first
+// 4 chars are returned as the upper-cased prefix unchanged.
+func locatorBlockToken(loc string) string {
+	if len(loc) < 4 {
+		return loc
+	}
+	d3 := loc[2]
+	d4 := loc[3]
+	if d3 < '0' || d3 > '9' || d4 < '0' || d4 > '9' {
+		return loc[:4]
+	}
+	// Floor each odd digit to the previous even by clearing the low bit.
+	return loc[:2] + string([]byte{(d3 - '0') &^ 1 + '0'}) + string([]byte{(d4 - '0') &^ 1 + '0'})
 }
 
 func snrTierFromDb(db int) int {

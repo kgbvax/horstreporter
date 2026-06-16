@@ -28,7 +28,7 @@ var compressStream bool
 var dxBaseline *DxBaselineEngine
 var streamAccounting = &streamAccountingState{}
 
-const defaultLiveHistoryRetentionMinutes = 120
+const defaultLiveHistoryRetentionMinutes = 60
 
 var maxClients int
 var logLevel = "INFO"
@@ -141,6 +141,7 @@ func main() {
 	qrzPasswordFlag := flag.String("qrz-password", "", "QRZ password for optional callsign->locator enrichment")
 	liveHistoryRetentionFlag := flag.Int("live-history-minutes", defaultLiveHistoryRetentionMinutes, "Maximum age of retained live spots in minutes")
 	dxBaselineMaxEventsFlag := flag.Int("dx-baseline-max-events", defaultDxBaselineMaxEvents, "Maximum number of retained DX baseline events")
+	dxRawSpotRetentionDaysFlag := flag.Int("dx-raw-spot-retention-days", 60, "Delete dx_raw_spots rows older than this many days (0 disables retention).")
 	opModeEnableFlag := flag.Bool("opmode-enable", true, "Deprecated: backend opmode integration endpoints are always enabled")
 	opModeControlEnableFlag := flag.Bool("opmode-control-enable", false, "Allow rotate/control commands in operator mode")
 	opModeAgentURLFlag := flag.String("opmode-agent-url", "", "Deprecated and ignored: backend never proxies to local operator agent")
@@ -150,6 +151,18 @@ func main() {
 	// Override logLevel from flag if provided
 	if *logLevelFlag != "" {
 		logLevel = strings.ToUpper(*logLevelFlag)
+	}
+
+	// Configure log file early so all startup messages (Postgres init, backfill, etc.) go to the file.
+	if *logFile != "" {
+		log.SetOutput(&lumberjack.Logger{
+			Filename:   *logFile,
+			MaxSize:    *logMaxSize,
+			MaxBackups: *logMaxBackups,
+			MaxAge:     *logMaxAge,
+			Compress:   true,
+		})
+		logInfo("Logging configured to write to file: %s (MaxAge: %d days, MaxBackups: %d, MaxSize: %d MB)", *logFile, *logMaxAge, *logMaxBackups, *logMaxSize)
 	}
 
 	if *liveHistoryRetentionFlag > 0 {
@@ -193,17 +206,6 @@ func main() {
 		} else {
 			logInfo("Startup spot-cache backfill found no spots in dx_raw_spots for the last %d minutes (include_dxcluster=%v)", backfillMinutes, includeDXCluster)
 		}
-	}
-
-	if *logFile != "" {
-		log.SetOutput(&lumberjack.Logger{
-			Filename:   *logFile,
-			MaxSize:    *logMaxSize,
-			MaxBackups: *logMaxBackups,
-			MaxAge:     *logMaxAge,
-			Compress:   true,
-		})
-		logInfo("Logging configured to write to file: %s (MaxAge: %d days, MaxBackups: %d, MaxSize: %d MB)", *logFile, *logMaxAge, *logMaxBackups, *logMaxSize)
 	}
 
 	if *enablePprof {
@@ -287,13 +289,56 @@ func main() {
 
 	// Mount DXLens (separate module) at /dxlens/. Reads HorstReporter's
 	// in-memory DX baseline via a small adapter; no extra network hops.
+	// Cache TTL is 60s: the historic-data queries (recent-24h, region stats)
+	// scan tens of millions of rows and cost several seconds each; the rose
+	// and region calendar are propagation views, not real-time tickers.
 	if dxBaseline != nil {
-		provider := newDxlensProvider(dxBaseline, 5*time.Second)
+		provider := newDxlensProvider(dxBaseline, 60*time.Second)
 		appMux.Handle("/dxlens/", dxlens.NewHandler(provider, dxlens.MountOptions{
 			PathPrefix: "/dxlens/",
 			NoCache:    *dev,
 		}))
 		logInfo("DXLens mounted at /dxlens/")
+		// Pre-warm the snapshot so the heavy PG queries run during startup
+		// rather than on the first user request. Async so it doesn't delay
+		// the HTTP listener.
+		go func() {
+			started := time.Now()
+			snap := provider.Snapshot()
+			if snap == nil {
+				logInfo("DXLens snapshot pre-warm: no snapshot built")
+				return
+			}
+			logInfo("DXLens snapshot pre-warm complete in %s (recent_24h=%v, region_stats=%v)",
+				time.Since(started).Round(time.Millisecond),
+				len(snap.Recent24hBuckets) > 0,
+				len(snap.RegionCalendarStats) > 0)
+		}()
+	}
+
+	// dx_raw_spots retention loop: prune rows older than the configured
+	// window once an hour. Disabled when retention is set to 0 days.
+	if dxBaseline != nil && *dxRawSpotRetentionDaysFlag > 0 {
+		retentionDays := *dxRawSpotRetentionDaysFlag
+		go func() {
+			// First run shortly after startup so any backlog is cleared
+			// without waiting an hour; afterwards, hourly.
+			firstDelay := 2 * time.Minute
+			t := time.NewTimer(firstDelay)
+			defer t.Stop()
+			for {
+				<-t.C
+				cutoff := time.Now().Unix() - int64(retentionDays)*24*60*60
+				n, err := dxBaseline.PruneRawSpotsOlderThan(cutoff)
+				if err != nil {
+					logInfo("dx_raw_spots prune failed (cutoff=%d, retention=%dd): %v", cutoff, retentionDays, err)
+				} else if n > 0 {
+					logInfo("dx_raw_spots prune deleted %d rows older than %d days", n, retentionDays)
+				}
+				t.Reset(1 * time.Hour)
+			}
+		}()
+		logInfo("dx_raw_spots retention enabled: %d days", retentionDays)
 	}
 
 	if *domain != "" {
