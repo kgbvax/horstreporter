@@ -876,6 +876,86 @@ func (s *dxPostgresStore) baselineActivityForBand(targets []string, band string,
 	return normalizeBaselineToSpotsPerMinute(total, historyMinutes), false, nil
 }
 
+// baselineActivityForBandAllSlots returns expected spots/minute per 30-min UTC
+// slot (length-48 array) and a parallel per-slot bool indicating whether the
+// target baseline was used for that slot (true) or the global fallback (false
+// — either because no target rows existed for that slot, or because no data
+// exists at all there). Two GROUP BY queries instead of 48 separate calls.
+func (s *dxPostgresStore) baselineActivityForBandAllSlots(targets []string, band string, historyMinutes int) ([]float64, []bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	rates := make([]float64, SlotsOfDay)
+	used := make([]bool, SlotsOfDay)
+	targetTotals := [SlotsOfDay]int64{}
+
+	if len(targets) > 0 {
+		rows, err := s.pool.Query(ctx, `
+			SELECT slot_of_day, SUM(count)::bigint
+			FROM dx_baseline_target
+			WHERE band = $1 AND target_token = ANY($2)
+			GROUP BY slot_of_day
+		`, band, targets)
+		if err != nil {
+			return nil, nil, err
+		}
+		for rows.Next() {
+			var slot int
+			var total int64
+			if err := rows.Scan(&slot, &total); err != nil {
+				rows.Close()
+				return nil, nil, err
+			}
+			if slot < 0 || slot >= SlotsOfDay {
+				continue
+			}
+			targetTotals[slot] = total
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	for slot := 0; slot < SlotsOfDay; slot++ {
+		if targetTotals[slot] > 0 {
+			rates[slot] = normalizeBaselineToSpotsPerMinute(float64(targetTotals[slot]), historyMinutes)
+			used[slot] = true
+		}
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT slot_of_day, SUM(count)::bigint
+		FROM dx_baseline_global
+		WHERE band = $1
+		GROUP BY slot_of_day
+	`, band)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var slot int
+		var total int64
+		if err := rows.Scan(&slot, &total); err != nil {
+			return nil, nil, err
+		}
+		if slot < 0 || slot >= SlotsOfDay {
+			continue
+		}
+		if used[slot] {
+			continue
+		}
+		if total > 0 {
+			rates[slot] = normalizeBaselineToSpotsPerMinute(float64(total), historyMinutes)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return rates, used, nil
+}
+
 // baselineP90DistanceForBand returns the tier-weighted p90 path length for a
 // (band, slot), summed across all SNR tiers. Falls back from target buckets to
 // global when the target has no rows. See dx_conditions.go:p90FromTierCounts

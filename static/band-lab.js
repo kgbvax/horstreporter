@@ -456,95 +456,215 @@ function formatKmLabel(km) {
     return String(rounded);
 }
 
+// utcSlotOfDayFromMs mirrors backend dx_conditions.go:utcSlotOfDay (a 30-min
+// UTC slot index 0..47). Frontend version takes ms so it composes with
+// Date.now() and test stubs.
+export function utcSlotOfDayFromMs(timestampMs) {
+    const d = new Date(timestampMs);
+    return d.getUTCHours() * 2 + Math.floor(d.getUTCMinutes() / 30);
+}
+
+// computeActivityChartData turns live spots + dx_conditions per-band metrics
+// into the numbers the chart needs. Returns a plain object so it can be unit
+// tested without a canvas.
+//
+// Shape:
+//   binRates[i]               — spots/min in bin i (i=0 oldest, i=11 newest)
+//   baselineRatesPerBin[i]    — historical spots/min for the slot containing bin i's centre
+//   baselineTargetUsedPerBin[i] — true when the per-slot target baseline was used
+//   yMax                       — y-axis upper bound in spots/min
+//   binMinutes                 — width of one bin in minutes
+//   sloChanges                 — bin indices where the slot index changed vs the previous bin
+export function computeActivityChartData(points, bandMetrics, minutes, nowMs) {
+    const safeMinutes = Math.max(1, Number(minutes) || 1);
+    const totalWindowSec = safeMinutes * 60;
+    const binSizeSec = totalWindowSec / ACTIVITY_BINS;
+    const binMinutes = binSizeSec / 60;
+
+    const counts = new Array(ACTIVITY_BINS).fill(0);
+    if (Array.isArray(points)) {
+        for (const point of points) {
+            if (!point) continue;
+            const age = Number(point.ageSeconds || 0);
+            if (!Number.isFinite(age) || age < 0 || age > totalWindowSec) continue;
+            const idx = Math.min(ACTIVITY_BINS - 1, Math.floor((totalWindowSec - age) / binSizeSec));
+            counts[idx] += 1;
+        }
+    }
+    const binRates = counts.map((c) => c / binMinutes);
+
+    const baselineBySlot = Array.isArray(bandMetrics?.baseline_activity_by_slot) ? bandMetrics.baseline_activity_by_slot : [];
+    const slotUsedByTarget = Array.isArray(bandMetrics?.baseline_slot_used_by_target) ? bandMetrics.baseline_slot_used_by_target : [];
+    const currentSlotBaselineRate = Math.max(0, Number(bandMetrics?.baseline_activity || 0));
+    const currentSlotTargetUsed = bandMetrics?.target_baseline_used === true;
+
+    const baselineRatesPerBin = new Array(ACTIVITY_BINS).fill(0);
+    const baselineTargetUsedPerBin = new Array(ACTIVITY_BINS).fill(false);
+    const slotChanges = [];
+    let prevSlot = -1;
+    for (let i = 0; i < ACTIVITY_BINS; i++) {
+        // Bin i covers ages [totalWindowSec - (i+1)*binSizeSec, totalWindowSec - i*binSizeSec].
+        // Centre age = totalWindowSec - (i + 0.5) * binSizeSec.
+        const centreAgeSec = totalWindowSec - (i + 0.5) * binSizeSec;
+        const centreMs = nowMs - centreAgeSec * 1000;
+        const slot = utcSlotOfDayFromMs(centreMs);
+        let rate = 0;
+        let used = false;
+        if (slot >= 0 && slot < baselineBySlot.length) {
+            const v = Number(baselineBySlot[slot]);
+            if (Number.isFinite(v) && v > 0) {
+                rate = v;
+                used = Boolean(slotUsedByTarget[slot]);
+            }
+        }
+        // Fallback: if the per-slot array didn't carry data, fall back to the
+        // current-slot single value (preserves the v1 behaviour for backends
+        // that haven't returned the new field yet).
+        if (rate === 0 && baselineBySlot.length === 0 && currentSlotBaselineRate > 0) {
+            rate = currentSlotBaselineRate;
+            used = currentSlotTargetUsed;
+        }
+        baselineRatesPerBin[i] = rate;
+        baselineTargetUsedPerBin[i] = used;
+        if (i === 0) {
+            prevSlot = slot;
+        } else if (slot !== prevSlot) {
+            slotChanges.push(i);
+            prevSlot = slot;
+        }
+    }
+
+    const yMaxCandidate = Math.max(0, ...binRates, ...baselineRatesPerBin);
+    // Always reserve some headroom so an entirely-zero chart still renders sensibly.
+    const yMax = yMaxCandidate > 0 ? yMaxCandidate * 1.1 : 0.5;
+
+    return {
+        binRates,
+        baselineRatesPerBin,
+        baselineTargetUsedPerBin,
+        yMax,
+        binMinutes,
+        slotChanges,
+    };
+}
+
+function formatRate(rate) {
+    if (!Number.isFinite(rate) || rate <= 0) return '0';
+    if (rate >= 10) return `${rate.toFixed(0)}/min`;
+    if (rate >= 1) return `${rate.toFixed(1)}/min`;
+    return `${rate.toFixed(2)}/min`;
+}
+
 function drawActivityChart(canvas, points, bandMetrics, minutes) {
     const prepared = prepareCanvas(canvas, 230, 120);
     if (!prepared) return;
     const { ctx, w, h } = prepared;
 
-    const pad = { l: 30, r: 10, t: 10, b: 20 };
+    const pad = { l: 38, r: 10, t: 10, b: 20 };
     const pw = w - pad.l - pad.r;
     const ph = h - pad.t - pad.b;
 
     ctx.clearRect(0, 0, w, h);
     drawChartFrame(ctx, pad, pw, ph);
 
-    const bins = new Array(ACTIVITY_BINS).fill(0);
-    const totalWindowSec = Math.max(60, minutes * 60);
-    const binSizeSec = totalWindowSec / ACTIVITY_BINS;
+    const data = computeActivityChartData(points, bandMetrics, minutes, Date.now());
+    const { binRates, baselineRatesPerBin, baselineTargetUsedPerBin, yMax } = data;
 
-    for (const point of points) {
-        const age = Number(point.ageSeconds || 0);
-        if (!Number.isFinite(age) || age < 0 || age > totalWindowSec) continue;
-        const idx = Math.min(ACTIVITY_BINS - 1, Math.floor((totalWindowSec - age) / binSizeSec));
-        bins[idx] += 1;
-    }
-
-    const baselinePerMinute = Number(bandMetrics?.baseline_activity || 0);
-    const baselinePerBin = Math.max(0, baselinePerMinute * (binSizeSec / 60));
-    const sparkline = Array.isArray(bandMetrics?.sparkline) ? bandMetrics.sparkline.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : [];
-    const sparklineMax = sparkline.length > 0 ? Math.max(...sparkline) : 0;
-    const maxBin = Math.max(1, ...bins, baselinePerBin, sparklineMax);
-
-    const yTicks = [maxBin, maxBin / 2, 0];
+    // Faint horizontal gridlines at 0, half, full.
     ctx.strokeStyle = hexToRgba('#64748b', 0.2);
     ctx.lineWidth = 1;
-    for (const tick of yTicks) {
-        const y = pad.t + ph - (tick / maxBin) * ph;
+    for (const tick of [0, yMax / 2, yMax]) {
+        const y = pad.t + ph - (tick / yMax) * ph;
         ctx.beginPath();
         ctx.moveTo(pad.l, y);
         ctx.lineTo(pad.l + pw, y);
         ctx.stroke();
     }
 
-    ctx.strokeStyle = hexToRgba('#ef4444', 0.95);
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 3]);
-    const baselineYRaw = pad.t + ph - (baselinePerBin / maxBin) * ph;
-    const baselineY = Math.max(pad.t + 1, Math.min(pad.t + ph - 1, baselineYRaw));
-    ctx.beginPath();
-    ctx.moveTo(pad.l, baselineY);
-    ctx.lineTo(pad.l + pw, baselineY);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    ctx.fillStyle = hexToRgba('#ef4444', 0.95);
-    ctx.font = '10px sans-serif';
-    ctx.fillText('baseline', Math.min(pad.l + pw - 44, pad.l + 3), Math.max(pad.t + 10, baselineY - 3));
-
+    // Bars: spots/min per bin.
     const barWidth = pw / ACTIVITY_BINS;
     ctx.fillStyle = hexToRgba('#3b82f6', 0.6);
-    bins.forEach((v, i) => {
-        const bh = (v / maxBin) * ph;
+    binRates.forEach((rate, i) => {
+        if (!Number.isFinite(rate) || rate <= 0) return;
+        const bh = (rate / yMax) * ph;
         const x = pad.l + i * barWidth + 0.7;
         const y = pad.t + ph - bh;
         ctx.fillRect(x, y, Math.max(1, barWidth - 1.4), bh);
     });
 
-    if (sparkline.length >= 2) {
-        ctx.strokeStyle = hexToRgba('#f97316', 0.95);
-        ctx.lineWidth = 1.6;
+    // Stepped baseline. Walk runs of contiguous bins that share the same slot
+    // (and thus the same baseline rate + per-bin used flag), draw each run as
+    // one horizontal segment; vertical connectors only at slot boundaries.
+    const renderBaselineSegment = (startIdx, endIdx) => {
+        const rate = baselineRatesPerBin[startIdx];
+        if (!(rate > 0)) return null;
+        const used = baselineTargetUsedPerBin[startIdx];
+        const x0 = pad.l + startIdx * barWidth;
+        const x1 = pad.l + (endIdx + 1) * barWidth;
+        const yRaw = pad.t + ph - (rate / yMax) * ph;
+        const y = Math.max(pad.t + 1, Math.min(pad.t + ph - 1, yRaw));
+        const color = used ? '#ef4444' : '#94a3b8';
+        ctx.strokeStyle = hexToRgba(color, used ? 0.95 : 0.85);
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([4, 3]);
         ctx.beginPath();
-        for (let i = 0; i < sparkline.length; i++) {
-            const x = pad.l + (i / (sparkline.length - 1)) * pw;
-            const y = pad.t + ph - (Math.max(0, sparkline[i]) / maxBin) * ph;
-            if (i === 0) {
-                ctx.moveTo(x, y);
-            } else {
-                ctx.lineTo(x, y);
-            }
-        }
+        ctx.moveTo(x0, y);
+        ctx.lineTo(x1, y);
         ctx.stroke();
+        ctx.setLineDash([]);
+        return { startIdx, endIdx, y, color, used };
+    };
+
+    let runStart = 0;
+    let lastSegment = null;
+    for (let i = 1; i <= ACTIVITY_BINS; i++) {
+        const slotChange = i === ACTIVITY_BINS
+            || baselineRatesPerBin[i] !== baselineRatesPerBin[i - 1]
+            || baselineTargetUsedPerBin[i] !== baselineTargetUsedPerBin[i - 1];
+        if (!slotChange) continue;
+        const seg = renderBaselineSegment(runStart, i - 1);
+        // Vertical connector between adjacent segments at a slot boundary.
+        if (lastSegment && seg) {
+            const xJoin = pad.l + i * barWidth;
+            ctx.strokeStyle = hexToRgba('#94a3b8', 0.55);
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 2]);
+            ctx.beginPath();
+            ctx.moveTo(xJoin, lastSegment.y);
+            ctx.lineTo(xJoin, seg.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+        if (seg) lastSegment = seg;
+        runStart = i;
     }
 
+    // Single 'baseline' label, placed near the rightmost segment's y so it
+    // doesn't drift when there are slot steps.
+    if (lastSegment) {
+        ctx.fillStyle = hexToRgba(lastSegment.color, 0.95);
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(
+            lastSegment.used ? 'baseline' : 'baseline·global',
+            pad.l + pw - 4,
+            Math.max(pad.t + 10, lastSegment.y - 3)
+        );
+        ctx.textAlign = 'left';
+    }
+
+    // Y-axis labels (spots/min).
     ctx.fillStyle = hexToRgba('#334155', 0.95);
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText(`${Math.round(maxBin)}`, pad.l - 4, pad.t + 8);
-    ctx.fillText(`${Math.round(maxBin / 2)}`, pad.l - 4, pad.t + (ph / 2) + 3);
+    ctx.fillText(formatRate(yMax), pad.l - 4, pad.t + 8);
+    ctx.fillText(formatRate(yMax / 2), pad.l - 4, pad.t + (ph / 2) + 3);
     ctx.fillText('0', pad.l - 4, pad.t + ph + 3);
     ctx.textAlign = 'left';
-    ctx.fillText(`-${minutes}m`, pad.l - 8, pad.t + ph + 12);
-    ctx.fillText('now', w - 28, pad.t + ph + 12);
+    ctx.fillText(`last ${minutes}m`, pad.l, pad.t + ph + 12);
+    ctx.textAlign = 'right';
+    ctx.fillText('spots/min', pad.l + pw, pad.t + ph + 12);
+    ctx.textAlign = 'left';
 }
 
 function drawChartFrame(ctx, pad, pw, ph) {

@@ -124,8 +124,10 @@ type dxBandCondition struct {
 	PeakSnr            int            `json:"peak_snr"`
 	MedianSnr          float64        `json:"median_snr"`
 	P90Snr             float64        `json:"p90_snr"`
-	BaselineActivity   float64        `json:"baseline_activity"`
-	TargetBaselineUsed bool           `json:"target_baseline_used"`
+	BaselineActivity         float64    `json:"baseline_activity"`
+	TargetBaselineUsed       bool       `json:"target_baseline_used"`
+	BaselineActivityBySlot   []float64  `json:"baseline_activity_by_slot,omitempty"`
+	BaselineSlotUsedByTarget []bool     `json:"baseline_slot_used_by_target,omitempty"`
 	DominantDirection  string         `json:"dominant_direction"`
 	AzimuthSectors     map[string]int `json:"azimuth_sectors,omitempty"`
 	Trend              string         `json:"trend"`
@@ -745,10 +747,13 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		targetBaselineUsed := false
 		baselineSupport := int64(0)
 		q25, q75, quantileOK := 0.0, 0.0, false
+		var baselineActivityBySlot []float64
+		var baselineSlotUsedByTarget []bool
 		if st == nil {
 			baselineActivity, targetBaselineUsed = baselineActivityForBand(aggGlobalBuckets, aggTargetBuckets, baselineTargets, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM)
 			baselineSupport = baselineSupportForBand(aggGlobalBuckets, aggTargetBuckets, baselineTargets, band, resp.CurrentSlotOfDay)
 			q25, q75, quantileOK = baselineScoreQuantilesForBand(aggGlobalBuckets, aggTargetBuckets, baselineTargets, band, resp.CurrentSlotOfDay)
+			baselineActivityBySlot, baselineSlotUsedByTarget = baselineActivityForBandAllSlots(aggGlobalBuckets, aggTargetBuckets, baselineTargets, band, resp.BaselineHistoryM)
 		} else {
 			if act, used, err := st.baselineActivityForBand(baselineTargets, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM); err == nil {
 				baselineActivity = act
@@ -759,6 +764,10 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 			}
 			if ql, qh, ok, err := st.baselineQuantilesForBand(baselineTargets, band, resp.CurrentSlotOfDay); err == nil {
 				q25, q75, quantileOK = ql, qh, ok
+			}
+			if rates, used, err := st.baselineActivityForBandAllSlots(baselineTargets, band, resp.BaselineHistoryM); err == nil {
+				baselineActivityBySlot = rates
+				baselineSlotUsedByTarget = used
 			}
 		}
 
@@ -829,9 +838,11 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 			PeakSnr:            acc.peakSnr,
 			MedianSnr:          round1(medianSnr),
 			P90Snr:             round1(p90Snr),
-			BaselineActivity:   round2(baselineActivity),
-			TargetBaselineUsed: targetBaselineUsed,
-			DominantDirection:  direction,
+			BaselineActivity:         round2(baselineActivity),
+			TargetBaselineUsed:       targetBaselineUsed,
+			BaselineActivityBySlot:   roundSlotRates(baselineActivityBySlot),
+			BaselineSlotUsedByTarget: baselineSlotUsedByTarget,
+			DominantDirection:        direction,
 			AzimuthSectors:     acc.directionBins,
 			Trend:              trend,
 			TrendDelta:         trendDelta,
@@ -893,6 +904,17 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 	}
 
 	return resp
+}
+
+func roundSlotRates(rates []float64) []float64 {
+	if rates == nil {
+		return nil
+	}
+	out := make([]float64, len(rates))
+	for i, v := range rates {
+		out[i] = round2(v)
+	}
+	return out
 }
 
 func activityScoreNorm(spotsPerMin, baselineActivity float64) float64 {
@@ -1338,6 +1360,49 @@ func baselineActivityForBand(global, targetBuckets map[string]*baselineBucket, t
 		return 0, false
 	}
 	return normalizeBaselineToSpotsPerMinute(total, historyMinutes), false
+}
+
+// baselineActivityForBandAllSlots returns the expected spots/minute for a band
+// at every 30-minute UTC slot (length-48 array). The accompanying boolean
+// slice marks per-slot whether the target-specific baseline was used; when
+// false for a slot, the value is from the global fallback or no data exists.
+//
+// Per-slot fallback is independent: a slot with a non-zero target count uses
+// the target baseline; a slot with no target rows falls back to global for
+// that slot only. The chart needs to know per slot which kind of baseline
+// it's looking at.
+func baselineActivityForBandAllSlots(global, targetBuckets map[string]*baselineBucket, targets []string, band string, historyMinutes int) ([]float64, []bool) {
+	rates := make([]float64, SlotsOfDay)
+	used := make([]bool, SlotsOfDay)
+	for slot := 0; slot < SlotsOfDay; slot++ {
+		targetTotal := 0.0
+		for _, t := range targets {
+			for d := 0; d <= 4; d++ {
+				for s := 0; s <= 3; s++ {
+					if b := targetBuckets[baselineTargetKey(t, band, slot, d, s)]; b != nil {
+						targetTotal += float64(b.Count)
+					}
+				}
+			}
+		}
+		if targetTotal > 0 {
+			rates[slot] = normalizeBaselineToSpotsPerMinute(targetTotal, historyMinutes)
+			used[slot] = true
+			continue
+		}
+		globalTotal := 0.0
+		for d := 0; d <= 4; d++ {
+			for s := 0; s <= 3; s++ {
+				if b := global[baselineKey(band, slot, d, s)]; b != nil {
+					globalTotal += float64(b.Count)
+				}
+			}
+		}
+		if globalTotal > 0 {
+			rates[slot] = normalizeBaselineToSpotsPerMinute(globalTotal, historyMinutes)
+		}
+	}
+	return rates, used
 }
 
 // normalizeBaselineToSpotsPerMinute converts a raw cumulative bucket count
