@@ -2,9 +2,12 @@ package main
 
 import (
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"sort"
 	"strconv"
@@ -581,5 +584,44 @@ func noCache(h http.Handler) http.Handler {
 		w.Header().Set("Pragma", "no-cache")                                   // HTTP 1.0.
 		w.Header().Set("Expires", "0")                                         // Proxies.
 		h.ServeHTTP(w, r)
+	})
+}
+
+// cachedStaticHandler serves the embedded static assets with content-based ETags
+// and Cache-Control: no-cache. Embedded files have a zero modtime, so the stock
+// http.FileServer emits no validators and browsers fall back to heuristic
+// caching — which serves stale JS/HTML after a redeploy. The plain ES-module
+// import paths can't be content-hashed into filenames without a build step, so
+// instead we attach a per-file content ETag and require revalidation: unchanged
+// assets return a cheap 304, and a redeploy (new content -> new ETag) is picked
+// up immediately. ETags are precomputed once at startup.
+func cachedStaticHandler(staticFS fs.FS) http.Handler {
+	etags := make(map[string]string)
+	_ = fs.WalkDir(staticFS, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		b, readErr := fs.ReadFile(staticFS, p)
+		if readErr != nil {
+			return nil
+		}
+		sum := sha256.Sum256(b)
+		etags["/"+p] = `"` + hex.EncodeToString(sum[:16]) + `"`
+		return nil
+	})
+
+	fileServer := http.FileServer(http.FS(staticFS))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lookup := r.URL.Path
+		if lookup == "" || strings.HasSuffix(lookup, "/") {
+			lookup += "index.html"
+		}
+		if etag, ok := etags[lookup]; ok {
+			w.Header().Set("ETag", etag)
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		// http.ServeContent (used by FileServer) honors the ETag we set above for
+		// If-None-Match, returning 304 when the client's copy is current.
+		fileServer.ServeHTTP(w, r)
 	})
 }

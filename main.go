@@ -275,8 +275,7 @@ func main() {
 		if err != nil {
 			logFatal("Failed to load embedded static files: %v", err)
 		}
-		fileServer = http.FileServer(http.FS(staticFS))
-		appMux.Handle("/", fileServer)
+		appMux.Handle("/", cachedStaticHandler(staticFS))
 	}
 	appMux.HandleFunc("/api/stream", streamHandler)
 	appMux.HandleFunc("/api/capture_snapshot", captureSnapshotHandler)
