@@ -1,4 +1,4 @@
-import { bandColors, getCountryColoringEnabled, getEnabledBands, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution } from './utils.js';
+import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution } from './utils.js';
 
 const EARTH_RADIUS_KM = 6371;
 const ANTIPODE_KM = Math.PI * EARTH_RADIUS_KM;
@@ -6,6 +6,11 @@ const MAX_VISIBLE_C = Math.PI - 0.02;
 const DXCC_SHOW_ALL_ZOOM_THRESHOLD = 5.0;
 const AZIMUTH_SCALE_CLEARANCE_PX = 12;
 const GRAYLINE_RECOMPUTE_MIN_INTERVAL_MS = 320;
+// Forecast overlay: how many minutes ahead to draw the advancing terminator,
+// nearest first. The terminator is the locus exactly 90° (a quarter great
+// circle) from the subsolar point.
+const GRAYLINE_FORECAST_HORIZONS_MIN = [20, 40, 60];
+const TERMINATOR_ARC_KM = EARTH_RADIUS_KM * (Math.PI / 2);
 // Active-area SNR field: value assigned to grid vertices with no nearby data,
 // and the "data presence" contour just above it that forms the smooth outer
 // boundary. NO_DATA sits far below any real SNR so the presence iso-line
@@ -1061,6 +1066,109 @@ function drawGrayline(ctx, width, height) {
     ctx.drawImage(overlayCanvas, 0, 0, width, height);
 }
 
+// drawGraylineForecast draws where the gray-line terminator WILL be in the next
+// hour as faint dashed advancing arcs (nearest = brightest). Gray-line propagation
+// enhancement tracks the terminator, so this previews which paths are about to open.
+export function drawGraylineForecast(ctx, width, height) {
+    const nowMs = Date.now();
+    const lineColor = state.theme === 'dark' ? '#c9a98f' : '#7d5d46';
+    const breakDistPx = Math.min(width, height) * 0.5;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.setLineDash([6, 5]);
+
+    GRAYLINE_FORECAST_HORIZONS_MIN.forEach((minutes, idx) => {
+        const subsolar = getSubsolarPoint(new Date(nowMs + (minutes * 60 * 1000)));
+        ctx.strokeStyle = lineColor;
+        ctx.globalAlpha = Math.max(0.18, 0.5 - (idx * 0.13));
+        ctx.lineWidth = Math.max(1, 1.7 - (idx * 0.35));
+
+        ctx.beginPath();
+        let pen = false;
+        let prev = null;
+        for (let bearing = 0; bearing <= 360; bearing += 3) {
+            const [lat, lng] = destinationPoint(subsolar.lat, subsolar.lng, bearing, TERMINATOR_ARC_KM);
+            const p = projectToCanvas(lat, lng, width, height);
+            if (!p) { pen = false; prev = null; continue; }
+            if (pen && prev && Math.hypot(p.x - prev.x, p.y - prev.y) > breakDistPx) {
+                pen = false;
+            }
+            if (!pen) { ctx.moveTo(p.x, p.y); pen = true; } else { ctx.lineTo(p.x, p.y); }
+            prev = p;
+        }
+        ctx.stroke();
+    });
+    ctx.restore();
+}
+
+// bearingFromCenter returns the initial great-circle bearing (0–360°, 0 = N) from
+// the station center to a point.
+export function bearingFromCenter(lat, lng) {
+    const lat1 = degToRad(state.center[0]);
+    const lat2 = degToRad(lat);
+    const dLng = degToRad(lng - state.center[1]);
+    const y = Math.sin(dLng) * Math.cos(lat2);
+    const x = (Math.cos(lat1) * Math.sin(lat2)) - (Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng));
+    return (radToDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+// drawTrendHalo highlights azimuth sectors where spot activity is RISING over the
+// streamed window (newer half vs older half), as a faint arc just inside the rim.
+// This is recent momentum from live data, NOT a slot-of-day historical baseline.
+export function drawTrendHalo(ctx, width, height, filteredSpots) {
+    if (!filteredSpots || filteredSpots.length < 8) return;
+
+    const SECTORS = 24;
+    const older = new Array(SECTORS).fill(0);
+    const newer = new Array(SECTORS).fill(0);
+    let maxAge = 0;
+    for (const s of filteredSpots) {
+        const age = Number(s?.ageSeconds) || 0;
+        if (age > maxAge) maxAge = age;
+    }
+    if (maxAge < 120) return; // window too short to read a trend
+    const split = maxAge / 2;
+
+    for (const s of filteredSpots) {
+        if (String(s?.sourceType || '').toLowerCase() === 'dxcluster') continue;
+        if (!Number.isFinite(s?.lat) || !Number.isFinite(s?.lng)) continue;
+        const sector = Math.floor((bearingFromCenter(s.lat, s.lng) / 360) * SECTORS) % SECTORS;
+        if ((Number(s.ageSeconds) || 0) <= split) newer[sector] += 1;
+        else older[sector] += 1;
+    }
+
+    const cx = width / 2;
+    const cy = height / 2;
+    const radiusBase = Math.min(width, height) * 0.47;
+    const horizonAngular = Math.min(MAX_VISIBLE_C, state.horizonKm / EARTH_RADIUS_KM);
+    const scale = (radiusBase * state.zoom) / Math.PI;
+    const rimRadius = Math.min(scale * horizonAngular, radiusBase - AZIMUTH_SCALE_CLEARANCE_PX) - 8;
+    if (rimRadius <= 0) return;
+
+    const sectorRad = (2 * Math.PI) / SECTORS;
+    ctx.save();
+    ctx.strokeStyle = state.theme === 'dark' ? '#c9a98f' : '#7d5d46';
+    ctx.lineCap = 'butt';
+    ctx.lineWidth = 5;
+    for (let sec = 0; sec < SECTORS; sec += 1) {
+        const delta = newer[sec] - older[sec];
+        if (delta < 2) continue; // only meaningfully rising sectors
+        ctx.globalAlpha = Math.min(0.5, 0.14 + (0.07 * delta));
+        // Sector spans bearings [sec, sec+1) * (360/SECTORS); 0° = up (canvas -Y).
+        const startBearing = sec * sectorRad;
+        const endBearing = (sec + 1) * sectorRad;
+        // Convert bearing (0=N, clockwise) to canvas angle (0=+X, clockwise, Y-down).
+        const a0 = startBearing - (Math.PI / 2);
+        const a1 = endBearing - (Math.PI / 2);
+        ctx.beginPath();
+        ctx.arc(cx, cy, rimRadius, a0, a1);
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
 function drawAzimuthIndicator(ctx, width, height) {
     const centerX = width / 2;
     const centerY = height / 2;
@@ -1974,6 +2082,11 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
             if (profile) profile.graylineStart = nowMs();
             drawGrayline(state.ctx, width, height);
             if (profile) profile.graylineEnd = nowMs();
+        }
+
+        if (getForecastEnabled()) {
+            drawGraylineForecast(state.ctx, width, height);
+            drawTrendHalo(state.ctx, width, height, filteredSpots);
         }
 
         if (profile) profile.spotsStart = nowMs();

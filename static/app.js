@@ -1407,6 +1407,18 @@ document.getElementById('show-country-coloring')?.addEventListener('change', (e)
     }
 });
 
+// Forecast overlay toggle (azimuthal advancing gray-line + rising-activity halo).
+// Local-only, default on.
+const forecastEl = document.getElementById('show-forecast');
+if (forecastEl) {
+    const savedForecast = localStorage.getItem('forecastEnabled');
+    forecastEl.checked = savedForecast === null ? true : savedForecast === 'true';
+    forecastEl.addEventListener('change', (e) => {
+        localStorage.setItem('forecastEnabled', e.target.checked ? 'true' : 'false');
+        scheduleRender();
+    });
+}
+
 document.getElementById('show-dxcc-labels')?.addEventListener('change', (e) => {
     updateDxccLabelsEnabled(e.target.checked);
 });
