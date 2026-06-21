@@ -414,20 +414,23 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     gap: 10px;
 }
 
+/* Docked vertical panel between the controls sidebar and the map (no overlap). */
 .band-lab-window {
-    position: absolute;
-    top: 14px;
-    right: 14px;
-    width: min(820px, calc(100% - 28px));
-    height: min(78vh, calc(100% - 28px));
-    min-width: 460px;
-    min-height: 320px;
-    z-index: 1200;
-    border: 1px solid var(--border-color);
-    border-radius: 10px;
-    box-shadow: 0 6px 22px var(--shadow-color);
+    position: relative;
+    flex: 0 0 var(--bandlab-w, 360px);
+    width: var(--bandlab-w, 360px);
+    min-width: 300px;
+    max-width: 70vw;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border-color);
     background: var(--bg-color);
     overflow: hidden;
+}
+
+.band-lab-window.is-hidden {
+    display: none;
 }
 
 .band-lab-window-header {
@@ -440,7 +443,6 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     font-weight: 700;
     border-bottom: 1px solid var(--border-color);
     background: color-mix(in srgb, var(--bg-color) 92%, var(--text-color) 8%);
-    cursor: move;
     user-select: none;
 }
 
@@ -480,21 +482,27 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 }
 
 .band-lab-window-body {
-    height: calc(100% - 40px);
+    flex: 1 1 auto;
+    min-height: 0;
     overflow: auto;
     padding: 10px;
     padding-bottom: 20px;
 }
 
+/* Right-edge vertical splitter for adjusting the docked panel width. */
 .band-lab-window-resize {
     position: absolute;
+    top: 0;
     right: 0;
-    bottom: 0;
-    width: 18px;
-    height: 18px;
-    cursor: nwse-resize;
-    background:
-        linear-gradient(135deg, transparent 0 45%, color-mix(in srgb, var(--text-color) 45%, transparent) 45% 52%, transparent 52% 65%, color-mix(in srgb, var(--text-color) 45%, transparent) 65% 72%, transparent 72%);
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    background: transparent;
+    z-index: 2;
+}
+
+.band-lab-window-resize:hover {
+    background: color-mix(in srgb, var(--text-color) 18%, transparent);
 }
 
 .band-lab-card {

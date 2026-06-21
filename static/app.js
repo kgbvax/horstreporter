@@ -1071,7 +1071,14 @@ if (captureConfig?.enabled) {
     attachMapEvents();
     attachUITooltipEvents();
     initOpMode({ requestRender: scheduleRender });
-    initBandLab();
+    initBandLab({
+        onLayoutChange: () => {
+            // Docked Band Stats panel changed the map container width; re-fit Leaflet
+            // and the azimuth canvas so tiles/centering stay correct (no overlap).
+            if (map) map.invalidateSize();
+            if (isAzimuthEnabled()) scheduleRender();
+        },
+    });
     hotBandIndicator = initHotBandIndicator({
         getTarget: () => document.getElementById('target')?.value?.trim()?.toUpperCase() || '',
         getSurroundings: () => Boolean(document.getElementById('surroundings')?.checked),

@@ -5,7 +5,6 @@ const ENABLE_KEY = 'bandLabEnabled';
 const UPDATE_THROTTLE_MS = 300;
 const DX_FETCH_INTERVAL_MS = 15000;
 const ACTIVITY_BINS = 12;
-const WINDOW_POS_KEY = 'bandLabWindowPos';
 const WINDOW_SIZE_KEY = 'bandLabWindowSize';
 const TIME_RANGE_KEY = 'bandLabTimeRangeMinutes';
 const BAND_LAB_TIME_RANGE_MINUTES = [15, 30, 60, 120];
@@ -20,10 +19,11 @@ const runtime = {
     dxCacheKey: '',
     dxInFlight: null,
     dxInFlightKey: '',
-    dxAbortController: null
+    dxAbortController: null,
+    onLayoutChange: null
 };
 
-export function initBandLab() {
+export function initBandLab(options = {}) {
     const toggleButton = document.getElementById('band-stats-toggle');
     const content = document.getElementById('band-lab-content');
     const windowEl = document.getElementById('band-lab-window');
@@ -32,6 +32,10 @@ export function initBandLab() {
     const helpPanel = document.getElementById('band-lab-legend-help');
     const timeRangeSelect = document.getElementById('band-lab-time-range');
     if (!content || !windowEl) return;
+
+    if (typeof options.onLayoutChange === 'function') {
+        runtime.onLayoutChange = options.onLayoutChange;
+    }
 
     runtime.enabled = localStorage.getItem(ENABLE_KEY) === 'true';
     setBandStatsVisible(windowEl, toggleButton, runtime.enabled);
@@ -47,10 +51,8 @@ export function initBandLab() {
         timeRangeSelect.value = String(initialMinutes);
     }
 
-    restoreWindowPosition(windowEl);
-    restoreWindowSize(windowEl);
+    restoreWindowWidth(windowEl);
     if (!runtime.initialized) {
-        setupWindowDrag(windowEl);
         setupWindowResize(windowEl);
     }
 
@@ -90,7 +92,8 @@ export function initBandLab() {
 }
 
 function setBandStatsVisible(windowEl, toggleButton, visible) {
-    windowEl.style.display = visible ? 'block' : 'none';
+    windowEl.classList.toggle('is-hidden', !visible);
+    runtime.onLayoutChange?.();
     if (!toggleButton) return;
     toggleButton.classList.toggle('btn-primary', visible);
     toggleButton.classList.toggle('btn-outline-secondary', !visible);
@@ -793,114 +796,56 @@ function prepareCanvas(canvas, fallbackW, fallbackH) {
     return { ctx, w: cssW, h: cssH };
 }
 
-function setupWindowDrag(windowEl) {
-    const header = document.getElementById('band-lab-window-header');
-    const host = document.getElementById('map-stack') || windowEl.parentElement;
-    if (!header || !host) return;
-
-    let dragging = false;
-    let startMouseX = 0;
-    let startMouseY = 0;
-    let startLeft = 0;
-    let startTop = 0;
-
-    const onMove = (e) => {
-        if (!dragging) return;
-
-        const hostRect = host.getBoundingClientRect();
-        const dx = e.clientX - startMouseX;
-        const dy = e.clientY - startMouseY;
-
-        let nextLeft = startLeft + dx;
-        let nextTop = startTop + dy;
-
-        const maxLeft = Math.max(0, hostRect.width - windowEl.offsetWidth);
-        const maxTop = Math.max(0, hostRect.height - windowEl.offsetHeight);
-        nextLeft = Math.max(0, Math.min(maxLeft, nextLeft));
-        nextTop = Math.max(0, Math.min(maxTop, nextTop));
-
-        windowEl.style.right = 'auto';
-        windowEl.style.left = `${Math.round(nextLeft)}px`;
-        windowEl.style.top = `${Math.round(nextTop)}px`;
-    };
-
-    const stopDrag = () => {
-        if (!dragging) return;
-        dragging = false;
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', stopDrag);
-        persistWindowPosition(windowEl);
-    };
-
-    header.addEventListener('mousedown', (e) => {
-        if (e.button !== 0) return;
-        const target = e.target instanceof Element ? e.target : null;
-        if (target?.closest('button, select')) return;
-        dragging = true;
-        startMouseX = e.clientX;
-        startMouseY = e.clientY;
-        const hostRect = host.getBoundingClientRect();
-        const windowRect = windowEl.getBoundingClientRect();
-        startLeft = windowRect.left - hostRect.left;
-        startTop = windowRect.top - hostRect.top;
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', stopDrag);
-        e.preventDefault();
-    });
-}
-
 function setLegendHelpVisible(helpToggle, helpPanel, visible) {
     if (!helpToggle || !helpPanel) return;
     helpPanel.style.display = visible ? 'block' : 'none';
     helpToggle.setAttribute('aria-expanded', visible ? 'true' : 'false');
 }
 
+// Right-edge splitter: drag to resize the docked panel's width only. The width
+// lives in the --bandlab-w CSS var so the flex column re-bases instantly, and we
+// re-fit the map live via the layout-change callback.
 function setupWindowResize(windowEl) {
     const handle = document.getElementById('band-lab-window-resize');
-    const host = document.getElementById('map-stack') || windowEl.parentElement;
-    if (!handle || !host) return;
+    if (!handle) return;
 
-    const MIN_W = 320;
-    const MIN_H = 260;
+    const MIN_W = 300;
+    const maxWidth = () => Math.max(MIN_W, Math.round(window.innerWidth * 0.7));
 
     let resizing = false;
     let startMouseX = 0;
-    let startMouseY = 0;
     let startWidth = 0;
-    let startHeight = 0;
+    let rafPending = false;
 
     const onMove = (e) => {
         if (!resizing) return;
-
-        const hostRect = host.getBoundingClientRect();
-        const panelRect = windowEl.getBoundingClientRect();
-        const panelLeftInHost = panelRect.left - hostRect.left;
-        const panelTopInHost = panelRect.top - hostRect.top;
-        const maxW = Math.max(MIN_W, hostRect.width - panelLeftInHost);
-        const maxH = Math.max(MIN_H, hostRect.height - panelTopInHost);
-
-        const nextWidth = Math.max(MIN_W, Math.min(maxW, startWidth + (e.clientX - startMouseX)));
-        const nextHeight = Math.max(MIN_H, Math.min(maxH, startHeight + (e.clientY - startMouseY)));
-
-        windowEl.style.width = `${Math.round(nextWidth)}px`;
-        windowEl.style.height = `${Math.round(nextHeight)}px`;
+        const next = Math.max(MIN_W, Math.min(maxWidth(), startWidth + (e.clientX - startMouseX)));
+        windowEl.style.setProperty('--bandlab-w', `${Math.round(next)}px`);
+        if (!rafPending) {
+            rafPending = true;
+            requestAnimationFrame(() => {
+                rafPending = false;
+                runtime.onLayoutChange?.();
+            });
+        }
     };
 
     const stopResize = () => {
         if (!resizing) return;
         resizing = false;
+        document.body.style.cursor = '';
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', stopResize);
-        persistWindowSize(windowEl);
+        persistWindowWidth(windowEl);
+        runtime.onLayoutChange?.();
     };
 
     handle.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
         resizing = true;
         startMouseX = e.clientX;
-        startMouseY = e.clientY;
         startWidth = windowEl.offsetWidth;
-        startHeight = windowEl.offsetHeight;
+        document.body.style.cursor = 'col-resize';
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', stopResize);
         e.preventDefault();
@@ -908,47 +853,18 @@ function setupWindowResize(windowEl) {
     });
 }
 
-function persistWindowPosition(windowEl) {
-    const left = parseInt(windowEl.style.left || '0', 10);
-    const top = parseInt(windowEl.style.top || '0', 10);
-    localStorage.setItem(WINDOW_POS_KEY, JSON.stringify({ left, top }));
+function persistWindowWidth(windowEl) {
+    localStorage.setItem(WINDOW_SIZE_KEY, JSON.stringify({ width: windowEl.offsetWidth }));
 }
 
-function restoreWindowPosition(windowEl) {
-    const raw = localStorage.getItem(WINDOW_POS_KEY);
-    if (!raw) return;
-    try {
-        const parsed = JSON.parse(raw);
-        const left = Number(parsed?.left);
-        const top = Number(parsed?.top);
-        if (Number.isFinite(left) && Number.isFinite(top)) {
-            windowEl.style.right = 'auto';
-            windowEl.style.left = `${Math.max(0, Math.round(left))}px`;
-            windowEl.style.top = `${Math.max(0, Math.round(top))}px`;
-        }
-    } catch {
-        // ignore invalid persisted values
-    }
-}
-
-function persistWindowSize(windowEl) {
-    const width = windowEl.offsetWidth;
-    const height = windowEl.offsetHeight;
-    localStorage.setItem(WINDOW_SIZE_KEY, JSON.stringify({ width, height }));
-}
-
-function restoreWindowSize(windowEl) {
+function restoreWindowWidth(windowEl) {
     const raw = localStorage.getItem(WINDOW_SIZE_KEY);
     if (!raw) return;
     try {
         const parsed = JSON.parse(raw);
         const width = Number(parsed?.width);
-        const height = Number(parsed?.height);
-        if (Number.isFinite(width) && width >= 320) {
-            windowEl.style.width = `${Math.round(width)}px`;
-        }
-        if (Number.isFinite(height) && height >= 260) {
-            windowEl.style.height = `${Math.round(height)}px`;
+        if (Number.isFinite(width) && width >= 300) {
+            windowEl.style.setProperty('--bandlab-w', `${Math.round(width)}px`);
         }
     } catch {
         // ignore invalid persisted values
