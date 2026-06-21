@@ -76,64 +76,64 @@ const LINES = {
     en: {
         dare: {
             soft: [
-                (B) => [`hey, ${B} looks promising — might be worth a listen.`, `${B}'s perking up. whenever you fancy it.`, `psst — ${B}'s starting to move.`, `little opening on ${B}, if you're curious.`],
-                (B) => [`${B}'s holding up nicely. no rush.`, `still going on ${B}. the rig's right there if you want it.`, `${B} keeps looking good. just a thought.`, `nice steady ${B} here. up to you.`],
-                (B) => [`${B}'s still good from your grid! shame to miss it.`, `${B} keeps on giving. just saying. 🙂`, `${B}'s been lovely for a while now.`, `honestly ${B} from your spot is a treat right now.`],
-                (B) => [`${B} had a lovely run. catch the next one!`, `that was a nice ${B} opening. there'll be others.`, `${B} faded, but no worries — they come back.`, `you missed a sweet ${B} window. happens to everyone.`],
+                (B) => [`hey, ${B} looks promising — might be worth a listen.`, `${B}'s perking up. whenever you fancy it.`, `psst — ${B}'s starting to move.`, `little opening on ${B}, if you're curious.`, `${B}'s warming up nicely. no pressure.`, `something gentle stirring on ${B}.`, `${B} just winked at you. rude not to look.`, `quiet little lift on ${B} — your call.`],
+                (B) => [`${B}'s holding up nicely. no rush.`, `still going on ${B}. the rig's right there if you want it.`, `${B} keeps looking good. just a thought.`, `nice steady ${B} here. up to you.`, `${B}'s being very patient with you.`, `still a lovely little run on ${B}.`, `${B} hasn't given up on you yet.`, `${B}'s still on. take your time, maestro.`],
+                (B) => [`${B}'s still good from your grid! shame to miss it.`, `${B} keeps on giving. just saying. 🙂`, `${B}'s been lovely for a while now.`, `honestly ${B} from your spot is a treat right now.`, `${B}'s practically gift-wrapped for you.`, `you could work the world on ${B} right now, you know.`, `${B}'s been open so long it's getting comfortable.`, `it'd be a kindness to ${B} to actually answer it.`],
+                (B) => [`${B} had a lovely run. catch the next one!`, `that was a nice ${B} opening. there'll be others.`, `${B} faded, but no worries — they come back.`, `you missed a sweet ${B} window. happens to everyone.`, `${B}'s tucked itself in. sleep well, little band.`, `ah well. ${B} will forgive you. probably.`, `the ${B} curtain's down. lovely while it lasted.`, `${B}'s gone quiet — we'll always have the sparkline.`],
             ],
             buzzed: [
-                (B) => [`${B}'s awake. just sayin'.`, `something's stirring on ${B}. don't make me beg.`, `${B} just lit up. tick tock.`, `oi. ${B}. it's happening.`, `${B}'s got a pulse. you got an excuse?`],
-                (B) => [`${B}'s STILL going. you gonna do something or just watch me?`, `still hot on ${B}. the radio's right there, champ.`, `${B} hasn't quit. why have you?`, `${B}'s holding. unlike my patience.`],
-                (B) => [`${B} workable from YOUR grid. from YOUR grid, Kevin.`, `${B}'s been open for ages now. I'm not gonna ask again. (I will.)`, `you know ${B}'s still going, right? RIGHT?`, `${B} from your own backyard and you're reading this. bold.`],
-                (B) => [`openings came and went on ${B}. I watched 'em leave. told 'em you were busy.`, `cool. ${B} was wide open. hope the chair's comfy.`, `${B} gave you twenty minutes. you gave it nothing.`, `that's a museum-grade ${B} opening you're ignoring. respect, almost.`],
+                (B) => [`${B}'s awake. which is more than I can say for you.`, `oh look, ${B}'s doing something. unlike SOME of us.`, `${B} just lit up. quick, ruin it by ignoring it.`, `something's stirring on ${B}. don't all rush at once.`, `${B}'s got a pulse. you got an excuse?`, `ladies and gentlemen, ${B} has entered the building. exit: you.`, `${B}'s opening. this is the good part. you're missing it.`, `${B}. it's happening. boooo if you don't.`, `psst — ${B}'s hot. I'd applaud but my hands are tired from waiting.`, `${B} just came alive. the bar's that low and you still tripped.`],
+                (B) => [`${B}'s STILL going. you gonna do something or just heckle from the cheap seats with me?`, `still hot on ${B}. why do we even come here?`, `${B} hasn't quit. why have you?`, `${B}'s holding. unlike my patience, which left ten minutes ago.`, `still ${B}, still nothing from you. riveting theatre.`, `${B}'s an open mic and you've got stage fright.`, `bravo, ${B}! ...and nothing. the crowd goes mild.`, `${B}'s been on a while. so has my disappointment.`, `${B} keeps performing. tough crowd of one, eh?`, `they don't make openings like ${B} anymore. and you don't make QSOs. perfect match.`],
+                (B) => [`${B} workable from YOUR grid. from YOUR grid, Kevin.`, `${B}'s been open for ages. I'm not gonna ask again. (I will.)`, `you KNOW ${B}'s still going, right? RIGHT?`, `${B} from your own backyard and you're reading THIS. bold.`, `I've seen glaciers move faster than you onto ${B}.`, `${B}'s practically begging. it's getting embarrassing — for you.`, `this ${B} opening deserves a better operator. sadly it has you.`, `${B}: open. you: a cautionary tale.`, `still ${B}! I've reviewed the footage. you do nothing. consistently.`, `${B}'s a standing ovation and you're checking your phone.`],
+                (B) => [`openings came and went on ${B}. I watched 'em leave. told 'em you were busy.`, `${B} was wide open. hope the chair's comfy — it's your only catch today.`, `${B} gave you twenty minutes. you gave it a blank stare.`, `that was a museum-grade ${B} opening. and you, the guard who slept through the heist.`, `${B}'s gone. that's showbiz. terrible, terrible showbiz.`, `and ${B} exits stage left. the only thing you worked today was my nerves.`, `${B} closed. round of applause for doing absolutely nothing.`, `the great ${B} opening of today: unattended. like a sad buffet.`, `${B}'s done. I'd say 'next time' but we both know.`, `${B} is history. so's your reputation in this shack.`],
             ],
             drill: [
-                (B) => [`${B}. ON THE AIR. NOW.`, `${B} IS LIVE. WHAT ARE YOU WAITING FOR.`, `MOVEMENT ON ${B}. RESPOND.`, `EYES ON ${B}, OPERATOR.`],
-                (B) => [`${B} STILL OPEN. WHY ARE YOU STILL READING THIS.`, `MOVE. ${B} WON'T WORK ITSELF.`, `${B} HOLDING. YOU ARE NOT. EXPLAIN.`, `${B} IS RIGHT THERE. ACQUIRE TARGET.`],
-                (B) => [`${B} FROM YOUR OWN GRID, SOLDIER. UNACCEPTABLE.`, `${B}. KEY DOWN. THAT'S AN ORDER.`, `${B} OPEN FOR MINUTES. THIS IS A DERELICTION.`, `${B} IN YOUR SECTOR. ENGAGE.`],
-                (B) => [`STAND DOWN. ${B} IS GONE. THAT ONE'S ON YOU.`, `${B} CLOSED. WE DO NOT SPEAK OF THIS.`, `OPPORTUNITY ${B}: LOST. LOG THE FAILURE.`, `${B} WINDOW: CLOSED. DEBRIEF YOURSELF.`],
+                (B) => [`${B}. ON THE AIR. NOW.`, `${B} IS LIVE. WHAT ARE YOU WAITING FOR.`, `MOVEMENT ON ${B}. RESPOND.`, `EYES ON ${B}, OPERATOR.`, `${B} HOT. BOOTS ON. MOVE.`, `THIS IS NOT A DRILL. ${B} IS OPEN.`, `${B} CONTACT. ENGAGE OR EXPLAIN.`, `DROP WHAT YOU'RE DOING. ${B}. GO.`],
+                (B) => [`${B} STILL OPEN. WHY ARE YOU STILL READING THIS.`, `MOVE. ${B} WON'T WORK ITSELF.`, `${B} HOLDING. YOU ARE NOT. EXPLAIN.`, `${B} IS RIGHT THERE. ACQUIRE TARGET.`, `${B} REMAINS HOT. YOUR HESITATION IS NOISE.`, `STILL ${B}. STILL YOU. STILL NOTHING. UNACCEPTABLE.`, `${B} WINDOW OPEN. STOP SPECTATING.`, `${B}. KEY. DOWN. THAT WAS NOT A REQUEST.`],
+                (B) => [`${B} FROM YOUR OWN GRID, SOLDIER. UNACCEPTABLE.`, `${B}. KEY DOWN. THAT'S AN ORDER.`, `${B} OPEN FOR MINUTES. THIS IS A DERELICTION.`, `${B} IN YOUR SECTOR. ENGAGE.`, `${B} HAS BEEN OPEN LONGER THAN YOUR ATTENTION SPAN.`, `EVERY SECOND ON ${B} WASTED IS ON YOUR RECORD.`, `${B}. NOW. I WILL NOT REPEAT MYSELF AGAIN. AGAIN.`, `${B} IS A GIFT AND YOU ARE INSUBORDINATE.`],
+                (B) => [`STAND DOWN. ${B} IS GONE. THAT ONE'S ON YOU.`, `${B} CLOSED. WE DO NOT SPEAK OF THIS.`, `OPPORTUNITY ${B}: LOST. LOG THE FAILURE.`, `${B} WINDOW: CLOSED. DEBRIEF YOURSELF.`, `${B} TERMINATED. CASUALTY: YOUR LOGBOOK.`, `MISSION ${B}: FAILED. NO MEDALS TODAY.`, `${B} IS GONE. RECORD IT. LEARN NOTHING, PROBABLY.`, `${B} LOST ON YOUR WATCH. DISMISSED.`],
             ],
         },
         fade: {
-            soft: (B) => [`${B}'s quieted down. maybe next time.`, `${B} drifted off. no biggie.`],
-            buzzed: (B) => [`and… ${B}'s gone. classic.`, `${B}? closed. you snooze, you lose.`],
-            drill: (B) => [`${B} LOST. DOCUMENT THE FAILURE.`, `${B} GONE. NOTED. PERMANENTLY.`],
+            soft: (B) => [`${B}'s quieted down. maybe next time.`, `${B} drifted off. no biggie.`, `${B}'s having a little rest now.`, `and ${B} fades, gentle as ever.`],
+            buzzed: (B) => [`and… ${B}'s gone. classic.`, `${B}? closed. you snooze, you lose. you snoozed.`, `${B} has left the building. take a bow for nothing.`, `${B}'s gone dark. like the theatre after a flop.`],
+            drill: (B) => [`${B} LOST. DOCUMENT THE FAILURE.`, `${B} GONE. NOTED. PERMANENTLY.`, `${B} OFFLINE. THAT'S A MARK ON YOUR RECORD.`, `${B} CLOSED. STAND THERE AND THINK ABOUT IT.`],
         },
-        dud: (B) => [`yeah ${B} was dead by the time you looked. my bad.`, `called ${B} too early. I got excited.`, `${B}? that one fizzled. don't @ me.`, `okay ${B} was a false alarm. sue me.`, `${B} ghosted us both. awkward.`, `I may have oversold ${B}. slightly.`],
+        dud: (B) => [`yeah ${B} was dead by the time you looked. my bad.`, `called ${B} too early. I got excited.`, `${B}? that one fizzled. don't @ me.`, `okay ${B} was a false alarm. sue me.`, `${B} ghosted us both. awkward.`, `I may have oversold ${B}. slightly.`, `${B} was a mirage. happens to the best hecklers.`, `fine, ${B} was nothing. even I get heckled sometimes.`, `${B}: all hat, no QSO. my mistake.`, `I jumped the gun on ${B}. the gun was empty.`, `${B} flopped. tough crowd, even for me.`, `chalk ${B} up as my bad review of the day.`],
         salt: (n, B, mean) => mean === 'drill'
             ? ` ${n} PRIOR OFFENSES ON ${B.toUpperCase()}.`
-            : ` (${n} times you've ghosted ${B} lately, by the way.)`,
+            : ` (${n} times you've ghosted ${B} lately — the balcony has notes.)`,
     },
     de: {
         dare: {
             soft: [
-                (B) => [`hey, ${B} sieht vielversprechend aus — mal reinhören?`, `${B} zieht an. wann immer du magst.`, `psst — auf ${B} bewegt sich was.`, `kleine Öffnung auf ${B}, falls du neugierig bist.`],
-                (B) => [`${B} hält sich schön. keine Eile.`, `läuft noch auf ${B}. das Gerät steht bereit.`, `${B} sieht weiter gut aus. nur so ein Gedanke.`, `schön gleichmäßig hier auf ${B}. ganz wie du willst.`],
-                (B) => [`${B} ist immer noch gut aus deinem Locator! schade drum.`, `${B} gibt einfach weiter. nur so. 🙂`, `${B} ist schon 'ne ganze Weile richtig nett.`, `ehrlich, ${B} von deinem Standort ist gerade ein Genuss.`],
-                (B) => [`${B} hatte einen schönen Lauf. nimm die nächste mit!`, `das war eine nette ${B}-Öffnung. es kommen weitere.`, `${B} ist abgeflaut, aber kein Stress — die kommen wieder.`, `du hast ein feines ${B}-Fenster verpasst. passiert jedem.`],
+                (B) => [`hey, ${B} sieht vielversprechend aus — mal reinhören?`, `${B} zieht an. wann immer du magst.`, `psst — auf ${B} bewegt sich was.`, `kleine Öffnung auf ${B}, falls du neugierig bist.`, `${B} wärmt sich auf. kein Druck.`, `da regt sich was Sanftes auf ${B}.`, `${B} hat dir gerade zugezwinkert. unhöflich, nicht hinzusehen.`, `leichtes Lüftchen auf ${B} — deine Entscheidung.`],
+                (B) => [`${B} hält sich schön. keine Eile.`, `läuft noch auf ${B}. das Gerät steht bereit.`, `${B} sieht weiter gut aus. nur so ein Gedanke.`, `schön gleichmäßig hier auf ${B}. ganz wie du willst.`, `${B} ist sehr geduldig mit dir.`, `immer noch ein netter Lauf auf ${B}.`, `${B} hat dich noch nicht aufgegeben.`, `${B} läuft weiter. lass dir Zeit, Maestro.`],
+                (B) => [`${B} ist immer noch gut aus deinem Locator! schade drum.`, `${B} gibt einfach weiter. nur so. 🙂`, `${B} ist schon 'ne ganze Weile richtig nett.`, `ehrlich, ${B} von deinem Standort ist gerade ein Genuss.`, `${B} ist praktisch Geschenkpapier für dich.`, `du könntest gerade die Welt auf ${B} arbeiten, weißt du.`, `${B} ist so lange offen, es macht's sich schon gemütlich.`, `wäre nett zu ${B}, mal zu antworten.`],
+                (B) => [`${B} hatte einen schönen Lauf. nimm die nächste mit!`, `das war eine nette ${B}-Öffnung. es kommen weitere.`, `${B} ist abgeflaut, aber kein Stress — die kommen wieder.`, `du hast ein feines ${B}-Fenster verpasst. passiert jedem.`, `${B} hat sich zugedeckt. schlaf gut, kleines Band.`, `na ja. ${B} verzeiht dir. wahrscheinlich.`, `der ${B}-Vorhang ist gefallen. schön war's.`, `${B} ist still geworden — die Sparkline bleibt uns.`],
             ],
             buzzed: [
-                (B) => [`${B} ist wach. nur so.`, `auf ${B} tut sich was. lass mich nicht betteln.`, `${B} leuchtet auf. tick tack.`, `ey. ${B}. es passiert.`, `${B} hat 'nen Puls. und du 'ne Ausrede?`],
-                (B) => [`${B} läuft IMMER noch. machst du was oder guckst du nur zu?`, `weiter heiß auf ${B}. das Funkgerät steht direkt da, Großer.`, `${B} gibt nicht auf. warum du?`, `${B} hält durch. anders als meine Geduld.`],
-                (B) => [`${B} aus DEINEM Locator machbar. aus DEINEM, Kevin.`, `${B} ist seit Ewigkeiten offen. ich frag nicht nochmal. (doch.)`, `du weißt, dass ${B} noch läuft, oder? ODER?`, `${B} direkt vor der Haustür und du liest das hier. mutig.`],
-                (B) => [`Öffnungen kamen und gingen auf ${B}. ich hab zugesehen. hab gesagt, du hast zu tun.`, `super. ${B} war sperrangelweit offen. hoffentlich sitzt du bequem.`, `${B} hat dir zwanzig Minuten gegeben. du gabst nichts zurück.`, `das ist eine museumsreife ${B}-Öffnung, die du ignorierst. fast Respekt.`],
+                (B) => [`${B} ist wach. mehr als man von dir behaupten kann.`, `oh, ${B} tut was. im Gegensatz zu GEWISSEN Leuten.`, `${B} leuchtet auf. schnell, ignorier es kaputt.`, `auf ${B} regt sich was. nur nicht alle auf einmal.`, `${B} hat 'nen Puls. und du 'ne Ausrede?`, `meine Damen und Herren, ${B} betritt die Bühne. Abgang: du.`, `${B} öffnet. das ist der gute Teil. du verpasst ihn.`, `${B}. es passiert. buuuh, wenn nicht.`, `psst — ${B} ist heiß. ich würd klatschen, aber meine Hände sind müde vom Warten.`, `${B} lebt auf. die Latte liegt am Boden und du stolperst trotzdem.`],
+                (B) => [`${B} läuft IMMER noch. machst du was, oder heckeln wir zwei aus der Loge?`, `weiter heiß auf ${B}. warum kommen wir überhaupt her?`, `${B} gibt nicht auf. warum du?`, `${B} hält durch. anders als meine Geduld, die ging vor zehn Minuten.`, `immer noch ${B}, immer noch nichts von dir. mitreißendes Theater.`, `${B} ist 'ne offene Bühne und du hast Lampenfieber.`, `bravo, ${B}! ...und nichts. das Publikum tobt verhalten.`, `${B} läuft schon 'ne Weile. meine Enttäuschung auch.`, `${B} spielt weiter. zähes Publikum von einem, was?`, `solche Öffnungen wie ${B} gibt's kaum noch. und QSOs machst du auch keine. passt.`],
+                (B) => [`${B} machbar aus DEINEM Locator. aus DEINEM, Kevin.`, `${B} ist seit Ewigkeiten offen. ich frag nicht nochmal. (doch.)`, `du WEISST, dass ${B} noch läuft, oder? ODER?`, `${B} direkt vor der Haustür und du liest DAS hier. mutig.`, `ich hab Gletscher schneller Richtung ${B} kriechen sehen als dich.`, `${B} bettelt praktisch. wird langsam peinlich — für dich.`, `diese ${B}-Öffnung verdient einen besseren Operator. leider hat sie dich.`, `${B}: offen. du: ein warnendes Beispiel.`, `immer noch ${B}! ich hab die Aufzeichnung geprüft. du tust nichts. zuverlässig.`, `${B} sind stehende Ovationen und du checkst dein Handy.`],
+                (B) => [`Öffnungen kamen und gingen auf ${B}. ich hab zugesehen. hab gesagt, du hast zu tun.`, `${B} war sperrangelweit offen. hoffentlich sitzt du bequem — das war dein einziger Fang.`, `${B} gab dir zwanzig Minuten. du gabst einen leeren Blick.`, `das war eine museumsreife ${B}-Öffnung. und du der Wachmann, der den Coup verschlief.`, `${B} ist weg. das ist Showbusiness. furchtbares Showbusiness.`, `und ${B} geht ab nach links. das Einzige, was du heute gearbeitet hast, sind meine Nerven.`, `${B} zu. Applaus dafür, dass du absolut nichts getan hast.`, `die große ${B}-Öffnung heute: unbeaufsichtigt. wie ein trauriges Buffet.`, `${B} ist durch. ich würd 'nächstes Mal' sagen, aber wir wissen beide Bescheid.`, `${B} ist Geschichte. dein Ruf in diesem Shack auch.`],
             ],
             drill: [
-                (B) => [`${B}. AUF SENDUNG. SOFORT.`, `${B} IST LIVE. WORAUF WARTEST DU.`, `BEWEGUNG AUF ${B}. REAGIEREN.`, `AUGEN AUF ${B}, FUNKER.`],
-                (B) => [`${B} IMMER NOCH OFFEN. WARUM LIEST DU DAS NOCH.`, `BEWEGUNG. ${B} ARBEITET NICHT VON ALLEIN.`, `${B} HÄLT. DU NICHT. ERKLÄRUNG.`, `${B} IST GENAU DA. ZIEL ERFASSEN.`],
-                (B) => [`${B} AUS DEINEM EIGENEN LOCATOR, SOLDAT. INAKZEPTABEL.`, `${B}. TASTE RUNTER. DAS IST EIN BEFEHL.`, `${B} SEIT MINUTEN OFFEN. DAS IST PFLICHTVERGESSEN.`, `${B} IN DEINEM SEKTOR. ANGREIFEN.`],
-                (B) => [`RÜCKZUG. ${B} IST WEG. DAS GEHT AUF DEINE KAPPE.`, `${B} GESCHLOSSEN. WIR REDEN NICHT DARÜBER.`, `CHANCE ${B}: VERLOREN. VERSAGEN PROTOKOLLIEREN.`, `FENSTER ${B}: ZU. SELBST-DEBRIEFING.`],
+                (B) => [`${B}. AUF SENDUNG. SOFORT.`, `${B} IST LIVE. WORAUF WARTEST DU.`, `BEWEGUNG AUF ${B}. REAGIEREN.`, `AUGEN AUF ${B}, FUNKER.`, `${B} HEISS. STIEFEL AN. BEWEGUNG.`, `DAS IST KEINE ÜBUNG. ${B} IST OFFEN.`, `${B}-KONTAKT. ANGREIFEN ODER ERKLÄREN.`, `ALLES STEHEN UND LIEGEN LASSEN. ${B}. LOS.`],
+                (B) => [`${B} IMMER NOCH OFFEN. WARUM LIEST DU DAS NOCH.`, `BEWEGUNG. ${B} ARBEITET NICHT VON ALLEIN.`, `${B} HÄLT. DU NICHT. ERKLÄRUNG.`, `${B} IST GENAU DA. ZIEL ERFASSEN.`, `${B} WEITER HEISS. DEIN ZÖGERN IST NUR RAUSCHEN.`, `IMMER NOCH ${B}. IMMER NOCH DU. IMMER NOCH NICHTS. INAKZEPTABEL.`, `${B}-FENSTER OFFEN. HÖR AUF ZU GLOTZEN.`, `${B}. TASTE. RUNTER. DAS WAR KEINE BITTE.`],
+                (B) => [`${B} AUS DEINEM EIGENEN LOCATOR, SOLDAT. INAKZEPTABEL.`, `${B}. TASTE RUNTER. DAS IST EIN BEFEHL.`, `${B} SEIT MINUTEN OFFEN. DAS IST PFLICHTVERGESSEN.`, `${B} IN DEINEM SEKTOR. ANGREIFEN.`, `${B} IST LÄNGER OFFEN ALS DEINE AUFMERKSAMKEITSSPANNE.`, `JEDE VERGEUDETE SEKUNDE AUF ${B} GEHT IN DEINE AKTE.`, `${B}. JETZT. ICH WIEDERHOLE MICH NICHT NOCHMAL. NOCHMAL.`, `${B} IST EIN GESCHENK UND DU VERWEIGERST DEN BEFEHL.`],
+                (B) => [`RÜCKZUG. ${B} IST WEG. DAS GEHT AUF DEINE KAPPE.`, `${B} GESCHLOSSEN. WIR REDEN NICHT DARÜBER.`, `CHANCE ${B}: VERLOREN. VERSAGEN PROTOKOLLIEREN.`, `FENSTER ${B}: ZU. SELBST-DEBRIEFING.`, `${B} BEENDET. VERLUST: DEIN LOGBUCH.`, `MISSION ${B}: GESCHEITERT. HEUTE KEINE ORDEN.`, `${B} IST WEG. NOTIEREN. VERMUTLICH NICHTS LERNEN.`, `${B} VERLOREN UNTER DEINER AUFSICHT. WEGTRETEN.`],
             ],
         },
         fade: {
-            soft: (B) => [`${B} ist ruhiger geworden. vielleicht nächstes Mal.`, `${B} hat sich verabschiedet. halb so wild.`],
-            buzzed: (B) => [`und… ${B} ist weg. typisch.`, `${B}? zu. wer zu spät kommt…`],
-            drill: (B) => [`${B} VERLOREN. VERSAGEN DOKUMENTIEREN.`, `${B} WEG. NOTIERT. FÜR IMMER.`],
+            soft: (B) => [`${B} ist ruhiger geworden. vielleicht nächstes Mal.`, `${B} hat sich verabschiedet. halb so wild.`, `${B} macht jetzt ein Päuschen.`, `und ${B} verklingt, sanft wie immer.`],
+            buzzed: (B) => [`und… ${B} ist weg. typisch.`, `${B}? zu. wer zu spät kommt… du kamst zu spät.`, `${B} hat das Gebäude verlassen. Verbeugung für nichts.`, `${B} ist dunkel. wie das Theater nach 'nem Flop.`],
+            drill: (B) => [`${B} VERLOREN. VERSAGEN DOKUMENTIEREN.`, `${B} WEG. NOTIERT. FÜR IMMER.`, `${B} OFFLINE. DAS IST EIN EINTRAG IN DEINER AKTE.`, `${B} ZU. STELL DICH HIN UND DENK DRÜBER NACH.`],
         },
-        dud: (B) => [`ja, ${B} war schon tot, als du geguckt hast. mein Fehler.`, `${B} zu früh gerufen. ich war aufgeregt.`, `${B}? ist verpufft. nicht meckern.`, `okay, ${B} war ein Fehlalarm. verklag mich.`, `${B} hat uns beide versetzt. peinlich.`, `ich hab ${B} vielleicht leicht überverkauft.`],
+        dud: (B) => [`ja, ${B} war schon tot, als du geguckt hast. mein Fehler.`, `${B} zu früh gerufen. ich war aufgeregt.`, `${B}? ist verpufft. nicht meckern.`, `okay, ${B} war ein Fehlalarm. verklag mich.`, `${B} hat uns beide versetzt. peinlich.`, `ich hab ${B} vielleicht leicht überverkauft.`, `${B} war 'ne Fata Morgana. passiert den besten Hecklern.`, `gut, ${B} war nichts. auch ich werd mal ausgebuht.`, `${B}: viel Lärm, kein QSO. mein Fehler.`, `ich hab bei ${B} vorgeprescht. die Kammer war leer.`, `${B} ist gefloppt. zähes Publikum, sogar für mich.`, `verbuch ${B} als meine Verrisskritik des Tages.`],
         salt: (n, B, mean) => mean === 'drill'
             ? ` ${n} FRÜHERE VERSTÖSSE AUF ${B.toUpperCase()}.`
-            : ` (${n}× hast du ${B} zuletzt versetzt, nur nebenbei.)`,
+            : ` (${n}× hast du ${B} zuletzt versetzt — die Loge führt Buch.)`,
     },
 };
 
@@ -182,7 +182,7 @@ const UI = {
         cleanSlate: 'Clean slate. For now.',
         ghosted: (n) => `ghosted ${n}×`,
         nag: 'let me nag your desktop',
-        meanLabels: { soft: 'Supportive', buzzed: 'Buzzed', drill: 'Drill Sergeant' },
+        meanLabels: { soft: 'Supportive', buzzed: 'In character', drill: 'Drill Sergeant' },
         demoDone: 'demo done. reload to reset.',
     },
     de: {
@@ -194,7 +194,7 @@ const UI = {
         cleanSlate: 'Weiße Weste. Vorerst.',
         ghosted: (n) => `${n}× versetzt`,
         nag: 'nerv meinen Desktop',
-        meanLabels: { soft: 'Aufmunternd', buzzed: 'Angeheitert', drill: 'Ausbilder' },
+        meanLabels: { soft: 'Aufmunternd', buzzed: 'Echt Horst-Kevin', drill: 'Ausbilder' },
         demoDone: 'Demo fertig. zum Zurücksetzen neu laden.',
     },
 };
@@ -578,12 +578,25 @@ export function initHorstKevin({ getTarget, getSurroundings, getCurrentBand, onB
         tracked.clear();
         togglePanel(true);
 
-        const STEP_MS = 2200;
+        const STEP_MS = 6000; // wall-clock between steps — slow enough to read each line
         const ADV_MS = 7 * 60_000; // 7 simulated minutes per step → crosses every rung
         let dnow = Date.now();
-        // Each step lists the bands "currently worth it". 20m runs the full
-        // ladder; 15m flashes once then dies (→ a dud + a grudge).
-        const timeline = [['20m'], ['20m', '15m'], ['20m'], ['20m'], []];
+        // Each step lists the bands "currently worth it". 20m runs the full ladder
+        // (rung 0→3) then fades; 15m flashes twice (two duds + two grudges), then on
+        // its third opening climbs to rung 2 — by which point it's a repeat offender,
+        // triggering the grudge "salt" line — before fading into a third grudge.
+        const timeline = [
+            ['20m'],            //  20m rung0
+            ['20m', '15m'],     //  20m rung1 · 15m rung0 (A) · 20m call→banger
+            ['20m'],            //  20m rung2 · 15m fades → grudge#1 · A→dud
+            ['20m', '15m'],     //  20m rung3 · 15m rung0 (B)
+            ['20m'],            //  15m fades → grudge#2 · B→dud
+            ['20m', '15m'],     //  15m rung0 (C)
+            ['15m'],            //  20m fades → grudge(20m) · 15m rung1
+            ['15m'],            //  15m rung2 → repeat-offender salt line
+            ['15m'],            //  15m rung3 · C→banger
+            [],                 //  15m fades → grudge#3 (repeat-flagged)
+        ];
         let i = 0;
 
         const tick = () => {
