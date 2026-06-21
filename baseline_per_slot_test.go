@@ -5,6 +5,39 @@ import (
 	"testing"
 )
 
+// TestNormalizeBaselineToSpotsPerMinute pins the fix for the inflated-baseline
+// bug: an unknown span (historyMinutes <= 0) must yield 0 ("no baseline"),
+// never a value divided by a 1-day floor — which, with months of accumulated
+// counts, inflated the baseline by ~that many days.
+func TestNormalizeBaselineToSpotsPerMinute(t *testing.T) {
+	cases := []struct {
+		name           string
+		totalCount     float64
+		historyMinutes int
+		want           float64
+	}{
+		// The old bug: span reported as 0 → would have floored to 1 day and
+		// returned 270000/30 = 9000/min. Must now be 0 (unavailable).
+		{"unknown span returns zero", 270000, 0, 0},
+		{"negative span returns zero", 100, -5, 0},
+		// 90 days of history: 270000 / (90 * 30) = 100/min.
+		{"ninety days", 270000, 90 * 24 * 60, 100},
+		// Sub-day span is floored to 1 day (slot observed ~once).
+		{"half day floors to one day", 300, 12 * 60, 10},
+		{"exactly one day", 300, 24 * 60, 10},
+		{"zero count", 0, 30 * 24 * 60, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizeBaselineToSpotsPerMinute(tc.totalCount, tc.historyMinutes)
+			if math.Abs(got-tc.want) > 1e-9 {
+				t.Fatalf("normalizeBaselineToSpotsPerMinute(%v, %d) = %v, want %v",
+					tc.totalCount, tc.historyMinutes, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestBaselineActivityForBandAllSlotsTargetWins exercises the per-slot helper
 // when each slot has target rows: every slot should be marked target-used and
 // the rate should match the per-slot count normalised over the history.

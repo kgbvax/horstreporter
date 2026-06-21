@@ -725,7 +725,11 @@ func (s *dxPostgresStore) flushRawSpots(ctx context.Context) error {
 	s.mu.Unlock()
 
 	batch := &pgx.Batch{}
+	var minSpotTime int64
 	for _, row := range rows {
+		if row.m.T > 0 && (minSpotTime == 0 || row.m.T < minSpotTime) {
+			minSpotTime = row.m.T
+		}
 		source4 := normalizeSource4(row.m.SL)
 		lat, lon := locatorToLatLng(source4)
 		batch.Queue(`
@@ -764,7 +768,11 @@ func (s *dxPostgresStore) flushRawSpots(ctx context.Context) error {
 			return err
 		}
 	}
-	return br.Close()
+	if err := br.Close(); err != nil {
+		return err
+	}
+	s.touchBaselineFirstObserved(ctx, minSpotTime)
+	return nil
 }
 
 func (s *dxPostgresStore) insertRawSpot(ctx context.Context, m MQTTMessage, band, sourceType, spotter string, frequencyKHz *float64, comment string) error {
@@ -1123,26 +1131,89 @@ func (s *dxPostgresStore) recentEvents(now int64) ([]dxObservedEvent, error) {
 }
 
 func (s *dxPostgresStore) baselineStats(now int64) (int, int, int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	var bucketCount int64
-	var eventCount int64
-	var minT, maxT *int64
-	err := s.pool.QueryRow(ctx, `
-		SELECT
-			(SELECT COUNT(*) FROM dx_baseline_global) + (SELECT COUNT(*) FROM dx_baseline_target),
-			(SELECT COUNT(*) FROM dx_raw_spots),
-			(SELECT MIN(spot_time) FROM dx_raw_spots),
-			(SELECT MAX(spot_time) FROM dx_raw_spots)
-	`).Scan(&bucketCount, &eventCount, &minT, &maxT)
-	if err != nil {
+
+	// History span comes from the tracked baseline-accumulation start in dx_meta
+	// (a fast PK lookup), NOT from COUNT/MIN over the large tables. This is the
+	// denominator that turns cumulative bucket counts into a spots/min rate, so
+	// it must not depend on a slow COUNT(*) — which previously timed out at 2s,
+	// errored, was silently swallowed, and left the span at 0 → baseline inflated.
+	historyM := 0
+	var firstObserved *int64
+	if err := s.pool.QueryRow(ctx,
+		`SELECT v::bigint FROM dx_meta WHERE k = 'baseline_first_observed_at'`,
+	).Scan(&firstObserved); err != nil && err != pgx.ErrNoRows {
 		return 0, 0, 0, err
 	}
-	historyM := 0
-	if minT != nil && maxT != nil && *maxT >= *minT {
-		historyM = int((*maxT - *minT) / 60)
+	if firstObserved != nil && *firstObserved > 0 && now > *firstObserved {
+		historyM = int((now - *firstObserved) / 60)
 	}
+
+	// Bucket / event counts are display-only (baseline_buckets, event_count). Use
+	// planner estimates (pg_class.reltuples) so an exact COUNT(*) over millions of
+	// rows can't fail this call or stall the conditions endpoint.
+	var bucketCount, eventCount int64
+	_ = s.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE((SELECT SUM(reltuples)::bigint FROM pg_class
+				WHERE relname IN ('dx_baseline_global', 'dx_baseline_target')), 0),
+			COALESCE((SELECT reltuples::bigint FROM pg_class
+				WHERE relname = 'dx_raw_spots'), 0)
+	`).Scan(&bucketCount, &eventCount)
+	if bucketCount < 0 {
+		bucketCount = 0
+	}
+	if eventCount < 0 {
+		eventCount = 0
+	}
+
 	return int(bucketCount), int(eventCount), historyM, nil
+}
+
+// seedBaselineFirstObservedIfMissing records when baseline accumulation began,
+// derived from the earliest persisted raw spot (the same observe() stream that
+// fills the baseline buckets). The bucket tables carry no timestamp, so this is
+// how we know the span to normalise their cumulative counts. Seeded once at
+// startup; thereafter flushRawSpots keeps it at the minimum observed spot time.
+// If there are no raw spots yet (fresh deployment), it stays unset and the rate
+// degrades to "no baseline" until accumulation begins.
+func (s *dxPostgresStore) seedBaselineFirstObservedIfMissing(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var exists bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM dx_meta WHERE k = 'baseline_first_observed_at')`,
+	).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	var minT *int64
+	if err := s.pool.QueryRow(ctx, `SELECT MIN(spot_time) FROM dx_raw_spots`).Scan(&minT); err != nil {
+		return err
+	}
+	if minT == nil {
+		return nil // no raw spots yet; flushRawSpots will set it as spots arrive
+	}
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO dx_meta (k, v) VALUES ('baseline_first_observed_at', $1)
+		 ON CONFLICT (k) DO NOTHING`,
+		fmt.Sprintf("%d", *minT))
+	return err
+}
+
+// touchBaselineFirstObserved keeps baseline_first_observed_at at the minimum
+// spot time ever flushed. Cheap single-row upsert run once per (batched) flush.
+func (s *dxPostgresStore) touchBaselineFirstObserved(ctx context.Context, spotTime int64) {
+	if spotTime <= 0 {
+		return
+	}
+	_, _ = s.pool.Exec(ctx,
+		`INSERT INTO dx_meta (k, v) VALUES ('baseline_first_observed_at', $1)
+		 ON CONFLICT (k) DO UPDATE SET v = LEAST(dx_meta.v::bigint, EXCLUDED.v::bigint)::text`,
+		fmt.Sprintf("%d", spotTime))
 }
 
 func (s *dxPostgresStore) loadSpotsBetween(start, end int64) ([]MQTTMessage, error) {

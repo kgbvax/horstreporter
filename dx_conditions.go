@@ -213,6 +213,11 @@ func (e *DxBaselineEngine) EnablePostgres(dsn string) error {
 		st.Close()
 		return err
 	}
+	// Best-effort: record when baseline accumulation began so the per-minute
+	// normaliser has a real span. Non-fatal if it can't be determined yet.
+	if err := st.seedBaselineFirstObservedIfMissing(context.Background()); err != nil {
+		logInfo("baseline first-observed seed skipped: %v", err)
+	}
 	e.mu.Lock()
 	e.store = st
 	e.mu.Unlock()
@@ -661,6 +666,10 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 			resp.BaselineBuckets = b
 			resp.BaselineEventCnt = ev
 			resp.BaselineHistoryM = hm
+		} else {
+			// Don't swallow: a failure here leaves BaselineHistoryM at 0, which
+			// previously caused the baseline normaliser to over-inflate.
+			logDebug("dx baselineStats failed (baseline_history_minutes defaults to 0): %v", err)
 		}
 		if recent, err := st.recentEvents(now); err == nil {
 			events = recent
@@ -1408,7 +1417,16 @@ func baselineActivityForBandAllSlots(global, targetBuckets map[string]*baselineB
 // normalizeBaselineToSpotsPerMinute converts a raw cumulative bucket count
 // into an expected spots/minute rate. Each slot_of_day is a 30-minute window
 // that repeats once per UTC day, so the denominator is historyDays × 30 min.
+//
+// historyMinutes <= 0 means the baseline accumulation span is unknown. In that
+// case return 0 so callers treat the baseline as unavailable, rather than
+// dividing by a 1-day floor — which, when the true span was actually months,
+// inflated the baseline by ~that many days and both emptied the activity chart
+// (baseline dwarfs the live bars) and tanked the per-band scores.
 func normalizeBaselineToSpotsPerMinute(totalCount float64, historyMinutes int) float64 {
+	if historyMinutes <= 0 {
+		return 0
+	}
 	historyDays := float64(historyMinutes) / float64(24*60)
 	if historyDays < 1 {
 		historyDays = 1
