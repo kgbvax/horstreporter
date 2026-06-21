@@ -208,7 +208,7 @@ function renderSummary(summaryEl, options = {}) {
     }
 
     const score = Number(resp.overall_score || 0);
-    const confidence = Number(resp.confidence || 0);
+    const confidence = confidence01(resp.confidence);
     const condition = String(resp.condition || 'Unknown');
     const bestBands = Array.isArray(resp.best_bands) ? resp.best_bands : [];
     const recBands = Array.isArray(resp.recommended_bands) ? resp.recommended_bands : [];
@@ -219,7 +219,7 @@ function renderSummary(summaryEl, options = {}) {
         : 'No clear best band yet';
 
     const decision = buildGlobalDecision(score, confidence, top.length);
-    const confidencePct = Number.isFinite(confidence) ? Math.round(Math.max(0, Math.min(1, confidence)) * 100) : 0;
+    const confidencePct = Math.round(confidence * 100);
 
     summaryEl.innerHTML = `
         <div class="band-lab-summary-grid">
@@ -716,7 +716,7 @@ function parseBandMeters(band) {
 
 function buildBandRecommendation(band, points, bandMetrics, sampleContext = {}) {
     const score = Number(bandMetrics?.score || 0);
-    const confidence = Number(bandMetrics?.confidence || 0);
+    const confidence = confidence01(bandMetrics?.confidence);
     const trend = String(bandMetrics?.trend || '').toLowerCase();
     const count = points.length;
     const totalReportsAllBands = Math.max(0, Number(sampleContext.totalReportsAllBands) || 0);
@@ -752,6 +752,15 @@ function buildBandRecommendation(band, points, bandMetrics, sampleContext = {}) 
 
     const label = tier >= 2 ? 'strong' : tier === 1 ? 'moderate' : 'weak';
     return label;
+}
+
+// The backend reports confidence on a 0-99 scale, but the decision/tier
+// thresholds and the summary display below expect a 0-1 fraction. Normalise at
+// the read sites so a ~98.7 value doesn't clamp to a permanent "100%".
+function confidence01(raw) {
+    const v = Number(raw);
+    if (!Number.isFinite(v)) return 0;
+    return Math.max(0, Math.min(1, v / 100));
 }
 
 function buildGlobalDecision(score, confidence, recommendedCount) {
