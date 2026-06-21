@@ -254,6 +254,38 @@
             <button id="azimuth-zoom-in" class="btn btn-outline-secondary btn-sm mb-1" title="Zoom in" tabindex="-1">+</button><br>
             <button id="azimuth-zoom-out" class="btn btn-outline-secondary btn-sm" title="Zoom out" tabindex="-1">−</button>
         </div>
+        <div id="horst-kevin" class="hk-stage">
+            <button type="button" class="hk-avatar is-dormant" title="Horst-Kevin" aria-label="Horst-Kevin — band heckler">
+                <img src="hk.jpg" alt="" />
+            </button>
+            <div class="hk-bubble" hidden>
+                <span class="hk-bubble-text"></span>
+                <button type="button" class="hk-bubble-action" hidden></button>
+            </div>
+            <div class="hk-panel" hidden role="dialog" aria-label="Horst-Kevin">
+                <div class="hk-panel-head">
+                    <span>Horst-Kevin</span>
+                    <div class="hk-panel-head-actions">
+                        <label class="visually-hidden" for="hk-lang">Language / Sprache</label>
+                        <select id="hk-lang" class="hk-lang form-select form-select-sm" title="Language / Sprache">
+                            <option value="en">EN</option>
+                            <option value="de">DE</option>
+                        </select>
+                        <label class="visually-hidden" for="hk-meanness">Heckle intensity</label>
+                        <select id="hk-meanness" class="hk-meanness form-select form-select-sm" title="How mean is Horst-Kevin?">
+                            <option value="soft">Supportive</option>
+                            <option value="buzzed">Buzzed</option>
+                            <option value="drill">Drill Sergeant</option>
+                        </select>
+                        <button type="button" class="hk-panel-close btn btn-sm btn-outline-secondary" title="Close">×</button>
+                    </div>
+                </div>
+                <div class="hk-panel-body"></div>
+                <label class="hk-panel-foot">
+                    <input type="checkbox" class="hk-desktop" /> <span class="hk-panel-foot-text">let me nag your desktop</span>
+                </label>
+            </div>
+        </div>
         <div id="band-lab-window" class="band-lab-window" style="display:none;">
             <div id="band-lab-window-header" class="band-lab-window-header" title="Drag to move">
                 <span>Band Stats</span>
