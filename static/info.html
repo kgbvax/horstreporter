@@ -25,8 +25,22 @@
     <div id="content">Loading information...</div>
    
     <script>
+        // Pick the doc by browser language preference: the first supported
+        // language in the browser's ordered preference list wins.
+        function preferredDoc() {
+            const byLang = { en: 'info.md', de: 'info.de.md', fr: 'info.fr.md', ja: 'info.ja.md' };
+            const langs = (navigator.languages && navigator.languages.length)
+                ? navigator.languages
+                : [navigator.language || 'en'];
+            for (const l of langs) {
+                const base = String(l || '').toLowerCase().split('-')[0];
+                if (byLang[base]) return byLang[base];
+            }
+            return 'info.md';
+        }
+
         const params = new URLSearchParams(window.location.search);
-        const rawDoc = params.get('doc') || 'info.md';
+        const rawDoc = params.get('doc') || preferredDoc();
         const safeDoc = /^[a-z0-9._-]+\.md$/i.test(rawDoc) ? rawDoc : 'info.md';
         const rawTitle = params.get('title') || '';
         if (rawTitle) {

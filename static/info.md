@@ -1,20 +1,22 @@
-Horstreporter is a tool for HAM radio operators. It's goal is to make **current** HF band conditions easy to explore.  
+Horstreporter is a tool for HAM radio operators. Its goal is to make **current** HF band conditions easy to explore.  
 It is effectively an alternate frontend for <a href="https://www.pskreporter.info" target="_blank">pskreporter</a>.  
 
+
 ## Getting Started
-1. Enter your **Locator** (e.g., JO32, FN31AB) or **Callsign** (e.g., W1AW) into the top input box. You can also click the map marker icon <i class="fas fa-map-marker-alt"></i> to auto-detect your location.
+1. Enter your **Locator** (e.g., JO32, FN31AB) into the top input box. You can also click the map marker icon <i class="fas fa-map-marker-alt"></i> to auto-detect your location.
 2. Click **Go**. HorstReporter will connect to the live stream and fetch recent FT8/FT4 reports where you or stations in your grid are either the sender or receiver.
 3. Watch the map populate! Data updates in real-time as long as the stream is running.
 
 ## Features & Controls
 * **Filters:** Enable or disable specific bands, or apply minimum SNR thresholds to only show spots strong enough for CW or SSB voice contacts.
+* **Projection:** Switch between *Mercator* (the familiar flat world map) and *Azimuthal* (a great-circle view centered on your location — handy for reading beam headings and distances).
 * **Styles:** Choose how to visualize the data:
     * *Grid:* Groups spots into Maidenhead squares. Color indicates the dominant band, opacity indicates signal strength.
     * *Active Area:* Draws dynamic polygons enclosing clustered spots to show the overall propagation footprint.
 
 * **Band Cycler:** Click the play icon <i class="fas fa-play"></i> under the band list to automatically cycle through currently open bands.
 * **Options:** Expand the Options panel to change maximum spot age, cluster grouping distance, auto-zoom behavior, and more.
-* If you don't see enough data for your square, try enabling "Include adjacent squares" which will also pull data from the 8 squares around you.
+* If you don't see enough data for your square, try enabling **Adj. Squares** which also pulls data from the 8 squares around you.
 
 ## Map Interaction
 * Hover over colored map features to see detailed statistics (Min/Max/Avg SNR) and top reports for that area.
@@ -38,7 +40,7 @@ The green plushy dragon in the lower left is called "Horst-Kevin".
 ## Implementation note
 In its core horstreporter subscribes to the pskreporter firehose *once* and does the 1:n fan-out / filtering for each client by itself. This is an explicit choice to not overload the pskreporter servers. Horstreporter also maintains a short history so that new clients don't have to wait for data to arrive from the event stream. Most visualization and interaction logic is done in the browser, while derived DX condition scoring is computed server-side and exposed via `/api/dx_conditions`.
 
-This project is open-source.
+This project is open-source under Affero GPL.
 
 # IMPRINT + PRIVACY
 
