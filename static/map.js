@@ -18,6 +18,13 @@ let dxccSyncRevision = 0;
 const WEB_MERCATOR_MAX_LAT = 85.05112878;
 const GRAYLINE_BUCKET_MS = 5 * 60 * 1000;
 const DXCC_SHOW_ALL_ZOOM_THRESHOLD = 5.0;
+const MERCATOR_TILE_SIZE_PX = 256;
+// Effectively unbounded longitude so east/west panning + worldCopyJump keep
+// working, while maxBounds still clamps latitude to the projection's poles.
+const MERCATOR_HORIZONTAL_PAN_LIMIT_DEG = 360 * 1000;
+// Replicate the grayline overlay across this many world copies on each side so
+// the terminator is never interrupted when panning across the antimeridian.
+const GRAYLINE_WORLD_COPIES = 2;
 const graylineOverlayCache = {
     key: '',
     dataUrl: null
@@ -71,7 +78,8 @@ export function initMap(initialCenter, initialZoom) {
         zoomDelta: 0.25,
         zoomControl: false,
         crs: L.CRS.EPSG3857,
-        worldCopyJump: true
+        worldCopyJump: true,
+        maxBoundsViscosity: 1.0
     }).setView(initialCenter, initialZoom);
 
     if (!map.getPane('country-fill-pane')) {
@@ -103,7 +111,43 @@ export function initMap(initialCenter, initialZoom) {
         void syncMercatorDxccLabelLayer();
     });
 
+    // Re-derive the minimum zoom whenever the container is resized (window
+    // resize, sidebar toggle, invalidateSize) so the world always fills the
+    // viewport vertically.
+    map.on('resize', applyMercatorViewConstraints);
+    applyMercatorViewConstraints();
+
     return map;
+}
+
+// applyMercatorViewConstraints pins the view so the user can never zoom or pan
+// to reveal empty space above/below the map: the minimum zoom is set so the
+// Web-Mercator world (MERCATOR_TILE_SIZE_PX · 2^zoom px tall) is at least as
+// tall as the viewport, and maxBounds clamps latitude to the poles. Longitude
+// is left effectively unbounded so east/west panning still works.
+function applyMercatorViewConstraints() {
+    if (!map || typeof map.getSize !== 'function' || typeof map.setMinZoom !== 'function') {
+        return;
+    }
+
+    const size = map.getSize();
+    const height = size && Number.isFinite(size.y) ? size.y : 0;
+    if (height <= 0) {
+        return;
+    }
+
+    // +epsilon guards against sub-pixel rounding leaving a 1px gap at the limit.
+    const minZoom = Math.log2(height / MERCATOR_TILE_SIZE_PX) + 1e-3;
+    if (Number.isFinite(minZoom)) {
+        map.setMinZoom(minZoom);
+    }
+
+    if (typeof map.setMaxBounds === 'function') {
+        map.setMaxBounds([
+            [-WEB_MERCATOR_MAX_LAT, -MERCATOR_HORIZONTAL_PAN_LIMIT_DEG],
+            [WEB_MERCATOR_MAX_LAT, MERCATOR_HORIZONTAL_PAN_LIMIT_DEG]
+        ]);
+    }
 }
 
 async function loadWorldGeoJson() {
@@ -291,11 +335,20 @@ export async function syncMercatorGraylineLayer(options = {}) {
 
     if (!dataUrl) return;
 
-    currentGraylineLayer = L.imageOverlay(dataUrl, [[-WEB_MERCATOR_MAX_LAT, -180], [WEB_MERCATOR_MAX_LAT, 180]], {
-        pane: 'grayline-pane',
-        interactive: false,
-        opacity: 1
-    }).addTo(map);
+    // Replicate the overlay across adjacent world copies so the terminator is
+    // continuous when panning east/west across the antimeridian (the single
+    // [-180,180] copy used to vanish in neighbouring worlds).
+    const graylineGroup = L.layerGroup([], { pane: 'grayline-pane' });
+    for (let copy = -GRAYLINE_WORLD_COPIES; copy <= GRAYLINE_WORLD_COPIES; copy += 1) {
+        const offset = copy * 360;
+        L.imageOverlay(dataUrl, [[-WEB_MERCATOR_MAX_LAT, -180 + offset], [WEB_MERCATOR_MAX_LAT, 180 + offset]], {
+            pane: 'grayline-pane',
+            interactive: false,
+            opacity: 1
+        }).addTo(graylineGroup);
+    }
+    graylineGroup.addTo(map);
+    currentGraylineLayer = graylineGroup;
     currentGraylineLayerKey = key;
 }
 

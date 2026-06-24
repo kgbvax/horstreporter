@@ -18,6 +18,9 @@ function installLeafletMock() {
         getCenter: vi.fn(() => ({ lat: 52, lng: 7 })),
         getZoom: vi.fn(() => 2),
         getBounds: vi.fn(() => ({ contains: vi.fn(() => true) })),
+        getSize: vi.fn(() => ({ x: 1200, y: 885 })),
+        setMinZoom: vi.fn(function setMinZoom() { return this; }),
+        setMaxBounds: vi.fn(function setMaxBounds() { return this; }),
         removeLayer: vi.fn(),
         eachLayer: vi.fn(),
         getContainer: vi.fn(() => ({ style: {} }))
@@ -79,6 +82,30 @@ describe('map.js mercator dxcc labels', () => {
         await expect(mapModule.syncMercatorDxccLabelLayer({ force: true, enabled: true })).resolves.toBeUndefined();
         expect(globalThis.fetch).toHaveBeenCalledWith('vendor/world.geojson');
         expect(mockMap.getZoom).toHaveBeenCalled();
+    });
+
+    it('constrains min zoom to viewport height and clamps latitude so no empty space can appear', async () => {
+        await importFreshMapModule();
+
+        mapModule.initMap([52, 7], 2);
+
+        // minZoom must make the Web-Mercator world (256·2^zoom px) at least as
+        // tall as the 885px viewport, so zooming out can never reveal gaps.
+        expect(mockMap.setMinZoom).toHaveBeenCalled();
+        const minZoom = mockMap.setMinZoom.mock.calls[0][0];
+        expect(minZoom).toBeCloseTo(Math.log2(885 / 256) + 1e-3, 5);
+
+        // Latitude is clamped to the projection poles; longitude is left
+        // effectively unbounded so east/west panning keeps working.
+        expect(mockMap.setMaxBounds).toHaveBeenCalled();
+        const bounds = mockMap.setMaxBounds.mock.calls[0][0];
+        expect(bounds[0][0]).toBeCloseTo(-85.05112878, 5);
+        expect(bounds[1][0]).toBeCloseTo(85.05112878, 5);
+        expect(Math.abs(bounds[0][1])).toBeGreaterThan(360);
+        expect(Math.abs(bounds[1][1])).toBeGreaterThan(360);
+
+        // The resize hook re-derives the constraint when the container changes.
+        expect(mockMap.on).toHaveBeenCalledWith('resize', expect.any(Function));
     });
 });
 
