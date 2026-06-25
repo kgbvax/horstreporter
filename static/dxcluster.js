@@ -165,16 +165,27 @@ function mount() {
   statusEl = panelEl.querySelector('#cq-status');
 
   const PANEL_W = 380;
+  // Docking the panel changes the map container width; nudge Leaflet (trackResize)
+  // and the azimuth canvas to re-fit so the map isn't left distorted/hidden until
+  // a manual zoom. rAF lets the flex layout settle; the timeout covers the control
+  // slide transition.
+  const reflowMap = () => {
+    const fire = () => window.dispatchEvent(new Event('resize'));
+    requestAnimationFrame(fire);
+    setTimeout(fire, 250);
+  };
   const open = () => {
     panelEl.classList.remove('is-hidden');
     toggle.style.display = 'none';
     if (trc) trc.style.right = (PANEL_W + 15) + 'px'; // slide app controls left, over the map
+    reflowMap();
     refresh();
   };
   const close = () => {
     panelEl.classList.add('is-hidden');
     toggle.style.display = '';
     if (trc) trc.style.right = trcRight; // restore original anchor (not '')
+    reflowMap();
   };
   toggle.addEventListener('click', open);
   panelEl.querySelector('#cq-close').addEventListener('click', close);
