@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,6 +24,31 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
+
+// maskDSN redacts the password in a URL-style DSN so it can be logged safely.
+func maskDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil || u.User == nil {
+		return dsn
+	}
+	if _, hasPw := u.User.Password(); hasPw {
+		u.User = url.UserPassword(u.User.Username(), "***")
+		return u.String()
+	}
+	return dsn
+}
+
+// dsnSource reports where the effective Postgres DSN came from, for an
+// audit-friendly startup log line that never prints the secret itself.
+func dsnSource(flagVal string) string {
+	if strings.TrimSpace(flagVal) != "" {
+		return "flag -dx-postgres-dsn"
+	}
+	if strings.TrimSpace(os.Getenv("DX_POSTGRES_DSN")) != "" {
+		return "env DX_POSTGRES_DSN"
+	}
+	return "built-in default"
+}
 
 // loadCtyResolver returns the cty.dat resolver for DX-cluster country/flag
 // labelling. It uses the embedded cty.dat by default; a non-empty path overrides
@@ -165,7 +191,7 @@ func main() {
 	logMaxSize := flag.Int("log-max-size", 100, "Maximum size in megabytes of the log file before it gets rotated")
 	flag.IntVar(&maxClients, "max-clients", 150, "Maximum number of concurrent SSE clients (0 = unlimited)")
 	dxBaselineFile := flag.String("dx-baseline-file", "dx_baseline.json", "Path to persistent DX baseline bucket storage")
-	dxPostgresDSN := flag.String("dx-postgres-dsn", defaultDxPostgresDSN, "Postgres DSN for DX baseline and raw spot storage")
+	dxPostgresDSN := flag.String("dx-postgres-dsn", "", "Postgres DSN for DX baseline and raw spot storage (falls back to env DX_POSTGRES_DSN, then the built-in default; keep secrets out of argv via the env var)")
 	dxPostgresFailFast := flag.Bool("dx-postgres-fail-fast", true, "Exit immediately when Postgres init/migration fails")
 	horstpropURL := flag.String("horstprop-url", "http://127.0.0.1:9970", "Reverse-proxy /horstprop/* to this local horstprop scoring service (empty disables the mount)")
 	dxClusterEnable := flag.Bool("dxcluster-enable", false, "Enable optional DX cluster ingest")
@@ -221,14 +247,27 @@ func main() {
 	}
 	configureOpMode(*opModeControlEnableFlag)
 
+	// Resolve the Postgres DSN: explicit flag wins (for ad-hoc/dev), then the
+	// DX_POSTGRES_DSN env var (the production path — keeps the secret out of
+	// argv / systemctl status), then the built-in default.
+	dxPostgresDSNResolved := strings.TrimSpace(*dxPostgresDSN)
+	if dxPostgresDSNResolved == "" {
+		dxPostgresDSNResolved = strings.TrimSpace(os.Getenv("DX_POSTGRES_DSN"))
+	}
+	if dxPostgresDSNResolved == "" {
+		dxPostgresDSNResolved = defaultDxPostgresDSN
+	}
+
+	logInfo("DX postgres DSN source: %s", dsnSource(*dxPostgresDSN))
+
 	dxBaseline = newDxBaselineEngine(strings.TrimSpace(*dxBaselineFile))
-	if err := dxBaseline.EnablePostgres(strings.TrimSpace(*dxPostgresDSN)); err != nil {
+	if err := dxBaseline.EnablePostgres(dxPostgresDSNResolved); err != nil {
 		if *dxPostgresFailFast {
-			logFatal("DX postgres init failed (dsn=%s, fail-fast=true): %v", strings.TrimSpace(*dxPostgresDSN), err)
+			logFatal("DX postgres init failed (dsn=%s, fail-fast=true): %v", maskDSN(dxPostgresDSNResolved), err)
 		}
-		logInfo("DX postgres init failed (dsn=%s, fail-fast=false). Continuing with in-memory fallback: %v", strings.TrimSpace(*dxPostgresDSN), err)
+		logInfo("DX postgres init failed (dsn=%s, fail-fast=false). Continuing with in-memory fallback: %v", maskDSN(dxPostgresDSNResolved), err)
 	} else {
-		logInfo("DX postgres initialized (dsn=%s)", strings.TrimSpace(*dxPostgresDSN))
+		logInfo("DX postgres initialized (dsn=%s)", maskDSN(dxPostgresDSNResolved))
 		includeDXCluster := *dxClusterEnable
 		backfillMinutes := liveHistoryRetentionMinutes
 		if backfillMinutes <= 0 {
