@@ -18,7 +18,8 @@ const opModeState = {
     transportFailureSticky: false,
     commandInFlight: false,
     pendingTargetBearingDeg: null,
-    pendingTargetLabel: ''
+    pendingTargetLabel: '',
+    rigCapabilities: null
 };
 
 const BASE_DOCUMENT_TITLE = typeof document !== 'undefined'
@@ -343,6 +344,16 @@ async function refreshOpModeStatus() {
 
     opModeState.controlPermittedByServer = Boolean(directControl);
     opModeState.controlPermittedByAgent = Boolean(directControl);
+
+    const rigCaps = status?.capabilities?.rig;
+    opModeState.rigCapabilities = (rigCaps && typeof rigCaps === 'object')
+        ? {
+            tune: rigCaps.tune === true,
+            preview: rigCaps.preview === true,
+            split: rigCaps.split === true
+        }
+        : null;
+
     syncControlWidgets();
 
     setStatus('online (direct)');
@@ -485,6 +496,76 @@ export async function setAntennaMode(modeValue) {
 
 export function isOpModeActive() {
     return opModeState.enabled === true;
+}
+
+// canControlRig reports whether the agent has a rig backend that can tune, AND
+// the operator/server/UI permission gate is satisfied. The Chase Queue uses this
+// to decide whether to expose tune affordances.
+export function canControlRig() {
+    if (opModeState.rigCapabilities?.tune !== true) return false;
+    const [allowed] = canSendControl();
+    return allowed;
+}
+
+export function getRigCapabilities() {
+    return opModeState.rigCapabilities;
+}
+
+// rigTune QSYs the rig to freqHz (Hz) with the given mode. Mode mapping
+// (CW/FT8/SSB → cw/data/usb/lsb) happens agent-side.
+export async function rigTune(freqHz, mode) {
+    const [allowed, reason] = canSendControl();
+    if (!allowed) throw new Error(reason);
+    if (opModeState.rigCapabilities?.tune !== true) throw new Error('rig tune not available');
+
+    const hz = Math.round(Number(freqHz));
+    if (!Number.isFinite(hz) || hz <= 0) throw new Error('invalid frequency');
+
+    await runControlAction('tuning rig', async () => {
+        await fetchJson(opModeEndpoint('rig/tune'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                permit_control: true,
+                freq_hz: hz,
+                mode: String(mode || '').trim()
+            })
+        });
+    });
+}
+
+// operate is the composite "Tune + Turn": QSY the rig AND rotate the beam to
+// azimuthDeg. The agent returns per-leg status so a partial failure (tuned,
+// rotor failed) is still reported.
+export async function operate(freqHz, mode, azimuthDeg, label = '') {
+    const [allowed, reason] = canSendControl();
+    if (!allowed) throw new Error(reason);
+
+    const hz = Math.round(Number(freqHz));
+    if (!Number.isFinite(hz) || hz <= 0) throw new Error('invalid frequency');
+
+    const az = toNumber(azimuthDeg);
+    const body = {
+        permit_control: true,
+        freq_hz: hz,
+        mode: String(mode || '').trim(),
+        station_lat: opModeState.station?.lat ?? null,
+        station_lng: opModeState.station?.lng ?? null
+    };
+    if (az !== null) {
+        body.azimuth_deg = normalizeAzimuthDeg(az);
+        setPendingTargetPreview(az, label);
+        syncAntennaOverlay();
+    }
+
+    await runControlAction('tune + turn', async () => {
+        await fetchJson(opModeEndpoint('operate'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        await refreshAntennaState();
+    }, { preserveTargetPreview: az !== null });
 }
 
 export async function setBeamTargetFromMapClick({ lat, lng, label = '' } = {}) {

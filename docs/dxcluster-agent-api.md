@@ -1,7 +1,8 @@
 # DX Cluster module — local agent API contract (v1)
 
-Status: **draft / design**. Slice A of the HorstOperator DX Cluster ("Chase Queue") module.
-Defines the new `horstoperator-agent` (`127.0.0.1:9955`) surface the browser calls directly.
+Status: **partly shipped**. The rig **tune** path (§3) and composite **Tune + Turn** (§4) are
+implemented against a WaveLogGate backend; Wavelog enrich (§1–2) and VFO-B preview/split remain
+design. Defines the `horstoperator-agent` (`127.0.0.1:9955`) surface the browser calls directly.
 
 ## Architecture recap
 
@@ -35,10 +36,13 @@ UI hides what isn't present.
 ```json
 "capabilities": {
   "control": true, "mode_control": true, "modes": ["forward","backward","bidirectional"],
-  "rig":    { "tune": true, "preview": true, "modes": ["USB","LSB","CW","DATA"] },
+  "rig":    { "tune": true, "preview": false, "split": false },
   "lookup": { "wavelog": true, "was": true, "profile_age_sec": 142 }
 }
 ```
+
+`rig` appears only when a rig backend is configured (`-rig-transport`). With the
+**WaveLogGate** backend (shipped first), `preview`/`split` are `false` — see §3.
 
 ---
 
@@ -135,28 +139,36 @@ Browser shows same-band first, else most recent.
 
 ---
 
-## 3. Rig — `tune`, `preview`, `state`
+## 3. Rig — `tune` (WaveLogGate-first, pivot-ready)
 
 Browser sends the **logical** mode + the spot frequency; the **agent owns the rig-mode mapping**
-(SSB→USB/LSB by band, FT8→DATA + standard dial freq, …) — rig/band-specific, not the UI's job.
+(`rigModeForBackend`: SSB→USB/LSB by band, FT8/FT4→`data`, CW→`cw`, …) — rig/band-specific, not
+the UI's job.
+
+The agent talks to the rig through a pluggable **`rigController`** interface
+(`cmd/horstoperator-agent/rig.go`) so the browser contract stays stable while the backend can be
+swapped. The shipped backend is **WaveLogGate**: `Tune` issues
+`GET http://127.0.0.1:54321/{freq_hz}/{mode}` (server-side, no CORS), WaveLogGate performs the CAT
+write via its rigctld/FLRig connection and applies mode-on-QSY.
 
 ```json
-// POST /v1/rig/tune   (dbl-click → VFO A)
-{ "permit_control": true, "freq_hz": 18145000, "mode": "SSB", "vfo": "A" }
-// → { "ok": true, "vfo":"A", "freq_hz":18145000, "rig_mode":"USB" }
-
-// POST /v1/rig/preview  (hover → VFO B pre-hear; clear on mouseleave)
-{ "permit_control": true, "freq_hz": 18145000, "mode": "SSB", "vfo": "B", "enable_dual_watch": true }
-{ "permit_control": true, "clear": true }          // dismiss preview
-
-// GET /v1/rig/state   (UI reflects truth, detects manual retune)
-{ "ok": true, "vfo_a": {"freq_hz":18145000,"rig_mode":"USB"},
-  "vfo_b": null, "dual_watch": false, "ptt": false }
+// POST /v1/rig/tune   (dbl-click / "Tune" → active VFO)
+{ "permit_control": true, "freq_hz": 18145000, "mode": "SSB" }
+// → { "ok": true, "freq_hz":18145000, "rig_mode":"usb" }
 ```
 
-- **Preview is opt-in.** Behind a "Preview on hover" toggle (default off). Browser debounces ~250 ms
-  before issuing, and sends `clear` on mouseleave.
-- Rig transport: Hamlib `rigctld` / flrig over a local socket (hardware-local, like the rotor UDP bridge).
+- Gated by the same 3-level `permit_control` check as `/v1/antenna/rotate` (server `-control-permitted`
+  + agent + UI). `503` if no rig backend is configured; `502` if the backend (WaveLogGate) errors.
+- **Single VFO only.** WaveLogGate's callback drives one VFO and cannot set VFO-B / split (it only
+  *reports* split state), so `preview` and `split` stay `false` in capabilities.
+
+### Pivot (later, not in this slice)
+
+A `rigctldBackend` (Hamlib net protocol, TCP 4532) and/or `flrigBackend` (XML-RPC) implementing the
+same `rigController` interface adds VFO-B **preview** (pre-hear / dual-watch) and **split** — flipping
+those capability flags true. Select via `-rig-transport hamlib|flrig`. The browser contract
+(`/v1/rig/tune`, `/v1/operate`) is unchanged; WaveLogGate keeps doing Wavelog logging off the same
+shared rigctld/FLRig. Endpoints `GET /v1/rig/state` and `POST /v1/rig/preview` arrive with that pivot.
 
 ---
 
@@ -171,11 +183,14 @@ Partial-failure aware so the UI can say "tuned, rotor failed."
   "freq_hz": 18145000, "mode": "SSB",
   "azimuth_deg": 189, "target_locator": "IB59",
   "target_lat": -54.4, "target_lng": 3.4, "station_lat": 50.0, "station_lng": 8.0 }
-// response
+// response (200 even on partial failure; inspect per-leg ok)
 { "ok": true,
-  "rig":     { "ok": true, "vfo":"A", "freq_hz":18145000, "rig_mode":"USB" },
-  "antenna": { "ok": true, "azimuth_deg":189, "fast_polling_enabled":true, "poll_interval_ms":500 } }
+  "rig":     { "ok": true, "freq_hz":18145000, "rig_mode":"usb" },
+  "antenna": { "ok": true, "azimuth_deg":189 } }
 ```
+
+A leg with no input is skipped (`{"ok":false,"skipped":"no freq_hz"}` /
+`"skipped":"no azimuth_deg"`) rather than erroring.
 
 ---
 
@@ -188,10 +203,11 @@ Partial-failure aware so the UI can say "tuned, rotor failed."
 
 ## Interaction summary (how the browser uses this)
 
-- New spots arrive on `/api/stream` → browser batches into `POST /v1/operate/enrich` → merges by `id`.
-- Hover (if preview enabled) → debounced `POST /v1/rig/preview`; mouseleave → `clear`. Also lights the
-  great-circle path on the map.
-- Double-click → `POST /v1/rig/tune` (VFO A); card marked tuned, reconciled against `GET /v1/rig/state`.
-- "Tune + Turn" → `POST /v1/operate`.
-- `↺` marker expand → `GET /v1/qso`.
+- **Shipped (WaveLogGate slice):** "Tune" button / double-click → `POST /v1/rig/tune` (active VFO);
+  "Tune + Turn" → `POST /v1/operate` (tune + rotate). Both gated on agent present + `permit_control`
+  + `capabilities.rig.tune`; `static/dxcluster.js` hides the actions otherwise. Mode inferred from the
+  spot frequency client-side (`guessMode`), refined agent-side and by WaveLogGate's mode-on-QSY.
+- **Deferred (rigctld/FLRig pivot):** hover → `POST /v1/rig/preview` (VFO-B pre-hear) + great-circle
+  path on the map; `GET /v1/rig/state` reconciliation; split.
+- **Deferred (Wavelog enrich slice):** spot enrichment via `/v1/operate/enrich`; `↺` marker → `GET /v1/qso`.
 - Snooze → client-side localStorage in v1.

@@ -5,6 +5,8 @@
 // live score. Self-contained — injects its own styles + toggle button; no edits
 // to app.js required. See docs/dxcluster-*.md and docs/horstprop.md.
 
+import { canControlRig, rigTune, operate } from './opmode.js';
+
 const DXSPOTS_URL = '/api/dxspots?minutes=30';
 // Same-origin by default: HorstReporter reverse-proxies /horstprop/* to the
 // local horstprop service (see horstprop_mount.go), so this works over the app's
@@ -63,6 +65,21 @@ const WELL_KNOWN_ISO = new Set([
   'AU', 'IN', 'JP', 'CN', 'BR', 'AR', 'US', 'CA', 'RU', 'TR', 'ID',
 ]);
 const isWellKnown = (iso) => WELL_KNOWN_ISO.has((iso || '').trim().toUpperCase());
+// guessMode picks a sensible rig mode from the spot frequency. Cluster spots
+// carry no mode field, so we infer from the band plan: FT8 watering holes →
+// data, the CW portion at the bottom of each band → CW, otherwise '' (the agent
+// then defaults to LSB/USB by frequency, and WaveLogGate refines via mode-on-QSY).
+const FT8_DIALS_KHZ = [1840, 3573, 5357, 7074, 10136, 14074, 18100, 21074, 24915, 28074, 50313];
+// CW segment upper edges (kHz) — at or below these (and within the band) → CW.
+const CW_EDGE_KHZ = [1838, 3580, 7040, 10150, 14070, 18095, 21070, 24920, 28070];
+function guessMode(freqKhz) {
+  const f = Number(freqKhz) || 0;
+  if (f <= 0) return '';
+  if (FT8_DIALS_KHZ.some((d) => Math.abs(f - d) <= 1.5)) return 'FT8';
+  if (CW_EDGE_KHZ.some((edge) => f <= edge && f >= edge - 100)) return 'CW';
+  return '';
+}
+
 const fmtFreq = (khz) => (khz >= 1000 ? (khz / 1000).toFixed(3) : String(khz));
 const fmtAge = (s) => s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
 const meterPct = (v) => Math.max(6, Math.min(100, v || 0));
@@ -113,6 +130,13 @@ function injectStyles() {
   .cq-r2 .sep { opacity:.5; margin:0 6px; }
   .cq-comment { font:12px/1.35 sans-serif; color: var(--status-color); margin-top:4px;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cq-actions { display:flex; gap:6px; margin-top:7px; }
+  .cq-act { flex:1 1 auto; font:600 11px sans-serif; border:1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-color) 90%, var(--text-color) 10%); color: var(--text-color);
+    border-radius:6px; padding:5px 8px; cursor:pointer; transition:background .12s, border-color .12s; }
+  .cq-act:hover { background: color-mix(in srgb, var(--cq-go) 18%, var(--bg-color)); border-color: var(--cq-go); }
+  .cq-act:disabled { opacity:.5; cursor:default; }
+  .cq-act.busy { opacity:.6; cursor:progress; }
   #cq-toggle { font:600 12px sans-serif; border:1px solid var(--border-color);
     background: var(--bg-color); color: var(--text-color); border-radius:999px;
     padding:6px 12px; cursor:pointer; box-shadow:0 2px 8px var(--shadow-color); white-space:nowrap; }
@@ -207,6 +231,31 @@ async function scoreSpot(s) {
   }
 }
 
+// flash shows a transient message on the panel status line (tune results, errors).
+let flashTimer = null;
+function flash(msg, isErr = false) {
+  if (!statusEl) return;
+  statusEl.textContent = msg;
+  statusEl.style.color = isErr ? 'var(--cq-wait)' : 'var(--cq-go)';
+  if (flashTimer) clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { statusEl.textContent = ''; statusEl.style.color = ''; }, 5000);
+}
+
+// Run a rig action from a card button: mark busy, await, report. Gated at call
+// time too (rigTune/operate throw if control isn't permitted).
+async function runCardAction(btn, label, fn, okMsg) {
+  if (btn.disabled || btn.classList.contains('busy')) return;
+  btn.classList.add('busy');
+  try {
+    await fn();
+    flash(okMsg);
+  } catch (err) {
+    flash(`${label} failed: ${err?.message || 'unknown error'}`, true);
+  } finally {
+    btn.classList.remove('busy');
+  }
+}
+
 function renderCard(s) {
   const el = document.createElement('div');
   el.className = 'cq-card';
@@ -215,11 +264,14 @@ function renderCard(s) {
   const dec = sc ? gradeToDecision(sc.grade) : 'unknown'; // still drives the gauge colour
   const num = sc && sc.score != null ? sc.score : '··';
   const dist = sc && sc.distance_km ? `${Math.round(sc.distance_km).toLocaleString()} km` : '';
-  const az = sc && sc.bearing_deg ? `${Math.round(sc.bearing_deg)}°` : '';
+  const bearing = sc && Number.isFinite(sc.bearing_deg) ? sc.bearing_deg : null;
+  const az = bearing != null ? `${Math.round(bearing)}°` : '';
   const comment = trimComment(s.comment);
   const flag = flagFromISO(s.country_iso);
   // Show the country name only when it isn't a well-known flag (reduce clutter).
   const showCountry = s.country && !isWellKnown(s.country_iso);
+  const freqHz = Math.round((s.freq_khz || 0) * 1000);
+  const mode = guessMode(s.freq_khz);
   el.innerHTML = `
     <div class="cq-r1">
       <span class="cq-flag">${flag}</span>
@@ -239,6 +291,43 @@ function renderCard(s) {
     </div>
     ${comment ? `<div class="cq-comment" title="${comment}">${comment}</div>` : ''}`;
   if (sc && sc.reason) el.title = sc.reason;
+
+  // Rig actions only appear when the local agent exposes a tune-capable rig AND
+  // control is permitted (server + agent + UI). Otherwise the card stays a pure
+  // readout — most viewers have no agent at all.
+  if (freqHz > 0 && canControlRig()) {
+    const actions = document.createElement('div');
+    actions.className = 'cq-actions';
+
+    const tuneBtn = document.createElement('button');
+    tuneBtn.className = 'cq-act';
+    tuneBtn.textContent = 'Tune';
+    tuneBtn.title = `QSY to ${fmtFreq(s.freq_khz)} MHz${mode ? ` (${mode})` : ''}`;
+    tuneBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      runCardAction(tuneBtn, 'Tune', () => rigTune(freqHz, mode), `Tuned ${s.dx_call} — ${fmtFreq(s.freq_khz)} MHz`);
+    });
+    actions.appendChild(tuneBtn);
+
+    if (bearing != null) {
+      const turnBtn = document.createElement('button');
+      turnBtn.className = 'cq-act';
+      turnBtn.textContent = 'Tune + Turn';
+      turnBtn.title = `QSY + rotate beam to ${Math.round(bearing)}°`;
+      turnBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        runCardAction(turnBtn, 'Tune + Turn', () => operate(freqHz, mode, bearing, s.dx_call),
+          `${s.dx_call} — tuned + beam ${Math.round(bearing)}°`);
+      });
+      actions.appendChild(turnBtn);
+    }
+    el.appendChild(actions);
+
+    // Double-click anywhere on the card is a Tune shortcut.
+    el.addEventListener('dblclick', () => {
+      runCardAction(tuneBtn, 'Tune', () => rigTune(freqHz, mode), `Tuned ${s.dx_call} — ${fmtFreq(s.freq_khz)} MHz`);
+    });
+  }
   return el;
 }
 

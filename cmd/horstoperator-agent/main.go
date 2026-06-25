@@ -53,6 +53,8 @@ type serviceConfig struct {
 	PSTHost          string
 	PSTPort          int
 	Station          stationConfig
+	RigTransport     string // none | waveloggate
+	RigWaveLogGate   string // WaveLogGate callback base URL
 }
 
 type rotatorState struct {
@@ -404,6 +406,7 @@ func decodeJSON[T any](r *http.Request, out *T) error {
 type server struct {
 	cfg    serviceConfig
 	client *pstUDPClient
+	rig    rigController // nil when -rig-transport=none
 
 	pollMu    sync.RWMutex
 	pollState polledAntennaState
@@ -440,6 +443,14 @@ func withCORS(next http.Handler) http.Handler {
 
 func newServer(cfg serviceConfig) *server {
 	s := &server{cfg: cfg, client: newPSTUDPClient(cfg)}
+	switch strings.ToLower(strings.TrimSpace(cfg.RigTransport)) {
+	case "", "none":
+		// rig control disabled
+	case "waveloggate":
+		s.rig = newWaveLogGateBackend(cfg.RigWaveLogGate)
+	default:
+		log.Printf("[WARN] unknown -rig-transport %q; rig control disabled", cfg.RigTransport)
+	}
 	s.startAntennaPoller()
 	return s
 }
@@ -544,6 +555,8 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/antenna/state", s.handleAntennaState)
 	mux.HandleFunc("/v1/antenna/rotate", s.handleRotate)
 	mux.HandleFunc("/v1/antenna/mode", s.handleMode)
+	mux.HandleFunc("/v1/rig/tune", s.handleRigTune)
+	mux.HandleFunc("/v1/operate", s.handleOperate)
 	mux.Handle("/", s.newBackendProxyHandler())
 }
 
@@ -590,15 +603,21 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	capabilities := map[string]any{
+		"control":      s.cfg.ControlPermitted,
+		"mode_control": s.cfg.ControlPermitted,
+		"modes":        s.cfg.AllowedModes,
+	}
+	if s.rig != nil {
+		c := s.rig.Capabilities()
+		capabilities["rig"] = map[string]any{"tune": c.Tune, "preview": c.Preview, "split": c.Split}
+	}
+
 	resp := map[string]any{
 		"service":           "horstoperator-agent",
 		"version":           "v1",
 		"control_permitted": s.cfg.ControlPermitted,
-		"capabilities": map[string]any{
-			"control":      s.cfg.ControlPermitted,
-			"mode_control": s.cfg.ControlPermitted,
-			"modes":        s.cfg.AllowedModes,
-		},
+		"capabilities":      capabilities,
 		"pstrotator": map[string]any{
 			"endpoint":   net.JoinHostPort(s.cfg.PSTHost, strconv.Itoa(s.cfg.PSTPort)),
 			"reply_port": s.cfg.PSTPort + 1,
@@ -791,6 +810,9 @@ func main() {
 	beamwidth3db := flag.Float64("beamwidth-3db-deg", 60, "Antenna 3dB beamwidth reported to UI")
 	allowedModesRaw := flag.String("allowed-modes", "forward,backward,bidirectional", "Comma-separated allowed antenna modes")
 
+	rigTransport := flag.String("rig-transport", "none", "Rig control backend: none|waveloggate (waveloggate = tune VFO A via WaveLogGate; preview/split need a future rigctld/FLRig backend)")
+	rigWaveLogGate := flag.String("rig-waveloggate-url", "http://127.0.0.1:54321", "WaveLogGate callback base URL (used when -rig-transport=waveloggate)")
+
 	flag.Parse()
 
 	if strings.TrimSpace(*stationLatRaw) == "" || strings.TrimSpace(*stationLngRaw) == "" {
@@ -829,6 +851,8 @@ func main() {
 			Lng:     lng,
 			Locator: strings.TrimSpace(*stationLocator),
 		},
+		RigTransport:   strings.TrimSpace(*rigTransport),
+		RigWaveLogGate: strings.TrimSpace(*rigWaveLogGate),
 	}
 
 	if cfg.ListenAddr == "" {
@@ -857,6 +881,12 @@ func main() {
 	log.Printf("[INFO] PSTrotator UDP endpoint: %s", net.JoinHostPort(cfg.PSTHost, strconv.Itoa(cfg.PSTPort)))
 	log.Printf("[INFO] PSTrotator UDP protocol profile: queryAZ=%q queryMode=%q rotate=<PST><TRACK>0</TRACK><AZIMUTH>x</AZIMUTH></PST> mode=<PST><TRACK>0|1</TRACK></PST> terminator=CR reply-port=%d", pstQueryAzCommand, pstQueryModeCommand, cfg.PSTPort+1)
 	log.Printf("[INFO] Control permitted: %v, allowed modes: %s", cfg.ControlPermitted, strings.Join(cfg.AllowedModes, ","))
+	switch strings.ToLower(cfg.RigTransport) {
+	case "waveloggate":
+		log.Printf("[INFO] Rig control: WaveLogGate (tune VFO A) via %s", cfg.RigWaveLogGate)
+	default:
+		log.Printf("[INFO] Rig control: disabled (-rig-transport=%s)", cfg.RigTransport)
+	}
 	log.Printf("[INFO] Station: %s (lat=%.6f lng=%.6f locator=%s)", cfg.Station.Name, cfg.Station.Lat, cfg.Station.Lng, strings.ToUpper(cfg.Station.Locator))
 	if cfg.UDPLogTraffic {
 		log.Printf("[INFO] UDP traffic diagnostics enabled (hex=%v, max-bytes=%d)", cfg.UDPLogHex, cfg.UDPLogMaxBytes)
