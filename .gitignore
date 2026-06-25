@@ -31,3 +31,14 @@ go.work.sum
 # Editor/IDE
 # .idea/
 .vscode/
+
+# horstprop build artifact (root-anchored so it can't match cmd/horstprop/)
+/horstprop-linux-x64
+
+# macOS
+.DS_Store
+
+# scratch: Chase Queue screenshots/scripts + standalone prototype
+tmp/cq-*.png
+tmp/cq*.mjs
+tmp/dx-cluster-proto/
