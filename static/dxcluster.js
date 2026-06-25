@@ -111,7 +111,7 @@ function injectStyles() {
   .cq-r2 b { color: var(--text-color); font-weight:700; }
   .cq-r2 .band { font-weight:700; }
   .cq-r2 .sep { opacity:.5; margin:0 6px; }
-  .cq-comment { font:11px/1.3 sans-serif; color: var(--status-color); margin-top:4px;
+  .cq-comment { font:12px/1.35 sans-serif; color: var(--status-color); margin-top:4px;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   #cq-toggle { font:600 12px sans-serif; border:1px solid var(--border-color);
     background: var(--bg-color); color: var(--text-color); border-radius:999px;
