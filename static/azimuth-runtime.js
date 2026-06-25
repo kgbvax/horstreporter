@@ -1,4 +1,4 @@
-import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution } from './utils.js';
+import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution, greatCirclePoints } from './utils.js';
 
 const EARTH_RADIUS_KM = 6371;
 const ANTIPODE_KM = Math.PI * EARTH_RADIUS_KM;
@@ -129,6 +129,15 @@ const state = {
         mode: 'forward',
         pendingTargetBearingDeg: null,
         pendingTargetLabel: ''
+    },
+    dxSpotHighlight: {
+        enabled: false,
+        originLat: null,
+        originLng: null,
+        spotLat: null,
+        spotLng: null,
+        label: '',
+        pinned: false
     }
 };
 
@@ -218,6 +227,24 @@ export function setAzimuthAntennaOverlay(overlay = {}) {
             ? ((pendingTargetBearingDeg % 360) + 360) % 360
             : null,
         pendingTargetLabel: String(overlay.pendingTargetLabel || '')
+    };
+}
+
+// setAzimuthDxSpotHighlight stores the Chase Queue spot highlight (origin →
+// spot, plus callsign label). Pass { enabled:false } to clear.
+export function setAzimuthDxSpotHighlight(overlay = {}) {
+    const spotLat = Number(overlay.spotLat);
+    const spotLng = Number(overlay.spotLng);
+    const originLat = Number(overlay.originLat);
+    const originLng = Number(overlay.originLng);
+    state.dxSpotHighlight = {
+        enabled: Boolean(overlay.enabled) && Number.isFinite(spotLat) && Number.isFinite(spotLng),
+        spotLat: Number.isFinite(spotLat) ? spotLat : null,
+        spotLng: Number.isFinite(spotLng) ? normalizeLng(spotLng) : null,
+        originLat: Number.isFinite(originLat) ? originLat : null,
+        originLng: Number.isFinite(originLng) ? normalizeLng(originLng) : null,
+        label: String(overlay.label || ''),
+        pinned: Boolean(overlay.pinned)
     };
 }
 
@@ -1328,6 +1355,63 @@ function drawDxccLabels(ctx, width, height, plan) {
     }
 }
 
+// drawDxSpotHighlight draws the Chase Queue spot highlight: a great-circle path
+// from the operator origin to the spot (dashed = hover, solid = pinned) plus a
+// ring marker + callsign label. Amber, to stay distinct from the red target
+// marker and the cyan antenna target line.
+function drawDxSpotHighlight(ctx, width, height) {
+    const h = state.dxSpotHighlight;
+    if (!h || !h.enabled) return;
+
+    const color = state.theme === 'dark' ? '#ffd166' : '#d97706';
+    const spot = projectToCanvas(h.spotLat, h.spotLng, width, height);
+    ctx.save();
+
+    if (Number.isFinite(h.originLat) && Number.isFinite(h.originLng)) {
+        const pts = greatCirclePoints(h.originLat, h.originLng, h.spotLat, h.spotLng, 48)
+            .map(([lat, lng]) => projectToCanvas(lat, lng, width, height));
+        ctx.lineWidth = h.pinned ? 2.4 : 1.8;
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = h.pinned ? 0.95 : 0.8;
+        if (!h.pinned) ctx.setLineDash([2, 5]);
+        // Break the line where the projection clips beyond the horizon.
+        let started = false;
+        ctx.beginPath();
+        for (const p of pts) {
+            if (!p) { started = false; continue; }
+            if (!started) { ctx.moveTo(p.x, p.y); started = true; } else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+    }
+
+    if (spot) {
+        ctx.beginPath();
+        ctx.arc(spot.x, spot.y, h.pinned ? 6.5 : 5.5, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.4;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(spot.x, spot.y, 2, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+
+        if (h.label) {
+            ctx.font = '700 12px ui-monospace, Menlo, monospace';
+            const tx = spot.x + 9;
+            const ty = spot.y - 9;
+            const textW = ctx.measureText(h.label).width;
+            ctx.fillStyle = state.theme === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.78)';
+            ctx.fillRect(tx - 3, ty - 12, textW + 6, 16);
+            ctx.fillStyle = color;
+            ctx.textBaseline = 'alphabetic';
+            ctx.fillText(h.label, tx, ty);
+        }
+    }
+    ctx.restore();
+}
+
 function drawTargetHighlight(ctx, width, height) {
     if (typeof document === 'undefined') return;
 
@@ -2104,6 +2188,7 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
         if (profile) profile.targetEnd = nowMs();
 
         drawAntennaOverlay(state.ctx, width, height);
+        drawDxSpotHighlight(state.ctx, width, height);
     });
 
     if (profile) profile.scaleStart = nowMs();

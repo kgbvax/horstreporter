@@ -5,7 +5,7 @@ export let currentCountryLayer = null;
 export let currentGraylineLayer = null;
 export let currentDxccLabelLayer = null;
 
-import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint } from './utils.js';
+import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints } from './utils.js';
 import { selectProminentDxccLabels } from './azimuth-runtime.js';
 import { endPerfTimer, incrementPerfCounter, startPerfTimer } from './perf.js';
 
@@ -95,6 +95,12 @@ export function initMap(initialCenter, initialZoom) {
     if (!map.getPane('dxcc-label-pane')) {
         const pane = map.createPane('dxcc-label-pane');
         pane.style.zIndex = '370';
+        pane.style.pointerEvents = 'none';
+    }
+    // Chase Queue spot highlight (path + marker), above everything else.
+    if (!map.getPane('dx-highlight-pane')) {
+        const pane = map.createPane('dx-highlight-pane');
+        pane.style.zIndex = '650';
         pane.style.pointerEvents = 'none';
     }
 
@@ -453,6 +459,69 @@ export async function syncMercatorDxccLabelLayer(options = {}) {
     currentDxccLabelLayer.addTo(map);
     currentDxccLabelLayerKey = key;
     endPerfTimer('mercator.dxcc.sync_total_ms', syncTimer);
+}
+
+let dxHighlightLayer = null;
+
+function ensureDxHighlightLayer() {
+    if (!map) return null;
+    if (!dxHighlightLayer) {
+        dxHighlightLayer = L.layerGroup([], { pane: 'dx-highlight-pane' }).addTo(map);
+    }
+    return dxHighlightLayer;
+}
+
+// setMercatorDxHighlight draws the Chase Queue spot highlight on the Leaflet map:
+// a segmented great-circle path from origin → spot (dashed = hover, solid =
+// pinned) plus a marker + callsign label. Updated directly (no full re-render)
+// so hovering stays snappy. Pass nothing / null spot to clear.
+export function setMercatorDxHighlight({ originLat, originLng, spotLat, spotLng, label = '', pinned = false } = {}) {
+    const layer = ensureDxHighlightLayer();
+    if (!layer) return;
+    layer.clearLayers();
+    if (!Number.isFinite(spotLat) || !Number.isFinite(spotLng)) return;
+
+    const dark = document.body.getAttribute('data-theme') === 'dark';
+    const color = dark ? '#ffd166' : '#d97706';
+
+    if (Number.isFinite(originLat) && Number.isFinite(originLng)) {
+        const pts = greatCirclePoints(originLat, originLng, spotLat, spotLng, 64);
+        L.polyline(pts, {
+            pane: 'dx-highlight-pane',
+            color,
+            weight: pinned ? 3 : 2,
+            opacity: pinned ? 0.95 : 0.8,
+            dashArray: pinned ? null : '3 6',
+            interactive: false
+        }).addTo(layer);
+    }
+
+    L.circleMarker([spotLat, spotLng], {
+        pane: 'dx-highlight-pane',
+        radius: pinned ? 7 : 6,
+        color,
+        weight: 2.6,
+        fillColor: color,
+        fillOpacity: 0.5,
+        interactive: false
+    }).addTo(layer);
+
+    if (label) {
+        L.marker([spotLat, spotLng], {
+            pane: 'dx-highlight-pane',
+            interactive: false,
+            icon: L.divIcon({
+                className: 'dx-highlight-label',
+                html: `<span>${label}</span>`,
+                iconSize: null,
+                iconAnchor: [-10, 8]
+            })
+        }).addTo(layer);
+    }
+}
+
+export function clearMercatorDxHighlight() {
+    if (dxHighlightLayer) dxHighlightLayer.clearLayers();
 }
 
 export function setTheme(theme) {

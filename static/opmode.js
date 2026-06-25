@@ -504,6 +504,16 @@ export function isOpModeActive() {
     return opModeState.enabled === true;
 }
 
+// getOpModeStation returns the operator station {lat,lng} when operator mode is
+// active and a station is known, else null. Used as the origin for the Chase
+// Queue path line so it matches the antenna-beam origin.
+export function getOpModeStation() {
+    if (!opModeState.enabled || !opModeState.station) return null;
+    const { lat, lng } = opModeState.station;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { lat, lng };
+}
+
 // canControlRig reports whether the agent has a rig backend that can tune, AND
 // the operator/server/UI permission gate is satisfied. The Chase Queue uses this
 // to decide whether to expose tune affordances.

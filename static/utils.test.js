@@ -22,10 +22,42 @@ import {
     buildDxPulseUrl,
     getMinSnrMode,
     getSelectedBand,
-    getEnabledBands
+    getEnabledBands,
+    greatCircleDistanceKm,
+    initialBearingDeg,
+    greatCirclePoints
 } from './utils.js';
 
 describe('utils.js', () => {
+    describe('Great-circle geometry', () => {
+        // Berlin (52.52, 13.40) → Tokyo (35.68, 139.69)
+        it('greatCircleDistanceKm matches the known ~8900 km Berlin→Tokyo path', () => {
+            const d = greatCircleDistanceKm(52.52, 13.40, 35.68, 139.69);
+            expect(d).toBeGreaterThan(8800);
+            expect(d).toBeLessThan(9000);
+        });
+
+        it('initialBearingDeg from Berlin to Tokyo is roughly NE (~40°)', () => {
+            const b = initialBearingDeg(52.52, 13.40, 35.68, 139.69);
+            expect(b).toBeGreaterThan(25);
+            expect(b).toBeLessThan(55);
+        });
+
+        it('greatCirclePoints returns segments+1 points, endpoints exact', () => {
+            const pts = greatCirclePoints(52.52, 13.40, 35.68, 139.69, 16);
+            expect(pts.length).toBe(17);
+            expect(pts[0][0]).toBeCloseTo(52.52, 3);
+            expect(pts[0][1]).toBeCloseTo(13.40, 3);
+            expect(pts[16][0]).toBeCloseTo(35.68, 3);
+            expect(pts[16][1]).toBeCloseTo(139.69, 3);
+        });
+
+        it('greatCirclePoints handles identical endpoints without NaN', () => {
+            const pts = greatCirclePoints(10, 20, 10, 20, 8);
+            expect(pts.every(([la, lo]) => Number.isFinite(la) && Number.isFinite(lo))).toBe(true);
+        });
+    });
+
     describe('Pure Mathematical & Formatting Functions', () => {
         it('formatNumber formats numbers with space separators', () => {
             expect(formatNumber(1000)).toBe('1 000');

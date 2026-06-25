@@ -413,6 +413,63 @@ export function locatorToBounds(locator) {
     return [[lat, lng], [lat + 1, lng + 2]];
 }
 
+// --- Great-circle geometry (shared by both map projections) ---
+// Spherical-earth approximations; accurate enough for drawing beam/path lines.
+
+const _toRad = (d) => (d * Math.PI) / 180;
+const _toDeg = (r) => (r * 180) / Math.PI;
+
+export function greatCircleDistanceKm(aLat, aLng, bLat, bLng) {
+    const dLat = _toRad(bLat - aLat);
+    const dLng = _toRad(bLng - aLng);
+    const la1 = _toRad(aLat);
+    const la2 = _toRad(bLat);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2;
+    return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+export function initialBearingDeg(aLat, aLng, bLat, bLng) {
+    const la1 = _toRad(aLat);
+    const la2 = _toRad(bLat);
+    const dLng = _toRad(bLng - aLng);
+    const y = Math.sin(dLng) * Math.cos(la2);
+    const x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dLng);
+    return (_toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+// greatCirclePoints samples the geodesic between two points (inclusive of both
+// ends) via spherical linear interpolation, returning [[lat,lng],…]. Used for
+// the Mercator polyline and the azimuthal canvas line so the math lives once.
+export function greatCirclePoints(aLat, aLng, bLat, bLng, segments = 48) {
+    const la1 = _toRad(aLat);
+    const lo1 = _toRad(aLng);
+    const la2 = _toRad(bLat);
+    const lo2 = _toRad(bLng);
+
+    const d = 2 * Math.asin(Math.sqrt(
+        Math.sin((la2 - la1) / 2) ** 2 +
+        Math.cos(la1) * Math.cos(la2) * Math.sin((lo2 - lo1) / 2) ** 2
+    ));
+    const n = Math.max(1, Math.floor(segments));
+    const out = [];
+    if (d === 0 || !Number.isFinite(d)) {
+        return [[aLat, aLng], [bLat, bLng]];
+    }
+    const sinD = Math.sin(d);
+    for (let i = 0; i <= n; i += 1) {
+        const f = i / n;
+        const A = Math.sin((1 - f) * d) / sinD;
+        const B = Math.sin(f * d) / sinD;
+        const x = A * Math.cos(la1) * Math.cos(lo1) + B * Math.cos(la2) * Math.cos(lo2);
+        const y = A * Math.cos(la1) * Math.sin(lo1) + B * Math.cos(la2) * Math.sin(lo2);
+        const z = A * Math.sin(la1) + B * Math.sin(la2);
+        const lat = Math.atan2(z, Math.sqrt(x * x + y * y));
+        const lng = Math.atan2(y, x);
+        out.push([_toDeg(lat), _toDeg(lng)]);
+    }
+    return out;
+}
+
 export function continentFromLatLng(lat, lng) {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
 

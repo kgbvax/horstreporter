@@ -6,6 +6,7 @@
 // to app.js required. See docs/dxcluster-*.md and docs/horstprop.md.
 
 import { canControlRig, rigTune, operate, canLookup, enrichSpots } from './opmode.js';
+import { setChaseQueueHighlight, clearChaseQueueHighlight } from './app.js';
 
 const DXSPOTS_URL = '/api/dxspots?minutes=30';
 // Same-origin by default: HorstReporter reverse-proxies /horstprop/* to the
@@ -158,6 +159,10 @@ function injectStyles() {
   #cq-close { border:0; background:transparent; color:var(--status-color); font-size:18px; line-height:1; cursor:pointer; padding:0 2px; margin-left:8px; }
   #cq-close:hover { color: var(--text-color); }
   @media (max-width: 820px){ #chase-queue{ position:absolute; right:0; top:0; z-index:1150; box-shadow:0 0 24px var(--shadow-color);} }
+  .cq-card.cq-pinned { border-color: var(--cq-atno); box-shadow: 0 0 0 1px var(--cq-atno) inset; }
+  .dx-highlight-label span { font: 700 12px var(--cq-mono); color:#1c1400;
+    background: var(--cq-atno); padding:1px 5px; border-radius:4px; white-space:nowrap;
+    box-shadow: 0 1px 4px rgba(0,0,0,.35); }
   `;
   const s = document.createElement('style');
   s.id = 'cq-styles';
@@ -166,6 +171,14 @@ function injectStyles() {
 }
 
 let panelEl, bodyEl, countEl, statusEl;
+
+// Map-highlight state. `pinned` is the click-pinned spot (persists until another
+// is pinned or the panel closes); hover previews transiently and reverts to the
+// pinned spot on mouse-leave. `dxLayerWasOn` remembers the 'DX Cluster' toggle.
+let pinned = null;
+let dxLayerWasOn = null;
+const spotKey = (s) => `${s.dx_call}|${s.band}|${s.freq_khz}`;
+const highlightData = (s) => ({ dx_call: s.dx_call, dx_locator: s.dx_locator, band: s.band, freq_khz: s.freq_khz });
 
 function mount() {
   injectStyles();
@@ -217,6 +230,13 @@ function mount() {
     panelEl.classList.remove('is-hidden');
     toggle.style.display = 'none';
     if (trc) trc.style.right = (PANEL_W + 15) + 'px'; // slide app controls left, over the map
+    // Reuse the existing 'DX Cluster' map layer so the listed spots are visible
+    // on the map; remember its prior state to restore on close.
+    const cb = document.getElementById('show-dxcluster-spots');
+    if (cb) {
+      dxLayerWasOn = cb.checked;
+      if (!cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change')); }
+    }
     reflowMap();
     refresh();
   };
@@ -224,6 +244,11 @@ function mount() {
     panelEl.classList.add('is-hidden');
     toggle.style.display = '';
     if (trc) trc.style.right = trcRight; // restore original anchor (not '')
+    // Clear any highlight and restore the DX Cluster layer to its prior state.
+    pinned = null;
+    clearChaseQueueHighlight();
+    const cb = document.getElementById('show-dxcluster-spots');
+    if (cb && dxLayerWasOn === false && cb.checked) { cb.checked = false; cb.dispatchEvent(new Event('change')); }
     reflowMap();
   };
   toggle.addEventListener('click', open);
@@ -360,6 +385,28 @@ function renderCard(s) {
     el.addEventListener('dblclick', () => {
       runCardAction(tuneBtn, 'Tune', () => rigTune(freqHz, mode), `Tuned ${s.dx_call} — ${fmtFreq(s.freq_khz)} MHz`);
     });
+  }
+
+  // Map highlight: hover previews this spot (line + marker); leaving reverts to
+  // the pinned spot (if any); clicking pins it. Needs a locator to place it.
+  if (s.dx_locator) {
+    const key = spotKey(s);
+    el.classList.add('cq-hl');
+    el.addEventListener('mouseenter', () => {
+      setChaseQueueHighlight({ ...highlightData(s), pinned: pinned?.key === key });
+    });
+    el.addEventListener('mouseleave', () => {
+      if (pinned) setChaseQueueHighlight({ ...pinned.data, pinned: true });
+      else clearChaseQueueHighlight();
+    });
+    el.addEventListener('click', () => {
+      // Idempotent for the same spot, so a double-click (Tune) doesn't unpin.
+      pinned = { key, data: highlightData(s) };
+      el.parentElement?.querySelectorAll('.cq-pinned').forEach((n) => n.classList.remove('cq-pinned'));
+      el.classList.add('cq-pinned');
+      setChaseQueueHighlight({ ...pinned.data, pinned: true });
+    });
+    if (pinned?.key === key) el.classList.add('cq-pinned');
   }
   return el;
 }

@@ -1,7 +1,7 @@
 import { state } from './state.js';
 import { loadConfig } from './config.js';
-import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineLayer, syncMercatorDxccLabelLayer } from './map.js';
-import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, getAzimuthCenter, setAzimuthEnabled, setAzimuthDragging, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled, getAzimuthLatLngFromClientPoint, getAzimuthHiddenGridSquaresCount } from './azimuth-runtime.js';
+import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineLayer, syncMercatorDxccLabelLayer, setMercatorDxHighlight, clearMercatorDxHighlight } from './map.js';
+import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, getAzimuthCenter, setAzimuthEnabled, setAzimuthDragging, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled, getAzimuthLatLngFromClientPoint, getAzimuthHiddenGridSquaresCount, setAzimuthDxSpotHighlight } from './azimuth-runtime.js';
 import { initUI, attachUITooltipEvents } from './ui.js';
 import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
 import { initHotBandIndicator } from './hot-band-indicator.js';
@@ -9,7 +9,7 @@ import { initHorstKevin } from './horst-kevin.js';
 import { updateMapVisualization, updateBandLabels } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
-import { initOpMode, isOpModeActive, setBeamTargetFromMapClick } from './opmode.js';
+import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
 
 // --- Azimuth Zoom State ---
 const AZIMUTH_MAX_HORIZON_KM = 20015;
@@ -638,6 +638,50 @@ function getActiveTargetCenter() {
     const lat = (bounds[0][0] + bounds[1][0]) / 2;
     const lng = (bounds[0][1] + bounds[1][1]) / 2;
     return [lat, lng];
+}
+
+// setChaseQueueHighlight drives the map highlight for a Chase Queue spot. Pass a
+// spot {dx_call, dx_locator, pinned} to show it (great-circle line from the
+// operator origin + marker), or null to clear. Origin = operator station when in
+// operator mode (matches the antenna beam), else the active target center.
+export function setChaseQueueHighlight(spot) {
+    if (!spot || !spot.dx_locator) {
+        clearChaseQueueHighlight();
+        return;
+    }
+    const bounds = locatorToBounds(String(spot.dx_locator).toUpperCase());
+    if (!bounds) {
+        clearChaseQueueHighlight();
+        return;
+    }
+    const spotLat = (bounds[0][0] + bounds[1][0]) / 2;
+    const spotLng = (bounds[0][1] + bounds[1][1]) / 2;
+
+    const station = (typeof getOpModeStation === 'function' && isOpModeActive()) ? getOpModeStation() : null;
+    const origin = station || (() => {
+        const c = getActiveTargetCenter();
+        return c ? { lat: c[0], lng: c[1] } : null;
+    })();
+
+    const payload = {
+        enabled: true,
+        originLat: origin ? origin.lat : null,
+        originLng: origin ? origin.lng : null,
+        spotLat,
+        spotLng,
+        label: String(spot.dx_call || ''),
+        pinned: Boolean(spot.pinned)
+    };
+
+    setAzimuthDxSpotHighlight(payload);
+    setMercatorDxHighlight(payload);
+    if (isAzimuthEnabled()) scheduleRender();
+}
+
+export function clearChaseQueueHighlight() {
+    setAzimuthDxSpotHighlight({ enabled: false });
+    clearMercatorDxHighlight();
+    if (isAzimuthEnabled()) scheduleRender();
 }
 
 function syncProjectionCenterToActiveTarget() {
