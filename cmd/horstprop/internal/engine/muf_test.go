@@ -42,6 +42,23 @@ func TestMUFGateOpenAndClosed(t *testing.T) {
 
 // Empirical-first: a confident, well-supported path resists a closing MUF gate;
 // a weak path does not.
+func TestMUFGateSkippedOnVHF(t *testing.T) {
+	muf := fakeMUF{muf: 7, age: 10, ok: true} // would gate hard on HF
+	e := New("JO31", nil, nil, muf, nil, 3)
+	// 2m (144.174 MHz): MUF irrelevant → gate must be unavailable.
+	for _, freq := range []int64{50313000, 144174000} {
+		sc := e.Score(propcontract.Spot{DXCall: "X", FreqHz: freq, Grid: "OH29"})
+		if sc.Layers.MUFGate.Available {
+			t.Errorf("freq %d Hz (VHF): MUF gate should be unavailable, got %+v", freq, sc.Layers.MUFGate)
+		}
+	}
+	// 20m (HF) still gated.
+	sc := e.Score(propcontract.Spot{DXCall: "X", FreqHz: 14074000, Grid: "OH29"})
+	if !sc.Layers.MUFGate.Available {
+		t.Error("20m (HF): MUF gate should still apply")
+	}
+}
+
 func TestEmpiricalFirstVsMUFGate(t *testing.T) {
 	add := func(st interface {
 		Add(propcontract.PropReport)

@@ -221,6 +221,12 @@ func (e *Engine) mufGate(dx geo.LatLon, freqHz int64) (propcontract.MUFGate, boo
 	if e.muf == nil || !e.homeOK {
 		return propcontract.MUFGate{Available: false}, false
 	}
+	// VHF (6m/4m/2m, >=50 MHz) propagates via Es / tropo / meteor-scatter, not the
+	// F-layer MUF the KC2G nowcast models — so the MUF gate doesn't apply. Scoring
+	// there leans on empirical evidence (L1) instead.
+	if float64(freqHz)/1e6 >= 50 {
+		return propcontract.MUFGate{Available: false}, false
+	}
 	mufMin, ageMin, have := 0.0, 0.0, false
 	for _, p := range controlPoints(e.home, dx) {
 		muf, age, ok := e.muf.MUFAt(p.Lat, p.Lon)

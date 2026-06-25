@@ -170,9 +170,8 @@ function renderCard(s) {
   el.className = 'cq-card';
   el.style.setProperty('--cq-spine', bandColor(s.band));
   const sc = s._score;
-  const dec = sc ? gradeToDecision(sc.grade) : 'unknown';
+  const dec = sc ? gradeToDecision(sc.grade) : 'unknown'; // still drives the gauge colour
   const num = sc && sc.score != null ? sc.score : '··';
-  const grade = sc ? sc.grade : '';
   const dist = sc && sc.distance_km ? `${Math.round(sc.distance_km).toLocaleString()} km` : '';
   const az = sc && sc.bearing_deg ? `${Math.round(sc.bearing_deg)}°` : '';
   const comment = trimComment(s.comment);
@@ -184,7 +183,6 @@ function renderCard(s) {
       <span class="cq-score">
         <span class="cq-meter m-${dec}"><i style="width:${meterPct(num)}%"></i></span>
         <span class="cq-num">${num}</span>
-        <span class="cq-grade g-${dec}">${grade}</span>
       </span>
     </div>
     <div class="cq-r2">
