@@ -33,8 +33,12 @@ if [ ! -f "$BINARY_NAME" ]; then
     exit 1
 fi
 echo "Installing binary to $INSTALL_DIR..."
-cp "$BINARY_NAME" "$INSTALL_DIR/"
-chmod +x "$INSTALL_DIR/$BINARY_NAME"
+# Atomic replace: rename works even when the current binary is running (a plain
+# cp over it fails with ETXTBSY). The running process keeps the old inode until
+# the restart below swaps to the new file.
+cp "$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME.new"
+chmod +x "$INSTALL_DIR/$BINARY_NAME.new"
+mv -f "$INSTALL_DIR/$BINARY_NAME.new" "$INSTALL_DIR/$BINARY_NAME"
 chown -R "$APP_USER:$APP_USER" "$INSTALL_DIR"
 
 # 3. Config (args only). Edit to point at your HorstReporter and set your grid.

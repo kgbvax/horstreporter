@@ -34,8 +34,11 @@ if [ ! -f "$BINARY_NAME" ]; then
 fi
 
 echo "Copying binary..."
-cp "$BINARY_NAME" "$INSTALL_DIR/"
-chmod +x "$INSTALL_DIR/$BINARY_NAME"
+# Atomic replace (rename) so re-running while the service is live doesn't hit
+# ETXTBSY ("Text file busy") on the running executable.
+cp "$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME.new"
+chmod +x "$INSTALL_DIR/$BINARY_NAME.new"
+mv -f "$INSTALL_DIR/$BINARY_NAME.new" "$INSTALL_DIR/$BINARY_NAME"
 
 # Set correct ownership for the service user
 chown -R "$APP_USER:$APP_USER" "$INSTALL_DIR"
