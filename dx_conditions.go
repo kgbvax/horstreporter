@@ -100,39 +100,39 @@ type DxBaselineEngine struct {
 }
 
 type dxBandCondition struct {
-	Band               string         `json:"band"`
-	Score              float64        `json:"score"`
-	Confidence         float64        `json:"confidence"`
-	Status             string         `json:"status"`
-	Condition          string         `json:"condition"`
-	Mode               string         `json:"mode"`
-	Recommendation     string         `json:"recommendation"`
-	CurrentLinks       int            `json:"current_links"`
-	UniqueLinks        int            `json:"unique_links"`
-	RepeatRatio        float64        `json:"repeat_ratio"`
-	SpotsPerMinute     float64        `json:"spots_per_minute"`
-	UniqueTxStations   int            `json:"unique_tx_stations"`
-	UniqueRxStations   int            `json:"unique_rx_stations"`
-	UniqueRemoteGrids  int            `json:"unique_remote_grids"`
-	AvgDistanceKm      float64        `json:"avg_distance_km"`
-	MaxDistanceKm      float64        `json:"max_distance_km"`
-	MedianDistanceKm   float64        `json:"median_distance_km"`
-	P90DistanceKm      float64        `json:"p90_distance_km"`
-	LongHaulRatio      float64        `json:"long_haul_ratio"`
-	DxRatio            float64        `json:"dx_ratio"`
-	AvgSnr             float64        `json:"avg_snr"`
-	PeakSnr            int            `json:"peak_snr"`
-	MedianSnr          float64        `json:"median_snr"`
-	P90Snr             float64        `json:"p90_snr"`
-	BaselineActivity         float64    `json:"baseline_activity"`
-	TargetBaselineUsed       bool       `json:"target_baseline_used"`
-	BaselineActivityBySlot   []float64  `json:"baseline_activity_by_slot,omitempty"`
-	BaselineSlotUsedByTarget []bool     `json:"baseline_slot_used_by_target,omitempty"`
-	DominantDirection  string         `json:"dominant_direction"`
-	AzimuthSectors     map[string]int `json:"azimuth_sectors,omitempty"`
-	Trend              string         `json:"trend"`
-	TrendDelta         float64        `json:"trend_delta"`
-	Sparkline          []float64      `json:"sparkline"`
+	Band                     string         `json:"band"`
+	Score                    float64        `json:"score"`
+	Confidence               float64        `json:"confidence"`
+	Status                   string         `json:"status"`
+	Condition                string         `json:"condition"`
+	Mode                     string         `json:"mode"`
+	Recommendation           string         `json:"recommendation"`
+	CurrentLinks             int            `json:"current_links"`
+	UniqueLinks              int            `json:"unique_links"`
+	RepeatRatio              float64        `json:"repeat_ratio"`
+	SpotsPerMinute           float64        `json:"spots_per_minute"`
+	UniqueTxStations         int            `json:"unique_tx_stations"`
+	UniqueRxStations         int            `json:"unique_rx_stations"`
+	UniqueRemoteGrids        int            `json:"unique_remote_grids"`
+	AvgDistanceKm            float64        `json:"avg_distance_km"`
+	MaxDistanceKm            float64        `json:"max_distance_km"`
+	MedianDistanceKm         float64        `json:"median_distance_km"`
+	P90DistanceKm            float64        `json:"p90_distance_km"`
+	LongHaulRatio            float64        `json:"long_haul_ratio"`
+	DxRatio                  float64        `json:"dx_ratio"`
+	AvgSnr                   float64        `json:"avg_snr"`
+	PeakSnr                  int            `json:"peak_snr"`
+	MedianSnr                float64        `json:"median_snr"`
+	P90Snr                   float64        `json:"p90_snr"`
+	BaselineActivity         float64        `json:"baseline_activity"`
+	TargetBaselineUsed       bool           `json:"target_baseline_used"`
+	BaselineActivityBySlot   []float64      `json:"baseline_activity_by_slot,omitempty"`
+	BaselineSlotUsedByTarget []bool         `json:"baseline_slot_used_by_target,omitempty"`
+	DominantDirection        string         `json:"dominant_direction"`
+	AzimuthSectors           map[string]int `json:"azimuth_sectors,omitempty"`
+	Trend                    string         `json:"trend"`
+	TrendDelta               float64        `json:"trend_delta"`
+	Sparkline                []float64      `json:"sparkline"`
 }
 
 type dxConditionsResponse struct {
@@ -823,39 +823,39 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		recommendation := classifyRecommendation(status, mode, dxRatio, spotsPerMin, bandConfidence)
 
 		bands = append(bands, dxBandCondition{
-			Band:               band,
-			Score:              round1(bandScore),
-			Confidence:         round1(bandConfidence),
-			Status:             status,
-			Condition:          condition,
-			Mode:               mode,
-			Recommendation:     recommendation,
-			CurrentLinks:       acc.total,
-			UniqueLinks:        uniqueCount,
-			RepeatRatio:        round2(repeatRatio),
-			SpotsPerMinute:     round2(spotsPerMin),
-			UniqueTxStations:   len(acc.uniqueTx),
-			UniqueRxStations:   len(acc.uniqueRx),
-			UniqueRemoteGrids:  len(acc.uniqueRemote),
-			AvgDistanceKm:      round1(avgDistance),
-			MaxDistanceKm:      round1(maxDistance),
-			MedianDistanceKm:   round1(medianDistance),
-			P90DistanceKm:      round1(p90Distance),
-			LongHaulRatio:      round2(longHaulRatio),
-			DxRatio:            round2(dxRatio),
-			AvgSnr:             round1(avgSnr),
-			PeakSnr:            acc.peakSnr,
-			MedianSnr:          round1(medianSnr),
-			P90Snr:             round1(p90Snr),
+			Band:                     band,
+			Score:                    round1(bandScore),
+			Confidence:               round1(bandConfidence),
+			Status:                   status,
+			Condition:                condition,
+			Mode:                     mode,
+			Recommendation:           recommendation,
+			CurrentLinks:             acc.total,
+			UniqueLinks:              uniqueCount,
+			RepeatRatio:              round2(repeatRatio),
+			SpotsPerMinute:           round2(spotsPerMin),
+			UniqueTxStations:         len(acc.uniqueTx),
+			UniqueRxStations:         len(acc.uniqueRx),
+			UniqueRemoteGrids:        len(acc.uniqueRemote),
+			AvgDistanceKm:            round1(avgDistance),
+			MaxDistanceKm:            round1(maxDistance),
+			MedianDistanceKm:         round1(medianDistance),
+			P90DistanceKm:            round1(p90Distance),
+			LongHaulRatio:            round2(longHaulRatio),
+			DxRatio:                  round2(dxRatio),
+			AvgSnr:                   round1(avgSnr),
+			PeakSnr:                  acc.peakSnr,
+			MedianSnr:                round1(medianSnr),
+			P90Snr:                   round1(p90Snr),
 			BaselineActivity:         round2(baselineActivity),
 			TargetBaselineUsed:       targetBaselineUsed,
 			BaselineActivityBySlot:   roundSlotRates(baselineActivityBySlot),
 			BaselineSlotUsedByTarget: baselineSlotUsedByTarget,
 			DominantDirection:        direction,
-			AzimuthSectors:     acc.directionBins,
-			Trend:              trend,
-			TrendDelta:         trendDelta,
-			Sparkline:          historicalBandSeries,
+			AzimuthSectors:           acc.directionBins,
+			Trend:                    trend,
+			TrendDelta:               trendDelta,
+			Sparkline:                historicalBandSeries,
 		})
 
 		weight := float64(acc.total)
@@ -1670,7 +1670,7 @@ func locatorBlockToken(loc string) string {
 		return loc[:4]
 	}
 	// Floor each odd digit to the previous even by clearing the low bit.
-	return loc[:2] + string([]byte{(d3 - '0') &^ 1 + '0'}) + string([]byte{(d4 - '0') &^ 1 + '0'})
+	return loc[:2] + string([]byte{(d3-'0')&^1 + '0'}) + string([]byte{(d4-'0')&^1 + '0'})
 }
 
 func snrTierFromDb(db int) int {

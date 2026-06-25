@@ -66,12 +66,12 @@ func TestBaselineActivityForBandAllSlotsTargetWins(t *testing.T) {
 	}
 
 	cases := []struct {
-		slot       int
-		wantRate   float64
-		wantUsed   bool
+		slot     int
+		wantRate float64
+		wantUsed bool
 	}{
-		{24, 1.0, true},  // 30 / (1 * 30) = 1.0
-		{25, 2.0, true},  // 60 / (1 * 30) = 2.0
+		{24, 1.0, true}, // 30 / (1 * 30) = 1.0
+		{25, 2.0, true}, // 60 / (1 * 30) = 2.0
 		{0, 0.0, false},
 		{47, 0.0, false},
 	}

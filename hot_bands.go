@@ -11,15 +11,15 @@ import (
 // operator is already on are suppressed.
 const (
 	hotBandsMinHistoryMinutes  = 24 * 60 // need at least 1 day of baseline before "surprise"/"dx_surge" are trustworthy
-	hotBandsMinSustainedBins   = 2        // ≥ N consecutive trailing bins above hotBandsSparklineFloor to count as sustained
-	hotBandsSparklineFloor     = 30.0     // bin value (0..100 normalised) considered "elevated"
-	hotBandsMinLiveRate        = 0.5      // spots/min — drops noisy 1-spot bursts
-	hotBandsSurpriseBaselineMx = 0.1      // expected spots/min ≤ this means band is usually quiet for this target
-	hotBandsSurpriseRatio      = 5.0      // current rate must be ≥ N× baseline to count as "rare opening"
-	hotBandsDxSurgeRatio       = 1.5      // live p90 distance / baseline p90 distance
-	hotBandsDxSurgeMinDistKm   = 5000.0   // suppress low-band 1k→1.5k "surges"
-	hotBandsMinTrendDelta      = 0.2      // matches Evaluate's "rising" gate
-	hotBandsRisingRatioMin     = 1.2      // current rate above its own baseline
+	hotBandsMinSustainedBins   = 2       // ≥ N consecutive trailing bins above hotBandsSparklineFloor to count as sustained
+	hotBandsSparklineFloor     = 30.0    // bin value (0..100 normalised) considered "elevated"
+	hotBandsMinLiveRate        = 0.5     // spots/min — drops noisy 1-spot bursts
+	hotBandsSurpriseBaselineMx = 0.1     // expected spots/min ≤ this means band is usually quiet for this target
+	hotBandsSurpriseRatio      = 5.0     // current rate must be ≥ N× baseline to count as "rare opening"
+	hotBandsDxSurgeRatio       = 1.5     // live p90 distance / baseline p90 distance
+	hotBandsDxSurgeMinDistKm   = 5000.0  // suppress low-band 1k→1.5k "surges"
+	hotBandsMinTrendDelta      = 0.2     // matches Evaluate's "rising" gate
+	hotBandsRisingRatioMin     = 1.2     // current rate above its own baseline
 	hotBandsMaxResults         = 3
 )
 

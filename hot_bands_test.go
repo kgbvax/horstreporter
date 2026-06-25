@@ -32,9 +32,9 @@ func TestSustainedRecentBins(t *testing.T) {
 
 func TestActivityRatio(t *testing.T) {
 	cases := []struct {
-		name             string
-		live, baseline   float64
-		min, max         float64
+		name           string
+		live, baseline float64
+		min, max       float64
 	}{
 		{"both zero", 0, 0, 0, 0},
 		{"baseline zero, live positive", 0.5, 0, 1.0, 2.0},

@@ -3,7 +3,6 @@ package geo
 import (
 	"bufio"
 	"io"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -146,14 +145,4 @@ func stripOverrides(tok string) string {
 		tok = tok[:i]
 	}
 	return strings.TrimSpace(tok)
-}
-
-// sortedPrefixes is a debug/test helper returning known prefixes sorted.
-func (c *CtyResolver) sortedPrefixes() []string {
-	out := make([]string, 0, len(c.prefixes))
-	for p := range c.prefixes {
-		out = append(out, p)
-	}
-	sort.Strings(out)
-	return out
 }
