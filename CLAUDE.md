@@ -17,6 +17,11 @@ DXCLUSTER_USERNAME=<yourcall> DXCLUSTER_PASSWORD=<password> \
 
 # Run local operator agent
 go run ./cmd/horstoperator-agent -listen 127.0.0.1:9955 -station-lat 52.52 -station-lng 13.40
+# Rig control + Chase Queue enrichment (operator-local): add
+#   -rig-transport waveloggate   (tune via WaveLogGate)
+# and set Wavelog creds via env / a repo-root .env (NOT flags — keep secrets out of argv):
+#   WAVELOG_API_KEY=… WAVELOG_URL=https://log.dclnext.darc.de/index.php
+# Secrets convention for both binaries (env vars / systemd EnvironmentFile): see docs/deployment-secrets.md
 
 # Run HF link-quality scoring service (separate binary; consumes HorstReporter read-only)
 go run ./cmd/horstprop -listen 127.0.0.1:9970
