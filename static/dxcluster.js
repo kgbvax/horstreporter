@@ -26,15 +26,46 @@ const gradeToDecision = (g) => (g === 'A' || g === 'B') ? 'go' : g === 'C' ? 'wa
 
 // Opt-in demo data (?cqdemo=1) so the panel renders without live cluster creds.
 const DEMO_SPOTS = [
-  { dx_call: '3Y0J', spotter: 'LA7GIA', freq_khz: 18145, band: '17m', dx_locator: 'IB59', age_seconds: 21, comment: 'up 5-10 listening EU' },
-  { dx_call: 'VK6LC', spotter: 'G3TXF', freq_khz: 14018, band: '20m', dx_locator: 'OF87', age_seconds: 48, comment: '599 long path' },
-  { dx_call: 'JA3XYZ', spotter: 'DL1ABC', freq_khz: 21091, band: '15m', dx_locator: 'PM74', age_seconds: 12, comment: 'calling EU' },
-  { dx_call: 'W7RV', spotter: 'EA4XYZ', freq_khz: 14205, band: '20m', dx_locator: 'DM43', age_seconds: 55, comment: 'booming in' },
-  { dx_call: 'PY2NY', spotter: 'F5ABC', freq_khz: 21094, band: '15m', dx_locator: 'GG66', age_seconds: 64, comment: '-14 dB' },
+  { dx_call: '3Y0J', spotter: 'LA7GIA', freq_khz: 18145, band: '17m', dx_locator: 'IB59', age_seconds: 21, comment: 'up 5-10 listening EU', op_name: 'Ken', country: 'Norway' },
+  { dx_call: 'VK6LC', spotter: 'G3TXF', freq_khz: 14018, band: '20m', dx_locator: 'OF87', age_seconds: 48, comment: '599 long path', op_name: 'Wayne', country: 'Australia' },
+  { dx_call: 'JA3XYZ', spotter: 'DL1ABC', freq_khz: 21091, band: '15m', dx_locator: 'PM74', age_seconds: 12, comment: 'calling EU', op_name: 'Kenji', country: 'Japan' },
+  { dx_call: 'W7RV', spotter: 'EA4XYZ', freq_khz: 14205, band: '20m', dx_locator: 'DM43', age_seconds: 55, comment: 'booming in', op_name: 'Bob', country: 'United States' },
+  { dx_call: 'PY2NY', spotter: 'F5ABC', freq_khz: 21094, band: '15m', dx_locator: 'GG66', age_seconds: 64, comment: '-14 dB', op_name: 'Vitor', country: 'Brazil' },
 ];
 
 const isDemo = () => location.search.includes('cqdemo');
-const trimComment = (c) => (c || '').replace(/\s*\d{3,4}Z\s*$/, '').trim();
+// DXSpider comments arrive padded and end with the spot time + BEL control chars
+// (e.g. "...  1015Z\x07\x07"). Strip control chars, the trailing time, and collapse padding.
+const trimComment = (c) => (c || '')
+  .replace(/[\u0000-\u001f]+/g, ' ')
+  .replace(/\s*\d{3,4}Z\s*$/i, '')
+  .replace(/\s{2,}/g, ' ')
+  .trim();
+
+// Country (DXCC entity, from QRZ) -> ISO-3166 alpha-2 -> flag emoji. Best-effort:
+// unknown countries simply show no flag (the country text still appears).
+const COUNTRY_ISO = {
+  'United States': 'US', 'Canada': 'CA', 'Mexico': 'MX', 'Brazil': 'BR', 'Argentina': 'AR',
+  'Chile': 'CL', 'Japan': 'JP', 'China': 'CN', 'South Korea': 'KR', 'Republic of Korea': 'KR',
+  'India': 'IN', 'Indonesia': 'ID', 'Thailand': 'TH', 'Australia': 'AU', 'New Zealand': 'NZ',
+  'Germany': 'DE', 'Fed. Rep. of Germany': 'DE', 'France': 'FR', 'Italy': 'IT', 'Spain': 'ES',
+  'Canary Islands': 'ES', 'Portugal': 'PT', 'Netherlands': 'NL', 'Belgium': 'BE', 'Luxembourg': 'LU',
+  'Switzerland': 'CH', 'Austria': 'AT', 'Poland': 'PL', 'Czech Republic': 'CZ', 'Czechia': 'CZ',
+  'Slovak Republic': 'SK', 'Slovakia': 'SK', 'Hungary': 'HU', 'Romania': 'RO', 'Bulgaria': 'BG',
+  'Greece': 'GR', 'Croatia': 'HR', 'Serbia': 'RS', 'Slovenia': 'SI', 'Ukraine': 'UA',
+  'European Russia': 'RU', 'Asiatic Russia': 'RU', 'Russia': 'RU', 'Belarus': 'BY', 'Lithuania': 'LT',
+  'Latvia': 'LV', 'Estonia': 'EE', 'Finland': 'FI', 'Sweden': 'SE', 'Norway': 'NO', 'Denmark': 'DK',
+  'Iceland': 'IS', 'Ireland': 'IE', 'England': 'GB', 'Scotland': 'GB', 'Wales': 'GB',
+  'Northern Ireland': 'GB', 'Isle of Man': 'IM', 'Jersey': 'JE', 'Guernsey': 'GG',
+  'Turkey': 'TR', 'Israel': 'IL', 'South Africa': 'ZA', 'Madagascar': 'MG', 'Morocco': 'MA',
+  'Egypt': 'EG', 'Moldova': 'MD', 'Albania': 'AL', 'North Macedonia': 'MK', 'Macedonia': 'MK',
+  'Bosnia-Herzegovina': 'BA', 'Montenegro': 'ME', 'Malta': 'MT', 'Cyprus': 'CY',
+};
+const flagEmoji = (country) => {
+  const iso = COUNTRY_ISO[(country || '').trim()];
+  if (!iso) return '';
+  return String.fromCodePoint(...[...iso].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65));
+};
 const fmtFreq = (khz) => (khz >= 1000 ? (khz / 1000).toFixed(3) : String(khz));
 const fmtAge = (s) => s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
 const meterPct = (v) => Math.max(6, Math.min(100, v || 0));
@@ -63,8 +94,11 @@ function injectStyles() {
     border-left:5px solid var(--cq-spine,#555); padding:7px 10px; cursor:pointer; transition:border-color .12s, background .12s; }
   .cq-card:hover { background: color-mix(in srgb, var(--bg-color) 94%, var(--text-color) 6%); }
   .cq-r1 { display:flex; align-items:center; gap:8px; }
+  .cq-flag { font-size:1rem; line-height:1; }
+  .cq-flag:empty { display:none; }
   .cq-call { font:700 1.02rem/1 var(--cq-mono); }
-  .cq-spotter { font:11px/1 sans-serif; color: var(--status-color); }
+  .cq-op { font:12px/1 sans-serif; color: var(--text-color); }
+  .cq-op:empty { display:none; }
   .cq-spacer { flex:1 1 auto; }
   .cq-score { display:flex; align-items:center; gap:6px; }
   .cq-meter { width:46px; height:6px; border-radius:4px; background: color-mix(in srgb, var(--bg-color) 80%, var(--text-color) 20%); overflow:hidden; }
@@ -80,7 +114,7 @@ function injectStyles() {
   .cq-r2 b { color: var(--text-color); font-weight:700; }
   .cq-r2 .band { font-weight:700; }
   .cq-r2 .sep { opacity:.5; margin:0 6px; }
-  .cq-comment { font:11px/1.3 sans-serif; font-style:italic; color: var(--status-color); margin-top:4px;
+  .cq-comment { font:11px/1.3 sans-serif; color: var(--status-color); margin-top:4px;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   #cq-toggle { font:600 12px sans-serif; border:1px solid var(--border-color);
     background: var(--bg-color); color: var(--text-color); border-radius:999px;
@@ -175,10 +209,12 @@ function renderCard(s) {
   const dist = sc && sc.distance_km ? `${Math.round(sc.distance_km).toLocaleString()} km` : '';
   const az = sc && sc.bearing_deg ? `${Math.round(sc.bearing_deg)}°` : '';
   const comment = trimComment(s.comment);
+  const flag = flagEmoji(s.country);
   el.innerHTML = `
     <div class="cq-r1">
+      <span class="cq-flag">${flag}</span>
       <span class="cq-call">${s.dx_call}</span>
-      <span class="cq-spotter">de ${s.spotter || '?'}</span>
+      <span class="cq-op">${s.op_name || ''}</span>
       <span class="cq-spacer"></span>
       <span class="cq-score">
         <span class="cq-meter m-${dec}"><i style="width:${meterPct(num)}%"></i></span>
@@ -186,10 +222,10 @@ function renderCard(s) {
       </span>
     </div>
     <div class="cq-r2">
-      <span class="band" style="color:${bandColor(s.band)}">${s.band}</span>
+      ${s.country ? `${s.country}<span class="sep">·</span>` : ''}<span class="band" style="color:${bandColor(s.band)}">${s.band}</span>
       <span class="sep">·</span>${fmtFreq(s.freq_khz)} MHz
       ${dist ? `<span class="sep">·</span>${dist}` : ''}${az ? ` · ${az}` : ''}
-      <span class="sep">·</span>${fmtAge(s.age_seconds)}${s.dx_locator ? ` · ${s.dx_locator}` : ''}
+      <span class="sep">·</span>${fmtAge(s.age_seconds)}
     </div>
     ${comment ? `<div class="cq-comment" title="${comment}">${comment}</div>` : ''}`;
   if (sc && sc.reason) el.title = sc.reason;

@@ -12,10 +12,20 @@ import (
 
 type CallsignLocatorResolver interface {
 	LookupLocator(callsign string) (string, error)
+	// LookupInfo returns locator + operator name + country in one (cached) lookup.
+	LookupInfo(callsign string) (CallsignInfo, error)
+}
+
+// CallsignInfo is the subset of a QRZ record we surface (locator, op first name,
+// country/DXCC-entity name).
+type CallsignInfo struct {
+	Locator string
+	Name    string
+	Country string
 }
 
 type qrzCacheEntry struct {
-	locator string
+	info    CallsignInfo
 	expires time.Time
 }
 
@@ -43,7 +53,10 @@ type qrzXMLSession struct {
 }
 
 type qrzXMLCallsign struct {
-	Grid string `xml:"grid"`
+	Grid    string `xml:"grid"`
+	Fname   string `xml:"fname"`
+	Name    string `xml:"name"`
+	Country string `xml:"country"`
 }
 
 func newQRZLookupClient(username, password string) *qrzLookupClient {
@@ -63,9 +76,10 @@ func newQRZLookupClient(username, password string) *qrzLookupClient {
 
 // qrzLookupCandidates returns ordered lookup candidates for slash-style callsigns.
 // Examples:
-//   EK/RX3DPK   -> EK/RX3DPK, RX3DPK, EK
-//   DL7VEE/P    -> DL7VEE/P, DL7VEE, P
-//   EA8/DL7VEE/P -> EA8/DL7VEE/P, DL7VEE, EA8, P
+//
+//	EK/RX3DPK   -> EK/RX3DPK, RX3DPK, EK
+//	DL7VEE/P    -> DL7VEE/P, DL7VEE, P
+//	EA8/DL7VEE/P -> EA8/DL7VEE/P, DL7VEE, EA8, P
 func qrzLookupCandidates(callsign string) []string {
 	call := strings.ToUpper(strings.TrimSpace(callsign))
 	if call == "" {
@@ -120,21 +134,28 @@ func qrzLookupCandidates(callsign string) []string {
 	return candidates
 }
 
+// LookupLocator returns just the locator (kept for callers that only need it).
 func (c *qrzLookupClient) LookupLocator(callsign string) (string, error) {
+	info, err := c.LookupInfo(callsign)
+	return info.Locator, err
+}
+
+// LookupInfo returns locator + op name + country, cached per callsign.
+func (c *qrzLookupClient) LookupInfo(callsign string) (CallsignInfo, error) {
 	if c == nil {
-		return "", fmt.Errorf("qrz resolver not configured")
+		return CallsignInfo{}, fmt.Errorf("qrz resolver not configured")
 	}
 
 	call := strings.ToUpper(strings.TrimSpace(callsign))
 	if call == "" {
-		return "", fmt.Errorf("empty callsign")
+		return CallsignInfo{}, fmt.Errorf("empty callsign")
 	}
 
 	now := time.Now()
 	c.mu.Lock()
 	if cached, ok := c.cache[call]; ok && now.Before(cached.expires) {
 		c.mu.Unlock()
-		return cached.locator, nil
+		return cached.info, nil
 	}
 	c.mu.Unlock()
 
@@ -143,47 +164,45 @@ func (c *qrzLookupClient) LookupLocator(callsign string) (string, error) {
 	hadNoError := false
 
 	for _, candidate := range candidates {
-		locator, err := c.lookupWithRetry(candidate)
+		info, err := c.lookupWithRetry(candidate)
 		if err != nil {
 			lastErr = err
 			continue
 		}
 		hadNoError = true
-		locator = strings.ToUpper(strings.TrimSpace(locator))
-		if locator == "" {
+		if info.Locator == "" && info.Name == "" && info.Country == "" {
 			continue
 		}
-
 		c.mu.Lock()
-		c.cache[call] = qrzCacheEntry{locator: locator, expires: now.Add(24 * time.Hour)}
+		c.cache[call] = qrzCacheEntry{info: info, expires: now.Add(24 * time.Hour)}
 		c.mu.Unlock()
-		return locator, nil
+		return info, nil
 	}
 
 	if hadNoError {
 		c.mu.Lock()
-		c.cache[call] = qrzCacheEntry{locator: "", expires: now.Add(20 * time.Minute)}
+		c.cache[call] = qrzCacheEntry{info: CallsignInfo{}, expires: now.Add(20 * time.Minute)}
 		c.mu.Unlock()
-		return "", nil
+		return CallsignInfo{}, nil
 	}
 
 	if lastErr != nil {
-		return "", lastErr
+		return CallsignInfo{}, lastErr
 	}
-	return "", nil
+	return CallsignInfo{}, nil
 }
 
-func (c *qrzLookupClient) lookupWithRetry(call string) (string, error) {
+func (c *qrzLookupClient) lookupWithRetry(call string) (CallsignInfo, error) {
 	if err := c.ensureSession(); err != nil {
-		return "", err
+		return CallsignInfo{}, err
 	}
 
-	locator, sessionExpired, err := c.lookupCall(call)
+	info, sessionExpired, err := c.lookupCall(call)
 	if err == nil {
-		return locator, nil
+		return info, nil
 	}
 	if !sessionExpired {
-		return "", err
+		return CallsignInfo{}, err
 	}
 
 	c.mu.Lock()
@@ -192,13 +211,13 @@ func (c *qrzLookupClient) lookupWithRetry(call string) (string, error) {
 	c.mu.Unlock()
 
 	if err := c.ensureSession(); err != nil {
-		return "", err
+		return CallsignInfo{}, err
 	}
-	locator, _, err = c.lookupCall(call)
+	info, _, err = c.lookupCall(call)
 	if err != nil {
-		return "", err
+		return CallsignInfo{}, err
 	}
-	return locator, nil
+	return info, nil
 }
 
 func (c *qrzLookupClient) ensureSession() error {
@@ -238,13 +257,13 @@ func (c *qrzLookupClient) ensureSession() error {
 	return nil
 }
 
-func (c *qrzLookupClient) lookupCall(call string) (locator string, sessionExpired bool, err error) {
+func (c *qrzLookupClient) lookupCall(call string) (info CallsignInfo, sessionExpired bool, err error) {
 	c.mu.Lock()
 	session := c.sessionKey
 	c.mu.Unlock()
 
 	if strings.TrimSpace(session) == "" {
-		return "", true, fmt.Errorf("qrz session unavailable")
+		return CallsignInfo{}, true, fmt.Errorf("qrz session unavailable")
 	}
 
 	params := url.Values{}
@@ -253,26 +272,33 @@ func (c *qrzLookupClient) lookupCall(call string) (locator string, sessionExpire
 
 	resp, err := c.httpClient.Get(c.baseURL + "?" + params.Encode())
 	if err != nil {
-		return "", false, err
+		return CallsignInfo{}, false, err
 	}
 	defer resp.Body.Close()
 
 	var data qrzXMLResponse
 	if err := xml.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return "", false, err
+		return CallsignInfo{}, false, err
 	}
 
 	sessionErr := strings.ToLower(strings.TrimSpace(data.Session.Error))
 	if sessionErr != "" {
 		if strings.Contains(sessionErr, "session") || strings.Contains(sessionErr, "expired") || strings.Contains(sessionErr, "timeout") {
-			return "", true, fmt.Errorf("qrz session expired: %s", data.Session.Error)
+			return CallsignInfo{}, true, fmt.Errorf("qrz session expired: %s", data.Session.Error)
 		}
-		return "", false, fmt.Errorf("qrz lookup error: %s", data.Session.Error)
+		return CallsignInfo{}, false, fmt.Errorf("qrz lookup error: %s", data.Session.Error)
 	}
 
+	out := CallsignInfo{
+		Name:    strings.TrimSpace(data.Callsign.Fname), // first name (friendly)
+		Country: strings.TrimSpace(data.Callsign.Country),
+	}
+	if out.Name == "" {
+		out.Name = strings.TrimSpace(data.Callsign.Name)
+	}
 	grid := strings.ToUpper(strings.TrimSpace(data.Callsign.Grid))
 	if len(grid) >= 4 && isLocator(grid[:4]) {
-		return grid[:4], false, nil
+		out.Locator = grid[:4]
 	}
-	return "", false, nil
+	return out, false, nil
 }

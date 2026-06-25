@@ -258,6 +258,8 @@ func handleDXClusterSpot(spot dxClusterSpot, resolver CallsignLocatorResolver) {
 	band := bandFromFrequencyKHz(spot.FrequencyKHz)
 	spotterLocator := ""
 	dxLocator := ""
+	dxName := ""
+	dxCountry := ""
 
 	if resolver != nil {
 		if spotterLocator == "" {
@@ -271,29 +273,32 @@ func handleDXClusterSpot(spot dxClusterSpot, resolver CallsignLocatorResolver) {
 			}
 		}
 
-		if dxLocator == "" {
-			if loc, err := resolver.LookupLocator(spot.DXCall); err == nil {
-				dxLocator = strings.ToUpper(strings.TrimSpace(loc))
-				if dxLocator == "" && logLevel == "DEBUG" {
-					logDebug("DX cluster QRZ lookup returned no locator for DX call %q", spot.DXCall)
-				}
-			} else if logLevel == "DEBUG" {
-				logDebug("DX cluster QRZ lookup failed for DX call %q: %v", spot.DXCall, err)
+		// One lookup for the DX call yields locator + operator name + country.
+		if info, err := resolver.LookupInfo(spot.DXCall); err == nil {
+			dxLocator = strings.ToUpper(strings.TrimSpace(info.Locator))
+			dxName = strings.TrimSpace(info.Name)
+			dxCountry = strings.TrimSpace(info.Country)
+			if dxLocator == "" && logLevel == "DEBUG" {
+				logDebug("DX cluster QRZ lookup returned no locator for DX call %q", spot.DXCall)
 			}
+		} else if logLevel == "DEBUG" {
+			logDebug("DX cluster QRZ lookup failed for DX call %q: %v", spot.DXCall, err)
 		}
 	}
 
 	m := MQTTMessage{
-		RP: 0,
-		T:  spot.ObservedAt,
-		SC: spot.Spotter,
-		SL: spotterLocator,
-		RC: spot.DXCall,
-		RL: dxLocator,
-		B:  band,
-		MD: "DXCLUSTER",
-		F:  spot.FrequencyKHz,
-		CM: spot.Comment,
+		RP:      0,
+		T:       spot.ObservedAt,
+		SC:      spot.Spotter,
+		SL:      spotterLocator,
+		RC:      spot.DXCall,
+		RL:      dxLocator,
+		B:       band,
+		MD:      "DXCLUSTER",
+		F:       spot.FrequencyKHz,
+		CM:      spot.Comment,
+		OpName:  dxName,
+		Country: dxCountry,
 	}
 
 	if dxBaseline != nil {

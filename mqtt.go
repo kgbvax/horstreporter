@@ -21,8 +21,10 @@ type MQTTMessage struct {
 
 	// Set programmatically for DX-cluster spots only (never from the MQTT
 	// payload — hence json:"-"); carried in hub.history for /api/dxspots.
-	F  float64 `json:"-"` // spot frequency in kHz
-	CM string  `json:"-"` // spot comment
+	F       float64 `json:"-"` // spot frequency in kHz
+	CM      string  `json:"-"` // spot comment
+	OpName  string  `json:"-"` // DX operator name (QRZ)
+	Country string  `json:"-"` // DX country / DXCC entity (QRZ)
 }
 
 func startMQTT() {
