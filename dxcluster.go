@@ -99,28 +99,19 @@ func runDXClusterSession(endpoint string, cfg dxClusterConfig) error {
 	dxClusterAccounting.connected.Add(1)
 	username := strings.ToUpper(strings.TrimSpace(cfg.Username))
 	password := strings.TrimSpace(cfg.Password)
-	if username == "" {
-		logInfo("DX cluster connected without login callsign (-dxcluster-username / DXCLUSTER_USERNAME empty); some clusters will disconnect quickly")
-	}
 
-	if username != "" {
-		if cfg.Verbose {
-			logInfo("DX cluster sending callsign: %s", username)
-		}
-		_, _ = fmt.Fprintf(conn, "%s\n", username)
-	}
-	if password != "" {
-		if cfg.Verbose {
-			logInfo("DX cluster sending password")
-		}
-		_, _ = fmt.Fprintf(conn, "%s\n", password)
+	reader := bufio.NewReaderSize(conn, 128*1024)
+	if username == "" {
+		logInfo("DX cluster: no login callsign (-dxcluster-username / DXCLUSTER_USERNAME empty); most clusters (incl. DXSpider) reject anonymous logins")
+	} else if err := dxClusterLogin(conn, reader, username, password, cfg.Verbose); err != nil {
+		return err
 	}
 
 	// Request server-side pagination and a startup snapshot of recent DX spots.
 	sendDXClusterCommand(conn, "set/page 200", cfg.Verbose)
 	sendDXClusterCommand(conn, "sh/dx 150", cfg.Verbose)
 
-	scanner := bufio.NewScanner(conn)
+	scanner := bufio.NewScanner(reader)
 	buf := make([]byte, 0, 128*1024)
 	scanner.Buffer(buf, 2*1024*1024)
 	linesSeen := 0
@@ -158,6 +149,67 @@ func runDXClusterSession(endpoint string, cfg dxClusterConfig) error {
 		logInfo("DX cluster scanner ended cleanly: lines=%d parsed_spots=%d", linesSeen, spotsParsed)
 	}
 	return fmt.Errorf("dx cluster connection closed")
+}
+
+// dxClusterLogin performs a prompt-aware DXSpider login. DXSpider prompts are
+// NOT newline-terminated (e.g. "login: "), so we scan the raw byte stream: wait
+// for "login:" before sending the callsign, then wait briefly for "password:"
+// (registered / individually-assigned accounts) before sending the password.
+// If no password prompt arrives the call is unregistered — DB0ERF and most
+// DXSpider nodes still stream DX spots — so we proceed. Read deadlines bound
+// every phase so a silent server can't hang the connection.
+func dxClusterLogin(conn net.Conn, reader *bufio.Reader, username, password string, verbose bool) error {
+	_ = conn.SetReadDeadline(time.Now().Add(25 * time.Second))
+	if err := awaitPrompt(reader, "login:"); err != nil {
+		_ = conn.SetReadDeadline(time.Time{})
+		return fmt.Errorf("dx cluster: never saw login prompt: %w", err)
+	}
+	fmt.Fprintf(conn, "%s\r\n", username)
+	if verbose {
+		logInfo("DX cluster: sent callsign %s at login prompt", username)
+	}
+
+	// Registered accounts are then prompted for a password. Wait briefly; absence
+	// of the prompt means the call is unregistered → proceed (read-only feed).
+	_ = conn.SetReadDeadline(time.Now().Add(6 * time.Second))
+	perr := awaitPrompt(reader, "password:")
+	_ = conn.SetReadDeadline(time.Time{})
+	if perr != nil {
+		if verbose {
+			logInfo("DX cluster: no password prompt within 6s; proceeding (unregistered or no-password account)")
+		}
+		return nil
+	}
+	if password == "" {
+		logInfo("DX cluster: server prompted for a password but none configured — sending empty (read-only). Set -dxcluster-password / DXCLUSTER_PASSWORD for your registered account.")
+	} else if verbose {
+		logInfo("DX cluster: sent password at password prompt")
+	}
+	fmt.Fprintf(conn, "%s\r\n", password)
+	return nil
+}
+
+// awaitPrompt reads bytes until the (case-insensitive) accumulated tail ends
+// with prompt. Prompts here are not newline-terminated.
+func awaitPrompt(reader *bufio.Reader, prompt string) error {
+	prompt = strings.ToLower(prompt)
+	tail := make([]byte, 0, 80)
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return err
+		}
+		if b >= 'A' && b <= 'Z' {
+			b += 32
+		}
+		tail = append(tail, b)
+		if len(tail) > 80 {
+			tail = tail[len(tail)-80:]
+		}
+		if strings.HasSuffix(string(tail), prompt) {
+			return nil
+		}
+	}
 }
 
 func sendDXClusterCommand(conn net.Conn, command string, verbose bool) {
@@ -240,6 +292,8 @@ func handleDXClusterSpot(spot dxClusterSpot, resolver CallsignLocatorResolver) {
 		RL: dxLocator,
 		B:  band,
 		MD: "DXCLUSTER",
+		F:  spot.FrequencyKHz,
+		CM: spot.Comment,
 	}
 
 	if dxBaseline != nil {

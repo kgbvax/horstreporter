@@ -1,0 +1,33 @@
+# Reference systemd unit for horstprop. The easy path is to let
+# install_horstprop_service.sh generate this for you (it also creates
+# /etc/default/horstprop and the service user). This file is kept for manual
+# installs and as documentation; keep it in sync with the installer.
+#
+# Manual install:
+#   sudo cp horstprop-linux-x64 /opt/horstprop/ && sudo chown hk:hk /opt/horstprop/horstprop-linux-x64
+#   sudo cp cmd/horstprop/horstprop.service /etc/systemd/system/horstprop.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now horstprop
+[Unit]
+Description=horstprop HF link-quality scoring service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hk
+Group=hk
+WorkingDirectory=/opt/horstprop
+# Args (home grid, HorstReporter URL, area rings, …) live here:
+EnvironmentFile=-/etc/default/horstprop
+ExecStart=/opt/horstprop/horstprop-linux-x64 $ARGS
+Restart=on-failure
+RestartSec=5
+# hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/horstprop
+
+[Install]
+WantedBy=multi-user.target

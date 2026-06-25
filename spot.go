@@ -51,7 +51,7 @@ func matchCall(spotCall, target string) bool {
 }
 
 func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
-	if len(client.targets) == 0 {
+	if len(client.targets) == 0 && !client.areaActive {
 		return Spot{}, false
 	}
 
@@ -66,6 +66,17 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 			isSender = true
 		}
 		if matchCall(rc, t) || (isLocator(t) && rl != "" && strings.HasPrefix(rl, t)) {
+			isReceiver = true
+		}
+	}
+
+	// Area-of-interest match (O(1), additive): a sender/receiver locator within
+	// areaRings grid-squares of the area centre also counts. Backs region feeds.
+	if client.areaActive {
+		if x, y, ok := locatorSquareXY(sl); ok && absInt(x-client.areaX) <= client.areaRings && absInt(y-client.areaY) <= client.areaRings {
+			isSender = true
+		}
+		if x, y, ok := locatorSquareXY(rl); ok && absInt(x-client.areaX) <= client.areaRings && absInt(y-client.areaY) <= client.areaRings {
 			isReceiver = true
 		}
 	}
@@ -132,28 +143,57 @@ func isLocator(s string) bool {
 	return true
 }
 
-func getSurroundingSquares(locator string) []string {
+// locatorSquareXY maps a 4+ char Maidenhead locator to integer grid-square
+// coordinates: x in [0,180) for longitude squares (2° wide), y in [0,180) for
+// latitude squares (1° tall). ok=false for non-locators.
+func locatorSquareXY(locator string) (x, y int, ok bool) {
 	if !isLocator(locator) {
-		return []string{locator}
+		return 0, 0, false
 	}
 	loc := strings.ToUpper(locator[:4])
-	x := int(loc[0]-'A')*10 + int(loc[2]-'0')
-	y := int(loc[1]-'A')*10 + int(loc[3]-'0')
+	x = int(loc[0]-'A')*10 + int(loc[2]-'0')
+	y = int(loc[1]-'A')*10 + int(loc[3]-'0')
+	return x, y, true
+}
 
+func squareXYToLocator(x, y int) string {
+	return string([]byte{byte('A' + x/10), byte('A' + y/10), byte('0' + x%10), byte('0' + y%10)})
+}
+
+// getSquaresWithinRings returns the (2*rings+1)² block of 4-char Maidenhead
+// squares centred on locator (Chebyshev radius `rings` in grid-square space),
+// clipped to the valid grid. rings<=0 yields just the centre square. This backs
+// configurable "area of interest" feeds. A non-locator is returned unchanged.
+func getSquaresWithinRings(locator string, rings int) []string {
+	cx, cy, ok := locatorSquareXY(locator)
+	if !ok {
+		return []string{locator}
+	}
+	if rings < 0 {
+		rings = 0
+	}
 	var res []string
-	for dx := -1; dx <= 1; dx++ {
-		for dy := -1; dy <= 1; dy++ {
-			nx, ny := x+dx, y+dy
+	for dx := -rings; dx <= rings; dx++ {
+		for dy := -rings; dy <= rings; dy++ {
+			nx, ny := cx+dx, cy+dy
 			if nx >= 0 && nx < 180 && ny >= 0 && ny < 180 {
-				char0 := byte('A' + nx/10)
-				char1 := byte('A' + ny/10)
-				char2 := byte('0' + nx%10)
-				char3 := byte('0' + ny%10)
-				res = append(res, string([]byte{char0, char1, char2, char3}))
+				res = append(res, squareXYToLocator(nx, ny))
 			}
 		}
 	}
 	return res
+}
+
+// getSurroundingSquares returns the target square and its 8 neighbours.
+func getSurroundingSquares(locator string) []string {
+	return getSquaresWithinRings(locator, 1)
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 func locatorToLatLng(locator string) (float64, float64) {

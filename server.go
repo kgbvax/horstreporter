@@ -61,6 +61,11 @@ type squareDetailsResponse struct {
 	TopReports []squareDetailReport `json:"top_reports"`
 }
 
+// maxAreaRings caps the configurable area-of-interest radius (in grid-square
+// rings) for region feeds. ~30 rings ≈ ±30° latitude — continental scale —
+// while keeping the match O(1) per spot.
+const maxAreaRings = 30
+
 func streamHandler(w http.ResponseWriter, r *http.Request) {
 	target, surroundings := resolveTargetQuery(r)
 	minutesStr := r.URL.Query().Get("minutes")
@@ -89,6 +94,19 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	client := &Client{
 		targets: targets,
 		send:    make(chan Spot, 10000), // Buffer to handle initial history dump
+	}
+
+	// Optional configurable "area of interest": rings>0 with a locator target
+	// matches any sender/receiver within `rings` grid-squares of the target,
+	// for region feeds (e.g. horstprop). Read-only; default behaviour unchanged.
+	if rings := parseIntDefault(r.URL.Query().Get("rings"), 0); rings > 0 && isLocator(target) {
+		if rings > maxAreaRings {
+			rings = maxAreaRings
+		}
+		if cx, cy, ok := locatorSquareXY(target); ok {
+			client.areaActive = true
+			client.areaX, client.areaY, client.areaRings = cx, cy, rings
+		}
 	}
 
 	now := time.Now().Unix()

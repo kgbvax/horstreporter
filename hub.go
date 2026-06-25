@@ -8,6 +8,17 @@ import (
 type Client struct {
 	targets []string
 	send    chan Spot
+
+	// Optional "area of interest" filter (a configurable-size region around a
+	// home square), used by region feeds such as horstprop. When areaActive is
+	// true a spot also matches if its sender or receiver locator falls within
+	// areaRings grid-squares (Chebyshev distance) of (areaX, areaY). This is
+	// additive to targets and is inert (no behaviour change) when areaActive
+	// is false.
+	areaActive bool
+	areaX      int
+	areaY      int
+	areaRings  int
 }
 
 type Hub struct {

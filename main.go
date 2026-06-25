@@ -131,6 +131,7 @@ func main() {
 	dxBaselineFile := flag.String("dx-baseline-file", "dx_baseline.json", "Path to persistent DX baseline bucket storage")
 	dxPostgresDSN := flag.String("dx-postgres-dsn", defaultDxPostgresDSN, "Postgres DSN for DX baseline and raw spot storage")
 	dxPostgresFailFast := flag.Bool("dx-postgres-fail-fast", true, "Exit immediately when Postgres init/migration fails")
+	horstpropURL := flag.String("horstprop-url", "http://127.0.0.1:9970", "Reverse-proxy /horstprop/* to this local horstprop scoring service (empty disables the mount)")
 	dxClusterEnable := flag.Bool("dxcluster-enable", false, "Enable optional DX cluster ingest")
 	dxClusterEndpoint := flag.String("dxcluster-endpoint", "db0erf.de:7300", "DX cluster endpoint in host:port format")
 	dxClusterReconnectSeconds := flag.Int("dxcluster-reconnect-seconds", 15, "Delay before reconnecting to DX cluster after disconnect")
@@ -285,7 +286,16 @@ func main() {
 	appMux.HandleFunc("/api/dxpulse/v1/matrix", dxPulseMatrixHandler)
 	appMux.HandleFunc("/api/dxpulse/v1/summary", dxPulseSummaryHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
+	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)
 	appMux.HandleFunc("/api/opmode/status", opModeStatusHandler)
+
+	// Reverse-proxy /horstprop/* to the local horstprop scoring service so the
+	// Chase Queue reaches it same-origin (horstprop itself stays bound to
+	// localhost). Thin passthrough; no scoring logic lives here.
+	if proxy, ok := newHorstpropProxy(*horstpropURL); ok {
+		appMux.Handle("/horstprop/", proxy)
+		logInfo("horstprop proxy mounted at /horstprop/ -> %s", *horstpropURL)
+	}
 
 	// Mount DXLens (separate module) at /dxlens/. Reads HorstReporter's
 	// in-memory DX baseline via a small adapter; no extra network hops.

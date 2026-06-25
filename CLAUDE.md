@@ -8,11 +8,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Run backend
 go run . -dev -port 8080
 
-# Run with DX cluster ingest
-go run . -dev -port 8080 -dxcluster-enable -dxcluster-endpoint db0erf.de:7300
+# Run with DX cluster ingest. Most clusters (e.g. DB0ERF) require a registered
+# callsign + individually-assigned password — pass via env so secrets stay out of
+# the shell history / process args (flags -dxcluster-username/-password also work).
+DXCLUSTER_USERNAME=<yourcall> DXCLUSTER_PASSWORD=<password> \
+  go run . -dev -port 8080 -dxcluster-enable -dxcluster-endpoint db0erf.de:7300
+# Optional: QRZ_USERNAME/QRZ_PASSWORD enable callsign→locator enrichment (dx_locator).
 
 # Run local operator agent
 go run ./cmd/horstoperator-agent -listen 127.0.0.1:9955 -station-lat 52.52 -station-lng 13.40
+
+# Run HF link-quality scoring service (separate binary; consumes HorstReporter read-only)
+go run ./cmd/horstprop -listen 127.0.0.1:9970
 
 # Backend tests
 go test ./...
@@ -43,6 +50,8 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `opmode.go` — operator mode endpoint wiring (browser calls local agent directly; backend never proxies)
 - `dxlens_mount.go` — mounts the `dxlens` sibling module at `/dxlens/`
 - `cmd/horstoperator-agent/` — standalone local agent bridging browser opmode to PSTrotator UDP
+- `cmd/horstprop/` — standalone HF link-quality scoring service (separate binary; consumes HorstReporter read-only over HTTP; see `docs/horstprop.md`)
+- `internal/propcontract/` — score contract types shared between the backend and `cmd/horstprop`
 
 **Frontend core files (`static/`):**
 - `app.js` — app boot, SSE stream lifecycle, projection/style gating
@@ -60,7 +69,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 
 ## API endpoints
 
-- `GET /api/stream` — SSE; params: `target`, `minutes` (default 15, max 60), `surroundings`
+- `GET /api/stream` — SSE; params: `target`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `target`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed)
 - `GET /api/dx_conditions` — DX score/conditions per band; params: `target`, `minutes`, `surroundings`, `cw_min_db`
 - `GET /api/stats` — active connections, history size/minutes
 - `GET /api/capture_snapshot` — deterministic filtered spot snapshot for server-driven frame capture
@@ -69,5 +78,5 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 ## What to avoid
 
 - Don't modify anything under `static/vendor/`
-- Don't introduce microservice splits; this is intentionally single-service/single-binary
+- Don't split the *core* backend into microservices; it is intentionally single-service/single-binary. (Separate operator-side binaries like `cmd/horstoperator-agent` and `cmd/horstprop` that consume the backend read-only over HTTP are the sanctioned pattern — they don't grow the core binary.)
 - Don't assume Gin/Echo/React/Vite conventions
