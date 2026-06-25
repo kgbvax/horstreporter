@@ -1,8 +1,8 @@
 # DX Cluster module — local agent API contract (v1)
 
-Status: **partly shipped**. The rig **tune** path (§3) and composite **Tune + Turn** (§4) are
-implemented against a WaveLogGate backend; Wavelog enrich (§1–2) and VFO-B preview/split remain
-design. Defines the `horstoperator-agent` (`127.0.0.1:9955`) surface the browser calls directly.
+Status: **partly shipped**. The rig **tune** path (§3), composite **Tune + Turn** (§4), and Wavelog
+**enrich** (§1) are implemented; the lazy QSO note (§2), WAS, and VFO-B preview/split remain design.
+Defines the `horstoperator-agent` (`127.0.0.1:9955`) surface the browser calls directly.
 
 ## Architecture recap
 
@@ -37,19 +37,25 @@ UI hides what isn't present.
 "capabilities": {
   "control": true, "mode_control": true, "modes": ["forward","backward","bidirectional"],
   "rig":    { "tune": true, "preview": false, "split": false },
-  "lookup": { "wavelog": true, "was": true, "profile_age_sec": 142 }
+  "lookup": { "wavelog": true, "was": false }
 }
 ```
 
-`rig` appears only when a rig backend is configured (`-rig-transport`). With the
-**WaveLogGate** backend (shipped first), `preview`/`split` are `false` — see §3.
+`rig` appears only when a rig backend is configured (`-rig-transport`); with the **WaveLogGate**
+backend (shipped first), `preview`/`split` are `false` (see §3). `lookup` appears only when
+`WAVELOG_API_KEY` is set; `was` is `false` (no Wavelog WAS endpoint — see §1).
 
 ---
 
-## 1. `POST /v1/operate/enrich` — needed + worked-before (read path)
+## 1. `POST /v1/operate/enrich` — needed + worked-before (read path) — **shipped**
 
-Browser batches the visible/candidate spots; agent echoes a merge key and answers from cache.
-Browser sends only `call·band·mode`; the agent resolves DXCC itself (it owns the worked matrix).
+Browser batches the visible/candidate spots; the agent answers per spot and echoes the merge `id`.
+Implemented as a **thin caching proxy over Wavelog `POST /api/private_lookup`** (`wavelog.go`):
+Wavelog computes the worked/confirmed matrix server-side, so the agent does **not** mirror the log —
+it calls `private_lookup` once per unique `call|band|mode`, caches the result (5-min TTL), and maps
+it to the `needed` vocabulary. Config via env (loaded from `.env` if present, never logged):
+`WAVELOG_API_KEY` (read key; enables the feature) and `WAVELOG_URL`
+(default `https://log.dclnext.darc.de/index.php`).
 
 ### Request
 
@@ -63,79 +69,63 @@ Browser sends only `call·band·mode`; the agent resolves DXCC itself (it owns t
 }
 ```
 
+`id` is opaque to the agent (echoed back). The browser uses `call|band|mode`.
+
 ### Response
 
 ```json
 {
   "ok": true,
   "degraded": false,
-  "profile_age_sec": 142,
   "results": [
     {
       "id": "3Y0J|17m|SSB",
-      "dxcc": { "entity": "Bouvet I.", "id": 24, "cont": "AF", "cqz": 38 },
+      "dxcc": { "entity": "BOUVET", "id": "24", "cont": "AF", "flag": "🇧🇻" },
       "needed": ["dxcc"],
-      "needed_was": null,
-      "worked_before": { "worked": false }
+      "worked_before": { "worked": false, "worked_band": false, "worked_band_mode": false }
     },
     {
       "id": "VK6LC|20m|CW",
-      "dxcc": { "entity": "Australia", "id": 150, "cont": "OC", "cqz": 29 },
+      "dxcc": { "entity": "AUSTRALIA", "id": "150", "cont": "OC" },
       "needed": ["band"],
-      "needed_was": null,
-      "worked_before": {
-        "worked": true, "count": 3,
-        "last": { "date": "2021-03-14", "band": "15m", "mode": "SSB" },
-        "note_ref": "qso:88431"
-      }
+      "worked_before": { "worked": true, "worked_band": false, "worked_band_mode": false }
     }
   ]
 }
 ```
 
-- `degraded: true` when Wavelog is unreachable → `needed:null`; UI shows spots without chips rather
-  than failing.
-- `profile_age_sec` — staleness of the worked matrix (see caching).
+- `degraded: true` when one or more upstream lookups failed (network / 5xx). Those spots come back
+  bare (`needed: []`, no `dxcc`) so the UI shows them un-chipped rather than failing.
+- `dxcc` block comes straight from `private_lookup` (entity, DXCC id, continent, flag emoji).
 
-### `needed` vocabulary
+### `needed` vocabulary (confirmation-based)
 
-Stable tokens, independent of how Wavelog phrases things internally:
+`private_lookup` exposes entity **confirmed** status (`dxcc_confirmed[_on_band[_mode]]`) but **not**
+entity *worked* status — so `needed` is award-oriented: a slot is "needed" until it is *confirmed*.
 
-| token                        | meaning                                       | UI chip          |
-| ---------------------------- | --------------------------------------------- | ---------------- |
-| `dxcc`                       | all-time-new entity (ATNO)                    | `★ ATNO` (gold)  |
-| `band`                       | entity worked before, new band-slot           | `NEW BAND`       |
-| `mode`                       | entity worked before, new mode-slot           | `NEW MODE`       |
-| `needed_was` `{state,need[]}`| US state needed for WAS                        | `WAS: AZ`        |
+| token  | derivation                                       | meaning                       | UI chip            |
+| ------ | ------------------------------------------------ | ----------------------------- | ------------------ |
+| `dxcc` | `!dxcc_confirmed`                                | entity not yet confirmed      | `ATNO` (gold)      |
+| `band` | confirmed, but `!dxcc_confirmed_on_band`         | new band-slot                 | `New band`         |
+| `mode` | band-confirmed, but `!dxcc_confirmed_on_band_mode` | new mode-slot               | `New mode`         |
 
-**Collapse rule (browser):** if `dxcc` is present, show only `★ ATNO` — `band`/`mode` are implied.
+**Collapse rule (agent-side):** if the entity isn't confirmed, only `dxcc` is returned — `band`/`mode`
+are implied. `worked_before` carries the per-callsign `call_worked[_band[_mode]]` booleans; the UI
+shows a muted `worked` marker when `worked_band_mode` and nothing is needed (likely a dupe). No
+chip/emoji uses decorative symbols per the project's UI rules — flags are data, not decoration.
 
-### Caching / refresh (agent-internal — the contract's backbone)
+### Caching
 
-- Worked matrix (DXCC×band×mode) + WAS + worked-callsign index held in memory; refreshed every
-  ~5 min and via `POST /v1/operate/profile/refresh`. The future Log module invalidates on QSO write.
-- Per-`call·band·mode` results in an LRU + TTL cache with in-flight dedup. Spots repeat heavily →
-  high hit rate; a batch of *M* unique calls costs at most *M* upstream lookups, then cached.
-- Agent throttles upstream (small concurrency, coalesce dupes) to respect cloud Wavelog rate limits.
-- Cache cleared on profile refresh.
+- Per-`call|band|mode` 5-min TTL cache on the agent; a batch dedupes by key, so *M* unique calls cost
+  at most *M* upstream lookups. Concurrency is capped (4) to respect Wavelog rate limits.
+- Batch capped at 60 spots.
 
 ---
 
-## 2. `GET /v1/qso?ref=qso:88431` — lazy prior-contact note
+## 2. `GET /v1/qso?ref=…` — lazy prior-contact note — **deferred**
 
-Fetched only when the operator expands the `↺` marker on a card.
-
-```json
-{
-  "ok": true, "call": "VK6LC",
-  "qsos": [
-    { "date":"2021-03-14","band":"15m","mode":"SSB","rst_s":"599","rst_r":"599",
-      "name":"Wayne","note":"Ran 5W QRP — patient op. QSL via bureau." }
-  ]
-}
-```
-
-Browser shows same-band first, else most recent.
+Not yet implemented. `private_lookup` gives worked/confirmed booleans but no QSO detail (date / RST /
+note); the note popover needs `get_contacts_adif` filtering and arrives with a later slice.
 
 ---
 
@@ -196,10 +186,16 @@ A leg with no input is skipped (`{"ok":false,"skipped":"no freq_hz"}` /
 
 ## Open details to confirm
 
-- **FT8/digital tuning** — tune the band's standard dial freq (e.g. 18.100) rather than the spot's
-  exact Hz. Assumed yes, agent-side.
-- **Split** — DXpeditions work split ("up 5"). v1: stay simple (VFO A on the spot), no auto-split.
-- **WAS scope** — US-state-only; `needed_was` never fires for non-US spots.
+- **FT8/digital tuning** — currently tunes the spot's exact freq with mode inferred client-side
+  (`guessMode`: FT8 watering holes → data, CW segment → cw). Snapping to the band's standard dial
+  freq is a possible refinement.
+- **Split** — DXpeditions work split ("up 5"). v1: VFO A on the spot, no auto-split (needs the
+  rigctld/FLRig pivot anyway).
+- **Worked vs confirmed** — `needed` is confirmation-based because `private_lookup` exposes only
+  entity *confirmed* status (§1). A worked-based "never made the contact" variant would need a
+  different data source.
+- **WAS** — no Wavelog endpoint (`private_lookup.state` is the *spot's* state, not your worked-states
+  set); deferred.
 
 ## Interaction summary (how the browser uses this)
 
@@ -207,7 +203,10 @@ A leg with no input is skipped (`{"ok":false,"skipped":"no freq_hz"}` /
   "Tune + Turn" → `POST /v1/operate` (tune + rotate). Both gated on agent present + `permit_control`
   + `capabilities.rig.tune`; `static/dxcluster.js` hides the actions otherwise. Mode inferred from the
   spot frequency client-side (`guessMode`), refined agent-side and by WaveLogGate's mode-on-QSY.
+- **Shipped (Wavelog enrich slice):** visible spots batched into `POST /v1/operate/enrich` →
+  need-chips (`ATNO`/`New band`/`New mode`) + muted `worked` marker, merged by `id`. Gated on agent +
+  `capabilities.lookup.wavelog`; best-effort (failures leave cards un-chipped).
 - **Deferred (rigctld/FLRig pivot):** hover → `POST /v1/rig/preview` (VFO-B pre-hear) + great-circle
   path on the map; `GET /v1/rig/state` reconciliation; split.
-- **Deferred (Wavelog enrich slice):** spot enrichment via `/v1/operate/enrich`; `↺` marker → `GET /v1/qso`.
+- **Deferred:** lazy QSO note (`GET /v1/qso`); WAS (no Wavelog endpoint).
 - Snooze → client-side localStorage in v1.

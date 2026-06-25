@@ -5,7 +5,7 @@
 // live score. Self-contained — injects its own styles + toggle button; no edits
 // to app.js required. See docs/dxcluster-*.md and docs/horstprop.md.
 
-import { canControlRig, rigTune, operate } from './opmode.js';
+import { canControlRig, rigTune, operate, canLookup, enrichSpots } from './opmode.js';
 
 const DXSPOTS_URL = '/api/dxspots?minutes=30';
 // Same-origin by default: HorstReporter reverse-proxies /horstprop/* to the
@@ -80,6 +80,13 @@ function guessMode(freqKhz) {
   return '';
 }
 
+// enrichSpot maps a spot to the {id, call, band, mode} the agent's enrich
+// endpoint expects. The id is echoed back so results merge by identity.
+const enrichSpot = (s) => {
+  const mode = guessMode(s.freq_khz);
+  return { id: `${s.dx_call}|${s.band}|${mode}`, call: s.dx_call, band: s.band, mode };
+};
+
 const fmtFreq = (khz) => (khz >= 1000 ? (khz / 1000).toFixed(3) : String(khz));
 const fmtAge = (s) => s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
 const meterPct = (v) => Math.max(6, Math.min(100, v || 0));
@@ -130,6 +137,14 @@ function injectStyles() {
   .cq-r2 .sep { opacity:.5; margin:0 6px; }
   .cq-comment { font:12px/1.35 sans-serif; color: var(--status-color); margin-top:4px;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cq-chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:5px; }
+  .cq-chip { font:800 9.5px/1 sans-serif; letter-spacing:.04em; text-transform:uppercase;
+    padding:3px 6px; border-radius:5px; }
+  .cq-chip-atno { color:#1c1400; background: var(--cq-atno); }
+  .cq-chip-new  { color: var(--text-color); background:transparent;
+    border:1px solid color-mix(in srgb, var(--text-color) 45%, transparent); }
+  .cq-chip-dupe { color: var(--status-color);
+    background: color-mix(in srgb, var(--status-color) 14%, transparent); font-weight:700; }
   .cq-actions { display:flex; gap:6px; margin-top:7px; }
   .cq-act { flex:1 1 auto; font:600 11px sans-serif; border:1px solid var(--border-color);
     background: color-mix(in srgb, var(--bg-color) 90%, var(--text-color) 10%); color: var(--text-color);
@@ -256,6 +271,23 @@ async function runCardAction(btn, label, fn, okMsg) {
   }
 }
 
+// chipsHTML renders Wavelog "needed" status as chips. needed is award-oriented
+// (confirmation-based): dxcc = new entity, band/mode = new slot. A worked
+// band+mode shows a muted "worked" marker (likely a dupe), but only when nothing
+// is needed — a needed chip is the more useful signal.
+function chipsHTML(enrich) {
+  if (!enrich) return '';
+  const needed = Array.isArray(enrich.needed) ? enrich.needed : [];
+  const chips = [];
+  if (needed.includes('dxcc')) chips.push('<span class="cq-chip cq-chip-atno">ATNO</span>');
+  if (needed.includes('band')) chips.push('<span class="cq-chip cq-chip-new">New band</span>');
+  if (needed.includes('mode')) chips.push('<span class="cq-chip cq-chip-new">New mode</span>');
+  if (!chips.length && enrich.worked_before?.worked_band_mode) {
+    chips.push('<span class="cq-chip cq-chip-dupe">worked</span>');
+  }
+  return chips.length ? `<div class="cq-chips">${chips.join('')}</div>` : '';
+}
+
 function renderCard(s) {
   const el = document.createElement('div');
   el.className = 'cq-card';
@@ -289,6 +321,7 @@ function renderCard(s) {
       ${dist ? `<span class="sep">·</span>${dist}` : ''}${az ? ` · ${az}` : ''}
       <span class="sep">·</span>${fmtAge(s.age_seconds)}
     </div>
+    ${chipsHTML(s._enrich)}
     ${comment ? `<div class="cq-comment" title="${comment}">${comment}</div>` : ''}`;
   if (sc && sc.reason) el.title = sc.reason;
 
@@ -365,7 +398,19 @@ async function refresh() {
   spots = (spots || []).slice(0, TOP_N);
 
   hpReachable = true;
+  // Score (horstprop, per-spot) and enrich (Wavelog via agent, one batch) run
+  // concurrently. Enrichment is best-effort: any failure leaves cards unchipped.
+  const enrichP = canLookup()
+    ? enrichSpots(spots.map(enrichSpot)).catch(() => null)
+    : Promise.resolve(null);
   await Promise.all(spots.map(async (s) => { s._score = await scoreSpot(s); }));
+  const enrich = await enrichP;
+  if (enrich && Array.isArray(enrich.results)) {
+    const byId = new Map(enrich.results.map((r) => [r.id, r]));
+    spots.forEach((s) => { s._enrich = byId.get(enrichSpot(s).id) || null; });
+  } else {
+    spots.forEach((s) => { s._enrich = null; });
+  }
 
   // Status line only surfaces a real problem (horstprop down), not spots that
   // merely lack a frequency to score.

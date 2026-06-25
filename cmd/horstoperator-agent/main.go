@@ -14,12 +14,55 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// defaultWavelogURL is the dclnext (DARC) instance; override via WAVELOG_URL.
+const defaultWavelogURL = "https://log.dclnext.darc.de/index.php"
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// loadDotEnv reads KEY=VALUE lines from a .env file (if present) and sets them
+// in the process environment unless already set. Comments (#) and blank lines
+// are ignored; optional surrounding single/double quotes are stripped. Keeps
+// secrets like WAVELOG_API_KEY out of the shell history / process args.
+func loadDotEnv(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		eq := strings.IndexByte(line, '=')
+		if eq <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eq])
+		val := strings.TrimSpace(line[eq+1:])
+		if len(val) >= 2 && (val[0] == '"' || val[0] == '\'') && val[len(val)-1] == val[0] {
+			val = val[1 : len(val)-1]
+		}
+		if _, exists := os.LookupEnv(key); !exists {
+			_ = os.Setenv(key, val)
+		}
+	}
+}
 
 const (
 	pstQueryAzCommand   = "<PST>AZ?</PST>"
@@ -55,6 +98,8 @@ type serviceConfig struct {
 	Station          stationConfig
 	RigTransport     string // none | waveloggate
 	RigWaveLogGate   string // WaveLogGate callback base URL
+	WavelogURL       string // Wavelog base URL (e.g. https://log.dclnext.darc.de/index.php)
+	WavelogAPIKey    string // Wavelog read API key (from env; never logged)
 }
 
 type rotatorState struct {
@@ -404,9 +449,10 @@ func decodeJSON[T any](r *http.Request, out *T) error {
 }
 
 type server struct {
-	cfg    serviceConfig
-	client *pstUDPClient
-	rig    rigController // nil when -rig-transport=none
+	cfg     serviceConfig
+	client  *pstUDPClient
+	rig     rigController  // nil when -rig-transport=none
+	wavelog *wavelogClient // nil when WAVELOG_API_KEY is unset
 
 	pollMu    sync.RWMutex
 	pollState polledAntennaState
@@ -450,6 +496,9 @@ func newServer(cfg serviceConfig) *server {
 		s.rig = newWaveLogGateBackend(cfg.RigWaveLogGate)
 	default:
 		log.Printf("[WARN] unknown -rig-transport %q; rig control disabled", cfg.RigTransport)
+	}
+	if strings.TrimSpace(cfg.WavelogAPIKey) != "" {
+		s.wavelog = newWavelogClient(cfg.WavelogURL, cfg.WavelogAPIKey)
 	}
 	s.startAntennaPoller()
 	return s
@@ -557,6 +606,7 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/antenna/mode", s.handleMode)
 	mux.HandleFunc("/v1/rig/tune", s.handleRigTune)
 	mux.HandleFunc("/v1/operate", s.handleOperate)
+	mux.HandleFunc("/v1/operate/enrich", s.handleEnrich)
 	mux.Handle("/", s.newBackendProxyHandler())
 }
 
@@ -611,6 +661,9 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if s.rig != nil {
 		c := s.rig.Capabilities()
 		capabilities["rig"] = map[string]any{"tune": c.Tune, "preview": c.Preview, "split": c.Split}
+	}
+	if s.wavelog != nil {
+		capabilities["lookup"] = map[string]any{"wavelog": true, "was": false}
 	}
 
 	resp := map[string]any{
@@ -792,6 +845,10 @@ func parseRequiredFloat(name string, raw string) (float64, error) {
 }
 
 func main() {
+	// Load .env (if present) before reading env so WAVELOG_API_KEY etc. resolve
+	// regardless of how the agent is launched (go run, systemd, run script).
+	loadDotEnv(".env")
+
 	listenAddr := flag.String("listen", "127.0.0.1:9955", "HTTP listen address for local operator agent")
 	backendURL := flag.String("backend-url", "", "Optional HorstReporter backend base URL for reverse proxy (e.g. https://horstreporter.kgbvax.net)")
 	pstHost := flag.String("pst-host", "127.0.0.1", "PSTrotator host")
@@ -853,6 +910,8 @@ func main() {
 		},
 		RigTransport:   strings.TrimSpace(*rigTransport),
 		RigWaveLogGate: strings.TrimSpace(*rigWaveLogGate),
+		WavelogURL:     firstNonEmpty(strings.TrimSpace(os.Getenv("WAVELOG_URL")), defaultWavelogURL),
+		WavelogAPIKey:  strings.TrimSpace(os.Getenv("WAVELOG_API_KEY")),
 	}
 
 	if cfg.ListenAddr == "" {
@@ -886,6 +945,11 @@ func main() {
 		log.Printf("[INFO] Rig control: WaveLogGate (tune VFO A) via %s", cfg.RigWaveLogGate)
 	default:
 		log.Printf("[INFO] Rig control: disabled (-rig-transport=%s)", cfg.RigTransport)
+	}
+	if cfg.WavelogAPIKey != "" {
+		log.Printf("[INFO] Wavelog enrichment: enabled (%s)", cfg.WavelogURL)
+	} else {
+		log.Printf("[INFO] Wavelog enrichment: disabled (set WAVELOG_API_KEY to enable)")
 	}
 	log.Printf("[INFO] Station: %s (lat=%.6f lng=%.6f locator=%s)", cfg.Station.Name, cfg.Station.Lat, cfg.Station.Lng, strings.ToUpper(cfg.Station.Locator))
 	if cfg.UDPLogTraffic {

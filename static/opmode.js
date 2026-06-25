@@ -19,7 +19,8 @@ const opModeState = {
     commandInFlight: false,
     pendingTargetBearingDeg: null,
     pendingTargetLabel: '',
-    rigCapabilities: null
+    rigCapabilities: null,
+    lookupCapabilities: null
 };
 
 const BASE_DOCUMENT_TITLE = typeof document !== 'undefined'
@@ -354,6 +355,11 @@ async function refreshOpModeStatus() {
         }
         : null;
 
+    const lookupCaps = status?.capabilities?.lookup;
+    opModeState.lookupCapabilities = (lookupCaps && typeof lookupCaps === 'object')
+        ? { wavelog: lookupCaps.wavelog === true, was: lookupCaps.was === true }
+        : null;
+
     syncControlWidgets();
 
     setStatus('online (direct)');
@@ -509,6 +515,32 @@ export function canControlRig() {
 
 export function getRigCapabilities() {
     return opModeState.rigCapabilities;
+}
+
+// canLookup reports whether the agent has a configured Wavelog backend. Lookup
+// is a read (no hardware), so it is gated only on the agent + capability, not
+// on the control-permission checkbox.
+export function canLookup() {
+    return opModeState.enabled === true
+        && opModeState.transport === 'direct'
+        && opModeState.lookupCapabilities?.wavelog === true;
+}
+
+// enrichSpots batches [{id, call, band, mode}] to the agent, which answers
+// needed[] + worked_before per spot from Wavelog (private_lookup). Returns the
+// raw envelope { ok, degraded, results } or null when lookup is unavailable.
+export async function enrichSpots(spots) {
+    if (!canLookup()) return null;
+    const list = (spots || [])
+        .filter((s) => s && s.call)
+        .map((s) => ({ id: String(s.id), call: s.call, band: s.band || '', mode: s.mode || '' }));
+    if (!list.length) return null;
+
+    return fetchJson(opModeEndpoint('operate/enrich'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permit_lookup: true, spots: list })
+    });
 }
 
 // rigTune QSYs the rig to freqHz (Hz) with the given mode. Mode mapping
