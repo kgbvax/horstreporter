@@ -149,15 +149,19 @@ function mount() {
   panelEl.querySelector('#cq-close').addEventListener('click', close);
 }
 
+let hpReachable = true; // false only on a network/5xx failure (not per-spot 4xx)
 async function scoreSpot(s) {
   const freqHz = Math.round((s.freq_khz || 0) * 1000);
+  if (freqHz <= 0) return null; // no frequency → can't score; don't 400-spam horstprop
   const u = `${HORSTPROP_URL}/v1/score?dx_call=${encodeURIComponent(s.dx_call)}&freq_hz=${freqHz}&grid=${encodeURIComponent(s.dx_locator || '')}`;
   try {
     const r = await fetch(u);
-    if (!r.ok) throw new Error(r.status);
+    if (r.status >= 500) { hpReachable = false; return null; } // proxy/horstprop down
+    if (!r.ok) return null; // 4xx: horstprop is up, this spot just couldn't be scored
     return await r.json();
   } catch (e) {
-    return null; // horstprop unreachable → render without a score
+    hpReachable = false; // network-level failure
+    return null;
   }
 }
 
@@ -211,7 +215,6 @@ function render(spots) {
   countEl.textContent = `${spots.length} spots`;
 }
 
-let scoredOK = 0, scoredFail = 0;
 async function refresh() {
   let spots;
   try {
@@ -228,14 +231,12 @@ async function refresh() {
   }
   spots = (spots || []).slice(0, TOP_N);
 
-  scoredOK = 0; scoredFail = 0;
-  await Promise.all(spots.map(async (s) => {
-    s._score = await scoreSpot(s);
-    if (s._score) scoredOK++; else scoredFail++;
-  }));
+  hpReachable = true;
+  await Promise.all(spots.map(async (s) => { s._score = await scoreSpot(s); }));
 
-  // Status line only surfaces problems; the happy path stays quiet.
-  statusEl.textContent = (scoredOK === 0 && spots.length > 0) ? 'horstprop unreachable — showing unscored' : '';
+  // Status line only surfaces a real problem (horstprop down), not spots that
+  // merely lack a frequency to score.
+  statusEl.textContent = hpReachable ? '' : 'horstprop unreachable — showing unscored';
   render(spots);
 }
 

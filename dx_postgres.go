@@ -21,10 +21,10 @@ const (
 type dxPostgresStore struct {
 	pool *pgxpool.Pool
 
-	mu            sync.Mutex
-	pendingGlobal map[baselineGlobalKey]baselineDelta
-	pendingTarget map[baselineTargetDeltaKey]baselineDelta
-	pendingRegion map[dxPulseRegionBaselineDailyKey]int64
+	mu              sync.Mutex
+	pendingGlobal   map[baselineGlobalKey]baselineDelta
+	pendingTarget   map[baselineTargetDeltaKey]baselineDelta
+	pendingRegion   map[dxPulseRegionBaselineDailyKey]int64
 	pendingCount    int
 	pendingRawSpots []rawSpotRow
 
@@ -1234,7 +1234,8 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 		SELECT
 			spot_time, sender_callsign, sender_locator,
 			receiver_callsign, receiver_locator,
-			band, mode, signal_report_db
+			band, mode, signal_report_db,
+			COALESCE(frequency_khz, 0), COALESCE(comment, '')
 		FROM dx_raw_spots
 		WHERE spot_time BETWEEN $1 AND $2
 		  AND ($3::bool OR LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster')
@@ -1248,7 +1249,9 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 	out := make([]MQTTMessage, 0, 8192)
 	for rows.Next() {
 		var m MQTTMessage
-		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP); err != nil {
+		// F (frequency_khz) and CM (comment) restore the fields /api/dxspots needs;
+		// without them, spots restored after a restart score as freq 0 (unscorable).
+		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP, &m.F, &m.CM); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
