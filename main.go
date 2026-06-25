@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"flag"
 	"io/fs"
@@ -23,30 +24,41 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// loadCtyResolver loads AD1C cty.dat for DX-cluster country/flag labelling, or
-// returns nil (labelling disabled) when no path is set or the file can't be read.
+// loadCtyResolver returns the cty.dat resolver for DX-cluster country/flag
+// labelling. It uses the embedded cty.dat by default; a non-empty path overrides
+// it with a file (e.g. a fresher cty.dat) when readable.
 func loadCtyResolver(path string) *cty.Resolver {
-	if path == "" {
-		logInfo("DX cluster country/flag labelling disabled (no -cty-path / CTY_DAT_PATH)")
-		return nil
+	if path != "" {
+		if f, err := os.Open(path); err == nil {
+			defer f.Close()
+			if r, err := cty.Parse(f); err == nil {
+				logInfo("DX cluster cty.dat loaded from %s", path)
+				return r
+			} else {
+				logInfo("DX cluster cty.dat parse failed (%s): %v — falling back to embedded", path, err)
+			}
+		} else {
+			logInfo("DX cluster cty.dat not readable (%s): %v — falling back to embedded", path, err)
+		}
 	}
-	f, err := os.Open(path)
+	r, err := cty.Parse(bytes.NewReader(embeddedCtyData))
 	if err != nil {
-		logInfo("DX cluster cty.dat not loaded (%s): %v", path, err)
+		logInfo("DX cluster embedded cty.dat parse failed: %v (labelling disabled)", err)
 		return nil
 	}
-	defer f.Close()
-	r, err := cty.Parse(f)
-	if err != nil {
-		logInfo("DX cluster cty.dat parse failed (%s): %v", path, err)
-		return nil
-	}
-	logInfo("DX cluster cty.dat loaded from %s", path)
+	logInfo("DX cluster cty.dat: using embedded (%d bytes)", len(embeddedCtyData))
 	return r
 }
 
 //go:embed static
 var staticFiles embed.FS
+
+// cty.dat is embedded so DX-cluster country/flag labelling works out of the box
+// (no file to deploy). Refreshed whenever the binary is rebuilt; -cty-path can
+// override it with a newer file at runtime.
+//
+//go:embed cty.dat
+var embeddedCtyData []byte
 
 var compressStream bool
 var dxBaseline *DxBaselineEngine

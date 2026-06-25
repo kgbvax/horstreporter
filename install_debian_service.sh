@@ -44,19 +44,8 @@ mv -f "$INSTALL_DIR/$BINARY_NAME.new" "$INSTALL_DIR/$BINARY_NAME"
 chown -R "$APP_USER:$APP_USER" "$INSTALL_DIR"
 chown -R "$APP_USER:$APP_USER" "/var/log/$APP_NAME"
 
-# 3b. cty.dat for DX-cluster country/flag labelling. Fetched here, refreshed
-# weekly by a systemd timer (see below). horstreporter loads it via CTY_DAT_PATH.
-CTY_PATH="$INSTALL_DIR/cty.dat"
-CTY_URL="${CTY_URL:-https://www.country-files.com/bigcty/cty.dat}"
-echo "Fetching cty.dat from $CTY_URL..."
-if curl -fsSL --max-time 60 "$CTY_URL" -o "$INSTALL_DIR/cty.dat.tmp" && grep -q ':.*:.*:.*:' "$INSTALL_DIR/cty.dat.tmp"; then
-    mv "$INSTALL_DIR/cty.dat.tmp" "$CTY_PATH"
-    chown "$APP_USER:$APP_USER" "$CTY_PATH"
-    echo "cty.dat installed at $CTY_PATH ($(wc -c < "$CTY_PATH") bytes)"
-else
-    rm -f "$INSTALL_DIR/cty.dat.tmp"
-    echo "WARNING: cty.dat download failed — country/flag labelling stays off until $CTY_PATH exists"
-fi
+# Note: cty.dat (DX-cluster country/flag labelling) is embedded in the binary —
+# no file to deploy. Override with -cty-path only if you want a fresher cty.dat.
 
 # 4. Create an environment configuration file for easy arg modifications
 DEFAULT_CONFIG="/etc/default/$APP_NAME"
@@ -74,14 +63,7 @@ if [ ! -f "$DEFAULT_CONFIG" ]; then
 ARGS="-port 80 -port 443 -domain example.com -pprof -log-file /var/log/$APP_NAME/$APP_NAME.log -log-max-age 14 -log-max-size 50"
 # To use PostgreSQL/PostGIS for baseline+raw spots:
 # ARGS="-port 80 -domain example.com -dx-postgres-dsn postgres://dxuser:YOUR_PASSWORD@localhost:5432/dxdata?sslmode=disable"
-# Path to cty.dat for DX-cluster country/flag labelling:
-CTY_DAT_PATH="$CTY_PATH"
 EOF
-fi
-
-# Ensure CTY_DAT_PATH is present even for pre-existing config files.
-if ! grep -q '^CTY_DAT_PATH=' "$DEFAULT_CONFIG"; then
-    echo "CTY_DAT_PATH=\"$CTY_PATH\"" >> "$DEFAULT_CONFIG"
 fi
 
 # 5. Create Systemd Service
@@ -110,62 +92,12 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 WantedBy=multi-user.target
 EOF
 
-# 5b. Weekly cty.dat refresh: an updater script + a systemd timer. cty.dat is
-# read at startup, so the updater restarts the service after a successful fetch
-# (brief; SSE clients auto-reconnect). It keeps the old file if the fetch fails.
-UPDATER="/usr/local/bin/$APP_NAME-update-cty"
-echo "Installing cty.dat refresh updater + timer..."
-cat <<EOF > "$UPDATER"
-#!/bin/bash
-set -euo pipefail
-DEST="$CTY_PATH"
-URL="\${CTY_URL:-$CTY_URL}"
-TMP="\$(mktemp)"
-if curl -fsSL --max-time 60 "\$URL" -o "\$TMP" && grep -q ':.*:.*:.*:' "\$TMP"; then
-    mv "\$TMP" "\$DEST"
-    chown $APP_USER:$APP_USER "\$DEST" || true
-    systemctl try-restart $APP_NAME
-    echo "cty.dat refreshed; $APP_NAME restarted"
-else
-    rm -f "\$TMP"
-    echo "cty.dat refresh failed; keeping existing file" >&2
-    exit 1
-fi
-EOF
-chmod +x "$UPDATER"
-
-cat <<EOF > "/etc/systemd/system/$APP_NAME-cty.service"
-[Unit]
-Description=Refresh cty.dat for $APP_NAME
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=$UPDATER
-EOF
-
-cat <<EOF > "/etc/systemd/system/$APP_NAME-cty.timer"
-[Unit]
-Description=Weekly cty.dat refresh for $APP_NAME
-
-[Timer]
-OnCalendar=weekly
-Persistent=true
-RandomizedDelaySec=1h
-
-[Install]
-WantedBy=timers.target
-EOF
-
-# 6. Enable and start the service + the cty refresh timer
+# 6. Enable and start the service
 echo "Reloading systemd, enabling and starting $APP_NAME..."
 systemctl daemon-reload
 systemctl enable $APP_NAME
 systemctl restart $APP_NAME
-systemctl enable --now "$APP_NAME-cty.timer"
 
 echo "Installation complete!"
 echo "Check the service status using: systemctl status $APP_NAME"
 echo "You can configure ports and domains in: $DEFAULT_CONFIG"
-echo "cty.dat: $CTY_PATH (refreshed weekly; manual: $UPDATER)"
