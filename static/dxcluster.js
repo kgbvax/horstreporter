@@ -404,7 +404,7 @@ function renderCard(s) {
       pinned = { key, data: highlightData(s) };
       el.parentElement?.querySelectorAll('.cq-pinned').forEach((n) => n.classList.remove('cq-pinned'));
       el.classList.add('cq-pinned');
-      setChaseQueueHighlight({ ...pinned.data, pinned: true });
+      setChaseQueueHighlight({ ...pinned.data, pinned: true, select: true });
     });
     if (pinned?.key === key) el.classList.add('cq-pinned');
   }

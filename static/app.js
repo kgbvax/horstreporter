@@ -675,6 +675,18 @@ export function setChaseQueueHighlight(spot) {
 
     setAzimuthDxSpotHighlight(payload);
     setMercatorDxHighlight(payload);
+
+    // On an explicit selection (click), with Auto-zoom on, pull the Mercator view
+    // in so the highlighted DX is visible. Centre on the DX with a ~2000km region
+    // (matching the periodic auto-zoom's minimum). Mark it as an interaction so the
+    // periodic auto-zoom doesn't immediately yank the view back to all spots.
+    if (spot.select && currentProjection() === 'mercator' &&
+        document.getElementById('auto-zoom')?.checked) {
+        const bounds = L.latLng(spotLat, spotLng).toBounds(2000000);
+        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 6 });
+        state.lastMercatorInteractionAt = Date.now();
+    }
+
     if (isAzimuthEnabled()) scheduleRender();
 }
 
