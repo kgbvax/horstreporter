@@ -52,8 +52,9 @@ function injectStyles() {
   .cq-head { padding: 10px 12px; border-bottom: 1px solid var(--border-color);
     background: color-mix(in srgb, var(--bg-color) 92%, var(--text-color) 8%); }
   .cq-title-row { display:flex; align-items:baseline; gap:8px; }
-  .cq-eyebrow { font:600 10px/1 sans-serif; letter-spacing:.14em; text-transform:uppercase; color: var(--status-color); }
   .cq-title { font-weight:700; font-size:.98rem; }
+  .cq-status { font:600 10px sans-serif; color: var(--cq-watch); margin-top:6px; }
+  .cq-status:empty { display:none; }
   .cq-count { margin-left:auto; font:600 11px var(--cq-mono); color: var(--status-color); }
   .cq-body { flex:1 1 auto; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:8px; }
   .cq-body > * { flex:0 0 auto; }
@@ -86,7 +87,6 @@ function injectStyles() {
     padding:6px 12px; cursor:pointer; box-shadow:0 2px 8px var(--shadow-color); white-space:nowrap; }
   #cq-close { border:0; background:transparent; color:var(--status-color); font-size:18px; line-height:1; cursor:pointer; padding:0 2px; margin-left:8px; }
   #cq-close:hover { color: var(--text-color); }
-  #cq-status { font:600 10px sans-serif; color: var(--status-color); }
   @media (max-width: 820px){ #chase-queue{ position:absolute; right:0; top:0; z-index:1150; box-shadow:0 0 24px var(--shadow-color);} }
   `;
   const s = document.createElement('style');
@@ -102,10 +102,11 @@ function mount() {
 
   const toggle = document.createElement('button');
   toggle.id = 'cq-toggle';
-  toggle.textContent = '📡 Chase Queue';
+  toggle.textContent = 'Chase Queue';
   // Dock the toggle into the app's existing top-right control cluster if present,
   // otherwise float it top-right.
   const trc = document.getElementById('top-right-controls');
+  const trcRight = trc ? (trc.style.right || '15px') : ''; // preserve original anchor
   if (trc) {
     trc.style.transition = 'right .2s ease';
     trc.insertBefore(toggle, trc.firstChild);
@@ -120,11 +121,11 @@ function mount() {
   panelEl.innerHTML = `
     <div class="cq-head">
       <div class="cq-title-row">
-        <div><div class="cq-eyebrow">HorstOperator · DX cluster</div><div class="cq-title">Chase Queue</div></div>
+        <div class="cq-title">Chase Queue</div>
         <span class="cq-count" id="cq-count">—</span>
         <button id="cq-close" title="Hide Chase Queue">×</button>
       </div>
-      <div class="cq-title-row" style="margin-top:6px"><span id="cq-status">connecting…</span></div>
+      <div id="cq-status" class="cq-status"></div>
     </div>
     <div class="cq-body" id="cq-body"><div class="cq-empty">Loading spots…</div></div>`;
   document.body.appendChild(panelEl);
@@ -142,7 +143,7 @@ function mount() {
   const close = () => {
     panelEl.classList.add('is-hidden');
     toggle.style.display = '';
-    if (trc) trc.style.right = '';
+    if (trc) trc.style.right = trcRight; // restore original anchor (not '')
   };
   toggle.addEventListener('click', open);
   panelEl.querySelector('#cq-close').addEventListener('click', close);
@@ -233,9 +234,8 @@ async function refresh() {
     if (s._score) scoredOK++; else scoredFail++;
   }));
 
-  statusEl.textContent = scoredOK > 0
-    ? `${spots.length} spots · scored by horstprop${scoredFail ? ` (${scoredFail} unscored)` : ''}`
-    : `${spots.length} spots · horstprop offline (no scores)`;
+  // Status line only surfaces problems; the happy path stays quiet.
+  statusEl.textContent = (scoredOK === 0 && spots.length > 0) ? 'horstprop unreachable — showing unscored' : '';
   render(spots);
 }
 
