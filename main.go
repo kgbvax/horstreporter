@@ -17,9 +17,33 @@ import (
 
 	"dxlens"
 
+	"horstreporter/internal/cty"
+
 	"golang.org/x/crypto/acme/autocert"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
+
+// loadCtyResolver loads AD1C cty.dat for DX-cluster country/flag labelling, or
+// returns nil (labelling disabled) when no path is set or the file can't be read.
+func loadCtyResolver(path string) *cty.Resolver {
+	if path == "" {
+		logInfo("DX cluster country/flag labelling disabled (no -cty-path / CTY_DAT_PATH)")
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		logInfo("DX cluster cty.dat not loaded (%s): %v", path, err)
+		return nil
+	}
+	defer f.Close()
+	r, err := cty.Parse(f)
+	if err != nil {
+		logInfo("DX cluster cty.dat parse failed (%s): %v", path, err)
+		return nil
+	}
+	logInfo("DX cluster cty.dat loaded from %s", path)
+	return r
+}
 
 //go:embed static
 var staticFiles embed.FS
@@ -138,6 +162,7 @@ func main() {
 	dxClusterVerbose := flag.Bool("dxcluster-verbose", false, "Enable verbose DX cluster connection logging")
 	dxClusterUsername := flag.String("dxcluster-username", "", "Callsign sent when connecting to DX cluster")
 	dxClusterPassword := flag.String("dxcluster-password", "", "Optional password sent when connecting to DX cluster")
+	ctyPath := flag.String("cty-path", os.Getenv("CTY_DAT_PATH"), "Path to AD1C cty.dat for DX-cluster country/flag labelling (empty disables)")
 	qrzUsernameFlag := flag.String("qrz-username", "", "QRZ username for optional callsign->locator enrichment")
 	qrzPasswordFlag := flag.String("qrz-password", "", "QRZ password for optional callsign->locator enrichment")
 	liveHistoryRetentionFlag := flag.Int("live-history-minutes", defaultLiveHistoryRetentionMinutes, "Maximum age of retained live spots in minutes")
@@ -247,6 +272,8 @@ func main() {
 			logInfo("DX cluster QRZ enrichment disabled (missing credentials)")
 		}
 
+		ctyResolver := loadCtyResolver(strings.TrimSpace(*ctyPath))
+
 		reconnectDelay := time.Duration(*dxClusterReconnectSeconds) * time.Second
 		go startDXClusterIngest(dxClusterConfig{
 			Enabled:        true,
@@ -256,6 +283,7 @@ func main() {
 			Username:       dxClusterUser,
 			Password:       dxClusterPass,
 			Resolver:       resolver,
+			CtyResolver:    ctyResolver,
 		})
 	}
 

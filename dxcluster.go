@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"horstreporter/internal/cty"
 )
 
 type dxClusterAccountingState struct {
@@ -42,6 +44,7 @@ type dxClusterConfig struct {
 	Username       string
 	Password       string
 	Resolver       CallsignLocatorResolver
+	CtyResolver    *cty.Resolver // DXCC entity + country flag (cty.dat); may be nil
 }
 
 type dxClusterSpot struct {
@@ -137,7 +140,7 @@ func runDXClusterSession(endpoint string, cfg dxClusterConfig) error {
 		}
 		spotsParsed++
 		dxClusterAccounting.parsedSpots.Add(1)
-		handleDXClusterSpot(spot, cfg.Resolver)
+		handleDXClusterSpot(spot, cfg.Resolver, cfg.CtyResolver)
 	}
 	if err := scanner.Err(); err != nil {
 		if cfg.Verbose {
@@ -254,12 +257,21 @@ func parseDXClusterSpot(line string, observedAt int64) (dxClusterSpot, bool) {
 	}, true
 }
 
-func handleDXClusterSpot(spot dxClusterSpot, resolver CallsignLocatorResolver) {
+func handleDXClusterSpot(spot dxClusterSpot, resolver CallsignLocatorResolver, ctyResolver *cty.Resolver) {
 	band := bandFromFrequencyKHz(spot.FrequencyKHz)
 	spotterLocator := ""
 	dxLocator := ""
 	dxName := ""
 	dxCountry := ""
+	dxCountryISO := ""
+
+	// Country + flag from cty.dat (authoritative, full prefix coverage).
+	if ctyResolver != nil {
+		if ent, iso, ok := ctyResolver.Resolve(spot.DXCall); ok {
+			dxCountry = ent.Name
+			dxCountryISO = iso
+		}
+	}
 
 	if resolver != nil {
 		if spotterLocator == "" {
@@ -273,11 +285,14 @@ func handleDXClusterSpot(spot dxClusterSpot, resolver CallsignLocatorResolver) {
 			}
 		}
 
-		// One lookup for the DX call yields locator + operator name + country.
+		// One lookup for the DX call yields locator + operator name (+ country as a
+		// fallback when cty.dat didn't resolve one).
 		if info, err := resolver.LookupInfo(spot.DXCall); err == nil {
 			dxLocator = strings.ToUpper(strings.TrimSpace(info.Locator))
 			dxName = strings.TrimSpace(info.Name)
-			dxCountry = strings.TrimSpace(info.Country)
+			if dxCountry == "" {
+				dxCountry = strings.TrimSpace(info.Country)
+			}
 			if dxLocator == "" && logLevel == "DEBUG" {
 				logDebug("DX cluster QRZ lookup returned no locator for DX call %q", spot.DXCall)
 			}
@@ -287,18 +302,19 @@ func handleDXClusterSpot(spot dxClusterSpot, resolver CallsignLocatorResolver) {
 	}
 
 	m := MQTTMessage{
-		RP:      0,
-		T:       spot.ObservedAt,
-		SC:      spot.Spotter,
-		SL:      spotterLocator,
-		RC:      spot.DXCall,
-		RL:      dxLocator,
-		B:       band,
-		MD:      "DXCLUSTER",
-		F:       spot.FrequencyKHz,
-		CM:      spot.Comment,
-		OpName:  dxName,
-		Country: dxCountry,
+		RP:         0,
+		T:          spot.ObservedAt,
+		SC:         spot.Spotter,
+		SL:         spotterLocator,
+		RC:         spot.DXCall,
+		RL:         dxLocator,
+		B:          band,
+		MD:         "DXCLUSTER",
+		F:          spot.FrequencyKHz,
+		CM:         spot.Comment,
+		OpName:     dxName,
+		Country:    dxCountry,
+		CountryISO: dxCountryISO,
 	}
 
 	if dxBaseline != nil {

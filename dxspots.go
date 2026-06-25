@@ -23,6 +23,7 @@ type dxSpot struct {
 	Comment        string  `json:"comment,omitempty"`
 	OpName         string  `json:"op_name,omitempty"`
 	Country        string  `json:"country,omitempty"`
+	CountryISO     string  `json:"country_iso,omitempty"`
 }
 
 // dxSpotsHandler returns recent DX-cluster spots, de-duplicated to the most
@@ -73,6 +74,7 @@ func dxSpotsHandler(w http.ResponseWriter, r *http.Request) {
 			Comment:        m.CM,
 			OpName:         m.OpName,
 			Country:        m.Country,
+			CountryISO:     m.CountryISO,
 		})
 	}
 	sort.Slice(spots, func(i, j int) bool { return spots[i].AgeSeconds < spots[j].AgeSeconds })

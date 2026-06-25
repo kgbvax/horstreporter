@@ -26,11 +26,11 @@ const gradeToDecision = (g) => (g === 'A' || g === 'B') ? 'go' : g === 'C' ? 'wa
 
 // Opt-in demo data (?cqdemo=1) so the panel renders without live cluster creds.
 const DEMO_SPOTS = [
-  { dx_call: '3Y0J', spotter: 'LA7GIA', freq_khz: 18145, band: '17m', dx_locator: 'IB59', age_seconds: 21, comment: 'up 5-10 listening EU', op_name: 'Ken', country: 'Norway' },
-  { dx_call: 'VK6LC', spotter: 'G3TXF', freq_khz: 14018, band: '20m', dx_locator: 'OF87', age_seconds: 48, comment: '599 long path', op_name: 'Wayne', country: 'Australia' },
-  { dx_call: 'JA3XYZ', spotter: 'DL1ABC', freq_khz: 21091, band: '15m', dx_locator: 'PM74', age_seconds: 12, comment: 'calling EU', op_name: 'Kenji', country: 'Japan' },
-  { dx_call: 'W7RV', spotter: 'EA4XYZ', freq_khz: 14205, band: '20m', dx_locator: 'DM43', age_seconds: 55, comment: 'booming in', op_name: 'Bob', country: 'United States' },
-  { dx_call: 'PY2NY', spotter: 'F5ABC', freq_khz: 21094, band: '15m', dx_locator: 'GG66', age_seconds: 64, comment: '-14 dB', op_name: 'Vitor', country: 'Brazil' },
+  { dx_call: '3Y0J', spotter: 'LA7GIA', freq_khz: 18145, band: '17m', dx_locator: 'IB59', age_seconds: 21, comment: 'up 5-10 listening EU', op_name: 'Ken', country: 'Bouvet', country_iso: '' },
+  { dx_call: 'VK6LC', spotter: 'G3TXF', freq_khz: 14018, band: '20m', dx_locator: 'OF87', age_seconds: 48, comment: '599 long path', op_name: 'Wayne', country: 'Australia', country_iso: 'AU' },
+  { dx_call: 'JA3XYZ', spotter: 'DL1ABC', freq_khz: 21091, band: '15m', dx_locator: 'PM74', age_seconds: 12, comment: 'calling EU', op_name: 'Kenji', country: 'Japan', country_iso: 'JP' },
+  { dx_call: '5R8AL', spotter: 'EA4XYZ', freq_khz: 14205, band: '20m', dx_locator: 'LH31', age_seconds: 55, comment: 'booming in', op_name: 'Eric', country: 'Madagascar', country_iso: 'MG' },
+  { dx_call: 'PY2NY', spotter: 'F5ABC', freq_khz: 21094, band: '15m', dx_locator: 'GG66', age_seconds: 64, comment: '-14 dB', op_name: 'Vitor', country: 'Brazil', country_iso: 'BR' },
 ];
 
 const isDemo = () => location.search.includes('cqdemo');
@@ -42,30 +42,27 @@ const trimComment = (c) => (c || '')
   .replace(/\s{2,}/g, ' ')
   .trim();
 
-// Country (DXCC entity, from QRZ) -> ISO-3166 alpha-2 -> flag emoji. Best-effort:
-// unknown countries simply show no flag (the country text still appears).
-const COUNTRY_ISO = {
-  'United States': 'US', 'Canada': 'CA', 'Mexico': 'MX', 'Brazil': 'BR', 'Argentina': 'AR',
-  'Chile': 'CL', 'Japan': 'JP', 'China': 'CN', 'South Korea': 'KR', 'Republic of Korea': 'KR',
-  'India': 'IN', 'Indonesia': 'ID', 'Thailand': 'TH', 'Australia': 'AU', 'New Zealand': 'NZ',
-  'Germany': 'DE', 'Fed. Rep. of Germany': 'DE', 'France': 'FR', 'Italy': 'IT', 'Spain': 'ES',
-  'Canary Islands': 'ES', 'Portugal': 'PT', 'Netherlands': 'NL', 'Belgium': 'BE', 'Luxembourg': 'LU',
-  'Switzerland': 'CH', 'Austria': 'AT', 'Poland': 'PL', 'Czech Republic': 'CZ', 'Czechia': 'CZ',
-  'Slovak Republic': 'SK', 'Slovakia': 'SK', 'Hungary': 'HU', 'Romania': 'RO', 'Bulgaria': 'BG',
-  'Greece': 'GR', 'Croatia': 'HR', 'Serbia': 'RS', 'Slovenia': 'SI', 'Ukraine': 'UA',
-  'European Russia': 'RU', 'Asiatic Russia': 'RU', 'Russia': 'RU', 'Belarus': 'BY', 'Lithuania': 'LT',
-  'Latvia': 'LV', 'Estonia': 'EE', 'Finland': 'FI', 'Sweden': 'SE', 'Norway': 'NO', 'Denmark': 'DK',
-  'Iceland': 'IS', 'Ireland': 'IE', 'England': 'GB', 'Scotland': 'GB', 'Wales': 'GB',
-  'Northern Ireland': 'GB', 'Isle of Man': 'IM', 'Jersey': 'JE', 'Guernsey': 'GG',
-  'Turkey': 'TR', 'Israel': 'IL', 'South Africa': 'ZA', 'Madagascar': 'MG', 'Morocco': 'MA',
-  'Egypt': 'EG', 'Moldova': 'MD', 'Albania': 'AL', 'North Macedonia': 'MK', 'Macedonia': 'MK',
-  'Bosnia-Herzegovina': 'BA', 'Montenegro': 'ME', 'Malta': 'MT', 'Cyprus': 'CY',
-};
-const flagEmoji = (country) => {
-  const iso = COUNTRY_ISO[(country || '').trim()];
-  if (!iso) return '';
+// Flag emoji from an ISO-3166 alpha-2 code (supplied by the backend, resolved
+// via cty.dat). Empty/unknown -> no flag.
+const flagFromISO = (iso) => {
+  iso = (iso || '').trim().toUpperCase();
+  if (iso.length !== 2) return '';
   return String.fromCodePoint(...[...iso].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65));
 };
+
+// Well-known countries: the flag alone is enough, so we suppress the country
+// NAME text on the card (less clutter). Lesser-known entities keep the name.
+// Extend freely (e.g. later from log analysis of who you actually work).
+const WELL_KNOWN_ISO = new Set([
+  // all of Europe
+  'AD', 'AL', 'AT', 'AX', 'BA', 'BE', 'BG', 'BY', 'CH', 'CY', 'CZ', 'DE', 'DK',
+  'EE', 'ES', 'FI', 'FO', 'FR', 'GB', 'GG', 'GI', 'GR', 'HR', 'HU', 'IE', 'IM',
+  'IS', 'IT', 'JE', 'LI', 'LT', 'LU', 'LV', 'MC', 'MD', 'ME', 'MK', 'MT', 'NL',
+  'NO', 'PL', 'PT', 'RO', 'RS', 'SE', 'SI', 'SJ', 'SK', 'SM', 'UA', 'VA',
+  // + commonly-worked majors
+  'AU', 'IN', 'JP', 'CN', 'BR', 'AR', 'US', 'CA', 'RU', 'TR', 'ID',
+]);
+const isWellKnown = (iso) => WELL_KNOWN_ISO.has((iso || '').trim().toUpperCase());
 const fmtFreq = (khz) => (khz >= 1000 ? (khz / 1000).toFixed(3) : String(khz));
 const fmtAge = (s) => s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
 const meterPct = (v) => Math.max(6, Math.min(100, v || 0));
@@ -209,7 +206,9 @@ function renderCard(s) {
   const dist = sc && sc.distance_km ? `${Math.round(sc.distance_km).toLocaleString()} km` : '';
   const az = sc && sc.bearing_deg ? `${Math.round(sc.bearing_deg)}°` : '';
   const comment = trimComment(s.comment);
-  const flag = flagEmoji(s.country);
+  const flag = flagFromISO(s.country_iso);
+  // Show the country name only when it isn't a well-known flag (reduce clutter).
+  const showCountry = s.country && !isWellKnown(s.country_iso);
   el.innerHTML = `
     <div class="cq-r1">
       <span class="cq-flag">${flag}</span>
@@ -222,7 +221,7 @@ function renderCard(s) {
       </span>
     </div>
     <div class="cq-r2">
-      ${s.country ? `${s.country}<span class="sep">·</span>` : ''}<span class="band" style="color:${bandColor(s.band)}">${s.band}</span>
+      ${showCountry ? `${s.country}<span class="sep">·</span>` : ''}<span class="band" style="color:${bandColor(s.band)}">${s.band}</span>
       <span class="sep">·</span>${fmtFreq(s.freq_khz)} MHz
       ${dist ? `<span class="sep">·</span>${dist}` : ''}${az ? ` · ${az}` : ''}
       <span class="sep">·</span>${fmtAge(s.age_seconds)}
