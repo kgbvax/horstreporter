@@ -79,4 +79,5 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 
 - Don't modify anything under `static/vendor/`
 - Don't split the *core* backend into microservices; it is intentionally single-service/single-binary. (Separate operator-side binaries like `cmd/horstoperator-agent` and `cmd/horstprop` that consume the backend read-only over HTTP are the sanctioned pattern — they don't grow the core binary.)
+- Keep the scoring boundary: per-spot/path **link** scoring lives only in `cmd/horstprop` (consumed by the Chase Queue via `/horstprop/v1/score`). horstreporter owns the shared, multi-station band/region **conditions** analytics (`dx_conditions.go`, `hot_bands.go`, `dxpulse.go`, dxlens) backed by the Postgres baseline. Don't add per-spot/path scoring to horstreporter.
 - Don't assume Gin/Echo/React/Vite conventions

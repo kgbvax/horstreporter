@@ -17,10 +17,9 @@ placement reconciled to the decision to ship it as `cmd/horstprop` in this repo.
   (It shares only the contract types under `internal/propcontract`.) The brief's literal "new
   repo" was relaxed to "same repo, separate binary" per the operator's decision.
 - **Contract authority:** this document is authoritative for horstprop's scoring contract.
-  It **supersedes** the earlier `docs/dxcluster-score-interface.md` sketch (a client-side v1
-  stopgap with a `go/watch/wait` decision + `factors`). horstprop's output is instead a
-  **`0–100` score + `grade` + per-layer breakdown** (§5.5). The `internal/propcontract` types
-  and the `cmd/horstprop` stub must be realigned to this contract before feature work.
+  It supersedes an earlier client-side score sketch (a `go/watch/wait` decision + `factors`);
+  horstprop's output is instead a **`0–100` score + `grade` + per-layer breakdown** (§5.5),
+  and `internal/propcontract` already matches it.
 
 ---
 
