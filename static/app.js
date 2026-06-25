@@ -18,6 +18,9 @@ const AZIMUTH_MAX_ZOOM = 5.0;
 let suppressAzimuthClickUntil = 0;
 let hotBandIndicator = null;
 let horstKevin = null;
+// Horst-Kevin mascot temporarily disabled (to be revised). Set true to re-enable;
+// the #horst-kevin element in index.html is also hidden via inline display:none.
+const HORST_KEVIN_ENABLED = false;
 
 function switchToBand(band) {
     const radio = document.querySelector(`input[name="band"][value="${band}"]`);
@@ -1085,12 +1088,14 @@ if (captureConfig?.enabled) {
         getCurrentBand: () => getSelectedBand(),
         onBandSwitch: switchToBand,
     });
-    horstKevin = initHorstKevin({
-        getTarget: () => document.getElementById('target')?.value?.trim()?.toUpperCase() || '',
-        getSurroundings: () => Boolean(document.getElementById('surroundings')?.checked),
-        getCurrentBand: () => getSelectedBand(),
-        onBandSwitch: switchToBand,
-    });
+    if (HORST_KEVIN_ENABLED) {
+        horstKevin = initHorstKevin({
+            getTarget: () => document.getElementById('target')?.value?.trim()?.toUpperCase() || '',
+            getSurroundings: () => Boolean(document.getElementById('surroundings')?.checked),
+            getCurrentBand: () => getSelectedBand(),
+            onBandSwitch: switchToBand,
+        });
+    }
 
     // Force an initial render to sync visual band states (colors/opacity) loaded from localStorage
     scheduleRender();
