@@ -52,6 +52,22 @@ body {
     --coachmark-border: #c08a00;
     --coachmark-shadow: rgba(122, 78, 0, 0.35);
 
+    /* Brand accent (teal-green) + shared control tokens. Deliberately distinct
+       from the band palette's green (#008000) so band colors keep their meaning. */
+    --accent: #1f9e8f;
+    --accent-rgb: 31, 158, 143;
+    --accent-strong: #17887a;
+    --accent-contrast: #ffffff;
+    --accent-tint: color-mix(in srgb, var(--accent) 12%, var(--bg-color));
+    --accent-tint-strong: color-mix(in srgb, var(--accent) 22%, var(--bg-color));
+    --surface-1: color-mix(in srgb, var(--bg-color) 92%, var(--text-color) 8%);
+    /* Resting border for interactive controls + card outlines. Deliberately
+       stronger than --border-color (structural hairlines) so buttons read as
+       buttons at rest. */
+    --control-border: color-mix(in srgb, var(--text-color) 32%, var(--bg-color));
+    --btn-radius: 8px;
+    --btn-radius-sm: 6px;
+
     font-family: sans-serif;
     margin: 0;
     padding: 0;
@@ -78,6 +94,16 @@ body[data-theme="dark"] {
     --dxcc-label-text: #f3f6fb;
     --dxcc-label-border: rgba(216, 226, 236, 0.28);
     --dxcc-label-shadow: rgba(0, 0, 0, 0.28);
+
+    /* Brighter accent for legibility on the dark surface. */
+    --accent: #34c4b0;
+    --accent-rgb: 52, 196, 176;
+    --accent-strong: #4dd3c0;
+    --accent-contrast: #08201d;
+    --accent-tint: color-mix(in srgb, var(--accent) 18%, var(--bg-color));
+    --accent-tint-strong: color-mix(in srgb, var(--accent) 28%, var(--bg-color));
+    --surface-1: color-mix(in srgb, var(--bg-color) 88%, var(--text-color) 12%);
+    --control-border: color-mix(in srgb, var(--text-color) 38%, var(--bg-color));
 }
 
 body {
@@ -341,10 +367,10 @@ body {
 }
 
 .band-lab-summary {
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--control-border);
     border-radius: 8px;
     padding: 8px 10px;
-    background: color-mix(in srgb, var(--bg-color) 92%, var(--text-color) 8%);
+    background: var(--surface-1);
 }
 
 .band-lab-summary-grid {
@@ -442,7 +468,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     font-size: 0.9rem;
     font-weight: 700;
     border-bottom: 1px solid var(--border-color);
-    background: color-mix(in srgb, var(--bg-color) 92%, var(--text-color) 8%);
+    background: var(--surface-1);
     user-select: none;
 }
 
@@ -469,9 +495,9 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 .band-lab-legend-help {
     margin: 8px 10px 0;
     padding: 8px 10px;
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--control-border);
     border-radius: 8px;
-    background: color-mix(in srgb, var(--bg-color) 91%, var(--text-color) 9%);
+    background: var(--surface-1);
     font-size: 0.72rem;
     line-height: 1.35;
     box-shadow: 0 2px 8px color-mix(in srgb, var(--shadow-color) 70%, transparent);
@@ -506,7 +532,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 }
 
 .band-lab-card {
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--control-border);
     border-left: 5px solid #888;
     border-radius: 10px;
     padding: 8px;
@@ -538,7 +564,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 }
 
 .band-lab-chart-block {
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--control-border);
     border-radius: 8px;
     padding: 6px;
     background: color-mix(in srgb, var(--bg-color) 96%, var(--text-color) 4%);
@@ -810,5 +836,94 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 @media (max-width: 640px) {
     .hk-panel { width: 260px; }
     .hk-bubble { max-width: 220px; }
+}
+
+/* ── Unified control system (teal accent) ──────────────────────────────────
+   One button language across the sidebar, Options grid, segmented controls,
+   Band Stats and Chase Queue. Re-skins Bootstrap 5.3 via its own --bs-btn-*
+   custom properties (no specificity overrides), so hover/active/focus/disabled
+   states all flow from the tokens above.
+
+   Resting  → neutral: ink text, hairline border, no fill.
+   Hover    → faint accent tint preview.
+   Active / checked (toggles, selected segment) → soft accent tint + accent text.
+   Primary  → solid accent (the one "go" action). */
+
+.btn {
+    --bs-btn-border-radius: var(--btn-radius);
+    --bs-btn-focus-shadow-rgb: var(--accent-rgb);
+}
+.btn-sm {
+    --bs-btn-border-radius: var(--btn-radius-sm);
+}
+
+/* Resting buttons: outline-primary and outline-secondary share ONE look so the
+   band presets (were grey) and the Options toggles (were blue) stop diverging. */
+.btn-outline-primary,
+.btn-outline-secondary {
+    --bs-btn-color: var(--text-color);
+    --bs-btn-bg: transparent;
+    --bs-btn-border-color: var(--control-border);
+    --bs-btn-hover-color: var(--accent-strong);
+    --bs-btn-hover-bg: var(--accent-tint);
+    --bs-btn-hover-border-color: var(--accent);
+    --bs-btn-active-color: var(--accent-strong);
+    --bs-btn-active-bg: var(--accent-tint-strong);
+    --bs-btn-active-border-color: var(--accent);
+    --bs-btn-active-shadow: none;
+    --bs-btn-disabled-color: var(--status-color);
+    --bs-btn-disabled-bg: transparent;
+    --bs-btn-disabled-border-color: var(--border-color);
+}
+
+/* Selected toggle / segment reads clearly without becoming a solid block. */
+.btn-check:checked + .btn-outline-primary,
+.btn-check:checked + .btn-outline-secondary,
+.btn-check:active + .btn-outline-primary,
+.btn-check:active + .btn-outline-secondary {
+    font-weight: 600;
+}
+
+/* The single solid call-to-action (Go). */
+.btn-primary {
+    --bs-btn-bg: var(--accent);
+    --bs-btn-border-color: var(--accent);
+    --bs-btn-color: var(--accent-contrast);
+    --bs-btn-hover-bg: var(--accent-strong);
+    --bs-btn-hover-border-color: var(--accent-strong);
+    --bs-btn-hover-color: var(--accent-contrast);
+    --bs-btn-active-bg: var(--accent-strong);
+    --bs-btn-active-border-color: var(--accent-strong);
+    --bs-btn-active-color: var(--accent-contrast);
+    --bs-btn-disabled-bg: var(--accent);
+    --bs-btn-disabled-border-color: var(--accent);
+    --bs-btn-disabled-color: var(--accent-contrast);
+}
+
+/* Neutral solid (the show-sidebar tab). */
+.btn-secondary {
+    --bs-btn-bg: var(--surface-1);
+    --bs-btn-border-color: var(--control-border);
+    --bs-btn-color: var(--text-color);
+    --bs-btn-hover-bg: var(--accent-tint);
+    --bs-btn-hover-border-color: var(--accent);
+    --bs-btn-hover-color: var(--accent-strong);
+    --bs-btn-active-bg: var(--accent-tint-strong);
+    --bs-btn-active-border-color: var(--accent);
+    --bs-btn-active-color: var(--accent-strong);
+}
+
+/* Solid primary still pops on the white map without the Bootstrap-blue weight. */
+#btn-submit { font-weight: 600; }
+
+/* Inputs/selects share the control border + accent focus ring (was Bootstrap blue). */
+.form-control,
+.form-select {
+    border-color: var(--control-border);
+}
+.form-control:focus,
+.form-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 0.2rem rgba(var(--accent-rgb), 0.25);
 }
 

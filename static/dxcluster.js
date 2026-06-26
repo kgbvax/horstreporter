@@ -90,6 +90,11 @@ const enrichSpot = (s) => {
 
 const fmtFreq = (khz) => (khz >= 1000 ? (khz / 1000).toFixed(3) : String(khz));
 const fmtAge = (s) => s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
+// degToCardinal maps a beam bearing to a 16-point compass abbreviation (N, NNE,
+// NE, …) — operators think in compass headings, not raw degrees. The exact
+// degrees stay available in the element title for anyone who needs them.
+const COMPASS16 = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+const degToCardinal = (deg) => COMPASS16[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16];
 const meterPct = (v) => Math.max(6, Math.min(100, v || 0));
 
 function injectStyles() {
@@ -100,10 +105,10 @@ function injectStyles() {
     border-left: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);
     --cq-go:#22c55e; --cq-watch:#f59e0b; --cq-wait:#64748b; --cq-atno:#f3c14b; --cq-unknown: var(--status-color);
     --cq-mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
-    font-size: 13px; }
+    font-size: 14px; }
   #chase-queue.is-hidden { display: none; }
   .cq-head { padding: 10px 12px; border-bottom: 1px solid var(--border-color);
-    background: color-mix(in srgb, var(--bg-color) 92%, var(--text-color) 8%); }
+    background: var(--surface-1); }
   .cq-title-row { display:flex; align-items:baseline; gap:8px; }
   .cq-title { font-weight:700; font-size:.98rem; }
   .cq-status { font:600 10px sans-serif; color: var(--cq-watch); margin-top:6px; }
@@ -112,14 +117,14 @@ function injectStyles() {
   .cq-body { flex:1 1 auto; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:8px; }
   .cq-body > * { flex:0 0 auto; }
   .cq-empty { color: var(--status-color); font-size:12px; text-align:center; padding:24px 12px; }
-  .cq-card { border:1px solid var(--border-color); border-radius:10px; background: var(--bg-color);
+  .cq-card { border:1px solid var(--control-border); border-radius:10px; background: var(--bg-color);
     border-left:5px solid var(--cq-spine,#555); padding:7px 10px; cursor:pointer; transition:border-color .12s, background .12s; }
   .cq-card:hover { background: color-mix(in srgb, var(--bg-color) 94%, var(--text-color) 6%); }
   .cq-r1 { display:flex; align-items:center; gap:8px; }
-  .cq-flag { font-size:1rem; line-height:1; }
+  .cq-flag { font-size:1.05rem; line-height:1; }
   .cq-flag:empty { display:none; }
-  .cq-call { font:700 1.02rem/1 var(--cq-mono); }
-  .cq-op { font:12px/1 sans-serif; color: var(--text-color); }
+  .cq-call { font:700 1.12rem/1 var(--cq-mono); letter-spacing:.01em; }
+  .cq-op { font:12.5px/1 sans-serif; color: var(--status-color); }
   .cq-op:empty { display:none; }
   .cq-spacer { flex:1 1 auto; }
   .cq-score { display:flex; align-items:center; gap:6px; }
@@ -132,30 +137,36 @@ function injectStyles() {
   .m-watch>i{background:var(--cq-watch);} .g-watch{color:var(--cq-watch); background:color-mix(in srgb,var(--cq-watch) 18%,transparent);}
   .m-wait>i{background:var(--cq-wait);} .g-wait{color:var(--cq-wait); background:color-mix(in srgb,var(--cq-wait) 20%,transparent);}
   .m-unknown>i{background:var(--cq-unknown);} .g-unknown{color:var(--cq-unknown); background:color-mix(in srgb,var(--cq-unknown) 18%,transparent);}
-  .cq-r2 { font:11px/1.4 var(--cq-mono); color: var(--status-color); margin-top:3px; }
+  .cq-r2 { font:12.5px/1.5 var(--cq-mono); color: var(--status-color); margin-top:4px;
+    display:flex; flex-wrap:wrap; align-items:baseline; }
   .cq-r2 b { color: var(--text-color); font-weight:700; }
   .cq-r2 .band { font-weight:700; }
-  .cq-r2 .sep { opacity:.5; margin:0 6px; }
-  .cq-comment { font:12px/1.35 sans-serif; color: var(--status-color); margin-top:4px;
+  .cq-r2 .dir { font-variant-numeric:tabular-nums; cursor:help; }
+  .cq-r2 .sep { opacity:.4; margin:0 5px; }
+  .cq-comment { font:13px/1.4 sans-serif; color: var(--status-color); margin-top:5px;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .cq-chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:5px; }
-  .cq-chip { font:800 9.5px/1 sans-serif; letter-spacing:.04em; text-transform:uppercase;
-    padding:3px 6px; border-radius:5px; }
+  .cq-chip { font:800 10.5px/1 sans-serif; letter-spacing:.04em; text-transform:uppercase;
+    padding:3px 7px; border-radius:5px; }
   .cq-chip-atno { color:#1c1400; background: var(--cq-atno); }
   .cq-chip-new  { color: var(--text-color); background:transparent;
     border:1px solid color-mix(in srgb, var(--text-color) 45%, transparent); }
   .cq-chip-dupe { color: var(--status-color);
     background: color-mix(in srgb, var(--status-color) 14%, transparent); font-weight:700; }
-  .cq-actions { display:flex; gap:6px; margin-top:7px; }
-  .cq-act { flex:1 1 auto; font:600 11px sans-serif; border:1px solid var(--border-color);
-    background: color-mix(in srgb, var(--bg-color) 90%, var(--text-color) 10%); color: var(--text-color);
-    border-radius:6px; padding:5px 8px; cursor:pointer; transition:background .12s, border-color .12s; }
-  .cq-act:hover { background: color-mix(in srgb, var(--cq-go) 18%, var(--bg-color)); border-color: var(--cq-go); }
+  .cq-actions { display:flex; gap:6px; margin-top:8px; }
+  .cq-act { flex:1 1 auto; font:600 12px sans-serif; border:1px solid var(--control-border);
+    background: transparent; color: var(--text-color);
+    border-radius: var(--btn-radius-sm, 6px); padding:6px 8px; cursor:pointer;
+    transition:background .12s, border-color .12s, color .12s; }
+  .cq-act:hover { background: var(--accent-tint); border-color: var(--accent); color: var(--accent-strong); }
+  .cq-act:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .cq-act:disabled { opacity:.5; cursor:default; }
   .cq-act.busy { opacity:.6; cursor:progress; }
-  #cq-toggle { font:600 12px sans-serif; border:1px solid var(--border-color);
-    background: var(--bg-color); color: var(--text-color); border-radius:999px;
-    padding:6px 12px; cursor:pointer; box-shadow:0 2px 8px var(--shadow-color); white-space:nowrap; }
+  #cq-toggle { font:600 12px sans-serif; border:1px solid var(--control-border);
+    background: var(--bg-color); color: var(--text-color); border-radius: var(--btn-radius, 8px);
+    padding:6px 12px; cursor:pointer; box-shadow:0 2px 8px var(--shadow-color); white-space:nowrap;
+    transition:background .12s, border-color .12s, color .12s; }
+  #cq-toggle:hover { background: var(--accent-tint); border-color: var(--accent); color: var(--accent-strong); }
   #cq-close { border:0; background:transparent; color:var(--status-color); font-size:18px; line-height:1; cursor:pointer; padding:0 2px; margin-left:8px; }
   #cq-close:hover { color: var(--text-color); }
   @media (max-width: 820px){ #chase-queue{ position:absolute; right:0; top:0; z-index:1150; box-shadow:0 0 24px var(--shadow-color);} }
@@ -322,13 +333,24 @@ function renderCard(s) {
   const num = sc && sc.score != null ? sc.score : '··';
   const dist = sc && sc.distance_km ? `${Math.round(sc.distance_km).toLocaleString()} km` : '';
   const bearing = sc && Number.isFinite(sc.bearing_deg) ? sc.bearing_deg : null;
-  const az = bearing != null ? `${Math.round(bearing)}°` : '';
   const comment = trimComment(s.comment);
   const flag = flagFromISO(s.country_iso);
   // Show the country name only when it isn't a well-known flag (reduce clutter).
   const showCountry = s.country && !isWellKnown(s.country_iso);
   const freqHz = Math.round((s.freq_khz || 0) * 1000);
   const mode = guessMode(s.freq_khz);
+
+  // Meta line: one consistently-separated row. Build the parts then join with a
+  // single separator so every gap is identical (previously the bearing used a
+  // raw " · " while everything else used a styled span).
+  const meta = [];
+  if (showCountry) meta.push(s.country);
+  meta.push(`<span class="band" style="color:${bandColor(s.band)}">${s.band}</span>`);
+  meta.push(`${fmtFreq(s.freq_khz)} MHz`);
+  if (dist) meta.push(dist);
+  if (bearing != null) meta.push(`<span class="dir" title="bearing ${Math.round(bearing)}°">${degToCardinal(bearing)}</span>`);
+  meta.push(fmtAge(s.age_seconds));
+  const metaHTML = meta.join('<span class="sep">·</span>');
   el.innerHTML = `
     <div class="cq-r1">
       <span class="cq-flag">${flag}</span>
@@ -340,12 +362,7 @@ function renderCard(s) {
         <span class="cq-num">${num}</span>
       </span>
     </div>
-    <div class="cq-r2">
-      ${showCountry ? `${s.country}<span class="sep">·</span>` : ''}<span class="band" style="color:${bandColor(s.band)}">${s.band}</span>
-      <span class="sep">·</span>${fmtFreq(s.freq_khz)} MHz
-      ${dist ? `<span class="sep">·</span>${dist}` : ''}${az ? ` · ${az}` : ''}
-      <span class="sep">·</span>${fmtAge(s.age_seconds)}
-    </div>
+    <div class="cq-r2">${metaHTML}</div>
     ${chipsHTML(s._enrich)}
     ${comment ? `<div class="cq-comment" title="${comment}">${comment}</div>` : ''}`;
   if (sc && sc.reason) el.title = sc.reason;
