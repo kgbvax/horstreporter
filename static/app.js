@@ -1433,28 +1433,6 @@ document.querySelectorAll('.band-enable').forEach(cb => {
     });
 });
 
-document.querySelectorAll('.band-preset').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const preset = btn.getAttribute('data-preset');
-        const highBands = ['20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
-        const lowBands = ['160m', '80m', '60m', '40m', '30m'];
-        const ssbBands = ['160m', '80m', '40m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
-        
-        document.querySelectorAll('.band-enable').forEach(cb => {
-            let enable = false;
-            if (preset === 'all') enable = true;
-            else if (preset === 'high') enable = highBands.includes(cb.value);
-            else if (preset === 'low') enable = lowBands.includes(cb.value);
-            else if (preset === 'ssb') enable = ssbBands.includes(cb.value);
-            
-            if (cb.checked !== enable) {
-                cb.checked = enable;
-                cb.dispatchEvent(new Event('change', { bubbles: true })); // Triggers map re-render and localStorage save
-            }
-        });
-    });
-});
-
 document.getElementById('auto-zoom')?.addEventListener('change', (e) => {
     localStorage.setItem('autoZoom', e.target.checked);
     if (e.target.checked) scheduleRender();

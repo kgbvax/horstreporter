@@ -7,6 +7,7 @@
 
 import { canControlRig, rigTune, operate, canLookup, enrichSpots } from './opmode.js';
 import { setChaseQueueHighlight, clearChaseQueueHighlight } from './app.js';
+import { getEnabledBands } from './utils.js';
 
 const DXSPOTS_URL = '/api/dxspots?minutes=30';
 // Same-origin by default: HorstReporter reverse-proxies /horstprop/* to the
@@ -431,7 +432,10 @@ function renderCard(s) {
 function render(spots) {
   bodyEl.innerHTML = '';
   if (!spots.length) {
-    bodyEl.innerHTML = '<div class="cq-empty">No DX spots in the window.<br>Is the cluster connected?</div>';
+    const msg = getEnabledBands().size === 0
+      ? 'No bands selected.<br>Enable bands on the left.'
+      : 'No DX spots on the selected bands.<br>Is the cluster connected?';
+    bodyEl.innerHTML = `<div class="cq-empty">${msg}</div>`;
     countEl.textContent = '0';
     return;
   }
@@ -459,7 +463,13 @@ async function refresh() {
     statusEl.textContent = 'spots feed offline';
     return;
   }
-  spots = (spots || []).slice(0, TOP_N);
+  // Mirror the band selection on the left (the .band-enable checkboxes): show
+  // only spots on the enabled bands. This deliberately reads the enabled set, not
+  // the single-band "current band" radio, so band cycling never narrows the
+  // queue — it stays filtered to all selected bands. Filter before the TOP_N cap
+  // and scoring so the cap (and horstprop load) applies to relevant spots only.
+  const enabled = getEnabledBands();
+  spots = (spots || []).filter((s) => enabled.has(s.band)).slice(0, TOP_N);
 
   hpReachable = true;
   // Score (horstprop, per-spot) and enrich (Wavelog via agent, one batch) run
@@ -486,6 +496,16 @@ function init() {
   mount();
   refresh();
   setInterval(() => { if (!panelEl.classList.contains('is-hidden')) refresh(); }, REFRESH_MS);
+
+  // Follow the left-side band selection live. Debounced so toggling several bands
+  // coalesces into one refresh; skipped while hidden (opening refreshes anyway).
+  let bandTimer = null;
+  const onBandChange = () => {
+    if (panelEl.classList.contains('is-hidden')) return;
+    clearTimeout(bandTimer);
+    bandTimer = setTimeout(refresh, 300);
+  };
+  document.querySelectorAll('.band-enable').forEach((cb) => cb.addEventListener('change', onBandChange));
 }
 
 if (document.readyState === 'loading') {
