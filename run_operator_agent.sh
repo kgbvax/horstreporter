@@ -31,19 +31,21 @@ cd "$(dirname "$0")"
 LISTEN="${LISTEN:-127.0.0.1:9955}"
 
 STATION_NAME="${STATION_NAME:-operator-station}"
-STATION_LAT="${STATION_LAT:-52.52}"            # default: Berlin (CLAUDE.md example)
-STATION_LNG="${STATION_LNG:-13.40}"
-STATION_LOCATOR="${STATION_LOCATOR:-}"         # optional Maidenhead locator
+STATION_LAT="${STATION_LAT:-52.184}"            # default: Berlin (CLAUDE.md example)
+STATION_LNG="${STATION_LNG:-7.875}"
+STATION_LOCATOR="${STATION_LOCATOR:-JO32we}"         # optional Maidenhead locator
 
-PST_HOST="${PST_HOST:-a6.kgbvax.net}"
+PST_HOST="${PST_HOST:-192.168.1.142}"
 PST_PORT="${PST_PORT:-12000}"
 PST_TIMEOUT_MS="${PST_TIMEOUT_MS:-1500}"
 
 BACKEND_URL="${BACKEND_URL:-}"                 # optional reverse-proxy target
-# horstawards runs on the server (kgbvax.net); the agent reaches it via the
-# backend's /horstawards reverse-proxy. Set to enable WAS/POTA "wanted", e.g.
-#   HORSTAWARDS_URL=https://horstreporter.kgbvax.net/horstawards
-HORSTAWARDS_URL="${HORSTAWARDS_URL:-}"
+# Award "wanted" (DXCC/WAS/POTA) runs IN-PROCESS and LOCAL — the operator's log
+# never leaves this machine. It activates when Wavelog is configured:
+#   WAVELOG_API_KEY=…           (in .env; read-only key)
+#   WAVELOG_STATION_ID=3427     (required: DCLNext get_contacts_adif needs it)
+#   POTA_HUNTED_CSV=hunted.csv  (optional: enables POTA via your hunted-parks export)
+# These are read from the environment / .env; no flag needed here.
 CONTROL_PERMITTED="${CONTROL_PERMITTED:-true}" # set false for read-only/monitor
 ALLOWED_MODES="${ALLOWED_MODES:-forward,backward,bidirectional}"
 BEAMWIDTH_3DB_DEG="${BEAMWIDTH_3DB_DEG:-60}"
@@ -67,7 +69,6 @@ args=(
 
 [ -n "$STATION_LOCATOR" ] && args+=(-station-locator "$STATION_LOCATOR")
 [ -n "$BACKEND_URL" ] && args+=(-backend-url "$BACKEND_URL")
-[ -n "$HORSTAWARDS_URL" ] && args+=(-horstawards-url "$HORSTAWARDS_URL")
 [ "$PST_LOG_TRAFFIC" = "1" ] && args+=(-pst-log-traffic)
 [ "$PST_LOG_TRAFFIC_HEX" = "1" ] && args+=(-pst-log-traffic-hex)
 

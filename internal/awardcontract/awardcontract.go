@@ -1,11 +1,8 @@
-// Package awardcontract holds the wire types shared between the horstoperator
-// agent and the standalone horstawards service. It is the single Go-level source
-// of truth for the POST /v1/wanted contract (docs/horstawards.md).
-//
-// The root binary (package main) cannot be imported, so contract types that more
-// than one binary needs live here under internal/ where anything in the module
-// can import them. The runtime boundary stays HTTP/JSON; this just keeps the
-// shapes (and the needed[] vocabulary) in one place. Mirrors internal/propcontract.
+// Package awardcontract holds the shared award types used by the awards engine
+// (internal/awards) and the operator agent: the WantedSpot input, the
+// WantedResult/WantedSlot output, and the needed[] vocabulary. Award progress
+// runs in-process inside the agent, so these are plain in-process types (no HTTP
+// boundary); keeping them in one importable place mirrors internal/propcontract.
 package awardcontract
 
 // Needed[] vocabulary. The frontend (static/dxcluster.js wantInfo) maps these to
@@ -45,13 +42,6 @@ type WantedSpot struct {
 	Mode    string `json:"mode"`
 }
 
-// WantedRequest is the POST /v1/wanted body. PermitLookup must be true (an
-// explicit opt-in gate, mirroring the agent's enrich endpoint).
-type WantedRequest struct {
-	PermitLookup bool         `json:"permit_lookup"`
-	Spots        []WantedSpot `json:"spots"`
-}
-
 // WantedSlot is per-spot detail: one award slot the spot could fill and its
 // current status. Additive — the frontend keys off Needed; Slots is for richer
 // UI/debugging later.
@@ -69,14 +59,4 @@ type WantedResult struct {
 	ID     string       `json:"id"`
 	Needed []string     `json:"needed"`
 	Slots  []WantedSlot `json:"slots,omitempty"`
-}
-
-// WantedResponse mirrors the agent's enrich envelope. Degraded is true when the
-// progress index has never loaded (or is stale beyond threshold), so the UI can
-// signal that "wanted" data is unavailable rather than treating everything as
-// not-needed.
-type WantedResponse struct {
-	OK       bool           `json:"ok"`
-	Degraded bool           `json:"degraded"`
-	Results  []WantedResult `json:"results"`
 }

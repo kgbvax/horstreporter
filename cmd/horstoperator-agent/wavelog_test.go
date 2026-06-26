@@ -8,6 +8,34 @@ import (
 	"testing"
 )
 
+// DCLNext returns lotw_member as a string ("18"), not a bool. The lookup must
+// still parse (the field is unused) — a hard parse error here would fail every
+// real lookup and degrade all enrichment.
+func TestHandleEnrich_ToleratesStringLotwMember(t *testing.T) {
+	s, _ := newWavelogServer(t, func(w http.ResponseWriter, r *http.Request) {
+		// Raw JSON mirroring DCLNext: stringy numerics + string lotw_member.
+		_, _ = w.Write([]byte(`{"callsign":"W1AW","dxcc":"UNITED STATES OF AMERICA","dxcc_id":"291","dxcc_cqz":"5","state":"CT","dxcc_confirmed":false,"call_worked":true,"lotw_member":"18"}`))
+	})
+	rec := httptest.NewRecorder()
+	body := `{"permit_lookup":true,"spots":[{"id":"x","call":"W1AW","band":"20m","mode":"SSB"}]}`
+	s.handleEnrich(rec, httptest.NewRequest(http.MethodPost, "/v1/operate/enrich", strings.NewReader(body)))
+
+	var resp struct {
+		Degraded bool           `json:"degraded"`
+		Results  []enrichResult `json:"results"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Degraded {
+		t.Fatalf("string lotw_member must not degrade the lookup: %s", rec.Body.String())
+	}
+	if len(resp.Results) != 1 || resp.Results[0].DXCC == nil || resp.Results[0].DXCC.ID != "291" {
+		t.Fatalf("expected resolved DXCC 291, got %+v", resp.Results)
+	}
+	if strings.Join(resp.Results[0].Needed, ",") != "dxcc" {
+		t.Errorf("needed = %v, want [dxcc] (not confirmed)", resp.Results[0].Needed)
+	}
+}
+
 func TestNeededFromLookup(t *testing.T) {
 	cases := []struct {
 		name string

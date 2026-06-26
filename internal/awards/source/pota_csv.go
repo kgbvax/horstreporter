@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"horstreporter/cmd/horstawards/internal/award"
+	"horstreporter/internal/awards/award"
 )
 
 // POTACSV is the recommended POTA progress source: the operator exports their

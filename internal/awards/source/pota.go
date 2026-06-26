@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"horstreporter/cmd/horstawards/internal/award"
+	"horstreporter/internal/awards/award"
 )
 
 // POTA is an OPTIONAL, supplemental progress source: it pulls the operator's

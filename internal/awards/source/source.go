@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"time"
 
-	"horstreporter/cmd/horstawards/internal/award"
+	"horstreporter/internal/awards/award"
 )
 
 // refuseCrossHostRedirect is an http.Client.CheckRedirect policy that blocks

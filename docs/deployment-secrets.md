@@ -63,17 +63,25 @@ before walking away.
 
 Reads from the environment (loaded from a `.env` in CWD if present):
 
+Enrichment **and the local award engine** both run here (the agent is local, so
+the operator's log never leaves the machine):
+
 | Env var | Default | Notes |
 | --- | --- | --- |
-| `WAVELOG_API_KEY` | — | Wavelog **read** API key. Enables enrichment; empty = disabled. Never logged. |
+| `WAVELOG_API_KEY` | — | Wavelog **read** API key. Enables callsign enrichment + the local log pull. Never logged. |
 | `WAVELOG_URL` | `https://log.dclnext.darc.de/index.php` | Wavelog base URL. |
-| `HORSTAWARDS_URL` | — | horstawards base URL the agent calls. horstawards runs on the server, so this is the proxied endpoint: `https://horstreporter.kgbvax.net/horstawards`. Also a `-horstawards-url` flag. Enables the award "wanted" merge (`was`/`pota`); empty = disabled. Not a secret. |
+| `WAVELOG_STATION_ID` | — | Station profile id. **Required for DCLNext** — `get_contacts_adif` returns HTTP 400 without it. Enables the DXCC/WAS award sources. Not a secret. |
+| `POTA_HUNTED_CSV` | — | Path to your POTA hunted-parks CSV export; enables POTA "wanted". Also `-pota-hunted-csv`. Not a secret. |
+| `HORSTAWARDS_DATA_DIR` | `./horstawards-data` | Local award snapshot store. Also `-awards-data-dir`. Not a secret. |
+| `POTA_CALLSIGN` / `POTA_TOKEN` | — | Optional POTA *API* source (only useful with an authenticated full-list endpoint). Token never logged. |
 
 `run_operator_agent.sh` runs from the repo root, so a `.env` there is picked up:
 
 ```
 WAVELOG_API_KEY=xxxxxxxx
 WAVELOG_URL=https://log.dclnext.darc.de/index.php
+WAVELOG_STATION_ID=3427
+POTA_HUNTED_CSV=hunted.csv
 ```
 
 `.env` is git-ignored — keep it that way.
@@ -95,42 +103,8 @@ belongs in the env file.)
 
 ---
 
-## Awards service — `horstawards`
-
-Runs **on the server** (`kgbvax.net`), co-located with the backend and
-`horstprop`, bound to `127.0.0.1:9956`; the backend reverse-proxies
-`/horstawards/` to it. (The agent is the local piece — it reaches horstawards via
-that proxy.) Reads from the environment (`EnvironmentFile` under systemd; a CWD
-`.env` for dev). Uses the same read-only Wavelog key the agent uses — the key
-simply also lives on the server here.
-
-| Env var | Default | Notes |
-| --- | --- | --- |
-| `WAVELOG_API_KEY` | — | Wavelog **read** key (must have ADIF-export scope). Empty = the Wavelog ADIF source is disabled and the index stays empty. Never logged. |
-| `WAVELOG_URL` | `https://log.dclnext.darc.de/index.php` | Wavelog base URL. |
-| `WAVELOG_STATION_ID` | — | Station profile id. **Required for DCLNext** — `get_contacts_adif` returns HTTP 400 without it. Also `-wavelog-station-id`. Not a secret. |
-| `POTA_HUNTED_CSV` | — | Path to your POTA hunted-parks CSV export. **Recommended POTA source.** Also `-pota-hunted-csv`. Not a secret. |
-| `POTA_CALLSIGN` | — | Enables the optional POTA *API* source (only useful with an authenticated full-list endpoint; the public profile is counts-only). Empty = disabled. Not a secret. |
-| `POTA_TOKEN` | — | Optional POTA bearer token, if a POTA endpoint requires auth. Never logged. |
-| `HORSTAWARDS_DATA_DIR` | `./horstawards-data` | Snapshot store dir. Also `-data-dir`. Not a secret. |
-
-`install_horstawards_service.sh` generates `/etc/default/horstawards`
-(`hk:hk`, `0600`) holding `WAVELOG_API_KEY` + `ARGS`, and provisions a writable
-`/opt/horstawards/data`. The unit's `ReadWritePaths=` is limited to that data dir.
-
-```ini
-[Service]
-WorkingDirectory=/opt/horstawards
-EnvironmentFile=-/etc/default/horstawards   # hk:hk, 0600 (holds WAVELOG_API_KEY)
-ExecStart=/opt/horstawards/horstawards-linux-x64 $ARGS   # ARGS="-listen 127.0.0.1:9956 -data-dir /opt/horstawards/data"
-```
-
-The backend mounts the proxy via `-horstawards-url` (default
-`http://127.0.0.1:9956`; the backend and horstawards are on the same host). The
-**local agent** then points at the public proxy:
-`HORSTAWARDS_URL=https://horstreporter.kgbvax.net/horstawards`. The public mount
-exposes only `/v1/wanted` + `/v1/health`; `/v1/refresh` is server-internal. See
-`docs/horstawards.md`.
+Award progress (DXCC/WAS/POTA) runs **in-process in this agent** — see the award
+rows above and `docs/horstawards.md`. There is no separate awards service.
 
 ---
 

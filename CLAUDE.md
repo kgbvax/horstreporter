@@ -26,12 +26,12 @@ go run ./cmd/horstoperator-agent -listen 127.0.0.1:9955 -station-lat 52.52 -stat
 # Run HF link-quality scoring service (separate binary; consumes HorstReporter read-only)
 go run ./cmd/horstprop -listen 127.0.0.1:9970
 
-# Run award-progress service (separate binary; owns the Chase Queue "wanted" index).
-# Runs on the SERVER (kgbvax.net) co-located with the backend, bound to 127.0.0.1:9956;
-# the backend reverse-proxies /horstawards/ (v1/wanted, v1/health) to it. The LOCAL
-# agent reaches it via that proxy (HORSTAWARDS_URL=https://horstreporter.kgbvax.net/horstawards).
-# Needs WAVELOG_STATION_ID for DCLNext; POTA via -pota-hunted-csv (hunted-parks export).
-go run ./cmd/horstawards -listen 127.0.0.1:9956 -wavelog-station-id <id> -pota-hunted-csv hunted.csv
+# Award progress (Chase Queue "wanted": DXCC/WAS/POTA) runs IN-PROCESS in the
+# operator agent (internal/awards) so the operator's log stays local. Enable it by
+# configuring Wavelog for the agent: WAVELOG_API_KEY (.env) + WAVELOG_STATION_ID
+# (required for DCLNext), and optionally POTA_HUNTED_CSV (hunted-parks export).
+#   WAVELOG_STATION_ID=3427 POTA_HUNTED_CSV=hunted.csv ./run_operator_agent.sh
+# Spec: docs/horstawards.md
 # Then point the agent at it so the Chase Queue "wanted" badges gain WAS/POTA:
 #   go run ./cmd/horstoperator-agent ... -horstawards-url http://127.0.0.1:9956
 # Spec: docs/horstawards.md
@@ -64,11 +64,11 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `dxcluster.go` — optional DX cluster TCP ingest
 - `opmode.go` — operator mode endpoint wiring (browser calls local agent directly; backend never proxies)
 - `dxlens_mount.go` — mounts the `dxlens` sibling module at `/dxlens/`
-- `cmd/horstoperator-agent/` — standalone local agent bridging browser opmode to PSTrotator UDP; also resolves Wavelog attributes for the Chase Queue and merges award "wanted" from horstawards
+- `cmd/horstoperator-agent/` — standalone local agent bridging browser opmode to PSTrotator UDP; resolves Wavelog attributes for the Chase Queue and computes award "wanted" in-process via `internal/awards` (operator log stays local)
 - `cmd/horstprop/` — standalone HF link-quality scoring service (separate binary; consumes HorstReporter read-only over HTTP; see `docs/horstprop.md`)
-- `cmd/horstawards/` — standalone operator-side award-progress service; owns the "wanted" slot index (DXCC/WAS/POTA) from the operator's log + POTA API; queried by the agent at `/v1/wanted` (see `docs/horstawards.md`)
+- `internal/awards/` — local award-progress engine embedded in the agent: slot index (DXCC/WAS/POTA) from the operator's Wavelog log + POTA hunted-parks CSV; `Manager` + `award`/`adif`/`refdata`/`source`/`store` (see `docs/horstawards.md`)
 - `internal/propcontract/` — score contract types shared between the backend and `cmd/horstprop`
-- `internal/awardcontract/` — `/v1/wanted` contract types shared between the agent and `cmd/horstawards`
+- `internal/awardcontract/` — award `WantedSpot`/`WantedResult` types shared between the agent and `internal/awards`
 
 **Frontend core files (`static/`):**
 - `app.js` — app boot, SSE stream lifecycle, projection/style gating
@@ -95,7 +95,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 ## What to avoid
 
 - Don't modify anything under `static/vendor/`
-- Don't split the *core* backend into microservices; it is intentionally single-service/single-binary. (Separate operator-side binaries like `cmd/horstoperator-agent`, `cmd/horstprop`, and `cmd/horstawards` that consume the backend/log read-only over HTTP are the sanctioned pattern — they don't grow the core binary.)
+- Don't split the *core* backend into microservices; it is intentionally single-service/single-binary. (Separate operator-side binaries like `cmd/horstoperator-agent` and `cmd/horstprop` that consume the backend/log read-only over HTTP are the sanctioned pattern — they don't grow the core binary.)
 - Keep the scoring boundary: per-spot/path **link** scoring lives only in `cmd/horstprop` (consumed by the Chase Queue via `/horstprop/v1/score`). horstreporter owns the shared, multi-station band/region **conditions** analytics (`dx_conditions.go`, `hot_bands.go`, `dxpulse.go`, dxlens) backed by the Postgres baseline. Don't add per-spot/path scoring to horstreporter.
-- Keep the awards boundary: the operator's personal **award progress** ("wanted") lives only in `cmd/horstawards` (the agent merges its `/v1/wanted` result into the enrich `needed[]`). Per-operator log/award data must not go into the shared core.
+- Keep the awards boundary: the operator's personal **award progress** ("wanted") lives only in the local operator agent (`internal/awards`, merged into the enrich `needed[]`). The operator's log/award data must stay local — never pulled to the shared core/server.
 - Don't assume Gin/Echo/React/Vite conventions

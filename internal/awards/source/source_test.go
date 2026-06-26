@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"horstreporter/cmd/horstawards/internal/award"
+	"horstreporter/internal/awards/award"
 )
 
 func statusOf(snap *Snapshot, s award.Slot) (award.Status, bool) {

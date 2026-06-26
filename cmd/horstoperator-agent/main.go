@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"horstreporter/internal/awards"
 	"horstreporter/internal/dotenv"
 )
 
@@ -70,11 +71,11 @@ type serviceConfig struct {
 	PSTHost          string
 	PSTPort          int
 	Station          stationConfig
-	RigTransport     string // none | waveloggate
-	RigWaveLogGate   string // WaveLogGate callback base URL
-	WavelogURL       string // Wavelog base URL (e.g. https://log.dclnext.darc.de/index.php)
-	WavelogAPIKey    string // Wavelog read API key (from env; never logged)
-	HorstAwardsURL   string // horstawards base URL (e.g. http://127.0.0.1:9956); empty = disabled
+	RigTransport     string        // none | waveloggate
+	RigWaveLogGate   string        // WaveLogGate callback base URL
+	WavelogURL       string        // Wavelog base URL (e.g. https://log.dclnext.darc.de/index.php)
+	WavelogAPIKey    string        // Wavelog read API key (from env; never logged)
+	Awards           awards.Config // local award-progress engine (in-process; logs stay local)
 }
 
 type rotatorState struct {
@@ -88,8 +89,13 @@ type pstUDPClient struct {
 	modeMu               sync.Mutex
 	lastKnownMode        string
 	lastModeQueryAttempt time.Time
-	disableModePolling   bool
+	modeQueryBackoff     time.Duration // current retry interval after a failure; 0 = healthy (base interval)
 }
+
+const (
+	modeQueryBaseInterval = 30 * time.Second
+	modeQueryMaxInterval  = 10 * time.Minute
+)
 
 func newPSTUDPClient(cfg serviceConfig) *pstUDPClient {
 	return &pstUDPClient{cfg: cfg, lastKnownMode: "forward"}
@@ -126,27 +132,44 @@ func (c *pstUDPClient) setKnownMode(mode string) {
 func (c *pstUDPClient) shouldQueryModeNow() bool {
 	c.modeMu.Lock()
 	defer c.modeMu.Unlock()
-	if c.disableModePolling {
-		return false
+	interval := c.modeQueryBackoff
+	if interval == 0 {
+		interval = modeQueryBaseInterval
 	}
-	if c.lastModeQueryAttempt.IsZero() {
-		c.lastModeQueryAttempt = time.Now()
-		return true
-	}
-	if time.Since(c.lastModeQueryAttempt) >= 30*time.Second {
+	if c.lastModeQueryAttempt.IsZero() || time.Since(c.lastModeQueryAttempt) >= interval {
 		c.lastModeQueryAttempt = time.Now()
 		return true
 	}
 	return false
 }
 
-func (c *pstUDPClient) disableModeQueryPolling(reason error) {
+// backoffModeQuery widens the MODE? retry interval after a failure instead of
+// giving up entirely, so polling self-heals once the controller answers again
+// while still avoiding tight-loop UDP spam.
+func (c *pstUDPClient) backoffModeQuery(reason error) {
 	c.modeMu.Lock()
-	alreadyDisabled := c.disableModePolling
-	c.disableModePolling = true
+	if c.modeQueryBackoff == 0 {
+		c.modeQueryBackoff = modeQueryBaseInterval
+	} else {
+		c.modeQueryBackoff *= 2
+		if c.modeQueryBackoff > modeQueryMaxInterval {
+			c.modeQueryBackoff = modeQueryMaxInterval
+		}
+	}
+	next := c.modeQueryBackoff
 	c.modeMu.Unlock()
-	if !alreadyDisabled {
-		log.Printf("[INFO] MODE? polling disabled after timeout/error to prevent UDP spam: %v", reason)
+	log.Printf("[INFO] MODE? query failed; retrying in %s (will keep trying): %v", next, reason)
+}
+
+// resetModeQueryBackoff returns to the base polling cadence after a reply is
+// received, recovering from any prior backoff.
+func (c *pstUDPClient) resetModeQueryBackoff() {
+	c.modeMu.Lock()
+	wasBackedOff := c.modeQueryBackoff != 0
+	c.modeQueryBackoff = 0
+	c.modeMu.Unlock()
+	if wasBackedOff {
+		log.Printf("[INFO] MODE? query recovered; resuming normal polling cadence")
 	}
 }
 
@@ -213,8 +236,12 @@ func (c *pstUDPClient) sendAndMaybeReceive(ctx context.Context, operation string
 		return "", nil
 	}
 
+	// Bind IPv4 explicitly ("udp4", not "udp"): PSTrotator sends its reply as an
+	// IPv4 broadcast (e.g. 192.168.1.255:replyPort). A dual-stack IPv6 wildcard
+	// socket ([::]) receives IPv4 unicast but NOT IPv4 broadcast, so "udp" here
+	// silently drops the reply and every read times out.
 	listenerAddr := &net.UDPAddr{IP: net.IPv4zero, Port: c.replyPort()}
-	listener, err := net.ListenUDP("udp", listenerAddr)
+	listener, err := net.ListenUDP("udp4", listenerAddr)
 	if err != nil {
 		return "", fmt.Errorf("failed to bind UDP reply listener on port %d: %w", c.replyPort(), err)
 	}
@@ -270,13 +297,16 @@ func (c *pstUDPClient) GetState(ctx context.Context) (rotatorState, error) {
 	if c.shouldQueryModeNow() {
 		modeReply, modeErr := c.sendAndMaybeReceive(ctx, "status-mode", pstQueryModeCommand, true)
 		if modeErr == nil {
+			// Controller answered: clear any backoff so polling stays at cadence.
+			c.resetModeQueryBackoff()
 			if parsed := parseMode(modeReply); parsed != "" {
 				mode = parsed
 				c.setKnownMode(parsed)
 			}
 		} else {
-			// Many controllers do not answer MODE? reliably; disable repeated polling.
-			c.disableModeQueryPolling(modeErr)
+			// Many controllers do not answer MODE? reliably; back off and retry
+			// rather than disabling forever, so it recovers once fixed.
+			c.backoffModeQuery(modeErr)
 		}
 	}
 
@@ -426,9 +456,9 @@ func decodeJSON[T any](r *http.Request, out *T) error {
 type server struct {
 	cfg     serviceConfig
 	client  *pstUDPClient
-	rig     rigController  // nil when -rig-transport=none
-	wavelog *wavelogClient // nil when WAVELOG_API_KEY is unset
-	awards  *awardsClient  // nil when -horstawards-url is unset
+	rig     rigController   // nil when -rig-transport=none
+	wavelog *wavelogClient  // nil when WAVELOG_API_KEY is unset
+	awards  *awards.Manager // nil when no award source is configured
 
 	pollMu    sync.RWMutex
 	pollState polledAntennaState
@@ -476,8 +506,14 @@ func newServer(cfg serviceConfig) *server {
 	if strings.TrimSpace(cfg.WavelogAPIKey) != "" {
 		s.wavelog = newWavelogClient(cfg.WavelogURL, cfg.WavelogAPIKey)
 	}
-	if strings.TrimSpace(cfg.HorstAwardsURL) != "" {
-		s.awards = newAwardsClient(cfg.HorstAwardsURL)
+	if cfg.Awards.Enabled() {
+		if mgr, err := awards.New(cfg.Awards); err != nil {
+			log.Printf("[WARN] awards engine disabled: %v", err)
+		} else {
+			s.awards = mgr
+			mgr.Run(context.Background())
+			log.Printf("[INFO] awards engine enabled (sources: %s)", mgr.SourceLabel())
+		}
 	}
 	s.startAntennaPoller()
 	return s
@@ -642,8 +678,8 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		capabilities["rig"] = map[string]any{"tune": c.Tune, "preview": c.Preview, "split": c.Split}
 	}
 	if s.wavelog != nil {
-		// "awards" => horstawards is wired (covers dxcc/band/mode/was/pota). The
-		// frontend keys off this; there is no award-specific sub-flag.
+		// "awards" => the in-process award engine is running (covers
+		// dxcc/band/mode/was/pota). The frontend keys off this.
 		capabilities["lookup"] = map[string]any{"wavelog": true, "awards": s.awards != nil}
 	}
 
@@ -658,6 +694,9 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"reachable":  true,
 			"note":       "liveness validated via /v1/antenna/state polling",
 		},
+	}
+	if s.awards != nil {
+		resp["awards"] = s.awards.Health()
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -850,7 +889,8 @@ func main() {
 
 	rigTransport := flag.String("rig-transport", "none", "Rig control backend: none|waveloggate (waveloggate = tune VFO A via WaveLogGate; preview/split need a future rigctld/FLRig backend)")
 	rigWaveLogGate := flag.String("rig-waveloggate-url", "http://127.0.0.1:54321", "WaveLogGate callback base URL (used when -rig-transport=waveloggate)")
-	horstAwardsURL := flag.String("horstawards-url", strings.TrimSpace(os.Getenv("HORSTAWARDS_URL")), "horstawards base URL for award 'wanted' enrichment (e.g. http://127.0.0.1:9956); empty = disabled")
+	potaHuntedCSV := flag.String("pota-hunted-csv", strings.TrimSpace(os.Getenv("POTA_HUNTED_CSV")), "Path to a POTA hunted-parks CSV export (enables POTA 'wanted'); empty = disabled")
+	awardsDataDir := flag.String("awards-data-dir", firstNonEmpty(strings.TrimSpace(os.Getenv("HORSTAWARDS_DATA_DIR")), "./horstawards-data"), "Local directory for the award-progress snapshot store")
 
 	flag.Parse()
 
@@ -894,8 +934,24 @@ func main() {
 		RigWaveLogGate: strings.TrimSpace(*rigWaveLogGate),
 		WavelogURL:     firstNonEmpty(strings.TrimSpace(os.Getenv("WAVELOG_URL")), defaultWavelogURL),
 		WavelogAPIKey:  strings.TrimSpace(os.Getenv("WAVELOG_API_KEY")),
-		HorstAwardsURL: strings.TrimRight(strings.TrimSpace(*horstAwardsURL), "/"),
 	}
+
+	// Local award-progress engine: runs in-process so the operator's Wavelog log
+	// and POTA CSV never leave this machine. Reuses the agent's Wavelog creds.
+	awCfg := awards.Defaults()
+	awCfg.DataDir = strings.TrimSpace(*awardsDataDir)
+	awCfg.WavelogURL = cfg.WavelogURL
+	awCfg.WavelogAPIKey = cfg.WavelogAPIKey
+	awCfg.WavelogStationID = strings.TrimSpace(os.Getenv("WAVELOG_STATION_ID"))
+	awCfg.POTAHuntedCSV = strings.TrimSpace(*potaHuntedCSV)
+	if v := strings.TrimSpace(os.Getenv("POTA_CALLSIGN")); v != "" {
+		awCfg.POTACall = strings.ToUpper(v)
+	}
+	awCfg.POTAToken = strings.TrimSpace(os.Getenv("POTA_TOKEN"))
+	if v := strings.TrimSpace(os.Getenv("POTA_BASE_URL")); v != "" {
+		awCfg.POTABaseURL = v
+	}
+	cfg.Awards = awCfg
 
 	if cfg.ListenAddr == "" {
 		log.Fatal("[FATAL] listen address must not be empty")

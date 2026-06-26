@@ -1,34 +1,72 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
-	"horstreporter/internal/awardcontract"
+	"horstreporter/internal/awards"
 )
 
-// newWavelogAwardsServer wires a server with both a mock Wavelog and a mock
-// horstawards backend.
-func newWavelogAwardsServer(t *testing.T, wl http.HandlerFunc, aw http.HandlerFunc) *server {
+// fakeWavelog is a single httptest server that doubles as Wavelog: it answers
+// /api/private_lookup (the agent's per-spot attribute resolution) and
+// /api/get_contacts_adif (the local award engine's log pull).
+func fakeWavelog(t *testing.T, lookup wavelogLookup, adif string) *httptest.Server {
 	t.Helper()
-	wlSrv := httptest.NewServer(wl)
-	awSrv := httptest.NewServer(aw)
-	t.Cleanup(wlSrv.Close)
-	t.Cleanup(awSrv.Close)
-	return &server{
-		cfg:     serviceConfig{},
-		wavelog: newWavelogClient(wlSrv.URL, "test-key"),
-		awards:  newAwardsClient(awSrv.URL),
-	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/api/private_lookup"):
+			_ = json.NewEncoder(w).Encode(lookup)
+		case strings.HasSuffix(r.URL.Path, "/api/get_contacts_adif"):
+			var body struct {
+				FetchFromID int64 `json:"fetchfromid"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body.FetchFromID == 0 {
+				_ = json.NewEncoder(w).Encode(map[string]any{"exported_qsos": "1", "lastfetchedid": "1", "adif": adif})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"exported_qsos": "0", "lastfetchedid": "1", "adif": ""})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
 }
 
-func decodeEnrich(t *testing.T, rec *httptest.ResponseRecorder) (bool, []enrichResult) {
+func loadedManager(t *testing.T, srvURL string, cfgMut func(*awards.Config)) *awards.Manager {
 	t.Helper()
+	c := awards.Defaults()
+	c.DataDir = t.TempDir()
+	c.WavelogURL = srvURL
+	c.WavelogAPIKey = "k"
+	c.WavelogStationID = "1"
+	c.StaleAfter = time.Hour
+	if cfgMut != nil {
+		cfgMut(&c)
+	}
+	mgr, err := awards.New(c)
+	if err != nil {
+		t.Fatalf("awards.New: %v", err)
+	}
+	mgr.RefreshNow(context.Background())
+	return mgr
+}
+
+func enrich(t *testing.T, s *server, body string) (bool, []enrichResult) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.handleEnrich(rec, httptest.NewRequest(http.MethodPost, "/v1/operate/enrich", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
 	var resp struct {
-		OK       bool           `json:"ok"`
 		Degraded bool           `json:"degraded"`
 		Results  []enrichResult `json:"results"`
 	}
@@ -38,150 +76,92 @@ func decodeEnrich(t *testing.T, rec *httptest.ResponseRecorder) (bool, []enrichR
 	return resp.Degraded, resp.Results
 }
 
-// When horstawards is healthy it is authoritative: its needed[] supersedes the
-// Wavelog confirmed-flag verdict and adds was/pota.
-func TestHandleEnrich_AwardsSupersedes(t *testing.T) {
-	wl := func(w http.ResponseWriter, r *http.Request) {
-		// Wavelog would say ATNO (not confirmed).
-		_ = json.NewEncoder(w).Encode(wavelogLookup{
-			Callsign: "W1AW", DXCC: "UNITED STATES", DXCCID: "291", State: "CT",
-			DXCCConfirmed: false,
-		})
-	}
-	aw := func(w http.ResponseWriter, r *http.Request) {
-		var req awardcontract.WantedRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if !req.PermitLookup {
-			t.Errorf("agent must send permit_lookup=true")
-		}
-		results := make([]awardcontract.WantedResult, 0, len(req.Spots))
-		for _, sp := range req.Spots {
-			// Confirm the agent forwarded resolved attributes.
-			if sp.DXCCID != "291" || sp.State != "CT" {
-				t.Errorf("forwarded attrs wrong: %+v", sp)
-			}
-			results = append(results, awardcontract.WantedResult{
-				ID:     sp.ID,
-				Needed: []string{"dxcc", "was"},
-				Slots:  []awardcontract.WantedSlot{{Program: "was", Entity: "CT", Status: "unworked"}},
-			})
-		}
-		_ = json.NewEncoder(w).Encode(awardcontract.WantedResponse{OK: true, Degraded: false, Results: results})
-	}
-	s := newWavelogAwardsServer(t, wl, aw)
+// The local index is authoritative: a US station whose DXCC is already worked but
+// whose state is new for WAS surfaces "was", superseding Wavelog's DXCC verdict.
+func TestHandleEnrich_LocalAwardsWAS(t *testing.T) {
+	// Log: one confirmed US QSO in MA on 20m SSB → DXCC 291 satisfied; WAS has MA
+	// but not CT.
+	adif := `<CALL:4>W1AA<DXCC:3>291<STATE:2>MA<BAND:3>20M<MODE:3>SSB<QSL_RCVD:1>Y<EOR>`
+	// private_lookup for the spot: US/CT, DXCC already confirmed.
+	srv := fakeWavelog(t, wavelogLookup{
+		Callsign: "W1AW", DXCC: "UNITED STATES", DXCCID: "291", State: "CT",
+		DXCCConfirmed: true, DXCCConfirmedBand: true, DXCCConfirmedBandMode: true,
+	}, adif)
+	s := &server{cfg: serviceConfig{}, wavelog: newWavelogClient(srv.URL, "k"), awards: loadedManager(t, srv.URL, nil)}
 
-	rec := httptest.NewRecorder()
-	body := `{"permit_lookup":true,"spots":[{"id":"W1AW|20m|SSB","call":"W1AW","band":"20m","mode":"SSB"}]}`
-	s.handleEnrich(rec, httptest.NewRequest(http.MethodPost, "/v1/operate/enrich", strings.NewReader(body)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	degraded, results := enrich(t, s, `{"permit_lookup":true,"spots":[{"id":"W1AW|20m|SSB","call":"W1AW","band":"20m","mode":"SSB"}]}`)
+	if degraded {
+		t.Errorf("expected not degraded (index loaded)")
 	}
-	degraded, results := decodeEnrich(t, rec)
-	if degraded || len(results) != 1 {
-		t.Fatalf("envelope degraded=%v results=%d", degraded, len(results))
-	}
-	if strings.Join(results[0].Needed, ",") != "dxcc,was" {
-		t.Errorf("needed=%v, want [dxcc was] from awards", results[0].Needed)
-	}
-	if len(results[0].Slots) != 1 || results[0].Slots[0].Program != "was" {
-		t.Errorf("slots not passed through: %+v", results[0].Slots)
-	}
-	// Wavelog DXCC block still present (entity resolution unchanged).
-	if results[0].DXCC == nil || results[0].DXCC.Entity != "UNITED STATES" {
-		t.Errorf("dxcc block lost: %+v", results[0].DXCC)
+	if len(results) != 1 || strings.Join(results[0].Needed, ",") != "was" {
+		t.Errorf("needed = %v, want [was] from local index", results[0].Needed)
 	}
 }
 
-// The POTA park ref from the spot (parsed from the comment, carried in the enrich
-// request) must be forwarded to horstawards — the Wavelog callsign lookup has no
-// park, so it can only come from the request.
-func TestHandleEnrich_ForwardsPotaRef(t *testing.T) {
-	wl := func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(wavelogLookup{Callsign: "W1ABC", DXCC: "UNITED STATES", DXCCID: "291"})
+// POTA park-hunt fires from the local CSV via the spot's pota_ref.
+func TestHandleEnrich_LocalAwardsPOTA(t *testing.T) {
+	adif := `<CALL:4>W1AA<DXCC:3>291<STATE:2>MA<SIG:4>POTA<SIG_INFO:6>K-0001<EOR>`
+	srv := fakeWavelog(t, wavelogLookup{Callsign: "K1ABC", DXCC: "UNITED STATES", DXCCID: "291", DXCCConfirmed: true, DXCCConfirmedBand: true, DXCCConfirmedBandMode: true}, adif)
+	csv := t.TempDir() + "/hunted.csv"
+	if err := os.WriteFile(csv, []byte("Reference\nK-0001\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	var gotRef string
-	aw := func(w http.ResponseWriter, r *http.Request) {
-		var req awardcontract.WantedRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if len(req.Spots) == 1 {
-			gotRef = req.Spots[0].POTARef
-		}
-		results := []awardcontract.WantedResult{}
-		for _, sp := range req.Spots {
-			needed := []string{}
-			if sp.POTARef != "" {
-				needed = append(needed, "pota")
-			}
-			results = append(results, awardcontract.WantedResult{ID: sp.ID, Needed: needed})
-		}
-		_ = json.NewEncoder(w).Encode(awardcontract.WantedResponse{OK: true, Results: results})
-	}
-	s := newWavelogAwardsServer(t, wl, aw)
+	mgr := loadedManager(t, srv.URL, func(c *awards.Config) { c.POTAHuntedCSV = csv })
+	s := &server{cfg: serviceConfig{}, wavelog: newWavelogClient(srv.URL, "k"), awards: mgr}
 
-	rec := httptest.NewRecorder()
-	body := `{"permit_lookup":true,"spots":[{"id":"W1ABC|20m|SSB","call":"W1ABC","band":"20m","mode":"SSB","pota_ref":"K-1234"}]}`
-	s.handleEnrich(rec, httptest.NewRequest(http.MethodPost, "/v1/operate/enrich", strings.NewReader(body)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	// K-0001 already hunted → no pota; K-9999 new → pota.
+	_, hunted := enrich(t, s, `{"permit_lookup":true,"spots":[{"id":"a","call":"K1ABC","band":"20m","mode":"SSB","pota_ref":"K-0001"}]}`)
+	if contains(hunted[0].Needed, "pota") {
+		t.Errorf("hunted park should not be wanted: %v", hunted[0].Needed)
 	}
-	if gotRef != "K-1234" {
-		t.Errorf("horstawards received pota_ref=%q, want K-1234", gotRef)
-	}
-	_, results := decodeEnrich(t, rec)
-	if len(results) != 1 || strings.Join(results[0].Needed, ",") != "pota" {
-		t.Errorf("expected needed [pota] from park ref, got %+v", results)
+	_, fresh := enrich(t, s, `{"permit_lookup":true,"spots":[{"id":"b","call":"K1ABC","band":"20m","mode":"SSB","pota_ref":"K-9999"}]}`)
+	if !contains(fresh[0].Needed, "pota") {
+		t.Errorf("new park should be wanted: %v", fresh[0].Needed)
 	}
 }
 
-// When horstawards is down, enrichment must continue with the Wavelog verdict and
-// only mark degraded.
-func TestHandleEnrich_AwardsDownTolerant(t *testing.T) {
-	wl := func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(wavelogLookup{Callsign: "3Y0J", DXCC: "BOUVET", DXCCID: "24", DXCCConfirmed: false})
+// A cold (never-refreshed) index is degraded → the agent keeps the Wavelog verdict.
+func TestHandleEnrich_AwardsColdFallsBackToWavelog(t *testing.T) {
+	srv := fakeWavelog(t, wavelogLookup{Callsign: "3Y0J", DXCC: "BOUVET", DXCCID: "24", DXCCConfirmed: false}, "")
+	c := awards.Defaults()
+	c.DataDir = t.TempDir()
+	c.WavelogURL = srv.URL
+	c.WavelogAPIKey = "k"
+	c.WavelogStationID = "1"
+	c.StaleAfter = time.Hour
+	mgr, err := awards.New(c) // NOT refreshed → cold → degraded
+	if err != nil {
+		t.Fatal(err)
 	}
-	aw := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) }
-	s := newWavelogAwardsServer(t, wl, aw)
+	s := &server{cfg: serviceConfig{}, wavelog: newWavelogClient(srv.URL, "k"), awards: mgr}
 
-	rec := httptest.NewRecorder()
-	body := `{"permit_lookup":true,"spots":[{"id":"3Y0J|17m|SSB","call":"3Y0J","band":"17m","mode":"SSB"}]}`
-	s.handleEnrich(rec, httptest.NewRequest(http.MethodPost, "/v1/operate/enrich", strings.NewReader(body)))
-
-	degraded, results := decodeEnrich(t, rec)
+	degraded, results := enrich(t, s, `{"permit_lookup":true,"spots":[{"id":"3Y0J|17m|SSB","call":"3Y0J","band":"17m","mode":"SSB"}]}`)
 	if !degraded {
-		t.Error("expected degraded=true when awards is down")
+		t.Errorf("expected degraded when index cold")
 	}
 	if len(results) != 1 || strings.Join(results[0].Needed, ",") != "dxcc" {
-		t.Errorf("expected Wavelog needed [dxcc] retained, got %+v", results)
+		t.Errorf("expected Wavelog fallback [dxcc], got %v", results[0].Needed)
 	}
 }
 
-// When horstawards is reachable but its index is cold (degraded), the Wavelog
-// verdict is retained (not overwritten with empty awards needed) and degraded is
-// surfaced.
-func TestHandleEnrich_AwardsColdRetainsWavelog(t *testing.T) {
-	wl := func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(wavelogLookup{Callsign: "3Y0J", DXCC: "BOUVET", DXCCID: "24", DXCCConfirmed: false})
+// No awards manager at all → Wavelog-only behavior (unchanged from before awards).
+func TestHandleEnrich_NoAwardsManager(t *testing.T) {
+	srv := fakeWavelog(t, wavelogLookup{Callsign: "3Y0J", DXCC: "BOUVET", DXCCID: "24", DXCCConfirmed: false}, "")
+	s := &server{cfg: serviceConfig{}, wavelog: newWavelogClient(srv.URL, "k")} // awards nil
+	degraded, results := enrich(t, s, `{"permit_lookup":true,"spots":[{"id":"x","call":"3Y0J","band":"17m","mode":"SSB"}]}`)
+	if degraded {
+		t.Errorf("no awards manager should not mark degraded")
 	}
-	aw := func(w http.ResponseWriter, r *http.Request) {
-		var req awardcontract.WantedRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		results := make([]awardcontract.WantedResult, 0, len(req.Spots))
-		for _, sp := range req.Spots {
-			results = append(results, awardcontract.WantedResult{ID: sp.ID, Needed: []string{}})
+	if strings.Join(results[0].Needed, ",") != "dxcc" {
+		t.Errorf("expected [dxcc] from Wavelog, got %v", results[0].Needed)
+	}
+}
+
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
 		}
-		_ = json.NewEncoder(w).Encode(awardcontract.WantedResponse{OK: true, Degraded: true, Results: results})
 	}
-	s := newWavelogAwardsServer(t, wl, aw)
-
-	rec := httptest.NewRecorder()
-	body := `{"permit_lookup":true,"spots":[{"id":"3Y0J|17m|SSB","call":"3Y0J","band":"17m","mode":"SSB"}]}`
-	s.handleEnrich(rec, httptest.NewRequest(http.MethodPost, "/v1/operate/enrich", strings.NewReader(body)))
-
-	degraded, results := decodeEnrich(t, rec)
-	if !degraded {
-		t.Error("expected degraded=true when awards index cold")
-	}
-	if len(results) != 1 || strings.Join(results[0].Needed, ",") != "dxcc" {
-		t.Errorf("expected Wavelog needed [dxcc] retained on cold index, got %+v", results)
-	}
+	return false
 }

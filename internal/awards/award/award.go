@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"horstreporter/cmd/horstawards/internal/refdata"
 	"horstreporter/internal/awardcontract"
+	"horstreporter/internal/awards/refdata"
 )
 
 // Program identifies an award program. Reserved (not yet computed): "waz",

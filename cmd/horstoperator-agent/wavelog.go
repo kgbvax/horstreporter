@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -72,7 +71,9 @@ type wavelogLookup struct {
 	DXCCConfirmedBandMode bool `json:"dxcc_confirmed_on_band_mode"`
 
 	CallConfirmed bool `json:"call_confirmed"`
-	LOTWMember    bool `json:"lotw_member"`
+	// NOTE: do not add lotw_member here as bool — DCLNext returns it as a string
+	// ("18"), which fails json.Unmarshal into a bool and breaks the whole lookup.
+	// It is unused; leaving it off lets the decoder ignore the unknown field.
 }
 
 func wlCacheKey(call, band, mode string) string {
@@ -302,29 +303,23 @@ func (s *server) handleEnrich(w http.ResponseWriter, r *http.Request) {
 		out = append(out, er)
 	}
 
-	// Compose with horstawards (optional). When the awards index is present and
-	// loaded, it is the authoritative source of needed[] (it computes dxcc/band/
-	// mode/was/pota from the operator's own log) and supersedes the Wavelog
-	// confirmed-flag verdict. When it is absent, cold (degraded), or errors, we
-	// keep the Wavelog-derived needed[] — awards being down must never drop the
-	// existing enrichment.
+	// Compose with the local award engine (optional, in-process). When its index
+	// is present and loaded, it is the authoritative source of needed[] (it
+	// computes dxcc/band/mode/was/pota from the operator's own log) and supersedes
+	// the Wavelog confirmed-flag verdict. When it is absent or cold (degraded), we
+	// keep the Wavelog-derived needed[] and just flag degraded — awards being
+	// unavailable must never drop the existing enrichment.
 	if s.awards != nil && len(wanted) > 0 {
-		actx, acancel := context.WithTimeout(r.Context(), 6*time.Second)
-		defer acancel()
-		resp, err := s.awards.Wanted(actx, wanted)
-		switch {
-		case err != nil || resp == nil:
-			degraded = true
-			log.Printf("[WARN] horstawards lookup failed: %v", err)
-		case resp.Degraded:
-			degraded = true // index not loaded yet — keep Wavelog needed[]
-		default:
-			byID := make(map[string]awardcontract.WantedResult, len(resp.Results))
-			for _, res := range resp.Results {
-				byID[res.ID] = res
-			}
+		if s.awards.Degraded() {
+			degraded = true // index not loaded/stale yet — keep Wavelog needed[]
+		} else {
+			byID := make(map[string]int, len(out))
 			for i := range out {
-				if res, ok := byID[out[i].ID]; ok {
+				byID[out[i].ID] = i
+			}
+			for _, sp := range wanted {
+				if i, ok := byID[sp.ID]; ok {
+					res := s.awards.Evaluate(sp)
 					out[i].Needed = res.Needed
 					out[i].Slots = res.Slots
 				}

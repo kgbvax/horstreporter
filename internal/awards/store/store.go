@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"horstreporter/cmd/horstawards/internal/source"
+	"horstreporter/internal/awards/source"
 )
 
 const fileName = "awards.json"

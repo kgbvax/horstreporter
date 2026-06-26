@@ -1,8 +1,8 @@
 package award
 
 import (
-	"horstreporter/cmd/horstawards/internal/refdata"
 	"horstreporter/internal/awardcontract"
+	"horstreporter/internal/awards/refdata"
 )
 
 // wasNeeded reports whether a spot is needed for Worked All States. WAS counts a

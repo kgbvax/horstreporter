@@ -194,7 +194,6 @@ func main() {
 	dxPostgresDSN := flag.String("dx-postgres-dsn", "", "Postgres DSN for DX baseline and raw spot storage (falls back to env DX_POSTGRES_DSN, then the built-in default; keep secrets out of argv via the env var)")
 	dxPostgresFailFast := flag.Bool("dx-postgres-fail-fast", true, "Exit immediately when Postgres init/migration fails")
 	horstpropURL := flag.String("horstprop-url", "http://127.0.0.1:9970", "Reverse-proxy /horstprop/* to this local horstprop scoring service (empty disables the mount)")
-	horstawardsURL := flag.String("horstawards-url", "http://127.0.0.1:9956", "Reverse-proxy /horstawards/{v1/wanted,v1/health} to this co-located horstawards service (empty disables the mount)")
 	dxClusterEnable := flag.Bool("dxcluster-enable", false, "Enable optional DX cluster ingest")
 	dxClusterEndpoint := flag.String("dxcluster-endpoint", "db0erf.de:7300", "DX cluster endpoint in host:port format")
 	dxClusterReconnectSeconds := flag.Int("dxcluster-reconnect-seconds", 15, "Delay before reconnecting to DX cluster after disconnect")
@@ -375,14 +374,6 @@ func main() {
 	if proxy, ok := newHorstpropProxy(*horstpropURL); ok {
 		appMux.Handle("/horstprop/", proxy)
 		logInfo("horstprop proxy mounted at /horstprop/ -> %s", *horstpropURL)
-	}
-
-	// Reverse-proxy /horstawards/{v1/wanted,v1/health} to the co-located
-	// horstawards award-progress service so the operator's (local) agent reaches
-	// it same-origin under TLS. Read-only scope: /v1/refresh is not exposed.
-	if proxy, ok := newHorstawardsProxy(*horstawardsURL); ok {
-		appMux.Handle("/horstawards/", proxy)
-		logInfo("horstawards proxy mounted at /horstawards/ (v1/wanted, v1/health) -> %s", *horstawardsURL)
 	}
 
 	// Mount DXLens (separate module) at /dxlens/. Reads HorstReporter's

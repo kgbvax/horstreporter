@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"horstreporter/cmd/horstawards/internal/adif"
-	"horstreporter/cmd/horstawards/internal/award"
-	"horstreporter/cmd/horstawards/internal/refdata"
+	"horstreporter/internal/awards/adif"
+	"horstreporter/internal/awards/award"
+	"horstreporter/internal/awards/refdata"
 )
 
 // WavelogADIF pulls the operator's full log from Wavelog's get_contacts_adif API

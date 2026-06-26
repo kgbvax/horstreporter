@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"horstreporter/cmd/horstawards/internal/award"
-	"horstreporter/cmd/horstawards/internal/source"
+	"horstreporter/internal/awards/award"
+	"horstreporter/internal/awards/source"
 )
 
 func TestSaveLoadRoundTrip(t *testing.T) {
