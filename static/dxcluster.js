@@ -125,8 +125,8 @@ function injectStyles() {
 
   .cq-colhead { background:var(--surface-1); border-bottom:1px solid var(--control-border); }
   .cq-colhead.is-hidden { display:none; }
-  .cq-fh1, .cq-row .cq-f1 { display:grid; grid-template-columns:24px auto auto 1fr 58px 40px; column-gap:8px; align-items:center; }
-  .cq-fh2, .cq-row .cq-f2 { display:grid; grid-template-columns:24px 48px 50px 82px 40px; column-gap:8px; align-items:baseline; }
+  .cq-fh1, .cq-row .cq-f1 { display:grid; grid-template-columns:24px auto auto 1fr; column-gap:8px; align-items:center; }
+  .cq-fh2, .cq-row .cq-f2 { display:grid; grid-template-columns:24px 48px 48px 78px 58px 40px; column-gap:8px; align-items:center; }
   .cq-fh1 { padding:7px 12px 2px 15px; } .cq-fh2 { padding:0 12px 8px 15px; }
   /* every header keeps the same box in every state (constant padding + a reserved
      arrow slot) so sorting never reflows the columns; only background changes */
@@ -338,10 +338,6 @@ let sortKey = localStorage.getItem('cqSortKey') || 'wanted';
 let sortAsc = localStorage.getItem('cqSortAsc') === '1';
 const scoreOf = (s) => (s._score && s._score.score != null) ? s._score.score : -1;
 const distOf = (s) => (s._score && s._score.distance_km) ? s._score.distance_km : -1;
-const dirIdx = (s) => {
-  const sc = s._score;
-  return (sc && Number.isFinite(sc.bearing_deg)) ? COMPASS16.indexOf(degToCardinal(sc.bearing_deg)) : 99;
-};
 // Each comparator is the column's default direction; sortAsc reverses it.
 const SORTS = {
   star: (a, b) => (isStar(b.dx_call) - isStar(a.dx_call)) || (scoreOf(b) - scoreOf(a)),
@@ -352,7 +348,6 @@ const SORTS = {
   band: (a, b) => (a.freq_khz || 0) - (b.freq_khz || 0),
   mode: (a, b) => (parseMode(a.comment) || '~~').localeCompare(parseMode(b.comment) || '~~'),
   dist: (a, b) => distOf(b) - distOf(a),
-  dir: (a, b) => dirIdx(a) - dirIdx(b),
 };
 
 // fHead builds the two-tier sortable column header. The arrow slot is always
@@ -365,8 +360,8 @@ function fHead() {
     return `<button data-k="${k}" class="${cls}">${label}<span class="cq-ar">${act ? (sortAsc ? '▲' : '▼') : ''}</span></button>`;
   };
   const star = `<button data-k="star" class="starh lft${sortKey === 'star' ? ' act' : ''}">★</button>`;
-  return `<div class="cq-fh1">${star}${H('call', 'Call', 1)}${H('wanted', 'Wanted', 1)}<span></span>${H('score', 'Score')}${H('age', 'Age')}</div>`
-       + `<div class="cq-fh2"><span></span>${H('band', 'Band', 1)}${H('mode', 'Mode', 1)}${H('dist', 'Dist')}${H('dir', 'Dir')}</div>`;
+  return `<div class="cq-fh1">${star}${H('call', 'Call', 1)}${H('wanted', 'Wanted', 1)}<span></span></div>`
+       + `<div class="cq-fh2"><span></span>${H('band', 'Band', 1)}${H('mode', 'Mode', 1)}${H('dist', 'Dist')}${H('score', 'Score')}${H('age', 'Age')}</div>`;
 }
 
 // renderRow builds one two-line ledger entry: line 1 = ★ · call · wanted · score
@@ -398,15 +393,14 @@ function renderRow(s) {
       <span class="cq-c">${s.dx_call}</span>
       ${badge}
       <span></span>
-      <span class="cq-bar g-${dec}"><i style="width:${fill}%"></i></span>
-      <span class="cq-age">${fmtAge(s.age_seconds)}</span>
     </div>
     <div class="cq-f2">
       <span></span>
       <span class="cq-d bandc" style="color:${bandColor(s.band)}">${s.band}</span>
       <span class="cq-d">${mode}</span>
       <span class="cq-d r">${dist ? dist + ' km' : ''}</span>
-      <span class="cq-d r">${dir}</span>
+      <span class="cq-bar g-${dec}"><i style="width:${fill}%"></i></span>
+      <span class="cq-age">${fmtAge(s.age_seconds)}</span>
     </div>
     <div class="cq-detail"></div>`;
   if (sc && sc.reason) el.title = sc.reason;
@@ -423,6 +417,7 @@ function renderRow(s) {
   if (s.country) bits.push(s.country);
   if (mode) bits.push(mode);
   bits.push(`${fmtFreq(s.freq_khz)} MHz`);
+  if (dir) bits.push(`beam ${dir}`); // direction lives here now (dropped from the row)
   detail.innerHTML = bits.join('<span class="sep">·</span>') + (comment ? `<span class="cmt">${comment}</span>` : '');
 
   // Rig mode prefers the spotter-reported mode, else the frequency default.
