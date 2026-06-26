@@ -35,11 +35,15 @@ STATION_LAT="${STATION_LAT:-52.52}"            # default: Berlin (CLAUDE.md exam
 STATION_LNG="${STATION_LNG:-13.40}"
 STATION_LOCATOR="${STATION_LOCATOR:-}"         # optional Maidenhead locator
 
-PST_HOST="${PST_HOST:-127.0.0.1}"
+PST_HOST="${PST_HOST:-a6.kgbvax.net}"
 PST_PORT="${PST_PORT:-12000}"
 PST_TIMEOUT_MS="${PST_TIMEOUT_MS:-1500}"
 
 BACKEND_URL="${BACKEND_URL:-}"                 # optional reverse-proxy target
+# horstawards runs on the server (kgbvax.net); the agent reaches it via the
+# backend's /horstawards reverse-proxy. Set to enable WAS/POTA "wanted", e.g.
+#   HORSTAWARDS_URL=https://horstreporter.kgbvax.net/horstawards
+HORSTAWARDS_URL="${HORSTAWARDS_URL:-}"
 CONTROL_PERMITTED="${CONTROL_PERMITTED:-true}" # set false for read-only/monitor
 ALLOWED_MODES="${ALLOWED_MODES:-forward,backward,bidirectional}"
 BEAMWIDTH_3DB_DEG="${BEAMWIDTH_3DB_DEG:-60}"
@@ -63,6 +67,7 @@ args=(
 
 [ -n "$STATION_LOCATOR" ] && args+=(-station-locator "$STATION_LOCATOR")
 [ -n "$BACKEND_URL" ] && args+=(-backend-url "$BACKEND_URL")
+[ -n "$HORSTAWARDS_URL" ] && args+=(-horstawards-url "$HORSTAWARDS_URL")
 [ "$PST_LOG_TRAFFIC" = "1" ] && args+=(-pst-log-traffic)
 [ "$PST_LOG_TRAFFIC_HEX" = "1" ] && args+=(-pst-log-traffic-hex)
 

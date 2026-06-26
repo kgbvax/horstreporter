@@ -1,8 +1,10 @@
 #!/bin/bash
 
-# Installs horstawards as a systemd service. Run as root ON THE TARGET machine
-# (your operator/shack box). Idempotent: re-run to update the binary; it won't
-# clobber an existing /etc/default/horstawards (which holds your secrets).
+# Installs horstawards as a systemd service. Run as root ON THE HORSTREPORTER
+# SERVER (kgbvax.net), co-located with the backend — horstawards binds to
+# 127.0.0.1:9956 and the backend reverse-proxies /horstawards/ to it. Idempotent:
+# re-run to update the binary; it won't clobber an existing /etc/default/horstawards
+# (which holds your secrets).
 #
 # Mirrors install_horstprop_service.sh, but horstawards DOES hold a secret (the
 # read-only WAVELOG_API_KEY) and needs a writable data dir for its snapshot store,

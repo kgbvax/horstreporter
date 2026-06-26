@@ -1,14 +1,25 @@
 # horstawards — award progress + the "wanted lookup"
 
-`horstawards` is a standalone, operator-side service that owns the operator's
-**award-progress index** and answers one question fast: *for this spot, which
-award slots would it fill that I haven't satisfied yet?* The Chase Queue uses the
-answer to flag spots as **ATNO / +BAND / +MODE / WAS / POTA**.
+`horstawards` is a standalone service that owns the operator's **award-progress
+index** and answers one question fast: *for this spot, which award slots would it
+fill that I haven't satisfied yet?* The Chase Queue uses the answer to flag spots
+as **ATNO / +BAND / +MODE / WAS / POTA**.
 
 It mirrors the `horstprop` pattern: a separate binary in the same module,
 decoupled over HTTP, sharing only the contract types in `internal/awardcontract`.
-Award/progress data is personal, so it lives operator-side — never in the shared
-core (same boundary that keeps per-spot scoring in `horstprop`).
+It stays out of the shared core (same boundary that keeps per-spot scoring in
+`horstprop`).
+
+## Topology
+
+horstawards runs **co-located on the HorstReporter server** (`kgbvax.net`),
+bound to `127.0.0.1:9956`, alongside the backend and `horstprop`. The backend
+reverse-proxies **`/horstawards/`** to it (read-only: only `/v1/wanted` and
+`/v1/health` — `/v1/refresh` stays server-internal). The **operator agent is the
+one local piece** (it drives the rotator/rig and the browser hits it at
+`127.0.0.1:9955`); it reaches horstawards through that proxy at
+`https://horstreporter.kgbvax.net/horstawards`. The Wavelog read key and the POTA
+hunted-parks CSV live on the server next to horstawards.
 
 ## The model: wanted = attribute ∩ progress
 
@@ -26,16 +37,20 @@ Two independent inputs feed it:
   owns, pulled from the operator's log (and optionally the POTA API).
 
 ```
-Chase Queue (browser)
-   │  POST /v1/operate/enrich         (agent contract; needed[] gains was/pota)
-   ▼
-horstoperator-agent ── resolves attributes via Wavelog private_lookup
-   │                 └─ POST /v1/wanted ─► horstawards (in-memory progress index)
-   └─ merges: awards is authoritative when loaded; Wavelog is the fallback
-                                              ▲ slow refresh goroutines
-                                  ┌───────────┴──────────────┐
-                          Wavelog get_contacts_adif    POTA api.pota.app (optional)
-                                  └── atomic JSON snapshot store ──┘
+ LOCAL (operator machine)          │   SERVER (kgbvax.net)
+                                   │
+ Chase Queue (browser)            │
+   │ POST /v1/operate/enrich      │
+   ▼                              │
+ horstoperator-agent ── resolves attributes via Wavelog private_lookup
+   │  └─ POST https://kgbvax.net/horstawards/v1/wanted
+   │            (backend reverse-proxy /horstawards/ ─► 127.0.0.1:9956)
+   │                              │        ▼
+   └─ merges: awards authoritative│   horstawards (in-memory progress index)
+      when loaded; Wavelog fallback│        ▲ slow refresh goroutines
+                                   │  ┌─────┴───────────────┐
+                                   │  Wavelog ADIF / pota-csv / POTA API
+                                   │  └── atomic JSON snapshot store ──┘
 ```
 
 The query path is a pure in-memory map lookup — no disk, no upstream call per
@@ -140,27 +155,35 @@ per-source summary (last refresh time + stats).
 Triggers an immediate async refresh of all sources (202). Requires
 `{"permit_refresh": true}` in a JSON body (`Content-Type: application/json`); the
 content-type requirement plus the loopback-only CORS policy close cross-site
-refresh triggers. The POST endpoints reject non-JSON requests with 415.
+refresh triggers, and it is **not** exposed through the public `/horstawards/`
+proxy — trigger it server-internally (`curl 127.0.0.1:9956/v1/refresh …`). The
+POST endpoints reject non-JSON requests with 415.
 
 ## Running
 
 ```bash
 # Local dev (reads WAVELOG_API_KEY from a repo-root .env). POTA optional.
-go run ./cmd/horstawards -listen 127.0.0.1:9956
+go run ./cmd/horstawards -listen 127.0.0.1:9956 -wavelog-station-id <id> -pota-hunted-csv hunted.csv
 
-# Sanity check
+# Sanity check (on the box running horstawards)
 curl -s 127.0.0.1:9956/v1/health
-curl -sX POST 127.0.0.1:9956/v1/wanted \
+curl -sX POST 127.0.0.1:9956/v1/wanted -H 'Content-Type: application/json' \
   -d '{"permit_lookup":true,"spots":[{"id":"t","call":"W1AW","dxcc_id":"291","state":"CT","band":"20m","mode":"SSB"}]}'
-
-# Point the agent at it
-go run ./cmd/horstoperator-agent -listen 127.0.0.1:9955 \
-  -station-lat 52.52 -station-lng 13.40 -horstawards-url http://127.0.0.1:9956
 ```
 
-Configuration and secrets: see `docs/deployment-secrets.md`. Production install:
-`./build_horstawards_linux_x64.sh` then `sudo ./install_horstawards_service.sh`
-(or `HORSTAWARDS_HOST=shack.lan ./deploy_horstawards.sh`).
+**Production (the real topology):** horstawards runs on the server next to the
+backend. Deploy it with `./deploy_horstawards.sh` (defaults to
+`horstreporter.kgbvax.net`); the installer creates `/etc/default/horstawards`
+(chmod 600) for `WAVELOG_API_KEY` + `WAVELOG_STATION_ID` and the `ARGS`
+(`-pota-hunted-csv …`). The backend already mounts the `/horstawards/` proxy
+(`-horstawards-url`, default `http://127.0.0.1:9956`). Then enable it on the
+**local** agent:
+
+```bash
+HORSTAWARDS_URL=https://horstreporter.kgbvax.net/horstawards ./run_operator_agent.sh
+```
+
+Configuration and secrets: see `docs/deployment-secrets.md`.
 
 ## Composition with the agent
 

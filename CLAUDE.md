@@ -26,9 +26,11 @@ go run ./cmd/horstoperator-agent -listen 127.0.0.1:9955 -station-lat 52.52 -stat
 # Run HF link-quality scoring service (separate binary; consumes HorstReporter read-only)
 go run ./cmd/horstprop -listen 127.0.0.1:9970
 
-# Run award-progress service (separate operator-side binary; owns the "wanted" index).
-# Reuses WAVELOG_API_KEY (read-only) via env/.env; needs WAVELOG_STATION_ID for DCLNext.
-# POTA: point -pota-hunted-csv at your POTA hunted-parks CSV export.
+# Run award-progress service (separate binary; owns the Chase Queue "wanted" index).
+# Runs on the SERVER (kgbvax.net) co-located with the backend, bound to 127.0.0.1:9956;
+# the backend reverse-proxies /horstawards/ (v1/wanted, v1/health) to it. The LOCAL
+# agent reaches it via that proxy (HORSTAWARDS_URL=https://horstreporter.kgbvax.net/horstawards).
+# Needs WAVELOG_STATION_ID for DCLNext; POTA via -pota-hunted-csv (hunted-parks export).
 go run ./cmd/horstawards -listen 127.0.0.1:9956 -wavelog-station-id <id> -pota-hunted-csv hunted.csv
 # Then point the agent at it so the Chase Queue "wanted" badges gain WAS/POTA:
 #   go run ./cmd/horstoperator-agent ... -horstawards-url http://127.0.0.1:9956

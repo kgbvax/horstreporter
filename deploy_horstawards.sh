@@ -1,29 +1,25 @@
 #!/bin/bash
 
-# Deploys horstawards to your operator/shack box (build locally, upload, install,
-# restart). Mirrors deploy_horstprop.sh — horstawards is operator-LOCAL (the agent
-# reaches it at 127.0.0.1:9956), so it must run on the machine you operate from,
-# NOT the public HorstReporter server.
+# Deploys horstawards to the HorstReporter server (build locally, upload, install,
+# restart). horstawards runs CO-LOCATED with the backend on kgbvax.net, bound to
+# 127.0.0.1:9956; the backend reverse-proxies /horstawards/ to it, and the
+# operator's (local) agent reaches it via that proxy. This mirrors deploy.sh — the
+# default host is the public HorstReporter server, NOT a separate shack box.
 #
 # Usage:
-#   HORSTAWARDS_HOST=shack.lan ./deploy_horstawards.sh           # remote (ssh/scp)
-#   HORSTAWARDS_HOST=shack.lan HORSTAWARDS_USER=ingo ./deploy_horstawards.sh
-#   ./deploy_horstawards.sh <host> [user]
+#   ./deploy_horstawards.sh                       # deploy to horstreporter.kgbvax.net (root)
+#   ./deploy_horstawards.sh <user>                # override ssh user
+#   HORSTAWARDS_HOST=other.host ./deploy_horstawards.sh   # override host
 #
-# Running ON the shack box itself? Skip this and just:
-#   ./build_horstawards_linux_x64.sh && sudo ./install_horstawards_service.sh
+# Secrets/config (WAVELOG_API_KEY, WAVELOG_STATION_ID, -pota-hunted-csv path) live
+# in /etc/default/horstawards on the server (created chmod 600 by the installer on
+# first run; edit it there, then: systemctl restart horstawards).
 
 set -e
 
-HOST="${HORSTAWARDS_HOST:-${1:-}}"
-USER="${HORSTAWARDS_USER:-${2:-root}}"
+HOST="${HORSTAWARDS_HOST:-horstreporter.kgbvax.net}"
+USER="${1:-root}"
 BINARY_NAME="horstawards-linux-x64"
-
-if [ -z "$HOST" ]; then
-    echo "No target host. Set HORSTAWARDS_HOST or pass it as the first argument."
-    echo "Usage: HORSTAWARDS_HOST=shack.lan $0   (or: $0 <host> [user])"
-    exit 1
-fi
 
 echo "Building $BINARY_NAME..."
 ./build_horstawards_linux_x64.sh

@@ -67,7 +67,7 @@ Reads from the environment (loaded from a `.env` in CWD if present):
 | --- | --- | --- |
 | `WAVELOG_API_KEY` | — | Wavelog **read** API key. Enables enrichment; empty = disabled. Never logged. |
 | `WAVELOG_URL` | `https://log.dclnext.darc.de/index.php` | Wavelog base URL. |
-| `HORSTAWARDS_URL` | — | horstawards base URL (e.g. `http://127.0.0.1:9956`). Also a `-horstawards-url` flag. Enables the award "wanted" merge (`was`/`pota`); empty = disabled. Not a secret. |
+| `HORSTAWARDS_URL` | — | horstawards base URL the agent calls. horstawards runs on the server, so this is the proxied endpoint: `https://horstreporter.kgbvax.net/horstawards`. Also a `-horstawards-url` flag. Enables the award "wanted" merge (`was`/`pota`); empty = disabled. Not a secret. |
 
 `run_operator_agent.sh` runs from the repo root, so a `.env` there is picked up:
 
@@ -97,9 +97,12 @@ belongs in the env file.)
 
 ## Awards service — `horstawards`
 
-Operator-local, like the agent. Reads from the environment (loaded from a `.env`
-in CWD if present; `EnvironmentFile` under systemd). Reuses the **same** read-only
-Wavelog key as the agent — no new secret is introduced.
+Runs **on the server** (`kgbvax.net`), co-located with the backend and
+`horstprop`, bound to `127.0.0.1:9956`; the backend reverse-proxies
+`/horstawards/` to it. (The agent is the local piece — it reaches horstawards via
+that proxy.) Reads from the environment (`EnvironmentFile` under systemd; a CWD
+`.env` for dev). Uses the same read-only Wavelog key the agent uses — the key
+simply also lives on the server here.
 
 | Env var | Default | Notes |
 | --- | --- | --- |
@@ -122,8 +125,12 @@ EnvironmentFile=-/etc/default/horstawards   # hk:hk, 0600 (holds WAVELOG_API_KEY
 ExecStart=/opt/horstawards/horstawards-linux-x64 $ARGS   # ARGS="-listen 127.0.0.1:9956 -data-dir /opt/horstawards/data"
 ```
 
-Point the agent at it with `-horstawards-url http://127.0.0.1:9956` (or
-`HORSTAWARDS_URL`). See `docs/horstawards.md`.
+The backend mounts the proxy via `-horstawards-url` (default
+`http://127.0.0.1:9956`; the backend and horstawards are on the same host). The
+**local agent** then points at the public proxy:
+`HORSTAWARDS_URL=https://horstreporter.kgbvax.net/horstawards`. The public mount
+exposes only `/v1/wanted` + `/v1/health`; `/v1/refresh` is server-internal. See
+`docs/horstawards.md`.
 
 ---
 
