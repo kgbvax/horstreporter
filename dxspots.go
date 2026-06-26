@@ -54,6 +54,13 @@ func dxSpotsHandler(w http.ResponseWriter, r *http.Request) {
 		if !strings.EqualFold(m.MD, "DXCLUSTER") || m.RC == "" {
 			continue
 		}
+		// Skip spots with no frequency: they can't be scored or tuned, and show
+		// as blank "0 MHz" cards. These are legacy/duplicate restores; skipping
+		// them here also stops a freq-less entry from shadowing the real spot for
+		// the same (call, band) during dedup.
+		if m.F <= 0 {
+			continue
+		}
 		latest[m.RC+"|"+m.B] = m
 	}
 

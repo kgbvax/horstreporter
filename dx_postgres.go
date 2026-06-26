@@ -704,7 +704,15 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 		s.pendingCount++
 	}
 
-	s.pendingRawSpots = append(s.pendingRawSpots, rawSpotRow{m: m, band: band})
+	// DX-cluster spots are persisted separately, with full fidelity (frequency,
+	// comment, source_type 'dxcluster'), via PersistRawSpot. Don't also enqueue a
+	// frequency-less 'mqtt' raw row for them here: that duplicate restores as an
+	// unscorable "0 MHz" spot in the Chase Queue and can shadow the real
+	// dxcluster row during /api/dxspots dedup. Baseline/region aggregation above
+	// still counts the spot.
+	if !strings.EqualFold(strings.TrimSpace(m.MD), "DXCLUSTER") {
+		s.pendingRawSpots = append(s.pendingRawSpots, rawSpotRow{m: m, band: band})
+	}
 	shouldFlush := s.pendingCount >= dxBaselineFlushMaxPending
 	s.mu.Unlock()
 
