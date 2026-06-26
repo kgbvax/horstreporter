@@ -46,27 +46,30 @@ const trimComment = (c) => (c || '')
   .replace(/\s{2,}/g, ' ')
   .trim();
 
-// Flag emoji from an ISO-3166 alpha-2 code (supplied by the backend, resolved
-// via cty.dat). Empty/unknown -> no flag.
-const flagFromISO = (iso) => {
-  iso = (iso || '').trim().toUpperCase();
-  if (iso.length !== 2) return '';
-  return String.fromCodePoint(...[...iso].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65));
-};
+// parseMode reads the mode from the spotter's comment when present (e.g.
+// "FT8 -12dB", "CW UP", "599 SSB"). Cluster spots carry no mode field and we
+// deliberately do NOT guess it from frequency for display — that's band-map
+// logic the operator doesn't want. Empty when the comment names no mode.
+const MODE_RE = /\b(FT8|FT4|JT65|JT9|FST4W?|Q65|RTTY|PSK\d*|MFSK|OLIVIA|CW|SSB|LSB|USB|AM|FM)\b/i;
+function parseMode(comment) {
+  const m = (comment || '').match(MODE_RE);
+  if (!m) return '';
+  const v = m[1].toUpperCase();
+  return (v === 'LSB' || v === 'USB') ? 'SSB' : v;
+}
 
-// Well-known countries: the flag alone is enough, so we suppress the country
-// NAME text on the card (less clutter). Lesser-known entities keep the name.
-// Extend freely (e.g. later from log analysis of who you actually work).
-const WELL_KNOWN_ISO = new Set([
-  // all of Europe
-  'AD', 'AL', 'AT', 'AX', 'BA', 'BE', 'BG', 'BY', 'CH', 'CY', 'CZ', 'DE', 'DK',
-  'EE', 'ES', 'FI', 'FO', 'FR', 'GB', 'GG', 'GI', 'GR', 'HR', 'HU', 'IE', 'IM',
-  'IS', 'IT', 'JE', 'LI', 'LT', 'LU', 'LV', 'MC', 'MD', 'ME', 'MK', 'MT', 'NL',
-  'NO', 'PL', 'PT', 'RO', 'RS', 'SE', 'SI', 'SJ', 'SK', 'SM', 'UA', 'VA',
-  // + commonly-worked majors
-  'AU', 'IN', 'JP', 'CN', 'BR', 'AR', 'US', 'CA', 'RU', 'TR', 'ID',
-]);
-const isWellKnown = (iso) => WELL_KNOWN_ISO.has((iso || '').trim().toUpperCase());
+// Starred ("watch") callsigns — stations the operator always wants to see,
+// persisted locally and sortable to the top via the ★ column.
+const STAR_KEY = 'cqStars';
+let stars;
+try { stars = new Set(JSON.parse(localStorage.getItem(STAR_KEY) || '[]')); } catch (e) { stars = new Set(); }
+const isStar = (c) => stars.has(c);
+function toggleStar(c) {
+  if (stars.has(c)) stars.delete(c); else stars.add(c);
+  try { localStorage.setItem(STAR_KEY, JSON.stringify([...stars])); } catch (e) { /* ignore quota */ }
+}
+const starSvg = (on) => `<svg viewBox="0 0 14 14"><path class="${on ? 's-on' : 's-off'}" d="M7 1l1.7 3.9 4.3.4-3.2 2.8 1 4.2L7 10.9 3.2 12.3l1-4.2L1 5.3l4.3-.4z"/></svg>`;
+
 // guessMode picks a sensible rig mode from the spot frequency. Cluster spots
 // carry no mode field, so we infer from the band plan: FT8 watering holes →
 // data, the CW portion at the bottom of each band → CW, otherwise '' (the agent
@@ -85,7 +88,7 @@ function guessMode(freqKhz) {
 // enrichSpot maps a spot to the {id, call, band, mode} the agent's enrich
 // endpoint expects. The id is echoed back so results merge by identity.
 const enrichSpot = (s) => {
-  const mode = guessMode(s.freq_khz);
+  const mode = parseMode(s.comment) || guessMode(s.freq_khz);
   return { id: `${s.dx_call}|${s.band}|${mode}`, call: s.dx_call, band: s.band, mode };
 };
 
@@ -105,76 +108,82 @@ function injectStyles() {
     position: relative; z-index: 1001;
     border-left: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);
     --cq-go:#22c55e; --cq-watch:#f59e0b; --cq-wait:#64748b; --cq-atno:#f3c14b; --cq-unknown: var(--status-color);
+    --cq-gold-strong:#9a7000; --cq-cc:#ffffff;
     --cq-mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
     font-size: 14px; }
+  body[data-theme="dark"] #chase-queue { --cq-gold-strong:#f3c14b; --cq-cc:#08201d; }
   #chase-queue.is-hidden { display: none; }
-  .cq-head { padding: 10px 12px; border-bottom: 1px solid var(--border-color);
-    background: var(--surface-1); }
-  .cq-title-row { display:flex; align-items:baseline; gap:8px; }
-  .cq-title { font-weight:700; font-size:.98rem; }
-  .cq-status { font:600 10px sans-serif; color: var(--cq-watch); margin-top:6px; }
+
+  /* Header: de-prioritised title row, then a separated sortable column band. */
+  .cq-head { padding:7px 12px; display:flex; align-items:baseline; gap:8px; background:var(--bg-color); border-bottom:1px solid var(--border-color); }
+  .cq-title { font-size:.8rem; font-weight:600; color:var(--status-color); letter-spacing:.02em; }
+  .cq-count { margin-left:auto; font:600 10px var(--cq-mono); color:var(--status-color); }
+  #cq-close { border:0; background:transparent; color:var(--status-color); font-size:17px; line-height:1; cursor:pointer; padding:0 2px; }
+  #cq-close:hover { color:var(--text-color); }
+  .cq-status { font:600 10px sans-serif; color:var(--cq-watch); padding:4px 12px 0; }
   .cq-status:empty { display:none; }
-  .cq-count { margin-left:auto; font:600 11px var(--cq-mono); color: var(--status-color); }
-  .cq-body { flex:1 1 auto; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:8px; }
-  .cq-body > * { flex:0 0 auto; }
-  .cq-empty { color: var(--status-color); font-size:12px; text-align:center; padding:24px 12px; }
-  .cq-card { border:1px solid var(--control-border); border-radius:10px; background: var(--bg-color);
-    border-left:5px solid var(--cq-spine,#555); padding:7px 10px; cursor:pointer; transition:border-color .12s, background .12s; }
-  .cq-card:hover { background: color-mix(in srgb, var(--bg-color) 94%, var(--text-color) 6%); }
-  .cq-r1 { display:flex; align-items:center; gap:8px; }
-  .cq-flag { font-size:1.05rem; line-height:1; }
-  .cq-flag:empty { display:none; }
-  .cq-call { font:700 1.12rem/1 var(--cq-mono); letter-spacing:.01em; }
-  .cq-op { font:12.5px/1 sans-serif; color: var(--status-color); }
-  .cq-op:empty { display:none; }
-  .cq-spacer { flex:1 1 auto; }
-  .cq-score { display:flex; align-items:center; gap:6px; }
-  .cq-meter { width:46px; height:6px; border-radius:4px; background: color-mix(in srgb, var(--bg-color) 80%, var(--text-color) 20%); overflow:hidden; }
-  .cq-meter > i { display:block; height:100%; }
-  .cq-num { font:700 12px var(--cq-mono); min-width:20px; text-align:right; }
-  .cq-grade { font:800 10px var(--cq-mono); padding:1px 5px; border-radius:5px; }
-  .cq-grade:empty { display:none; }
-  .m-go>i,.g-go{ background:var(--cq-go);} .g-go{color:#053; background:color-mix(in srgb,var(--cq-go) 20%,transparent);}
-  .m-watch>i{background:var(--cq-watch);} .g-watch{color:var(--cq-watch); background:color-mix(in srgb,var(--cq-watch) 18%,transparent);}
-  .m-wait>i{background:var(--cq-wait);} .g-wait{color:var(--cq-wait); background:color-mix(in srgb,var(--cq-wait) 20%,transparent);}
-  .m-unknown>i{background:var(--cq-unknown);} .g-unknown{color:var(--cq-unknown); background:color-mix(in srgb,var(--cq-unknown) 18%,transparent);}
-  .cq-r2 { font:12.5px/1.5 var(--cq-mono); color: var(--status-color); margin-top:4px;
-    display:flex; flex-wrap:wrap; align-items:baseline; }
-  .cq-r2 b { color: var(--text-color); font-weight:700; }
-  .cq-r2 .band { font-weight:700; }
-  .cq-r2 .dir { font-variant-numeric:tabular-nums; cursor:help; }
-  .cq-r2 .sep { opacity:.4; margin:0 5px; }
-  .cq-comment { font:13px/1.4 sans-serif; color: var(--status-color); margin-top:5px;
-    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .cq-chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:5px; }
-  .cq-chip { font:800 10.5px/1 sans-serif; letter-spacing:.04em; text-transform:uppercase;
-    padding:3px 7px; border-radius:5px; }
-  .cq-chip-atno { color:#1c1400; background: var(--cq-atno); }
-  .cq-chip-new  { color: var(--text-color); background:transparent;
-    border:1px solid color-mix(in srgb, var(--text-color) 45%, transparent); }
-  .cq-chip-dupe { color: var(--status-color);
-    background: color-mix(in srgb, var(--status-color) 14%, transparent); font-weight:700; }
-  .cq-actions { display:flex; gap:6px; margin-top:8px; }
-  .cq-act { flex:1 1 auto; font:600 12px sans-serif; border:1px solid var(--control-border);
-    background: transparent; color: var(--text-color);
-    border-radius: var(--btn-radius-sm, 6px); padding:6px 8px; cursor:pointer;
-    transition:background .12s, border-color .12s, color .12s; }
-  .cq-act:hover { background: var(--accent-tint); border-color: var(--accent); color: var(--accent-strong); }
+
+  .cq-colhead { background:var(--surface-1); border-bottom:1px solid var(--control-border); }
+  .cq-colhead.is-hidden { display:none; }
+  .cq-fh1, .cq-row .cq-f1 { display:grid; grid-template-columns:24px auto auto 1fr 58px 40px; column-gap:8px; align-items:center; }
+  .cq-fh2, .cq-row .cq-f2 { display:grid; grid-template-columns:24px 48px 50px 82px 40px; column-gap:8px; align-items:baseline; }
+  .cq-fh1 { padding:7px 12px 2px 15px; } .cq-fh2 { padding:0 12px 8px 15px; }
+  /* every header keeps the same box in every state (constant padding + a reserved
+     arrow slot) so sorting never reflows the columns; only background changes */
+  .cq-fh1 button, .cq-fh2 button { all:unset; cursor:pointer; display:block; box-sizing:border-box; white-space:nowrap; text-align:right;
+    font:700 10px/1.2 sans-serif; letter-spacing:.02em; text-transform:uppercase; color:var(--status-color); padding:3px 6px; border-radius:3px; }
+  .cq-fh1 button.lft, .cq-fh2 button.lft { text-align:left; }
+  .cq-fh1 button.starh { padding:3px 2px; }
+  .cq-fh1 button:hover, .cq-fh2 button:hover { color:var(--accent-strong); }
+  .cq-fh1 button.act, .cq-fh2 button.act { background:var(--accent); color:var(--cq-cc); }
+  .cq-ar { display:inline-block; width:9px; text-align:center; font-size:8px; }
+
+  .cq-body { flex:1 1 auto; overflow-y:auto; padding:0; }
+  .cq-empty { color:var(--status-color); font-size:13px; text-align:center; padding:24px 12px; line-height:1.5; }
+
+  .cq-row { border-left:6px solid var(--cq-spine,#555); border-bottom:1px solid color-mix(in srgb,var(--border-color) 60%,transparent);
+    padding:7px 12px 8px 9px; cursor:pointer; }
+  .cq-row:hover { background:var(--accent-tint); }
+  .cq-row.cq-pinned { background:color-mix(in srgb,var(--cq-atno) 12%,var(--bg-color)); }
+  .cq-row.w-atno { border-left:8px solid var(--cq-atno); background:color-mix(in srgb,var(--cq-atno) 11%,var(--bg-color)); }
+  .cq-row.w-atno .cq-c { color:var(--cq-gold-strong); }
+  .cq-row .cq-f2 { margin-top:3px; }
+  .cq-c { font:700 15px var(--cq-mono); }
+  .cq-age { text-align:right; color:var(--status-color); font:12.5px var(--cq-mono); }
+  .cq-d { font:12.5px var(--cq-mono); color:var(--status-color); }
+  .cq-d.bandc { font-weight:700; } .cq-d.r { text-align:right; white-space:nowrap; }
+  .cq-star { all:unset; cursor:pointer; width:14px; height:14px; display:block; }
+  .cq-star svg { width:14px; height:14px; display:block; }
+  .cq-star .s-on { fill:var(--cq-atno); } .cq-star .s-off { fill:none; stroke:color-mix(in srgb,var(--text-color) 32%,transparent); stroke-width:1.1; }
+  .cq-fbadge { justify-self:start; box-sizing:border-box; font:800 9px/1 sans-serif; text-transform:uppercase; letter-spacing:.03em; padding:3px 6px; border-radius:3px; }
+  .cq-fbadge.atno { color:#1c1400; background:var(--cq-atno); }
+  .cq-fbadge.band, .cq-fbadge.mode { color:var(--cq-cc); background:var(--accent); }
+  .cq-fbadge.worked { color:var(--status-color); background:color-mix(in srgb,var(--status-color) 26%,var(--bg-color)); }
+  .cq-bar { justify-self:end; display:inline-block; width:44px; height:6px; border-radius:3px;
+    background:color-mix(in srgb,var(--text-color) 13%,transparent); overflow:hidden; }
+  .cq-bar > i { display:block; height:100%; border-radius:3px; }
+  .cq-bar.g-go>i{background:var(--cq-go);} .cq-bar.g-watch>i{background:var(--cq-watch);} .cq-bar.g-wait>i{background:var(--cq-wait);} .cq-bar.g-unknown>i{background:var(--cq-unknown);}
+
+  /* expand-on-click detail: operator/comment + rig actions */
+  .cq-detail { display:none; font:12px/1.4 sans-serif; color:var(--status-color); padding:6px 12px 2px 15px; }
+  .cq-row.cq-open .cq-detail { display:block; }
+  .cq-detail .k { color:var(--text-color); font-weight:600; }
+  .cq-detail .cmt { display:block; margin-top:2px; }
+  .cq-detail .sep { opacity:.4; margin:0 5px; }
+  .cq-actions { display:flex; gap:6px; margin-top:7px; }
+  .cq-act { flex:1 1 auto; font:600 12px sans-serif; border:1px solid var(--control-border); background:transparent; color:var(--text-color);
+    border-radius:var(--btn-radius-sm,6px); padding:5px 8px; cursor:pointer; transition:background .12s, border-color .12s, color .12s; }
+  .cq-act:hover { background:var(--accent-tint); border-color:var(--accent); color:var(--accent-strong); }
   .cq-act:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-  .cq-act:disabled { opacity:.5; cursor:default; }
-  .cq-act.busy { opacity:.6; cursor:progress; }
-  #cq-toggle { font:600 12px sans-serif; border:1px solid var(--control-border);
-    background: var(--bg-color); color: var(--text-color); border-radius: var(--btn-radius, 8px);
-    padding:6px 12px; cursor:pointer; box-shadow:0 2px 8px var(--shadow-color); white-space:nowrap;
+  .cq-act:disabled { opacity:.5; cursor:default; } .cq-act.busy { opacity:.6; cursor:progress; }
+
+  #cq-toggle { font:600 12px sans-serif; border:1px solid var(--control-border); background:var(--bg-color); color:var(--text-color);
+    border-radius:var(--btn-radius, 8px); padding:6px 12px; cursor:pointer; box-shadow:0 2px 8px var(--shadow-color); white-space:nowrap;
     transition:background .12s, border-color .12s, color .12s; }
-  #cq-toggle:hover { background: var(--accent-tint); border-color: var(--accent); color: var(--accent-strong); }
-  #cq-close { border:0; background:transparent; color:var(--status-color); font-size:18px; line-height:1; cursor:pointer; padding:0 2px; margin-left:8px; }
-  #cq-close:hover { color: var(--text-color); }
+  #cq-toggle:hover { background:var(--accent-tint); border-color:var(--accent); color:var(--accent-strong); }
   @media (max-width: 820px){ #chase-queue{ position:absolute; right:0; top:0; z-index:1150; box-shadow:0 0 24px var(--shadow-color);} }
-  .cq-card.cq-pinned { border-color: var(--cq-atno); box-shadow: 0 0 0 1px var(--cq-atno) inset; }
-  .dx-highlight-label span { font: 700 12px var(--cq-mono); color:#1c1400;
-    background: var(--cq-atno); padding:1px 5px; border-radius:4px; white-space:nowrap;
-    box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+  .dx-highlight-label span { font:700 12px var(--cq-mono); color:#1c1400; background:var(--cq-atno);
+    padding:1px 5px; border-radius:4px; white-space:nowrap; box-shadow:0 1px 4px rgba(0,0,0,.35); }
   `;
   const s = document.createElement('style');
   s.id = 'cq-styles';
@@ -182,7 +191,8 @@ function injectStyles() {
   document.head.appendChild(s);
 }
 
-let panelEl, bodyEl, countEl, statusEl;
+let panelEl, bodyEl, countEl, statusEl, colheadEl;
+let lastSpots = []; // last fetched+scored+enriched spots (band-filtered); sorted client-side
 
 // Map-highlight state. `pinned` is the click-pinned spot (persists until another
 // is pinned or the panel closes); hover previews transiently and reverts to the
@@ -215,18 +225,18 @@ function mount() {
   panelEl.className = 'is-hidden';
   panelEl.innerHTML = `
     <div class="cq-head">
-      <div class="cq-title-row">
-        <div class="cq-title">Chase Queue</div>
-        <span class="cq-count" id="cq-count">—</span>
-        <button id="cq-close" title="Hide Chase Queue">×</button>
-      </div>
-      <div id="cq-status" class="cq-status"></div>
+      <span class="cq-title">Chase Queue</span>
+      <span class="cq-count" id="cq-count">—</span>
+      <button id="cq-close" title="Hide Chase Queue">×</button>
     </div>
+    <div id="cq-status" class="cq-status"></div>
+    <div class="cq-colhead is-hidden" id="cq-colhead"></div>
     <div class="cq-body" id="cq-body"><div class="cq-empty">Loading spots…</div></div>`;
   document.body.appendChild(panelEl);
   bodyEl = panelEl.querySelector('#cq-body');
   countEl = panelEl.querySelector('#cq-count');
   statusEl = panelEl.querySelector('#cq-status');
+  colheadEl = panelEl.querySelector('#cq-colhead');
 
   const PANEL_W = 380;
   // Docking the panel changes the map container width; nudge Leaflet (trackResize)
@@ -308,83 +318,127 @@ async function runCardAction(btn, label, fn, okMsg) {
   }
 }
 
-// chipsHTML renders Wavelog "needed" status as chips. needed is award-oriented
-// (confirmation-based): dxcc = new entity, band/mode = new slot. A worked
-// band+mode shows a muted "worked" marker (likely a dupe), but only when nothing
-// is needed — a needed chip is the more useful signal.
-function chipsHTML(enrich) {
-  if (!enrich) return '';
-  const needed = Array.isArray(enrich.needed) ? enrich.needed : [];
-  const chips = [];
-  if (needed.includes('dxcc')) chips.push('<span class="cq-chip cq-chip-atno">ATNO</span>');
-  if (needed.includes('band')) chips.push('<span class="cq-chip cq-chip-new">New band</span>');
-  if (needed.includes('mode')) chips.push('<span class="cq-chip cq-chip-new">New mode</span>');
-  if (!chips.length && enrich.worked_before?.worked_band_mode) {
-    chips.push('<span class="cq-chip cq-chip-dupe">worked</span>');
-  }
-  return chips.length ? `<div class="cq-chips">${chips.join('')}</div>` : '';
+// wantInfo maps the Wavelog "needed" enrichment to a wanted state: a sort rank
+// (ATNO highest) plus a filled badge. dxcc = all-time-new entity, band/mode = a
+// new slot, worked_band_mode = already worked. No enrichment (no Wavelog) → no
+// label.
+function wantInfo(s) {
+  const e = s._enrich;
+  const needed = e && Array.isArray(e.needed) ? e.needed : [];
+  if (needed.includes('dxcc')) return { rank: 0, cls: 'atno', label: 'ATNO' };
+  if (needed.includes('band')) return { rank: 1, cls: 'band', label: '+BAND' };
+  if (needed.includes('mode')) return { rank: 2, cls: 'mode', label: '+MODE' };
+  if (e && e.worked_before && e.worked_before.worked_band_mode) return { rank: 3, cls: 'worked', label: 'WORKED' };
+  return { rank: 4, cls: '', label: '' };
 }
 
-function renderCard(s) {
-  const el = document.createElement('div');
-  el.className = 'cq-card';
-  el.style.setProperty('--cq-spine', bandColor(s.band));
+// Sort state (persisted). The operator's reading modes are just sort orders:
+// DX hunting = wanted, confidence = score, old friends = star, browsing = age.
+let sortKey = localStorage.getItem('cqSortKey') || 'wanted';
+let sortAsc = localStorage.getItem('cqSortAsc') === '1';
+const scoreOf = (s) => (s._score && s._score.score != null) ? s._score.score : -1;
+const distOf = (s) => (s._score && s._score.distance_km) ? s._score.distance_km : -1;
+const dirIdx = (s) => {
   const sc = s._score;
-  const dec = sc ? gradeToDecision(sc.grade) : 'unknown'; // still drives the gauge colour
-  const num = sc && sc.score != null ? sc.score : '··';
-  const dist = sc && sc.distance_km ? `${Math.round(sc.distance_km).toLocaleString()} km` : '';
-  const bearing = sc && Number.isFinite(sc.bearing_deg) ? sc.bearing_deg : null;
-  const comment = trimComment(s.comment);
-  const flag = flagFromISO(s.country_iso);
-  // Show the country name only when it isn't a well-known flag (reduce clutter).
-  const showCountry = s.country && !isWellKnown(s.country_iso);
-  const freqHz = Math.round((s.freq_khz || 0) * 1000);
-  const mode = guessMode(s.freq_khz);
+  return (sc && Number.isFinite(sc.bearing_deg)) ? COMPASS16.indexOf(degToCardinal(sc.bearing_deg)) : 99;
+};
+// Each comparator is the column's default direction; sortAsc reverses it.
+const SORTS = {
+  star: (a, b) => (isStar(b.dx_call) - isStar(a.dx_call)) || (scoreOf(b) - scoreOf(a)),
+  call: (a, b) => a.dx_call.localeCompare(b.dx_call),
+  wanted: (a, b) => (wantInfo(a).rank - wantInfo(b).rank) || (scoreOf(b) - scoreOf(a)),
+  score: (a, b) => scoreOf(b) - scoreOf(a),
+  age: (a, b) => a.age_seconds - b.age_seconds,
+  band: (a, b) => (a.freq_khz || 0) - (b.freq_khz || 0),
+  mode: (a, b) => (parseMode(a.comment) || '~~').localeCompare(parseMode(b.comment) || '~~'),
+  dist: (a, b) => distOf(b) - distOf(a),
+  dir: (a, b) => dirIdx(a) - dirIdx(b),
+};
 
-  // Meta line: one consistently-separated row. Build the parts then join with a
-  // single separator so every gap is identical (previously the bearing used a
-  // raw " · " while everything else used a styled span).
-  const meta = [];
-  if (showCountry) meta.push(s.country);
-  meta.push(`<span class="band" style="color:${bandColor(s.band)}">${s.band}</span>`);
-  meta.push(`${fmtFreq(s.freq_khz)} MHz`);
-  if (dist) meta.push(dist);
-  if (bearing != null) meta.push(`<span class="dir" title="bearing ${Math.round(bearing)}°">${degToCardinal(bearing)}</span>`);
-  meta.push(fmtAge(s.age_seconds));
-  const metaHTML = meta.join('<span class="sep">·</span>');
+// fHead builds the two-tier sortable column header. The arrow slot is always
+// present (glyph only on the active column) so the columns never reflow when the
+// sort changes; the active header is a solid fill, click it again to flip ▲/▼.
+function fHead() {
+  const H = (k, label, lft) => {
+    const act = sortKey === k;
+    const cls = [lft ? 'lft' : '', act ? 'act' : ''].filter(Boolean).join(' ');
+    return `<button data-k="${k}" class="${cls}">${label}<span class="cq-ar">${act ? (sortAsc ? '▲' : '▼') : ''}</span></button>`;
+  };
+  const star = `<button data-k="star" class="starh lft${sortKey === 'star' ? ' act' : ''}">★</button>`;
+  return `<div class="cq-fh1">${star}${H('call', 'Call', 1)}${H('wanted', 'Wanted', 1)}<span></span>${H('score', 'Score')}${H('age', 'Age')}</div>`
+       + `<div class="cq-fh2"><span></span>${H('band', 'Band', 1)}${H('mode', 'Mode', 1)}${H('dist', 'Dist')}${H('dir', 'Dir')}</div>`;
+}
+
+// renderRow builds one two-line ledger entry: line 1 = ★ · call · wanted · score
+// bar · age; line 2 = the folded detail columns band · mode · dist · dir. Click
+// expands a detail strip (operator/comment + rig actions) and pins the map
+// highlight; the ★ toggles the watch flag.
+function renderRow(s) {
+  const wi = wantInfo(s);
+  const sc = s._score;
+  const dec = sc ? gradeToDecision(sc.grade) : 'unknown';
+  const scored = sc && sc.score != null;
+  const fill = scored ? meterPct(sc.score) : 0;
+  const dist = sc && sc.distance_km ? Math.round(sc.distance_km).toLocaleString() : '';
+  const bearing = sc && Number.isFinite(sc.bearing_deg) ? sc.bearing_deg : null;
+  const dir = bearing != null ? degToCardinal(bearing) : '';
+  const mode = parseMode(s.comment);
+  const freqHz = Math.round((s.freq_khz || 0) * 1000);
+  const comment = trimComment(s.comment);
+  const key = spotKey(s);
+
+  const el = document.createElement('div');
+  el.className = 'cq-row w-' + (wi.cls || 'none');
+  el.style.setProperty('--cq-spine', bandColor(s.band));
+
+  const badge = wi.label ? `<span class="cq-fbadge ${wi.cls}">${wi.label}</span>` : '<span></span>';
   el.innerHTML = `
-    <div class="cq-r1">
-      <span class="cq-flag">${flag}</span>
-      <span class="cq-call">${s.dx_call}</span>
-      <span class="cq-op">${s.op_name || ''}</span>
-      <span class="cq-spacer"></span>
-      <span class="cq-score">
-        <span class="cq-meter m-${dec}"><i style="width:${meterPct(num)}%"></i></span>
-        <span class="cq-num">${num}</span>
-      </span>
+    <div class="cq-f1">
+      <button class="cq-star" tabindex="-1">${starSvg(isStar(s.dx_call))}</button>
+      <span class="cq-c">${s.dx_call}</span>
+      ${badge}
+      <span></span>
+      <span class="cq-bar g-${dec}"><i style="width:${fill}%"></i></span>
+      <span class="cq-age">${fmtAge(s.age_seconds)}</span>
     </div>
-    <div class="cq-r2">${metaHTML}</div>
-    ${chipsHTML(s._enrich)}
-    ${comment ? `<div class="cq-comment" title="${comment}">${comment}</div>` : ''}`;
+    <div class="cq-f2">
+      <span></span>
+      <span class="cq-d bandc" style="color:${bandColor(s.band)}">${s.band}</span>
+      <span class="cq-d">${mode}</span>
+      <span class="cq-d r">${dist ? dist + ' km' : ''}</span>
+      <span class="cq-d r">${dir}</span>
+    </div>
+    <div class="cq-detail"></div>`;
   if (sc && sc.reason) el.title = sc.reason;
 
-  // Rig actions only appear when the local agent exposes a tune-capable rig AND
-  // control is permitted (server + agent + UI). Otherwise the card stays a pure
-  // readout — most viewers have no agent at all.
+  // ★ toggles the watch flag (stop propagation so it doesn't pin/expand the row).
+  const starBtn = el.querySelector('.cq-star');
+  starBtn.title = isStar(s.dx_call) ? 'Starred — click to unstar' : 'Star this station';
+  starBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleStar(s.dx_call); sortAndRender(); });
+
+  // Detail strip: operator · country · mode · frequency — comment, + rig actions.
+  const detail = el.querySelector('.cq-detail');
+  const bits = [];
+  if (s.op_name) bits.push(`<span class="k">${s.op_name}</span>`);
+  if (s.country) bits.push(s.country);
+  if (mode) bits.push(mode);
+  bits.push(`${fmtFreq(s.freq_khz)} MHz`);
+  detail.innerHTML = bits.join('<span class="sep">·</span>') + (comment ? `<span class="cmt">${comment}</span>` : '');
+
+  // Rig mode prefers the spotter-reported mode, else the frequency default.
+  const rigMode = mode || guessMode(s.freq_khz);
   if (freqHz > 0 && canControlRig()) {
     const actions = document.createElement('div');
     actions.className = 'cq-actions';
-
     const tuneBtn = document.createElement('button');
     tuneBtn.className = 'cq-act';
     tuneBtn.textContent = 'Tune';
-    tuneBtn.title = `QSY to ${fmtFreq(s.freq_khz)} MHz${mode ? ` (${mode})` : ''}`;
+    tuneBtn.title = `QSY to ${fmtFreq(s.freq_khz)} MHz${rigMode ? ` (${rigMode})` : ''}`;
     tuneBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      runCardAction(tuneBtn, 'Tune', () => rigTune(freqHz, mode), `Tuned ${s.dx_call} — ${fmtFreq(s.freq_khz)} MHz`);
+      runCardAction(tuneBtn, 'Tune', () => rigTune(freqHz, rigMode), `Tuned ${s.dx_call} — ${fmtFreq(s.freq_khz)} MHz`);
     });
     actions.appendChild(tuneBtn);
-
     if (bearing != null) {
       const turnBtn = document.createElement('button');
       turnBtn.className = 'cq-act';
@@ -392,46 +446,53 @@ function renderCard(s) {
       turnBtn.title = `QSY + rotate beam to ${Math.round(bearing)}°`;
       turnBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        runCardAction(turnBtn, 'Tune + Turn', () => operate(freqHz, mode, bearing, s.dx_call),
+        runCardAction(turnBtn, 'Tune + Turn', () => operate(freqHz, rigMode, bearing, s.dx_call),
           `${s.dx_call} — tuned + beam ${Math.round(bearing)}°`);
       });
       actions.appendChild(turnBtn);
     }
-    el.appendChild(actions);
-
-    // Double-click anywhere on the card is a Tune shortcut.
+    detail.appendChild(actions);
     el.addEventListener('dblclick', () => {
-      runCardAction(tuneBtn, 'Tune', () => rigTune(freqHz, mode), `Tuned ${s.dx_call} — ${fmtFreq(s.freq_khz)} MHz`);
+      runCardAction(tuneBtn, 'Tune', () => rigTune(freqHz, rigMode), `Tuned ${s.dx_call} — ${fmtFreq(s.freq_khz)} MHz`);
     });
   }
 
-  // Map highlight: hover previews this spot (line + marker); leaving reverts to
-  // the pinned spot (if any); clicking pins it. Needs a locator to place it.
+  // Hover previews the map highlight; click pins it (and expands the row).
   if (s.dx_locator) {
-    const key = spotKey(s);
-    el.classList.add('cq-hl');
-    el.addEventListener('mouseenter', () => {
-      setChaseQueueHighlight({ ...highlightData(s), pinned: pinned?.key === key });
-    });
-    el.addEventListener('mouseleave', () => {
-      if (pinned) setChaseQueueHighlight({ ...pinned.data, pinned: true });
-      else clearChaseQueueHighlight();
-    });
-    el.addEventListener('click', () => {
-      // Idempotent for the same spot, so a double-click (Tune) doesn't unpin.
+    el.addEventListener('mouseenter', () => setChaseQueueHighlight({ ...highlightData(s), pinned: pinned?.key === key }));
+    el.addEventListener('mouseleave', () => { if (pinned) setChaseQueueHighlight({ ...pinned.data, pinned: true }); else clearChaseQueueHighlight(); });
+    if (pinned?.key === key) el.classList.add('cq-pinned', 'cq-open');
+  }
+  el.addEventListener('click', () => {
+    const wasOpen = el.classList.contains('cq-open');
+    bodyEl.querySelectorAll('.cq-row.cq-open').forEach((n) => n.classList.remove('cq-open'));
+    if (!wasOpen) el.classList.add('cq-open');
+    if (s.dx_locator) {
       pinned = { key, data: highlightData(s) };
-      el.parentElement?.querySelectorAll('.cq-pinned').forEach((n) => n.classList.remove('cq-pinned'));
+      bodyEl.querySelectorAll('.cq-pinned').forEach((n) => n.classList.remove('cq-pinned'));
       el.classList.add('cq-pinned');
       setChaseQueueHighlight({ ...pinned.data, pinned: true, select: true });
-    });
-    if (pinned?.key === key) el.classList.add('cq-pinned');
-  }
+    }
+  });
   return el;
 }
 
-function render(spots) {
+// sortAndRender rebuilds the sortable header (so the active marker tracks the
+// current sort) and the row list. Runs on refresh, on a header click, and on a
+// star toggle — all client-side off the cached lastSpots.
+function sortAndRender() {
+  colheadEl.innerHTML = fHead();
+  colheadEl.querySelectorAll('button[data-k]').forEach((b) => b.addEventListener('click', () => {
+    const k = b.dataset.k;
+    if (k === sortKey) sortAsc = !sortAsc; else { sortKey = k; sortAsc = false; }
+    try { localStorage.setItem('cqSortKey', sortKey); localStorage.setItem('cqSortAsc', sortAsc ? '1' : '0'); } catch (e) { /* ignore */ }
+    sortAndRender();
+  }));
+
+  const spots = lastSpots.slice();
   bodyEl.innerHTML = '';
   if (!spots.length) {
+    colheadEl.classList.add('is-hidden');
     const msg = getEnabledBands().size === 0
       ? 'No bands selected.<br>Enable bands on the left.'
       : 'No DX spots on the selected bands.<br>Is the cluster connected?';
@@ -439,13 +500,10 @@ function render(spots) {
     countEl.textContent = '0';
     return;
   }
-  // Auto mode: highest score first; unscored fall to the bottom by recency.
-  spots.sort((a, b) => {
-    const sa = a._score?.score ?? -1, sb = b._score?.score ?? -1;
-    if (sb !== sa) return sb - sa;
-    return a.age_seconds - b.age_seconds;
-  });
-  spots.forEach((s) => bodyEl.appendChild(renderCard(s)));
+  colheadEl.classList.remove('is-hidden');
+  spots.sort(SORTS[sortKey] || SORTS.wanted);
+  if (sortAsc) spots.reverse();
+  spots.forEach((s) => bodyEl.appendChild(renderRow(s)));
   countEl.textContent = `${spots.length} spots`;
 }
 
@@ -489,7 +547,8 @@ async function refresh() {
   // Status line only surfaces a real problem (horstprop down), not spots that
   // merely lack a frequency to score.
   statusEl.textContent = hpReachable ? '' : 'horstprop unreachable — showing unscored';
-  render(spots);
+  lastSpots = spots;
+  sortAndRender();
 }
 
 function init() {
