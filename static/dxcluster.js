@@ -177,10 +177,7 @@ function injectStyles() {
   .cq-act:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .cq-act:disabled { opacity:.5; cursor:default; } .cq-act.busy { opacity:.6; cursor:progress; }
 
-  #cq-toggle { font:600 12px sans-serif; border:1px solid var(--control-border); background:var(--bg-color); color:var(--text-color);
-    border-radius:var(--btn-radius, 8px); padding:6px 12px; cursor:pointer; box-shadow:0 2px 8px var(--shadow-color); white-space:nowrap;
-    transition:background .12s, border-color .12s, color .12s; }
-  #cq-toggle:hover { background:var(--accent-tint); border-color:var(--accent); color:var(--accent-strong); }
+  /* #cq-toggle uses the shared .panel-toggle pill style (style.css). */
   @media (max-width: 820px){ #chase-queue{ position:absolute; right:0; top:0; z-index:1150; box-shadow:0 0 24px var(--shadow-color);} }
   .dx-highlight-label span { font:700 12px var(--cq-mono); color:#1c1400; background:var(--cq-atno);
     padding:1px 5px; border-radius:4px; white-space:nowrap; box-shadow:0 1px 4px rgba(0,0,0,.35); }
@@ -207,6 +204,7 @@ function mount() {
 
   const toggle = document.createElement('button');
   toggle.id = 'cq-toggle';
+  toggle.className = 'panel-toggle'; // shared pill style (see style.css)
   toggle.textContent = 'Chase Queue';
   // Dock the toggle into the app's existing top-right control cluster if present,
   // otherwise float it top-right.

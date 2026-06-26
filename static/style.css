@@ -927,3 +927,32 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     box-shadow: 0 0 0 0.2rem rgba(var(--accent-rgb), 0.25);
 }
 
+/* Floating panel-toggle buttons (Chase Queue, Band Stats) share one pill look
+   and one behaviour: they sit at the edge their panel pops from, and hide while
+   it's open (the panel has its own close). Stats is translucent so it reads as
+   secondary and lets the map show through. */
+.panel-toggle {
+    font: 600 12px sans-serif;
+    border: 1px solid var(--control-border);
+    background: var(--bg-color);
+    color: var(--text-color);
+    border-radius: var(--btn-radius, 8px);
+    padding: 6px 12px;
+    cursor: pointer;
+    box-shadow: 0 2px 8px var(--shadow-color);
+    white-space: nowrap;
+    transition: background .12s, border-color .12s, color .12s;
+}
+.panel-toggle:hover {
+    background: var(--accent-tint);
+    border-color: var(--accent);
+    color: var(--accent-strong);
+}
+.panel-toggle.is-translucent {
+    background: color-mix(in srgb, var(--bg-color) 66%, transparent);
+    backdrop-filter: blur(4px);
+}
+.panel-toggle.is-translucent:hover {
+    background: color-mix(in srgb, var(--accent-tint) 88%, transparent);
+}
+

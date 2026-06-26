@@ -95,8 +95,9 @@ function setBandStatsVisible(windowEl, toggleButton, visible) {
     windowEl.classList.toggle('is-hidden', !visible);
     runtime.onLayoutChange?.();
     if (!toggleButton) return;
-    toggleButton.classList.toggle('btn-primary', visible);
-    toggleButton.classList.toggle('btn-outline-secondary', !visible);
+    // Mirror the Chase Queue toggle: the button hides while the panel is open
+    // (the panel carries its own close), and reappears when it closes.
+    toggleButton.style.display = visible ? 'none' : '';
     toggleButton.setAttribute('aria-pressed', visible ? 'true' : 'false');
 }
 
