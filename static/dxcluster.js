@@ -229,7 +229,9 @@ function injectStyles() {
   .cq-c { font:700 16px var(--cq-mono); }
   .cq-age { text-align:right; color:var(--status-color); font:13.5px var(--cq-mono); }
   .cq-d { font:13.5px var(--cq-mono); color:var(--status-color); }
-  .cq-cmt { font:13.5px/1.35 sans-serif; color:var(--status-color); padding:3px 12px 0 15px;
+  /* left padding aligns the comment with the call/band column (past the 24px
+     star column + 6px gap), not the row edge */
+  .cq-cmt { font:13.5px/1.35 sans-serif; color:var(--status-color); padding:3px 12px 0 30px;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .cq-d.bandc { font-weight:700; } .cq-d.r { text-align:right; white-space:nowrap; }
   .cq-star { all:unset; cursor:pointer; width:14px; height:14px; display:block; }
