@@ -35,6 +35,9 @@ go.work.sum
 # horstprop build artifact (root-anchored so it can't match cmd/horstprop/)
 /horstprop-linux-x64
 
+# operator-agent build artifact (root-anchored; `go build ./cmd/horstoperator-agent`)
+/horstoperator-agent
+
 # horstawards local award snapshot store (written by the operator agent)
 horstawards-data/
 
@@ -45,3 +48,5 @@ horstawards-data/
 tmp/cq-*.png
 tmp/cq*.mjs
 tmp/dx-cluster-proto/
+# Cross-compiled binaries (scripts/build-operator-agent-win64.sh)
+dist/
