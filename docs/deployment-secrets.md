@@ -67,6 +67,7 @@ Reads from the environment (loaded from a `.env` in CWD if present):
 | --- | --- | --- |
 | `WAVELOG_API_KEY` | — | Wavelog **read** API key. Enables enrichment; empty = disabled. Never logged. |
 | `WAVELOG_URL` | `https://log.dclnext.darc.de/index.php` | Wavelog base URL. |
+| `HORSTAWARDS_URL` | — | horstawards base URL (e.g. `http://127.0.0.1:9956`). Also a `-horstawards-url` flag. Enables the award "wanted" merge (`was`/`pota`); empty = disabled. Not a secret. |
 
 `run_operator_agent.sh` runs from the repo root, so a `.env` there is picked up:
 
@@ -91,6 +92,38 @@ ExecStart=/opt/horstoperator/horstoperator-agent -listen 127.0.0.1:9955 \
 
 (Rig/rotor settings are not secrets — flags are fine. Only `WAVELOG_API_KEY`
 belongs in the env file.)
+
+---
+
+## Awards service — `horstawards`
+
+Operator-local, like the agent. Reads from the environment (loaded from a `.env`
+in CWD if present; `EnvironmentFile` under systemd). Reuses the **same** read-only
+Wavelog key as the agent — no new secret is introduced.
+
+| Env var | Default | Notes |
+| --- | --- | --- |
+| `WAVELOG_API_KEY` | — | Wavelog **read** key (must have ADIF-export scope). Empty = the Wavelog ADIF source is disabled and the index stays empty. Never logged. |
+| `WAVELOG_URL` | `https://log.dclnext.darc.de/index.php` | Wavelog base URL. |
+| `WAVELOG_STATION_ID` | — | Station profile id. **Required for DCLNext** — `get_contacts_adif` returns HTTP 400 without it. Also `-wavelog-station-id`. Not a secret. |
+| `POTA_HUNTED_CSV` | — | Path to your POTA hunted-parks CSV export. **Recommended POTA source.** Also `-pota-hunted-csv`. Not a secret. |
+| `POTA_CALLSIGN` | — | Enables the optional POTA *API* source (only useful with an authenticated full-list endpoint; the public profile is counts-only). Empty = disabled. Not a secret. |
+| `POTA_TOKEN` | — | Optional POTA bearer token, if a POTA endpoint requires auth. Never logged. |
+| `HORSTAWARDS_DATA_DIR` | `./horstawards-data` | Snapshot store dir. Also `-data-dir`. Not a secret. |
+
+`install_horstawards_service.sh` generates `/etc/default/horstawards`
+(`hk:hk`, `0600`) holding `WAVELOG_API_KEY` + `ARGS`, and provisions a writable
+`/opt/horstawards/data`. The unit's `ReadWritePaths=` is limited to that data dir.
+
+```ini
+[Service]
+WorkingDirectory=/opt/horstawards
+EnvironmentFile=-/etc/default/horstawards   # hk:hk, 0600 (holds WAVELOG_API_KEY)
+ExecStart=/opt/horstawards/horstawards-linux-x64 $ARGS   # ARGS="-listen 127.0.0.1:9956 -data-dir /opt/horstawards/data"
+```
+
+Point the agent at it with `-horstawards-url http://127.0.0.1:9956` (or
+`HORSTAWARDS_URL`). See `docs/horstawards.md`.
 
 ---
 

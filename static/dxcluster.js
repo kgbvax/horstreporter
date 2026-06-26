@@ -58,16 +58,53 @@ function parseMode(comment) {
   return (v === 'LSB' || v === 'USB') ? 'SSB' : v;
 }
 
-// modeCat folds a spot's parsed mode into the three operator filter buckets:
-// cw, phone (SSB/AM/FM), digi (everything else — FT8/FT4/RTTY/PSK/…). Returns ''
-// when the comment names no mode (cluster spots often don't).
+// IARU Region 1 HF/VHF band-plan mode segments (this station is in DL / Region 1).
+// Each band lists ascending upper-edge kHz → bucket: CW at the band bottom, the
+// digimode sub-band next, then the phone ("all modes") segment. Used ONLY to
+// bucket comment-less spots for the mode filter — the row still shows no mode
+// text, since we deliberately don't guess a mode for display.
+const BAND_PLAN = [
+  { lo: 1810, hi: 2000, segs: [[1838, 'cw'], [1843, 'digi'], [2000, 'phone']] },
+  { lo: 3500, hi: 3800, segs: [[3570, 'cw'], [3600, 'digi'], [3800, 'phone']] },
+  { lo: 5351.5, hi: 5366.5, segs: [[5354, 'cw'], [5366.5, 'phone']] },
+  { lo: 7000, hi: 7200, segs: [[7040, 'cw'], [7050, 'digi'], [7200, 'phone']] },
+  { lo: 10100, hi: 10150, segs: [[10130, 'cw'], [10150, 'digi']] },
+  { lo: 14000, hi: 14350, segs: [[14070, 'cw'], [14099, 'digi'], [14350, 'phone']] },
+  { lo: 18068, hi: 18168, segs: [[18095, 'cw'], [18109, 'digi'], [18168, 'phone']] },
+  { lo: 21000, hi: 21450, segs: [[21070, 'cw'], [21150, 'digi'], [21450, 'phone']] },
+  { lo: 24890, hi: 24990, segs: [[24915, 'cw'], [24931, 'digi'], [24990, 'phone']] },
+  { lo: 28000, hi: 29700, segs: [[28070, 'cw'], [28190, 'digi'], [29700, 'phone']] },
+  { lo: 50000, hi: 52000, segs: [[50100, 'cw'], [52000, 'phone']] },
+  { lo: 70000, hi: 70500, segs: [[70250, 'cw'], [70500, 'phone']] },
+  { lo: 144000, hi: 146000, segs: [[144150, 'cw'], [146000, 'phone']] },
+];
+// Digital watering holes (FT8/FT4/RTTY dials) that sit inside an otherwise-phone
+// segment — e.g. 7074, 50313 — so they classify as digi regardless of segment.
+const DIGI_DIALS_KHZ = [1840, 3573, 3575, 5357, 7074, 7047.5, 10136, 10140,
+  14074, 14080, 18100, 18104, 21074, 21140, 24915, 24919, 28074, 28180,
+  50313, 50318, 70154, 144174];
+// modeCatFromFreq buckets a frequency via the band plan; '' when out of any band.
+function modeCatFromFreq(freqKhz) {
+  const f = Number(freqKhz) || 0;
+  if (f <= 0) return '';
+  if (DIGI_DIALS_KHZ.some((d) => Math.abs(f - d) <= 1.5)) return 'digi';
+  const band = BAND_PLAN.find((b) => f >= b.lo && f <= b.hi);
+  if (!band) return '';
+  const seg = band.segs.find(([to]) => f <= to);
+  return seg ? seg[1] : 'phone';
+}
+
+// modeCat folds a spot into the three operator filter buckets: cw, phone
+// (SSB/AM/FM), digi (FT8/FT4/RTTY/PSK/…). Prefers the spotter-reported mode;
+// when the comment names none, infers the bucket from the frequency + band plan.
+// Returns '' only when neither yields anything (e.g. an out-of-band frequency).
 const MODE_CATS = [['cw', 'CW'], ['phone', 'Phone'], ['digi', 'Digi']];
 function modeCat(s) {
   const m = parseMode(s.comment);
-  if (!m) return '';
   if (m === 'CW') return 'cw';
   if (m === 'SSB' || m === 'AM' || m === 'FM') return 'phone';
-  return 'digi';
+  if (m) return 'digi';
+  return modeCatFromFreq(s.freq_khz);
 }
 
 // Enabled mode buckets (persisted). Default all on. A spot whose mode can't be
@@ -109,11 +146,23 @@ function guessMode(freqKhz) {
   return '';
 }
 
-// enrichSpot maps a spot to the {id, call, band, mode} the agent's enrich
-// endpoint expects. The id is echoed back so results merge by identity.
+// parsePotaRef extracts a POTA park reference (e.g. "K-1234", "DL-0123") from a
+// spot comment. POTA-to-cluster gateways put the park ref in the comment; the
+// format is a letter-led prefix, a dash, then 4-6 digits (e.g. K-0817, KH6-0123,
+// VK-1234). The letter-led prefix avoids matching freq ranges like "5-10".
+// Returns '' when the comment names no park.
+const POTA_RE = /\b([A-Z][A-Z0-9]{0,3}-\d{4,6})\b/i;
+function parsePotaRef(comment) {
+  const m = (comment || '').match(POTA_RE);
+  return m ? m[1].toUpperCase() : '';
+}
+
+// enrichSpot maps a spot to the {id, call, band, mode, pota_ref} the agent's
+// enrich endpoint expects. The id is echoed back so results merge by identity;
+// pota_ref (when the comment carries a park) drives POTA "wanted".
 const enrichSpot = (s) => {
   const mode = parseMode(s.comment) || guessMode(s.freq_khz);
-  return { id: `${s.dx_call}|${s.band}|${mode}`, call: s.dx_call, band: s.band, mode };
+  return { id: `${s.dx_call}|${s.band}|${mode}`, call: s.dx_call, band: s.band, mode, pota_ref: parsePotaRef(s.comment) };
 };
 
 const fmtFreq = (khz) => (khz >= 1000 ? (khz / 1000).toFixed(3) : String(khz));

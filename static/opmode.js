@@ -357,7 +357,7 @@ async function refreshOpModeStatus() {
 
     const lookupCaps = status?.capabilities?.lookup;
     opModeState.lookupCapabilities = (lookupCaps && typeof lookupCaps === 'object')
-        ? { wavelog: lookupCaps.wavelog === true, was: lookupCaps.was === true }
+        ? { wavelog: lookupCaps.wavelog === true, awards: lookupCaps.awards === true }
         : null;
 
     syncControlWidgets();
@@ -543,7 +543,7 @@ export async function enrichSpots(spots) {
     if (!canLookup()) return null;
     const list = (spots || [])
         .filter((s) => s && s.call)
-        .map((s) => ({ id: String(s.id), call: s.call, band: s.band || '', mode: s.mode || '' }));
+        .map((s) => ({ id: String(s.id), call: s.call, band: s.band || '', mode: s.mode || '', pota_ref: s.pota_ref || '' }));
     if (!list.length) return null;
 
     return fetchJson(opModeEndpoint('operate/enrich'), {

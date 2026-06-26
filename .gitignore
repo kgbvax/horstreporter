@@ -35,6 +35,10 @@ go.work.sum
 # horstprop build artifact (root-anchored so it can't match cmd/horstprop/)
 /horstprop-linux-x64
 
+# horstawards build artifact + local snapshot store
+/horstawards-linux-x64
+horstawards-data/
+
 # macOS
 .DS_Store
 

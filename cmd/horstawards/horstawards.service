@@ -1,0 +1,36 @@
+# Reference systemd unit for horstawards. The easy path is to let
+# install_horstawards_service.sh generate this for you (it also creates
+# /etc/default/horstawards with chmod 600 for secrets, the data dir, and the
+# service user). This file is kept for manual installs and as documentation;
+# keep it in sync with the installer.
+#
+# Manual install:
+#   sudo cp horstawards-linux-x64 /opt/horstawards/ && sudo chown hk:hk /opt/horstawards/horstawards-linux-x64
+#   sudo install -d -o hk -g hk /opt/horstawards/data
+#   sudo cp cmd/horstawards/horstawards.service /etc/systemd/system/horstawards.service
+#   # create /etc/default/horstawards (chmod 600) with WAVELOG_API_KEY=… and ARGS=…
+#   sudo systemctl daemon-reload && sudo systemctl enable --now horstawards
+[Unit]
+Description=horstawards award-progress service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hk
+Group=hk
+WorkingDirectory=/opt/horstawards
+# Secrets (WAVELOG_API_KEY) + args (-listen, -data-dir) live here, chmod 600:
+EnvironmentFile=-/etc/default/horstawards
+ExecStart=/opt/horstawards/horstawards-linux-x64 $ARGS
+Restart=on-failure
+RestartSec=5
+# hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/horstawards/data
+
+[Install]
+WantedBy=multi-user.target

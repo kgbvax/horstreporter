@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"horstreporter/internal/awardcontract"
 )
 
 // wavelogClient is a thin, caching proxy over Wavelog's POST /api/private_lookup.
@@ -56,6 +59,8 @@ type wavelogLookup struct {
 	Name     string `json:"name"`
 	Grid     string `json:"gridsquare"`
 	State    string `json:"state"`
+	Cqz      string `json:"dxcc_cqz"`
+	IOTA     string `json:"iota_ref"`
 	Bearing  string `json:"bearing"`
 
 	CallWorked         bool `json:"call_worked"`
@@ -147,10 +152,11 @@ func neededFromLookup(l *wavelogLookup) []string {
 // --- enrich endpoint ---
 
 type enrichSpotReq struct {
-	ID   string `json:"id"`
-	Call string `json:"call"`
-	Band string `json:"band"`
-	Mode string `json:"mode"`
+	ID      string `json:"id"`
+	Call    string `json:"call"`
+	Band    string `json:"band"`
+	Mode    string `json:"mode"`
+	PotaRef string `json:"pota_ref"` // POTA park ref parsed from the spot comment (drives POTA wanted)
 }
 
 type enrichRequest struct {
@@ -172,10 +178,11 @@ type workedBlock struct {
 }
 
 type enrichResult struct {
-	ID           string       `json:"id"`
-	DXCC         *dxccBlock   `json:"dxcc,omitempty"`
-	Needed       []string     `json:"needed"`
-	WorkedBefore *workedBlock `json:"worked_before,omitempty"`
+	ID           string                     `json:"id"`
+	DXCC         *dxccBlock                 `json:"dxcc,omitempty"`
+	Needed       []string                   `json:"needed"`
+	WorkedBefore *workedBlock               `json:"worked_before,omitempty"`
+	Slots        []awardcontract.WantedSlot `json:"slots,omitempty"`
 }
 
 const enrichMaxSpots = 60
@@ -259,6 +266,7 @@ func (s *server) handleEnrich(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := make([]enrichResult, 0, len(req.Spots))
+	var wanted []awardcontract.WantedSpot
 	for _, sp := range req.Spots {
 		if strings.TrimSpace(sp.Call) == "" {
 			continue
@@ -275,8 +283,53 @@ func (s *server) handleEnrich(w http.ResponseWriter, r *http.Request) {
 				WorkedBand:     l.CallWorkedBand,
 				WorkedBandMode: l.CallWorkedBandMode,
 			}
+			// Carry the resolved attributes to horstawards for the progress check.
+			// pota_ref comes from the spot comment (the callsign lookup has no park),
+			// so it is taken from the request rather than the Wavelog result.
+			wanted = append(wanted, awardcontract.WantedSpot{
+				ID:      sp.ID,
+				Call:    sp.Call,
+				DXCCID:  l.DXCCID,
+				State:   l.State,
+				CQZ:     l.Cqz,
+				Grid:    l.Grid,
+				IOTA:    l.IOTA,
+				POTARef: sp.PotaRef,
+				Band:    sp.Band,
+				Mode:    sp.Mode,
+			})
 		}
 		out = append(out, er)
+	}
+
+	// Compose with horstawards (optional). When the awards index is present and
+	// loaded, it is the authoritative source of needed[] (it computes dxcc/band/
+	// mode/was/pota from the operator's own log) and supersedes the Wavelog
+	// confirmed-flag verdict. When it is absent, cold (degraded), or errors, we
+	// keep the Wavelog-derived needed[] — awards being down must never drop the
+	// existing enrichment.
+	if s.awards != nil && len(wanted) > 0 {
+		actx, acancel := context.WithTimeout(r.Context(), 6*time.Second)
+		defer acancel()
+		resp, err := s.awards.Wanted(actx, wanted)
+		switch {
+		case err != nil || resp == nil:
+			degraded = true
+			log.Printf("[WARN] horstawards lookup failed: %v", err)
+		case resp.Degraded:
+			degraded = true // index not loaded yet — keep Wavelog needed[]
+		default:
+			byID := make(map[string]awardcontract.WantedResult, len(resp.Results))
+			for _, res := range resp.Results {
+				byID[res.ID] = res
+			}
+			for i := range out {
+				if res, ok := byID[out[i].ID]; ok {
+					out[i].Needed = res.Needed
+					out[i].Slots = res.Slots
+				}
+			}
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "degraded": degraded, "results": out})

@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"horstreporter/internal/dotenv"
 )
 
 // defaultWavelogURL is the dclnext (DARC) instance; override via WAVELOG_URL.
@@ -34,35 +36,7 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// loadDotEnv reads KEY=VALUE lines from a .env file (if present) and sets them
-// in the process environment unless already set. Comments (#) and blank lines
-// are ignored; optional surrounding single/double quotes are stripped. Keeps
-// secrets like WAVELOG_API_KEY out of the shell history / process args.
-func loadDotEnv(path string) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		line = strings.TrimPrefix(line, "export ")
-		eq := strings.IndexByte(line, '=')
-		if eq <= 0 {
-			continue
-		}
-		key := strings.TrimSpace(line[:eq])
-		val := strings.TrimSpace(line[eq+1:])
-		if len(val) >= 2 && (val[0] == '"' || val[0] == '\'') && val[len(val)-1] == val[0] {
-			val = val[1 : len(val)-1]
-		}
-		if _, exists := os.LookupEnv(key); !exists {
-			_ = os.Setenv(key, val)
-		}
-	}
-}
+// .env loading is shared with horstawards via internal/dotenv.Load.
 
 const (
 	pstQueryAzCommand   = "<PST>AZ?</PST>"
@@ -100,6 +74,7 @@ type serviceConfig struct {
 	RigWaveLogGate   string // WaveLogGate callback base URL
 	WavelogURL       string // Wavelog base URL (e.g. https://log.dclnext.darc.de/index.php)
 	WavelogAPIKey    string // Wavelog read API key (from env; never logged)
+	HorstAwardsURL   string // horstawards base URL (e.g. http://127.0.0.1:9956); empty = disabled
 }
 
 type rotatorState struct {
@@ -453,6 +428,7 @@ type server struct {
 	client  *pstUDPClient
 	rig     rigController  // nil when -rig-transport=none
 	wavelog *wavelogClient // nil when WAVELOG_API_KEY is unset
+	awards  *awardsClient  // nil when -horstawards-url is unset
 
 	pollMu    sync.RWMutex
 	pollState polledAntennaState
@@ -499,6 +475,9 @@ func newServer(cfg serviceConfig) *server {
 	}
 	if strings.TrimSpace(cfg.WavelogAPIKey) != "" {
 		s.wavelog = newWavelogClient(cfg.WavelogURL, cfg.WavelogAPIKey)
+	}
+	if strings.TrimSpace(cfg.HorstAwardsURL) != "" {
+		s.awards = newAwardsClient(cfg.HorstAwardsURL)
 	}
 	s.startAntennaPoller()
 	return s
@@ -663,7 +642,9 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		capabilities["rig"] = map[string]any{"tune": c.Tune, "preview": c.Preview, "split": c.Split}
 	}
 	if s.wavelog != nil {
-		capabilities["lookup"] = map[string]any{"wavelog": true, "was": false}
+		// "awards" => horstawards is wired (covers dxcc/band/mode/was/pota). The
+		// frontend keys off this; there is no award-specific sub-flag.
+		capabilities["lookup"] = map[string]any{"wavelog": true, "awards": s.awards != nil}
 	}
 
 	resp := map[string]any{
@@ -847,7 +828,7 @@ func parseRequiredFloat(name string, raw string) (float64, error) {
 func main() {
 	// Load .env (if present) before reading env so WAVELOG_API_KEY etc. resolve
 	// regardless of how the agent is launched (go run, systemd, run script).
-	loadDotEnv(".env")
+	dotenv.Load(".env")
 
 	listenAddr := flag.String("listen", "127.0.0.1:9955", "HTTP listen address for local operator agent")
 	backendURL := flag.String("backend-url", "", "Optional HorstReporter backend base URL for reverse proxy (e.g. https://horstreporter.kgbvax.net)")
@@ -869,6 +850,7 @@ func main() {
 
 	rigTransport := flag.String("rig-transport", "none", "Rig control backend: none|waveloggate (waveloggate = tune VFO A via WaveLogGate; preview/split need a future rigctld/FLRig backend)")
 	rigWaveLogGate := flag.String("rig-waveloggate-url", "http://127.0.0.1:54321", "WaveLogGate callback base URL (used when -rig-transport=waveloggate)")
+	horstAwardsURL := flag.String("horstawards-url", strings.TrimSpace(os.Getenv("HORSTAWARDS_URL")), "horstawards base URL for award 'wanted' enrichment (e.g. http://127.0.0.1:9956); empty = disabled")
 
 	flag.Parse()
 
@@ -912,6 +894,7 @@ func main() {
 		RigWaveLogGate: strings.TrimSpace(*rigWaveLogGate),
 		WavelogURL:     firstNonEmpty(strings.TrimSpace(os.Getenv("WAVELOG_URL")), defaultWavelogURL),
 		WavelogAPIKey:  strings.TrimSpace(os.Getenv("WAVELOG_API_KEY")),
+		HorstAwardsURL: strings.TrimRight(strings.TrimSpace(*horstAwardsURL), "/"),
 	}
 
 	if cfg.ListenAddr == "" {
