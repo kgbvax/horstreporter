@@ -594,7 +594,7 @@ export function getGraylineEnabled() {
     return true;
 }
 
-// Forecast overlay: advancing gray-line + rising-activity directional halo.
+// Forecast overlay: rising-activity directional halo.
 // Local-only toggle (no server config), default on.
 export function getForecastEnabled() {
     const toggle = document.getElementById('show-forecast');

@@ -6,11 +6,6 @@ const MAX_VISIBLE_C = Math.PI - 0.02;
 const DXCC_SHOW_ALL_ZOOM_THRESHOLD = 5.0;
 const AZIMUTH_SCALE_CLEARANCE_PX = 12;
 const GRAYLINE_RECOMPUTE_MIN_INTERVAL_MS = 320;
-// Forecast overlay: how many minutes ahead to draw the advancing terminator,
-// nearest first. The terminator is the locus exactly 90° (a quarter great
-// circle) from the subsolar point.
-const GRAYLINE_FORECAST_HORIZONS_MIN = [20, 40, 60];
-const TERMINATOR_ARC_KM = EARTH_RADIUS_KM * (Math.PI / 2);
 // Active-area SNR field: value assigned to grid vertices with no nearby data,
 // and the "data presence" contour just above it that forms the smooth outer
 // boundary. NO_DATA sits far below any real SNR so the presence iso-line
@@ -1093,43 +1088,6 @@ function drawGrayline(ctx, width, height) {
     ctx.drawImage(overlayCanvas, 0, 0, width, height);
 }
 
-// drawGraylineForecast draws where the gray-line terminator WILL be in the next
-// hour as faint dashed advancing arcs (nearest = brightest). Gray-line propagation
-// enhancement tracks the terminator, so this previews which paths are about to open.
-export function drawGraylineForecast(ctx, width, height) {
-    const nowMs = Date.now();
-    const lineColor = state.theme === 'dark' ? '#c9a98f' : '#7d5d46';
-    const breakDistPx = Math.min(width, height) * 0.5;
-
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.setLineDash([6, 5]);
-
-    GRAYLINE_FORECAST_HORIZONS_MIN.forEach((minutes, idx) => {
-        const subsolar = getSubsolarPoint(new Date(nowMs + (minutes * 60 * 1000)));
-        ctx.strokeStyle = lineColor;
-        ctx.globalAlpha = Math.max(0.18, 0.5 - (idx * 0.13));
-        ctx.lineWidth = Math.max(1, 1.7 - (idx * 0.35));
-
-        ctx.beginPath();
-        let pen = false;
-        let prev = null;
-        for (let bearing = 0; bearing <= 360; bearing += 3) {
-            const [lat, lng] = destinationPoint(subsolar.lat, subsolar.lng, bearing, TERMINATOR_ARC_KM);
-            const p = projectToCanvas(lat, lng, width, height);
-            if (!p) { pen = false; prev = null; continue; }
-            if (pen && prev && Math.hypot(p.x - prev.x, p.y - prev.y) > breakDistPx) {
-                pen = false;
-            }
-            if (!pen) { ctx.moveTo(p.x, p.y); pen = true; } else { ctx.lineTo(p.x, p.y); }
-            prev = p;
-        }
-        ctx.stroke();
-    });
-    ctx.restore();
-}
-
 // bearingFromCenter returns the initial great-circle bearing (0–360°, 0 = N) from
 // the station center to a point.
 export function bearingFromCenter(lat, lng) {
@@ -1150,6 +1108,10 @@ export function drawTrendHalo(ctx, width, height, filteredSpots) {
     const SECTORS = 24;
     const older = new Array(SECTORS).fill(0);
     const newer = new Array(SECTORS).fill(0);
+    // Per-sector, per-band newer/older counts so the halo can be tinted with
+    // the band whose activity is rising most in that direction.
+    const newerByBand = Array.from({ length: SECTORS }, () => ({}));
+    const olderByBand = Array.from({ length: SECTORS }, () => ({}));
     let maxAge = 0;
     for (const s of filteredSpots) {
         const age = Number(s?.ageSeconds) || 0;
@@ -1162,8 +1124,14 @@ export function drawTrendHalo(ctx, width, height, filteredSpots) {
         if (String(s?.sourceType || '').toLowerCase() === 'dxcluster') continue;
         if (!Number.isFinite(s?.lat) || !Number.isFinite(s?.lng)) continue;
         const sector = Math.floor((bearingFromCenter(s.lat, s.lng) / 360) * SECTORS) % SECTORS;
-        if ((Number(s.ageSeconds) || 0) <= split) newer[sector] += 1;
-        else older[sector] += 1;
+        const band = s?.band || 'all';
+        if ((Number(s.ageSeconds) || 0) <= split) {
+            newer[sector] += 1;
+            newerByBand[sector][band] = (newerByBand[sector][band] || 0) + 1;
+        } else {
+            older[sector] += 1;
+            olderByBand[sector][band] = (olderByBand[sector][band] || 0) + 1;
+        }
     }
 
     const cx = width / 2;
@@ -1175,14 +1143,24 @@ export function drawTrendHalo(ctx, width, height, filteredSpots) {
     if (rimRadius <= 0) return;
 
     const sectorRad = (2 * Math.PI) / SECTORS;
+    const neutralColor = state.theme === 'dark' ? '#c9a98f' : '#7d5d46';
     ctx.save();
-    ctx.strokeStyle = state.theme === 'dark' ? '#c9a98f' : '#7d5d46';
     ctx.lineCap = 'butt';
     ctx.lineWidth = 5;
     for (let sec = 0; sec < SECTORS; sec += 1) {
         const delta = newer[sec] - older[sec];
         if (delta < 2) continue; // only meaningfully rising sectors
-        ctx.globalAlpha = Math.min(0.5, 0.14 + (0.07 * delta));
+        // Tint the arc with whichever band is rising most in this sector.
+        let risingBand = null;
+        let bestRise = 0;
+        const bands = newerByBand[sec];
+        for (const band in bands) {
+            const rise = bands[band] - (olderByBand[sec][band] || 0);
+            if (rise > bestRise) { bestRise = rise; risingBand = band; }
+        }
+        ctx.strokeStyle = (risingBand && bandColors[risingBand]) || neutralColor;
+        // Keep the tint faint: a touch dimmer than the old monochrome halo.
+        ctx.globalAlpha = Math.min(0.42, 0.12 + (0.06 * delta));
         // Sector spans bearings [sec, sec+1) * (360/SECTORS); 0° = up (canvas -Y).
         const startBearing = sec * sectorRad;
         const endBearing = (sec + 1) * sectorRad;
@@ -2169,7 +2147,6 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
         }
 
         if (getForecastEnabled()) {
-            drawGraylineForecast(state.ctx, width, height);
             drawTrendHalo(state.ctx, width, height, filteredSpots);
         }
 
