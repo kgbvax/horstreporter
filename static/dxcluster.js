@@ -58,6 +58,30 @@ function parseMode(comment) {
   return (v === 'LSB' || v === 'USB') ? 'SSB' : v;
 }
 
+// modeCat folds a spot's parsed mode into the three operator filter buckets:
+// cw, phone (SSB/AM/FM), digi (everything else — FT8/FT4/RTTY/PSK/…). Returns ''
+// when the comment names no mode (cluster spots often don't).
+const MODE_CATS = [['cw', 'CW'], ['phone', 'Phone'], ['digi', 'Digi']];
+function modeCat(s) {
+  const m = parseMode(s.comment);
+  if (!m) return '';
+  if (m === 'CW') return 'cw';
+  if (m === 'SSB' || m === 'AM' || m === 'FM') return 'phone';
+  return 'digi';
+}
+
+// Enabled mode buckets (persisted). Default all on. A spot whose mode can't be
+// determined is shown only while no bucket is filtered out, so the default view
+// stays complete but narrowing to e.g. CW drops ambiguous spots too.
+const MODE_KEY = 'cqModes';
+let enabledModes;
+try { enabledModes = new Set(JSON.parse(localStorage.getItem(MODE_KEY) || '["cw","phone","digi"]')); } catch (e) { enabledModes = new Set(['cw', 'phone', 'digi']); }
+function modePass(s) {
+  const cat = modeCat(s);
+  if (!cat) return enabledModes.size >= MODE_CATS.length; // unknown: only when unfiltered
+  return enabledModes.has(cat);
+}
+
 // Starred ("watch") callsigns — stations the operator always wants to see,
 // persisted locally and sortable to the top via the ★ column.
 const STAR_KEY = 'cqStars';
@@ -109,15 +133,20 @@ function injectStyles() {
     border-left: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);
     --cq-go:#22c55e; --cq-watch:#f59e0b; --cq-wait:#64748b; --cq-atno:#f3c14b; --cq-unknown: var(--status-color);
     --cq-gold-strong:#9a7000; --cq-cc:#ffffff;
+    --cq-was:#2f9e8f; --cq-pota:#3f8f4f;
     --cq-mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
     font-size: 15px; }
   body[data-theme="dark"] #chase-queue { --cq-gold-strong:#f3c14b; --cq-cc:#08201d; }
   #chase-queue.is-hidden { display: none; }
 
   /* Header: de-prioritised title row, then a separated sortable column band. */
-  .cq-head { padding:7px 12px; display:flex; align-items:baseline; gap:8px; background:var(--bg-color); border-bottom:1px solid var(--border-color); }
+  .cq-head { padding:7px 12px; display:flex; align-items:center; gap:8px; background:var(--bg-color); border-bottom:1px solid var(--border-color); }
   .cq-title { font-size:.86rem; font-weight:600; color:var(--status-color); letter-spacing:.02em; }
-  .cq-count { margin-left:auto; font:600 11px var(--cq-mono); color:var(--status-color); }
+  .cq-modes { margin-left:auto; display:flex; gap:3px; }
+  .cq-mode { all:unset; cursor:pointer; box-sizing:border-box; font:700 10px/1 sans-serif; letter-spacing:.03em;
+    text-transform:uppercase; color:var(--status-color); padding:4px 7px; border-radius:3px; border:1px solid var(--control-border); }
+  .cq-mode:hover { color:var(--accent-strong); border-color:var(--accent); }
+  .cq-mode.act { background:var(--accent); color:var(--cq-cc); border-color:var(--accent); }
   #cq-close { border:0; background:transparent; color:var(--status-color); font-size:17px; line-height:1; cursor:pointer; padding:0 2px; }
   #cq-close:hover { color:var(--text-color); }
   .cq-status { font:600 11px sans-serif; color:var(--cq-watch); padding:4px 12px 0; }
@@ -160,6 +189,8 @@ function injectStyles() {
   .cq-fbadge { justify-self:start; box-sizing:border-box; font:800 10px/1 sans-serif; text-transform:uppercase; letter-spacing:.03em; padding:3px 6px; border-radius:3px; }
   .cq-fbadge.atno { color:#1c1400; background:var(--cq-atno); }
   .cq-fbadge.band, .cq-fbadge.mode { color:var(--cq-cc); background:var(--accent); }
+  .cq-fbadge.was { color:var(--cq-cc); background:var(--cq-was); }
+  .cq-fbadge.pota { color:var(--cq-cc); background:var(--cq-pota); }
   .cq-fbadge.worked { color:var(--status-color); background:color-mix(in srgb,var(--status-color) 26%,var(--bg-color)); }
   .cq-bar { justify-self:end; display:inline-block; width:44px; height:6px; border-radius:3px;
     background:color-mix(in srgb,var(--text-color) 13%,transparent); overflow:hidden; }
@@ -189,7 +220,7 @@ function injectStyles() {
   document.head.appendChild(s);
 }
 
-let panelEl, bodyEl, countEl, statusEl, colheadEl;
+let panelEl, bodyEl, modesEl, statusEl, colheadEl;
 let lastSpots = []; // last fetched+scored+enriched spots (band-filtered); sorted client-side
 
 // Map-highlight state. `pinned` is the click-pinned spot (persists until another
@@ -225,7 +256,7 @@ function mount() {
   panelEl.innerHTML = `
     <div class="cq-head">
       <span class="cq-title">Chase Queue</span>
-      <span class="cq-count" id="cq-count">—</span>
+      <div class="cq-modes" id="cq-modes"></div>
       <button id="cq-close" title="Hide Chase Queue">×</button>
     </div>
     <div id="cq-status" class="cq-status"></div>
@@ -233,9 +264,10 @@ function mount() {
     <div class="cq-body" id="cq-body"><div class="cq-empty">Loading spots…</div></div>`;
   document.body.appendChild(panelEl);
   bodyEl = panelEl.querySelector('#cq-body');
-  countEl = panelEl.querySelector('#cq-count');
+  modesEl = panelEl.querySelector('#cq-modes');
   statusEl = panelEl.querySelector('#cq-status');
   colheadEl = panelEl.querySelector('#cq-colhead');
+  renderModeFilter();
 
   const PANEL_W = 380;
   // Docking the panel changes the map container width; nudge Leaflet (trackResize)
@@ -317,18 +349,21 @@ async function runCardAction(btn, label, fn, okMsg) {
   }
 }
 
-// wantInfo maps the Wavelog "needed" enrichment to a wanted state: a sort rank
-// (ATNO highest) plus a filled badge. dxcc = all-time-new entity, band/mode = a
-// new slot, worked_band_mode = already worked. No enrichment (no Wavelog) → no
-// label.
+// wantInfo maps the "needed" enrichment to a wanted state: a sort rank (ATNO
+// highest) plus a filled badge. The needed[] vocabulary comes from the operator
+// agent: dxcc = all-time-new entity, band/mode = a new DXCC slot, was = a new US
+// state (Worked All States), pota = a new POTA park. worked_band_mode = already
+// worked. No enrichment (no Wavelog/horstawards) → no label.
 function wantInfo(s) {
   const e = s._enrich;
   const needed = e && Array.isArray(e.needed) ? e.needed : [];
   if (needed.includes('dxcc')) return { rank: 0, cls: 'atno', label: 'ATNO' };
   if (needed.includes('band')) return { rank: 1, cls: 'band', label: '+BAND' };
   if (needed.includes('mode')) return { rank: 2, cls: 'mode', label: '+MODE' };
-  if (e && e.worked_before && e.worked_before.worked_band_mode) return { rank: 3, cls: 'worked', label: 'WORKED' };
-  return { rank: 4, cls: '', label: '' };
+  if (needed.includes('was')) return { rank: 3, cls: 'was', label: '+STATE' };
+  if (needed.includes('pota')) return { rank: 4, cls: 'pota', label: 'POTA' };
+  if (e && e.worked_before && e.worked_before.worked_band_mode) return { rank: 5, cls: 'worked', label: 'WORKED' };
+  return { rank: 6, cls: '', label: '' };
 }
 
 // Sort state (persisted). The operator's reading modes are just sort orders:
@@ -472,6 +507,20 @@ function renderRow(s) {
   return el;
 }
 
+// renderModeFilter draws the CW/Phone/Digi toggle pills in the header and wires
+// their clicks. Toggling is client-side (re-filters cached spots, no refetch).
+function renderModeFilter() {
+  modesEl.innerHTML = MODE_CATS.map(([k, label]) =>
+    `<button data-m="${k}" class="cq-mode${enabledModes.has(k) ? ' act' : ''}" title="Show ${label} spots">${label}</button>`).join('');
+  modesEl.querySelectorAll('button[data-m]').forEach((b) => b.addEventListener('click', () => {
+    const m = b.dataset.m;
+    if (enabledModes.has(m)) enabledModes.delete(m); else enabledModes.add(m);
+    try { localStorage.setItem(MODE_KEY, JSON.stringify([...enabledModes])); } catch (e) { /* ignore quota */ }
+    renderModeFilter();
+    sortAndRender();
+  }));
+}
+
 // sortAndRender rebuilds the sortable header (so the active marker tracks the
 // current sort) and the row list. Runs on refresh, on a header click, and on a
 // star toggle — all client-side off the cached lastSpots.
@@ -484,22 +533,22 @@ function sortAndRender() {
     sortAndRender();
   }));
 
-  const spots = lastSpots.slice();
+  const spots = lastSpots.filter(modePass);
   bodyEl.innerHTML = '';
   if (!spots.length) {
     colheadEl.classList.add('is-hidden');
-    const msg = getEnabledBands().size === 0
-      ? 'No bands selected.<br>Enable bands on the left.'
-      : 'No DX spots on the selected bands.<br>Is the cluster connected?';
+    let msg;
+    if (getEnabledBands().size === 0) msg = 'No bands selected.<br>Enable bands on the left.';
+    else if (enabledModes.size === 0) msg = 'No modes selected.<br>Enable CW / Phone / Digi above.';
+    else if (lastSpots.length) msg = 'No spots match the mode filter.';
+    else msg = 'No DX spots on the selected bands.<br>Is the cluster connected?';
     bodyEl.innerHTML = `<div class="cq-empty">${msg}</div>`;
-    countEl.textContent = '0';
     return;
   }
   colheadEl.classList.remove('is-hidden');
   spots.sort(SORTS[sortKey] || SORTS.wanted);
   if (sortAsc) spots.reverse();
   spots.forEach((s) => bodyEl.appendChild(renderRow(s)));
-  countEl.textContent = `${spots.length} spots`;
 }
 
 async function refresh() {
