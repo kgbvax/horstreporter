@@ -1590,6 +1590,22 @@ func normalizeBand(raw string) string {
 	return b + "m"
 }
 
+// bandsInScope is the set of amateur bands HorstReporter analyses (160m–2m).
+// PSKReporter / DX-cluster feeds occasionally carry microwave spots (13cm, 23cm,
+// 70cm, …) whose band strings also end in "m", so normalizeBand passes them
+// through. Trend/hot-band analysis must gate on this set explicitly, otherwise
+// it surfaces out-of-scope bands like "13cm rising".
+var bandsInScope = map[string]struct{}{
+	"160m": {}, "80m": {}, "60m": {}, "40m": {}, "30m": {}, "20m": {},
+	"17m": {}, "15m": {}, "12m": {}, "10m": {}, "6m": {}, "4m": {}, "2m": {},
+}
+
+// bandInScope reports whether a normalized band is one HorstReporter analyses.
+func bandInScope(band string) bool {
+	_, ok := bandsInScope[band]
+	return ok
+}
+
 func baselineKey(band string, slotOfDay, distanceTier, snrTier int) string {
 	return band + "|" + itoa(slotOfDay) + "|" + itoa(distanceTier) + "|" + itoa(snrTier)
 }

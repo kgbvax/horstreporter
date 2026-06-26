@@ -88,6 +88,12 @@ func (e *DxBaselineEngine) HotBands(target string, surroundings bool, minutes in
 		if b.Band == "" {
 			continue
 		}
+		// Only surface trends for bands in scope (160m–2m). Microwave spots
+		// (e.g. 13cm) can leak through normalizeBand and must not appear as
+		// "13cm rising".
+		if !bandInScope(b.Band) {
+			continue
+		}
 		if currentBand != "" && currentBand != "all" && b.Band == currentBand {
 			continue
 		}

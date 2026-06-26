@@ -169,6 +169,19 @@ func TestHotBandsHeuristicGating(t *testing.T) {
 			wantEmpty: true,
 		},
 		{
+			name:      "out-of-scope band (13cm) suppressed",
+			band:      "13cm", // microwave: same rising setup as 15m, must not surface
+			spark:     []float64{0, 0, 0, 0, 0, 0, 0, 0, 40, 50, 70, 90},
+			live:      1.5,
+			baseAct:   1.0,
+			liveP90:   3000,
+			baseP90:   2800,
+			trend:     "rising",
+			trendDel:  0.4,
+			status:    "green",
+			wantEmpty: true,
+		},
+		{
 			name:      "too low rate suppressed",
 			band:      "17m",
 			spark:     []float64{0, 0, 0, 0, 0, 0, 0, 0, 30, 50, 60, 70},
@@ -231,6 +244,9 @@ func classifyHotBandsForTest(cond dxConditionsResponse, currentBand string, base
 	trustedBaseline := cond.BaselineHistoryM >= hotBandsMinHistoryMinutes
 	out := make([]hotBandRecommendation, 0, len(cond.Bands))
 	for _, b := range cond.Bands {
+		if !bandInScope(b.Band) {
+			continue
+		}
 		if currentBand != "" && currentBand != "all" && b.Band == currentBand {
 			continue
 		}
