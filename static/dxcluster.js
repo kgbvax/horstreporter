@@ -110,36 +110,36 @@ function injectStyles() {
     --cq-go:#22c55e; --cq-watch:#f59e0b; --cq-wait:#64748b; --cq-atno:#f3c14b; --cq-unknown: var(--status-color);
     --cq-gold-strong:#9a7000; --cq-cc:#ffffff;
     --cq-mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
-    font-size: 14px; }
+    font-size: 15px; }
   body[data-theme="dark"] #chase-queue { --cq-gold-strong:#f3c14b; --cq-cc:#08201d; }
   #chase-queue.is-hidden { display: none; }
 
   /* Header: de-prioritised title row, then a separated sortable column band. */
   .cq-head { padding:7px 12px; display:flex; align-items:baseline; gap:8px; background:var(--bg-color); border-bottom:1px solid var(--border-color); }
-  .cq-title { font-size:.8rem; font-weight:600; color:var(--status-color); letter-spacing:.02em; }
-  .cq-count { margin-left:auto; font:600 10px var(--cq-mono); color:var(--status-color); }
+  .cq-title { font-size:.86rem; font-weight:600; color:var(--status-color); letter-spacing:.02em; }
+  .cq-count { margin-left:auto; font:600 11px var(--cq-mono); color:var(--status-color); }
   #cq-close { border:0; background:transparent; color:var(--status-color); font-size:17px; line-height:1; cursor:pointer; padding:0 2px; }
   #cq-close:hover { color:var(--text-color); }
-  .cq-status { font:600 10px sans-serif; color:var(--cq-watch); padding:4px 12px 0; }
+  .cq-status { font:600 11px sans-serif; color:var(--cq-watch); padding:4px 12px 0; }
   .cq-status:empty { display:none; }
 
   .cq-colhead { background:var(--surface-1); border-bottom:1px solid var(--control-border); }
   .cq-colhead.is-hidden { display:none; }
-  .cq-fh1, .cq-row .cq-f1 { display:grid; grid-template-columns:24px auto auto 1fr; column-gap:8px; align-items:center; }
-  .cq-fh2, .cq-row .cq-f2 { display:grid; grid-template-columns:24px 48px 48px 78px 58px 40px; column-gap:8px; align-items:center; }
+  .cq-fh1, .cq-row .cq-f1 { display:grid; grid-template-columns:24px auto auto 1fr; column-gap:6px; align-items:center; }
+  .cq-fh2, .cq-row .cq-f2 { display:grid; grid-template-columns:24px 52px 54px 78px 62px 44px; column-gap:6px; align-items:center; }
   .cq-fh1 { padding:7px 12px 2px 15px; } .cq-fh2 { padding:0 12px 8px 15px; }
   /* every header keeps the same box in every state (constant padding + a reserved
      arrow slot) so sorting never reflows the columns; only background changes */
   .cq-fh1 button, .cq-fh2 button { all:unset; cursor:pointer; display:block; box-sizing:border-box; white-space:nowrap; text-align:right;
-    font:700 10px/1.2 sans-serif; letter-spacing:.02em; text-transform:uppercase; color:var(--status-color); padding:3px 6px; border-radius:3px; }
+    font:700 11px/1.2 sans-serif; letter-spacing:.02em; text-transform:uppercase; color:var(--status-color); padding:3px 6px; border-radius:3px; }
   .cq-fh1 button.lft, .cq-fh2 button.lft { text-align:left; }
   .cq-fh1 button.starh { padding:3px 2px; }
   .cq-fh1 button:hover, .cq-fh2 button:hover { color:var(--accent-strong); }
   .cq-fh1 button.act, .cq-fh2 button.act { background:var(--accent); color:var(--cq-cc); }
-  .cq-ar { display:inline-block; width:9px; text-align:center; font-size:8px; }
+  .cq-ar { display:inline-block; width:10px; text-align:center; font-size:9px; }
 
   .cq-body { flex:1 1 auto; overflow-y:auto; padding:0; }
-  .cq-empty { color:var(--status-color); font-size:13px; text-align:center; padding:24px 12px; line-height:1.5; }
+  .cq-empty { color:var(--status-color); font-size:14px; text-align:center; padding:24px 12px; line-height:1.5; }
 
   .cq-row { border-left:6px solid var(--cq-spine,#555); border-bottom:1px solid color-mix(in srgb,var(--border-color) 60%,transparent);
     padding:7px 12px 8px 9px; cursor:pointer; }
@@ -148,14 +148,16 @@ function injectStyles() {
   .cq-row.w-atno { border-left:8px solid var(--cq-atno); background:color-mix(in srgb,var(--cq-atno) 11%,var(--bg-color)); }
   .cq-row.w-atno .cq-c { color:var(--cq-gold-strong); }
   .cq-row .cq-f2 { margin-top:3px; }
-  .cq-c { font:700 15px var(--cq-mono); }
-  .cq-age { text-align:right; color:var(--status-color); font:12.5px var(--cq-mono); }
-  .cq-d { font:12.5px var(--cq-mono); color:var(--status-color); }
+  .cq-c { font:700 16px var(--cq-mono); }
+  .cq-age { text-align:right; color:var(--status-color); font:13.5px var(--cq-mono); }
+  .cq-d { font:13.5px var(--cq-mono); color:var(--status-color); }
+  .cq-cmt { font:13.5px/1.35 sans-serif; color:var(--status-color); padding:3px 12px 0 15px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .cq-d.bandc { font-weight:700; } .cq-d.r { text-align:right; white-space:nowrap; }
   .cq-star { all:unset; cursor:pointer; width:14px; height:14px; display:block; }
   .cq-star svg { width:14px; height:14px; display:block; }
   .cq-star .s-on { fill:var(--cq-atno); } .cq-star .s-off { fill:none; stroke:color-mix(in srgb,var(--text-color) 32%,transparent); stroke-width:1.1; }
-  .cq-fbadge { justify-self:start; box-sizing:border-box; font:800 9px/1 sans-serif; text-transform:uppercase; letter-spacing:.03em; padding:3px 6px; border-radius:3px; }
+  .cq-fbadge { justify-self:start; box-sizing:border-box; font:800 10px/1 sans-serif; text-transform:uppercase; letter-spacing:.03em; padding:3px 6px; border-radius:3px; }
   .cq-fbadge.atno { color:#1c1400; background:var(--cq-atno); }
   .cq-fbadge.band, .cq-fbadge.mode { color:var(--cq-cc); background:var(--accent); }
   .cq-fbadge.worked { color:var(--status-color); background:color-mix(in srgb,var(--status-color) 26%,var(--bg-color)); }
@@ -165,13 +167,12 @@ function injectStyles() {
   .cq-bar.g-go>i{background:var(--cq-go);} .cq-bar.g-watch>i{background:var(--cq-watch);} .cq-bar.g-wait>i{background:var(--cq-wait);} .cq-bar.g-unknown>i{background:var(--cq-unknown);}
 
   /* expand-on-click detail: operator/comment + rig actions */
-  .cq-detail { display:none; font:12px/1.4 sans-serif; color:var(--status-color); padding:6px 12px 2px 15px; }
+  .cq-detail { display:none; font:13px/1.4 sans-serif; color:var(--status-color); padding:6px 12px 2px 15px; }
   .cq-row.cq-open .cq-detail { display:block; }
   .cq-detail .k { color:var(--text-color); font-weight:600; }
-  .cq-detail .cmt { display:block; margin-top:2px; }
   .cq-detail .sep { opacity:.4; margin:0 5px; }
   .cq-actions { display:flex; gap:6px; margin-top:7px; }
-  .cq-act { flex:1 1 auto; font:600 12px sans-serif; border:1px solid var(--control-border); background:transparent; color:var(--text-color);
+  .cq-act { flex:1 1 auto; font:600 13px sans-serif; border:1px solid var(--control-border); background:transparent; color:var(--text-color);
     border-radius:var(--btn-radius-sm,6px); padding:5px 8px; cursor:pointer; transition:background .12s, border-color .12s, color .12s; }
   .cq-act:hover { background:var(--accent-tint); border-color:var(--accent); color:var(--accent-strong); }
   .cq-act:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
@@ -400,6 +401,7 @@ function renderRow(s) {
       <span class="cq-bar g-${dec}"><i style="width:${fill}%"></i></span>
       <span class="cq-age">${fmtAge(s.age_seconds)}</span>
     </div>
+    ${comment ? `<div class="cq-cmt" title="${comment}">${comment}</div>` : ''}
     <div class="cq-detail"></div>`;
   if (sc && sc.reason) el.title = sc.reason;
 
@@ -416,7 +418,7 @@ function renderRow(s) {
   if (mode) bits.push(mode);
   bits.push(`${fmtFreq(s.freq_khz)} MHz`);
   if (dir) bits.push(`beam ${dir}`); // direction lives here now (dropped from the row)
-  detail.innerHTML = bits.join('<span class="sep">·</span>') + (comment ? `<span class="cmt">${comment}</span>` : '');
+  detail.innerHTML = bits.join('<span class="sep">·</span>'); // comment now shown on its own always-visible line
 
   // Rig mode prefers the spotter-reported mode, else the frequency default.
   const rigMode = mode || guessMode(s.freq_khz);
