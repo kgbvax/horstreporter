@@ -265,8 +265,8 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
             pill.style.filter = 'none';
             if (nodata) nodata.hidden = true;
             if (icon) icon.style.opacity = isFocused ? '1' : '0.4';
-            pill.style.borderColor = isFocused ? '#111' : 'transparent';
-            pill.style.boxShadow = isFocused ? '0 0 0 2px var(--text-color, #111)' : 'none';
+            pill.style.borderColor = 'transparent';
+            pill.style.boxShadow = 'none';
             pill.style.opacity = (soloing && !shown) ? '0.5' : '1';
         } else {
             // Enabled but no data: muted band color + band-color border + tag.
@@ -275,8 +275,8 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
             pill.style.filter = 'none';
             if (nodata) nodata.hidden = false;
             if (icon) icon.style.opacity = isFocused ? '1' : '0.4';
-            pill.style.borderColor = isFocused ? '#111' : color;
-            pill.style.boxShadow = isFocused ? '0 0 0 2px var(--text-color, #111)' : 'none';
+            pill.style.borderColor = color;
+            pill.style.boxShadow = 'none';
             pill.style.opacity = (soloing && !shown) ? '0.5' : '1';
         }
 
