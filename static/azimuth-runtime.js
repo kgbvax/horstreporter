@@ -1164,19 +1164,11 @@ function drawAzimuthIndicator(ctx, width, height) {
     // NS6T-style helper spokes: draw full spokes every 10° and
     // emphasize cardinal N/S/E/W lines.
     for (let bearing = 0; bearing < 360; bearing += 10) {
-        const angle = degToRad(bearing - 90);
-        const cosA = Math.cos(angle);
-        const sinA = Math.sin(angle);
         const isCardinal = bearing === 0 || bearing === 90 || bearing === 180 || bearing === 270;
         const isMajor = bearing % 30 === 0;
-
-        ctx.beginPath();
-        ctx.moveTo(centerX, centerY);
-        ctx.lineTo(centerX + (spokeRadius * cosA), centerY + (spokeRadius * sinA));
         ctx.strokeStyle = spokeColor;
-        ctx.lineWidth = isCardinal ? 1.9 : isMajor ? 1.15 : 0.85;
         ctx.globalAlpha = isCardinal ? 0.72 : isMajor ? 0.50 : 0.34;
-        ctx.stroke();
+        radialLine(ctx, centerX, centerY, 0, spokeRadius, bearing, isCardinal ? 1.9 : isMajor ? 1.15 : 0.85);
     }
 
     // 2° minor subdivisions (skip 10° and 30° positions).
@@ -1206,16 +1198,7 @@ function drawAzimuthIndicator(ctx, width, height) {
         const sinA = Math.sin(angle);
         const cardinal = bearing === 0 ? 'N' : bearing === 90 ? 'E' : bearing === 180 ? 'S' : bearing === 270 ? 'W' : '';
 
-        const x0 = centerX + (majorTickInner * cosA);
-        const y0 = centerY + (majorTickInner * sinA);
-        const x1 = centerX + (outerRadius * cosA);
-        const y1 = centerY + (outerRadius * sinA);
-
-        ctx.beginPath();
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(x1, y1);
-        ctx.lineWidth = cardinal ? 2.0 : 1.4;
-        ctx.stroke();
+        radialLine(ctx, centerX, centerY, majorTickInner, outerRadius, bearing, cardinal ? 2.0 : 1.4);
 
         const lx = centerX + (labelRadius * cosA);
         const ly = centerY + (labelRadius * sinA);
