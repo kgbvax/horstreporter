@@ -5,6 +5,15 @@ import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTi
 
 let lastRenderFingerprint = '';
 
+// Add a single isolated-spot circle marker to the heat layer (shared by the
+// clustered and non-clustered render paths so the style lives in one place).
+function addSpotMarker(p, color) {
+    L.circleMarker([p.geometry.coordinates[1], p.geometry.coordinates[0]], {
+        color, fillColor: color, radius: 4.5, weight: 2,
+        opacity: 0.65, fillOpacity: 0.5, interactive: false
+    }).addTo(state.heatLayer);
+}
+
 function buildFilterCtx() {
     return {
         minSnrMode: getMinSnrMode(),
@@ -440,28 +449,12 @@ function renderActiveArea(spots, maxMinutes, filterCtx) {
             }
 
             isolatedPts.forEach(p => {
-                L.circleMarker([p.geometry.coordinates[1], p.geometry.coordinates[0]], {
-                    color: color,
-                    fillColor: color,
-                    radius: 4.5,
-                    weight: 2,
-                    opacity: 0.65,
-                    fillOpacity: 0.5,
-                    interactive: false
-                }).addTo(state.heatLayer);
+                addSpotMarker(p, color);
                 markersAdded += 1;
             });
         } else {
             pts.forEach(p => {
-                L.circleMarker([p.geometry.coordinates[1], p.geometry.coordinates[0]], {
-                    color: color,
-                    fillColor: color,
-                    radius: 4.5,
-                    weight: 2,
-                    opacity: 0.65,
-                    fillOpacity: 0.5,
-                    interactive: false
-                }).addTo(state.heatLayer);
+                addSpotMarker(p, color);
                 markersAdded += 1;
             });
         }
