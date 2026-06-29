@@ -6,6 +6,12 @@ MODE="${1:-static}"
 
 STATIC_BIN="horstreporter-linux-x64"
 
+# Build the Svelte UI bundle into static/dist before the Go build embeds
+# static/. dist/ is gitignored, so this must run on every fresh checkout.
+echo "Building frontend bundle (vite)..."
+npm ci
+npm run build
+
 case "$MODE" in
 	static)
 		echo "Building statically linked binary for Linux x64 (CGO disabled)..."
