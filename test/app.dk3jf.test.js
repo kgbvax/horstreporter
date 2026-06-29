@@ -200,10 +200,9 @@ describe('app.js DK3JF mode behavior', () => {
         localStorage.setItem('dk3jfModeEnabled', 'false');
         localStorage.setItem('mapProjection', 'azimuthal');
 
-        const band2mRadio = document.querySelector('input[name="band"][value="2m"]');
-        const bandAllRadio = document.querySelector('input[name="band"][value="all"]');
-        bandAllRadio.checked = false;
-        band2mRadio.checked = true;
+        // 2m is the focused (solo) band before dk3jf turns it off.
+        localStorage.setItem('selectedBand', '2m');
+        document.getElementById('band-container').dataset.focusBand = '2m';
 
         await importAppFresh();
 
@@ -219,8 +218,8 @@ describe('app.js DK3JF mode behavior', () => {
         expect(localStorage.getItem('mapProjection')).toBe('azimuthal');
 
         expect(document.querySelector('.band-enable[value="2m"]').checked).toBe(false);
-        expect(document.querySelector('input[name="band"][value="2m"]').disabled).toBe(true);
-        expect(document.querySelector('input[name="band"][value="all"]').checked).toBe(true);
+        // 2m was focused; disabling it drops focus back to "all" (empty dataset).
+        expect(document.getElementById('band-container').dataset.focusBand).toBe('');
     });
 
     it('keeps projection/azimuth options visible while toggling DK3JF-specific 2m controls', async () => {

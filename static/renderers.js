@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, bandColors, locatorToBounds } from './utils.js';
+import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, bandColors, locatorToBounds, hexToRgba, pillTextColor } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTimer } from './perf.js';
 
 let lastRenderFingerprint = '';
@@ -229,33 +229,58 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
         });
     }
 
-    const radios = document.querySelectorAll('input[name="band"]');
-    radios.forEach(radio => {
-        const wrapper = radio.closest('.band-wrapper');
-        if (!wrapper) return;
+    const enabledBands = ctx.enabledBands;
+    const focus = getSelectedBand();
+    // Focus only applies while its band is still enabled; otherwise fall back to
+    // "show all enabled" (focus is ignored until set again).
+    const effectiveFocus = (focus !== 'all' && enabledBands.has(focus)) ? focus : 'all';
+    const soloing = effectiveFocus !== 'all';
 
-        if (radio.checked) {
-            wrapper.style.borderColor = 'var(--text-color)';
+    document.querySelectorAll('.band-pill').forEach(pill => {
+        const band = pill.dataset.band;
+        if (!band) return;
+        const color = bandColors[band] || '#6c757d';
+        const enabled = enabledBands.has(band);
+        const hasData = bands.has(band);
+        const isFocused = enabled && band === effectiveFocus;
+        const shown = enabled && (effectiveFocus === 'all' || isFocused);
+
+        const icon = pill.querySelector('.band-focus-icon');
+        const nodata = pill.querySelector('.band-nodata-tag');
+
+        if (!enabled) {
+            // Disabled: gray pill, muted text.
+            pill.style.backgroundColor = '#6c757d';
+            pill.style.color = '#dee2e6';
+            pill.style.borderColor = 'transparent';
+            pill.style.boxShadow = 'none';
+            pill.style.opacity = '1';
+            pill.style.filter = 'none';
+            if (nodata) nodata.hidden = true;
+            if (icon) icon.style.opacity = '0.2';
+        } else if (hasData) {
+            // Active: full band color, contrast-aware text.
+            pill.style.backgroundColor = color;
+            pill.style.color = pillTextColor(color);
+            pill.style.filter = 'none';
+            if (nodata) nodata.hidden = true;
+            if (icon) icon.style.opacity = isFocused ? '1' : '0.4';
+            pill.style.borderColor = isFocused ? '#111' : 'transparent';
+            pill.style.boxShadow = isFocused ? '0 0 0 2px var(--text-color, #111)' : 'none';
+            pill.style.opacity = (soloing && !shown) ? '0.5' : '1';
         } else {
-            wrapper.style.borderColor = 'transparent';
+            // Enabled but no data: muted band color + band-color border + tag.
+            pill.style.backgroundColor = hexToRgba(color, 0.18);
+            pill.style.color = 'var(--text-color, #212529)';
+            pill.style.filter = 'none';
+            if (nodata) nodata.hidden = false;
+            if (icon) icon.style.opacity = isFocused ? '1' : '0.4';
+            pill.style.borderColor = isFocused ? '#111' : color;
+            pill.style.boxShadow = isFocused ? '0 0 0 2px var(--text-color, #111)' : 'none';
+            pill.style.opacity = (soloing && !shown) ? '0.5' : '1';
         }
 
-        if (radio.value === 'all') return;
-
-        const isEnabled = ctx.enabledBands.has(radio.value);
-        if (!isEnabled) {
-            wrapper.style.opacity = '0.2';
-            wrapper.style.filter = 'grayscale(100%)';
-            return;
-        }
-
-        if (bands.has(radio.value)) {
-            wrapper.style.opacity = '1';
-            wrapper.style.filter = 'none';
-        } else {
-            wrapper.style.opacity = '0.4';
-            wrapper.style.filter = 'grayscale(100%)';
-        }
+        pill.setAttribute('aria-pressed', isFocused ? 'true' : 'false');
     });
 }
 

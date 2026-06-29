@@ -617,8 +617,23 @@ export function getMinSnrMode() {
 }
 
 export function getSelectedBand() {
-    const checkedRadio = document.querySelector('input[name="band"]:checked');
-    return checkedRadio ? checkedRadio.value : 'all';
+    // Focus (solo) band lives on the band-container's data-focus-band attribute;
+    // empty means no focus ('all' = show all enabled bands).
+    const container = document.getElementById('band-container');
+    const focus = container?.dataset.focusBand;
+    return focus && focus.length ? focus : 'all';
+}
+
+// pillTextColor picks a legible text color (dark/light) for a given band's
+// solid hex background using perceived luminance.
+export function pillTextColor(hex) {
+    const v = String(hex || '').replace('#', '');
+    if (v.length !== 6) return '#ffffff';
+    const r = Number.parseInt(v.slice(0, 2), 16);
+    const g = Number.parseInt(v.slice(2, 4), 16);
+    const b = Number.parseInt(v.slice(4, 6), 16);
+    const lum = (0.299 * r) + (0.587 * g) + (0.114 * b);
+    return lum > 150 ? '#212529' : '#ffffff';
 }
 
 export function getEnabledBands() {

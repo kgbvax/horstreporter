@@ -23,6 +23,7 @@ import {
     getMinSnrMode,
     getSelectedBand,
     getEnabledBands,
+    pillTextColor,
     greatCircleDistanceKm,
     initialBearingDeg,
     greatCirclePoints
@@ -205,12 +206,20 @@ describe('utils.js', () => {
             expect(getGridResolution()).toBe(4);
         });
 
-        it('getSelectedBand returns the value of the checked band radio input', () => {
-            document.body.innerHTML = `
-                <input type="radio" name="band" value="20m" checked />
-                <input type="radio" name="band" value="40m" />
-            `;
+        it('getSelectedBand returns the focus band from #band-container, else all', () => {
+            document.body.innerHTML = '<div id="band-container" data-focus-band="20m"></div>';
             expect(getSelectedBand()).toBe('20m');
+            document.getElementById('band-container').dataset.focusBand = '';
+            expect(getSelectedBand()).toBe('all');
+            document.body.innerHTML = '';
+            expect(getSelectedBand()).toBe('all');
+        });
+
+        it('pillTextColor picks dark text on light band colors and white on dark', () => {
+            expect(pillTextColor('#FFA500')).toBe('#212529'); // orange (15m) -> dark
+            expect(pillTextColor('#00FFFF')).toBe('#212529'); // cyan (12m) -> dark
+            expect(pillTextColor('#0000FF')).toBe('#ffffff'); // blue (40m) -> white
+            expect(pillTextColor('bad')).toBe('#ffffff');
         });
 
         it('getMinSnrMode returns checked value and falls back to none', () => {

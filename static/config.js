@@ -45,15 +45,13 @@ export function loadConfig() {
             const savedEnable = localStorage.getItem(`enable-${input.value}`);
             if (savedEnable !== null) {
                 input.checked = savedEnable === 'true';
-                const radio = inputByQuery(`input[name="band"][value="${input.value}"]`);
-                if (radio) radio.disabled = !input.checked;
             }
         });
 
         const savedBand = localStorage.getItem('selectedBand');
-        if (savedBand) {
-            const radio = inputByQuery(`input[name="band"][value="${savedBand}"]`);
-            if (radio) radio.checked = true;
+        const bandContainer = document.getElementById('band-container');
+        if (bandContainer) {
+            bandContainer.dataset.focusBand = (savedBand && savedBand !== 'all') ? savedBand : '';
         }
 
         const savedCycleTime = localStorage.getItem('cycleTime');

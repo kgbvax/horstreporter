@@ -42,88 +42,98 @@
                 <div class="btn-group w-100" role="group" id="style-group"></div>
             </div>
             <div class="form-sections d-flex flex-column gap-2">
-            <div id="band-container" class="w-100 bg-transparent mb-2" style="font-size: 0.85rem;">
+            <div id="band-container" class="w-100 bg-transparent mb-2" style="font-size: 0.85rem;" data-focus-band="">
                 <div class="row g-2 mb-2">
-                    <div class="col-12 action-buttons d-flex justify-content-center w-100">
-                        <button type="button" id="btn-cycle" class="btn btn-outline-primary btn-sm w-100" title="Cycle Active Bands"><i class="fas fa-play"></i> cycle bands</button>
+                    <div class="col-6">
+                        <button type="button" id="btn-show-all" class="btn btn-outline-secondary btn-sm w-100" title="Show all enabled bands">Show all</button>
                     </div>
-                    <div class="col-12">
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #555555; border: 2px solid transparent; position: relative;">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="all" id="band-all" checked>
-                            <label class="form-check-label text-white w-100 stretched-link" for="band-all" style="cursor:pointer; white-space: nowrap;">All Bands</label>
-                        </div>
+                    <div class="col-6">
+                        <button type="button" id="btn-cycle" class="btn btn-outline-primary btn-sm w-100" title="Cycle enabled bands"><i class="fas fa-play"></i> Cycle</button>
                     </div>
                 </div>
                 <div class="row g-2">
                     <!-- Column 1 -->
                     <div class="col-6 d-flex flex-column gap-2">
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #8B0000; border: 2px solid transparent; position: relative; opacity: 0.2; filter: grayscale(100%);">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="160m" id="band-160m" disabled>
-                            <label class="form-check-label text-white w-100 stretched-link" for="band-160m" style="cursor:pointer;">160m</label>
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="160m" title="Enable/Disable 160m">
+                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="160m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">160m</span>
+                            <span class="band-nodata-tag small me-1" hidden>no data</span>
+                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="160m" title="Enable / disable band">
                         </div>
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #800080; border: 2px solid transparent; position: relative;">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="80m" id="band-80m">
-                            <label class="form-check-label text-white w-100 stretched-link" for="band-80m" style="cursor:pointer;">80m</label>
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="80m" checked title="Enable/Disable 80m">
+                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="80m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">80m</span>
+                            <span class="band-nodata-tag small me-1" hidden>no data</span>
+                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="80m" checked title="Enable / disable band">
                         </div>
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #4B0082; border: 2px solid transparent; position: relative; opacity: 0.2; filter: grayscale(100%);">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="60m" id="band-60m" disabled>
-                            <label class="form-check-label text-white w-100 stretched-link" for="band-60m" style="cursor:pointer;">60m</label>
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="60m" title="Enable/Disable 60m">
+                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="60m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">60m</span>
+                            <span class="band-nodata-tag small me-1" hidden>no data</span>
+                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="60m" title="Enable / disable band">
                         </div>
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #0000FF; border: 2px solid transparent; position: relative;">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="40m" id="band-40m">
-                            <label class="form-check-label text-white w-100 stretched-link" for="band-40m" style="cursor:pointer;">40m</label>
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="40m" checked title="Enable/Disable 40m">
+                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="40m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">40m</span>
+                            <span class="band-nodata-tag small me-1" hidden>no data</span>
+                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="40m" checked title="Enable / disable band">
                         </div>
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #03b1b1; border: 2px solid transparent; position: relative;">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="30m" id="band-30m">
-                            <label class="form-check-label text-white w-100 stretched-link" for="band-30m" style="cursor:pointer;">30m</label>
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="30m"  title="Enable/Disable 30m">
+                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="30m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">30m</span>
+                            <span class="band-nodata-tag small me-1" hidden>no data</span>
+                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="30m" title="Enable / disable band">
                         </div>
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #008000; border: 2px solid transparent; position: relative;">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="20m" id="band-20m">
-                            <label class="form-check-label text-white w-100 stretched-link" for="band-20m" style="cursor:pointer;">20m</label>
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="20m" checked title="Enable/Disable 20m">
+                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="20m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">20m</span>
+                            <span class="band-nodata-tag small me-1" hidden>no data</span>
+                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="20m" checked title="Enable / disable band">
                         </div>
                     </div>
                     <!-- Column 2 -->
                     <div class="col-6 d-flex flex-column gap-2">
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #808000; border: 2px solid transparent; position: relative;">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="17m" id="band-17m">
-                            <label class="form-check-label text-white w-100 stretched-link" for="band-17m" style="cursor:pointer;">17m</label>
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="17m" checked title="Enable/Disable 17m">
+                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="17m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">17m</span>
+                            <span class="band-nodata-tag small me-1" hidden>no data</span>
+                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="17m" checked title="Enable / disable band">
                         </div>
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #FFA500; border: 2px solid transparent; position: relative;">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="15m" id="band-15m">
-                            <label class="form-check-label text-dark w-100 stretched-link" for="band-15m" style="cursor:pointer;">15m</label>
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="15m" checked title="Enable/Disable 15m">
+                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="15m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">15m</span>
+                            <span class="band-nodata-tag small me-1" hidden>no data</span>
+                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="15m" checked title="Enable / disable band">
                         </div>
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #00FFFF; border: 2px solid transparent; position: relative;">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="12m" id="band-12m">
-                            <label class="form-check-label text-dark w-100 stretched-link" for="band-12m" style="cursor:pointer;">12m</label>
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="12m" checked title="Enable/Disable 12m">
+                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="12m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">12m</span>
+                            <span class="band-nodata-tag small me-1" hidden>no data</span>
+                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="12m" checked title="Enable / disable band">
                         </div>
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #FF0000; border: 2px solid transparent; position: relative;">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="10m" id="band-10m">
-                            <label class="form-check-label text-white w-100 stretched-link" for="band-10m" style="cursor:pointer;">10m</label>
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="10m" checked title="Enable/Disable 10m">
+                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="10m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">10m</span>
+                            <span class="band-nodata-tag small me-1" hidden>no data</span>
+                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="10m" checked title="Enable / disable band">
                         </div>
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #FF00FF; border: 2px solid transparent; position: relative;">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="6m" id="band-6m">
-                            <label class="form-check-label text-white w-100 stretched-link" for="band-6m" style="cursor:pointer;">6m</label>
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="6m" checked title="Enable/Disable 6m">
+                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="6m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">6m</span>
+                            <span class="band-nodata-tag small me-1" hidden>no data</span>
+                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="6m" checked title="Enable / disable band">
                         </div>
-                        <div class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #FF1493; border: 2px solid transparent; position: relative; opacity: 0.2; filter: grayscale(100%);">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="4m" id="band-4m" disabled>
-                            <label class="form-check-label text-white w-100 stretched-link" for="band-4m" style="cursor:pointer;">4m</label>
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="4m" title="Enable/Disable 4m">
+                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="4m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">4m</span>
+                            <span class="band-nodata-tag small me-1" hidden>no data</span>
+                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="4m" title="Enable / disable band">
                         </div>
-                        <div id="band-wrapper-2m" class="band-wrapper d-flex align-items-center rounded p-1" style="background-color: #008080; border: 2px solid transparent; position: relative; opacity: 0.2; filter: grayscale(100%);">
-                            <input type="radio" class="form-check-input ms-1 me-2" name="band" value="2m" id="band-2m" disabled>
-                            <label class="form-check-label text-white w-100 stretched-link" for="band-2m" style="cursor:pointer;">2m</label>
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="2m" title="Enable/Disable 2m">
+                        <div id="band-wrapper-2m" class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="2m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">2m</span>
+                            <span class="band-nodata-tag small me-1" hidden>no data</span>
+                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
+                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="2m" title="Enable / disable band">
                         </div>
                     </div>
                 </div>

@@ -7,7 +7,7 @@ import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-la
 import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { updateMapVisualization, updateBandLabels } from './renderers.js';
-import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled } from './utils.js';
+import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
 
@@ -22,11 +22,76 @@ let horstKevin = null;
 // the #horst-kevin element in index.html is also hidden via inline display:none.
 const HORST_KEVIN_ENABLED = false;
 
+// --- Band selector (pills) ---------------------------------------------------
+// Band order matches the panel layout. Focus = solo band ('all' = no solo),
+// stored on #band-container[data-focus-band]; enabled = checkbox set; cycling =
+// state.cycleInterval. These three are independent (see redesign spec).
+const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
+const BAND_CYCLE_DEFAULT_MS = 1600;
+
+function setBandFocus(band) {
+    const c = document.getElementById('band-container');
+    if (c) c.dataset.focusBand = (!band || band === 'all') ? '' : band;
+}
+
+// Re-style pills immediately on interaction (the render loop also calls
+// updateBandLabels, but this gives instant feedback before the throttled render).
+function refreshBandPills() {
+    try { updateBandLabels(getRenderableMapSpots(state.liveSpots)); } catch (_) { /* pre-init */ }
+}
+
+// Shared side effects for any focus/enable/cycle change (mirrors the old
+// band-container change handler).
+function applyBandChange() {
+    localStorage.setItem('selectedBand', getSelectedBand());
+    updateCurrentBandDisplay();
+    updateBandLab({ force: true });
+    scheduleRender();
+    hotBandIndicator?.rerender();
+    hotBandIndicator?.refresh();
+    horstKevin?.refresh();
+    refreshBandPills();
+}
+
+function stopBandCycle() {
+    if (state.cycleInterval) {
+        clearInterval(state.cycleInterval);
+        state.cycleInterval = null;
+    }
+    const btn = document.getElementById('btn-cycle');
+    if (btn) {
+        btn.innerHTML = '<i class="fas fa-play"></i> Cycle';
+        btn.title = 'Cycle enabled bands';
+        btn.classList.remove('active');
+    }
+}
+
+function startBandCycle() {
+    const btn = document.getElementById('btn-cycle');
+    if (btn) {
+        btn.innerHTML = '<i class="fas fa-pause"></i> Cycle';
+        btn.title = 'Stop cycling';
+        btn.classList.add('active');
+    }
+    const slider = parseInt(document.getElementById('cycle-time')?.value || '', 10);
+    const ms = Number.isFinite(slider) && slider > 0 ? slider * 1000 : BAND_CYCLE_DEFAULT_MS;
+    state.cycleInterval = setInterval(() => {
+        const order = BAND_ORDER.filter(b => getEnabledBands().has(b));
+        if (!order.length) return;
+        const cur = getSelectedBand();
+        const idx = order.indexOf(cur);
+        const next = order[(idx + 1) % order.length];
+        setBandFocus(next);
+        applyBandChange();
+    }, ms);
+}
+
+// Focus a band programmatically (hot-band indicator / horst-kevin onBandSwitch).
 function switchToBand(band) {
-    const radio = document.querySelector(`input[name="band"][value="${band}"]`);
-    if (!radio || radio.disabled) return;
-    radio.checked = true;
-    radio.dispatchEvent(new Event('change', { bubbles: true }));
+    if (!getEnabledBands().has(band)) return;
+    stopBandCycle();
+    setBandFocus(band);
+    applyBandChange();
 }
 
 function parseBoolParam(raw, fallback = false) {
@@ -488,20 +553,16 @@ async function updateDk3jfMode(enabled) {
 
     if (!dk3jfModeEnabled) {
         const band2mEnable = document.querySelector('.band-enable[value="2m"]');
-        const band2mRadio = document.querySelector('input[name="band"][value="2m"]');
-        const allBandRadio = document.querySelector('input[name="band"][value="all"]');
 
         if (band2mEnable) {
             band2mEnable.checked = false;
             localStorage.setItem('enable-2m', 'false');
         }
-        if (band2mRadio) {
-            band2mRadio.disabled = true;
-            if (band2mRadio.checked && allBandRadio) {
-                allBandRadio.checked = true;
-                localStorage.setItem('selectedBand', 'all');
-                updateCurrentBandDisplay();
-            }
+        // If 2m was the focused band, drop focus back to "all".
+        if (getSelectedBand() === '2m') {
+            setBandFocus('all');
+            localStorage.setItem('selectedBand', 'all');
+            updateCurrentBandDisplay();
         }
 
     }
@@ -842,9 +903,7 @@ function applyCaptureConfigToControls(config) {
     const projectionRadio = document.querySelector(`input[name="projection-select"][value="${config.projection}"]`);
     if (projectionRadio) projectionRadio.checked = true;
 
-    const selectedBandRadio = document.querySelector(`input[name="band"][value="${config.selectedBand}"]`)
-        || document.querySelector('input[name="band"][value="all"]');
-    if (selectedBandRadio) selectedBandRadio.checked = true;
+    setBandFocus(config.selectedBand && config.selectedBand !== 'all' ? config.selectedBand : 'all');
 
     const enabledBandsSet = new Set(
         config.enabledBandsCsv
@@ -861,8 +920,6 @@ function applyCaptureConfigToControls(config) {
         } else {
             cb.checked = enabledBandsSet.has(band);
         }
-        const radio = document.querySelector(`input[name="band"][value="${band}"]`);
-        if (radio) radio.disabled = !cb.checked;
     });
 
     const showDxclusterEl = document.getElementById('show-dxcluster-spots');
@@ -1184,8 +1241,9 @@ function updateCurrentBandDisplay() {
     const display = document.getElementById('current-band-display');
     if (display) {
         display.textContent = band === 'all' ? 'All Bands' : band;
-        display.style.backgroundColor = bandColors[band] || bandColors['all'];
-        display.style.color = (band === '15m' || band === '12m') ? '#212529' : '#fff';
+        const color = bandColors[band] || bandColors['all'];
+        display.style.backgroundColor = color;
+        display.style.color = pillTextColor(color);
     }
 }
 
@@ -1346,41 +1404,48 @@ document.getElementById('dk3jf-mode')?.addEventListener('change', async (e) => {
     await updateDk3jfMode(e.target.checked);
 });
 
-document.getElementById('band-container')?.addEventListener('change', (e) => {
-    if (e && e.isTrusted && state.cycleInterval && e.target && e.target.name === 'band') {
-        clearInterval(state.cycleInterval);
-        state.cycleInterval = null;
-        const btn = document.getElementById('btn-cycle');
-        if (btn) {
-            btn.innerHTML = '<i class="fas fa-play"></i>';
-            btn.title = 'Cycle Active Bands';
-            btn.classList.remove('active');
-        }
+// --- Band pill interactions (event-delegated on #band-container) ------------
+function activateBandPill(pill) {
+    const band = pill?.dataset?.band;
+    if (!band) return;
+    if (state.cycleInterval) {
+        // Clicking any pill while cycling stops the cycle and focuses that band.
+        stopBandCycle();
+        setBandFocus(band);
+    } else if (getSelectedBand() === band) {
+        setBandFocus('all'); // release focus -> show all enabled
+    } else {
+        setBandFocus(band);
     }
-    localStorage.setItem('selectedBand', getSelectedBand());
-    updateCurrentBandDisplay();
-    updateBandLab({ force: true });
-    scheduleRender();
-    hotBandIndicator?.rerender();
-    hotBandIndicator?.refresh();
-    horstKevin?.refresh();
+    applyBandChange();
+}
+
+const bandContainerEl = document.getElementById('band-container');
+bandContainerEl?.addEventListener('click', (e) => {
+    if (e.target.closest('.band-enable')) return; // checkbox handled separately
+    const pill = e.target.closest('.band-pill');
+    if (pill) activateBandPill(pill);
+});
+bandContainerEl?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    if (e.target.closest('.band-enable')) return;
+    const pill = e.target.closest('.band-pill');
+    if (!pill) return;
+    e.preventDefault();
+    activateBandPill(pill);
+});
+bandContainerEl?.addEventListener('change', (e) => {
+    const cb = e.target.closest('.band-enable');
+    if (!cb) return;
+    // Toggling enabled must NOT change focus; just persist the set and re-render.
+    localStorage.setItem(`enable-${cb.value}`, cb.checked);
+    applyBandChange();
 });
 
-document.querySelectorAll('.band-enable').forEach(cb => {
-    cb.addEventListener('change', (e) => {
-        const band = e.target.value;
-        const radio = document.querySelector(`input[name="band"][value="${band}"]`);
-        if (radio) {
-            radio.disabled = !e.target.checked;
-            if (!e.target.checked && radio.checked) {
-                document.querySelector('input[name="band"][value="all"]').checked = true;
-                localStorage.setItem('selectedBand', 'all');
-            }
-        }
-        localStorage.setItem(`enable-${band}`, e.target.checked);
-        updateBandLab({ force: true });
-        scheduleRender();
-    });
+document.getElementById('btn-show-all')?.addEventListener('click', () => {
+    stopBandCycle();
+    setBandFocus('all');
+    applyBandChange();
 });
 
 window.__horstSurroundingsChanged = () => {
@@ -1482,50 +1547,8 @@ document.getElementById('btn-center')?.addEventListener('click', () => {
 });
 
 document.getElementById('btn-cycle')?.addEventListener('click', () => {
-    const btn = document.getElementById('btn-cycle');
-    if (!btn) return;
-    if (state.cycleInterval) {
-        clearInterval(state.cycleInterval);
-        state.cycleInterval = null;
-        btn.innerHTML = '<i class="fas fa-play"></i>';
-        btn.title = 'Cycle Active Bands';
-        btn.classList.remove('active');
-    } else {
-        btn.innerHTML = '<i class="fas fa-pause"></i>';
-        btn.title = 'Stop Cycling';
-        btn.classList.add('active');
-        const cycleTimeMs = parseInt(document.getElementById('cycle-time')?.value || '3', 10) * 1000;
-        state.cycleInterval = setInterval(() => {
-            const minSnrMode = getMinSnrMode();
-            const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
-            const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
-            const activeBands = new Set();
-            const enabledBands = getEnabledBands();
-
-            state.liveSpots.forEach(s => {
-                if (minSnrMode === 'ssb' && s.snr < ssbMinDb) return;
-                if (minSnrMode === 'cw' && s.snr < cwMinDb) return;
-                if (!enabledBands.has(s.band)) return;
-                activeBands.add(s.band);
-            });
-
-            const radios = Array.from(document.querySelectorAll('input[name="band"]'))
-                .filter(r => {
-                    if (r.disabled) return false;
-                    if (r.value === 'all') return true;
-                    return activeBands.has(r.value);
-                });
-            
-            if (radios.length === 0) return;
-
-            const currentBand = getSelectedBand();
-            let currentIndex = radios.findIndex(r => r.value === currentBand);
-            let nextIndex = (currentIndex + 1) % radios.length;
-            
-            radios[nextIndex].checked = true;
-            document.getElementById('band-container')?.dispatchEvent(new Event('change'));
-        }, cycleTimeMs);
-    }
+    if (state.cycleInterval) stopBandCycle();
+    else startBandCycle();
 });
 
 document.getElementById('target')?.addEventListener('keydown', (e) => {
