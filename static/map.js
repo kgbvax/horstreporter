@@ -5,7 +5,7 @@ export let currentCountryLayer = null;
 export let currentGraylineLayer = null;
 export let currentDxccLabelLayer = null;
 
-import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints } from './utils.js';
+import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, hexToRgb, blendOverlayColors } from './utils.js';
 import { selectProminentDxccLabels } from './azimuth-runtime.js';
 import { endPerfTimer, incrementPerfCounter, startPerfTimer } from './perf.js';
 
@@ -212,28 +212,6 @@ function removeDxccLabelLayer() {
     }
 
     currentDxccLabelLayerKey = null;
-}
-
-function hexToRgb(hex) {
-    const value = String(hex || '').replace('#', '');
-    if (value.length !== 6) return [0, 0, 0];
-    return [
-        Number.parseInt(value.slice(0, 2), 16),
-        Number.parseInt(value.slice(2, 4), 16),
-        Number.parseInt(value.slice(4, 6), 16)
-    ];
-}
-
-function blendOverlayColors(base, color, alpha) {
-    if (alpha <= 0) return base;
-    const nextAlpha = base.a + (alpha * (1 - base.a));
-    if (nextAlpha <= 0) return base;
-    return {
-        r: ((base.r * base.a) + (color[0] * alpha * (1 - base.a))) / nextAlpha,
-        g: ((base.g * base.a) + (color[1] * alpha * (1 - base.a))) / nextAlpha,
-        b: ((base.b * base.a) + (color[2] * alpha * (1 - base.a))) / nextAlpha,
-        a: nextAlpha
-    };
 }
 
 function mercatorYToLat(yRatio) {

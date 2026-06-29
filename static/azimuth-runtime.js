@@ -1,4 +1,4 @@
-import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution, greatCirclePoints } from './utils.js';
+import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
 
 const EARTH_RADIUS_KM = 6371;
 const ANTIPODE_KM = Math.PI * EARTH_RADIUS_KM;
@@ -303,28 +303,6 @@ function resizeCanvasToElement(canvas) {
         state.ctx.setTransform(1, 0, 0, 1, 0, 0);
         state.ctx.scale(dpr, dpr);
     }
-}
-
-function degToRad(v) {
-    return (v * Math.PI) / 180;
-}
-
-function radToDeg(v) {
-    return (v * 180) / Math.PI;
-}
-
-function normalizeLng(lng) {
-    let out = lng;
-    while (out > 180) out -= 360;
-    while (out < -180) out += 360;
-    return out;
-}
-
-function haversineKm(aLat, aLng, bLat, bLng) {
-    const dLat = degToRad(bLat - aLat);
-    const dLng = degToRad(bLng - aLng);
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(degToRad(aLat)) * Math.cos(degToRad(bLat)) * Math.sin(dLng / 2) ** 2;
-    return 2 * EARTH_RADIUS_KM * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function destinationPoint(lat, lng, bearingDeg, distanceKm) {
@@ -974,27 +952,6 @@ export function getAzimuthLatLngFromClientPoint(clientX, clientY) {
     return { lat: geo.lat, lng: geo.lng };
 }
 
-function hexToRgb(hex) {
-    const value = String(hex || '').replace('#', '');
-    if (value.length !== 6) return [0, 0, 0];
-    return [
-        Number.parseInt(value.slice(0, 2), 16),
-        Number.parseInt(value.slice(2, 4), 16),
-        Number.parseInt(value.slice(4, 6), 16)
-    ];
-}
-
-function blendOverlayColors(base, color, alpha) {
-    if (alpha <= 0) return base;
-    const nextAlpha = base.a + (alpha * (1 - base.a));
-    if (nextAlpha <= 0) return base;
-    return {
-        r: ((base.r * base.a) + (color[0] * alpha * (1 - base.a))) / nextAlpha,
-        g: ((base.g * base.a) + (color[1] * alpha * (1 - base.a))) / nextAlpha,
-        b: ((base.b * base.a) + (color[2] * alpha * (1 - base.a))) / nextAlpha,
-        a: nextAlpha
-    };
-}
 
 function drawGrayline(ctx, width, height) {
     const bucket = Math.floor(Date.now() / (5 * 60 * 1000));

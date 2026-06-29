@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { bandColors, formatNumber, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds } from './utils.js';
+import { bandColors, formatNumber, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds, haversineKm, hexToRgba } from './utils.js';
 
 const ENABLE_KEY = 'bandLabEnabled';
 const UPDATE_THROTTLE_MS = 300;
@@ -888,24 +888,6 @@ function escapeHtml(value) {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
-}
-
-function hexToRgba(hex, alpha = 1) {
-    const c = String(hex || '').replace('#', '').trim();
-    if (c.length !== 6) return `rgba(100,116,139,${alpha})`;
-    const r = Number.parseInt(c.slice(0, 2), 16);
-    const g = Number.parseInt(c.slice(2, 4), 16);
-    const b = Number.parseInt(c.slice(4, 6), 16);
-    return `rgba(${r},${g},${b},${alpha})`;
-}
-
-function haversineKm(lat1, lng1, lat2, lng2) {
-    const toRad = (v) => (v * Math.PI) / 180;
-    const dLat = toRad(lat2 - lat1);
-    const dLng = toRad(lng2 - lng1);
-    const a = (Math.sin(dLat / 2) ** 2) +
-        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * (Math.sin(dLng / 2) ** 2);
-    return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 async function ensureDxConditions(target, minutes, surroundings) {

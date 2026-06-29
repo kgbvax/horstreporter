@@ -12,11 +12,11 @@ const COUNTRY_PALETTE_DARK = [
     '#355453', '#375360', '#334967', '#45425f', '#55445d', '#544d43', '#2f343a'
 ];
 
-function degToRad(v) {
+export function degToRad(v) {
     return (v * Math.PI) / 180;
 }
 
-function radToDeg(v) {
+export function radToDeg(v) {
     return (v * 180) / Math.PI;
 }
 
@@ -416,8 +416,47 @@ export function locatorToBounds(locator) {
 // --- Great-circle geometry (shared by both map projections) ---
 // Spherical-earth approximations; accurate enough for drawing beam/path lines.
 
-const _toRad = (d) => (d * Math.PI) / 180;
-const _toDeg = (r) => (r * 180) / Math.PI;
+const _toRad = degToRad;
+const _toDeg = radToDeg;
+
+// Shared geodesic distance (haversine, 6371km). Alias kept for callers that
+// import haversineKm by name; greatCircleDistanceKm is the same computation.
+export function haversineKm(aLat, aLng, bLat, bLng) {
+    return greatCircleDistanceKm(aLat, aLng, bLat, bLng);
+}
+
+// Shared hex color helpers. hexToRgb returns [r,g,b]; hexToRgba returns a CSS
+// string; blendOverlayColors does premultiplied-alpha compositing.
+export function hexToRgb(hex) {
+    const value = String(hex || '').replace('#', '');
+    if (value.length !== 6) return [0, 0, 0];
+    return [
+        Number.parseInt(value.slice(0, 2), 16),
+        Number.parseInt(value.slice(2, 4), 16),
+        Number.parseInt(value.slice(4, 6), 16)
+    ];
+}
+
+export function hexToRgba(hex, alpha = 1) {
+    const c = String(hex || '').replace('#', '').trim();
+    if (c.length !== 6) return `rgba(100,116,139,${alpha})`;
+    const r = Number.parseInt(c.slice(0, 2), 16);
+    const g = Number.parseInt(c.slice(2, 4), 16);
+    const b = Number.parseInt(c.slice(4, 6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+}
+
+export function blendOverlayColors(base, color, alpha) {
+    if (alpha <= 0) return base;
+    const nextAlpha = base.a + (alpha * (1 - base.a));
+    if (nextAlpha <= 0) return base;
+    return {
+        r: ((base.r * base.a) + (color[0] * alpha * (1 - base.a))) / nextAlpha,
+        g: ((base.g * base.a) + (color[1] * alpha * (1 - base.a))) / nextAlpha,
+        b: ((base.b * base.a) + (color[2] * alpha * (1 - base.a))) / nextAlpha,
+        a: nextAlpha
+    };
+}
 
 export function greatCircleDistanceKm(aLat, aLng, bLat, bLng) {
     const dLat = _toRad(bLat - aLat);
