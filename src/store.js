@@ -16,6 +16,7 @@ const defaults = {
     clusterDistance: 500,
     autoZoom: false,
     mapStyle: 'grid-snr',
+    projection: 'mercator',
     surroundings: false,
 };
 

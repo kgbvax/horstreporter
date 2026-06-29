@@ -1106,6 +1106,7 @@ if (captureConfig?.enabled) {
     installPerfDebugApi();
     // Render hook for migrated Svelte controls (SNR sliders) to trigger renders.
     window.__horstScheduleRender = scheduleRender;
+    window.__horstApplyProjection = applyProjectionMode;
     initMap(initialCenter, initialZoom);
     initAzimuthCanvas();
     attachProjectionGestureZoomEvents();
@@ -1268,12 +1269,6 @@ document.getElementById('controls')?.addEventListener('transitionend', (e) => {
         map.invalidateSize(); // Fixes distorted tile layers and centering after map container is stretched
         if (isAzimuthEnabled()) scheduleRender();
     }
-});
-
-document.getElementById('projection-group')?.addEventListener('change', async (e) => {
-    if (e.target?.name !== 'projection-select') return;
-    localStorage.setItem('mapProjection', e.target.value);
-    await applyProjectionMode(e.target.value);
 });
 
 // Azimuth zoom button events

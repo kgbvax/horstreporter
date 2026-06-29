@@ -76,3 +76,13 @@ test('style radios default to grid, switch+persist', async ({ page }) => {
     await page.reload();
     await expect(page.locator('#style-area')).toBeChecked();
 });
+
+test('projection radios default to mercator and invoke projection hook', async ({ page }) => {
+    await expect(page.locator('#proj-mercator')).toBeChecked();
+    await page.evaluate(() => { window.__projCalls = []; window.__horstApplyProjection = (p) => window.__projCalls.push(p); });
+    await page.locator('#proj-azimuthal').dispatchEvent('click');
+    await expect(page.locator('#proj-azimuthal')).toBeChecked();
+    expect(await page.evaluate(() => window.__projCalls)).toContain('azimuthal');
+    await page.reload();
+    await expect(page.locator('#proj-azimuthal')).toBeChecked();
+});

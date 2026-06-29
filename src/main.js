@@ -4,6 +4,7 @@ import Range from './Range.svelte';
 import Toggle from './Toggle.svelte';
 import MinSnr from './MinSnr.svelte';
 import MapStyle from './MapStyle.svelte';
+import Projection from './Projection.svelte';
 import { uiStore } from './store.js';
 // Mount the Svelte UI shell into a stable host node if present. The node does
 // not exist yet (U2 migrates panels into it); guard so the bundle is inert
@@ -30,6 +31,14 @@ if (minSnrHost) new MinSnr({ target: minSnrHost });
 
 const styleHost = document.getElementById('style-group');
 if (styleHost) new MapStyle({ target: styleHost });
+
+// Seed projection from the legacy key so the radio reflects init, then mount.
+const savedProjection = localStorage.getItem('mapProjection');
+if (savedProjection === 'mercator' || savedProjection === 'azimuthal') {
+    uiStore.update((s) => ({ ...s, projection: savedProjection }));
+}
+const projHost = document.getElementById('projection-group');
+if (projHost) new Projection({ target: projHost });
 
 window.__horstUiStore = uiStore;
 

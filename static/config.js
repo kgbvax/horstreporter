@@ -56,12 +56,6 @@ export function loadConfig() {
             if (el) el.value = savedTarget;
         }
 
-        const savedProjection = localStorage.getItem('mapProjection');
-        if (savedProjection) {
-            const radio = inputByQuery(`input[name="projection-select"][value="${savedProjection}"]`);
-            if (radio) radio.checked = true;
-        }
-
         const savedBand = localStorage.getItem('selectedBand');
         if (savedBand) {
             const radio = inputByQuery(`input[name="band"][value="${savedBand}"]`);
