@@ -3,6 +3,8 @@
   "name": "horstreporter-frontend",
   "version": "1.0.0",
   "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
     "test": "vitest run",
     "test:perf": "vitest run test/**/*.perf.test.js",
     "test:perf:mercator": "vitest run test/mercator*.perf.test.js",
@@ -15,9 +17,11 @@
     "check": "npm run typecheck && npm run test"
   },
   "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^3.1.2",
     "@vitest/coverage-v8": "^1.6.1",
     "jsdom": "^24.0.0",
     "playwright": "^1.54.1",
+    "svelte": "^4.2.20",
     "typescript": "^5.5.4",
     "vitest": "^1.2.0"
   }
