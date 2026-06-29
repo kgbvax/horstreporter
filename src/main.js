@@ -33,6 +33,10 @@ if (surroundingsHost) new Toggle({ target: surroundingsHost, props: { id: 'surro
 const countryHost = document.getElementById('country-coloring-root');
 if (countryHost) new Toggle({ target: countryHost, props: { id: 'show-country-coloring', label: 'Country Color', key: 'countryColoring', render: false, hook: '__horstCountryColoringChanged' } });
 
+const dxclusterHost = document.getElementById('dxcluster-root');
+if (dxclusterHost) new Toggle({ target: dxclusterHost, props: { id: 'show-dxcluster-spots', label: 'DX Cluster', key: 'showDxcluster' } });
+window.__horstSetDxcluster = (on) => uiStore.update((s) => ({ ...s, showDxcluster: !!on }));
+
 const minSnrHost = document.getElementById('min-snr-group');
 if (minSnrHost) new MinSnr({ target: minSnrHost });
 
@@ -54,6 +58,8 @@ if (savedCountry !== null) {
 }
 const savedTarget = localStorage.getItem('target');
 if (savedTarget) uiStore.update((s) => ({ ...s, target: savedTarget }));
+const savedDx = localStorage.getItem('showDXClusterSpots');
+if (savedDx !== null) uiStore.update((s) => ({ ...s, showDxcluster: savedDx === 'true' }));
 
 // External vanilla writers set the target via the store so the input stays in
 // sync; readers still read #target.value directly.

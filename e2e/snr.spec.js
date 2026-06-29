@@ -117,3 +117,11 @@ test('target input persists, rehydrates, and external setter updates it', async 
     await page.evaluate(() => window.__horstSetTarget('FN31'));
     await expect(page.locator('#target')).toHaveValue('FN31');
 });
+
+test('dx-cluster defaults on; external setter syncs it', async ({ page }) => {
+    await expect(page.locator('#show-dxcluster-spots')).toBeChecked();
+    await page.evaluate(() => window.__horstSetDxcluster(false));
+    await expect(page.locator('#show-dxcluster-spots')).not.toBeChecked();
+    await page.reload();
+    await expect(page.locator('#show-dxcluster-spots')).not.toBeChecked();
+});

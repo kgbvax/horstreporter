@@ -18,6 +18,7 @@ const defaults = {
     mapStyle: 'grid-snr',
     projection: 'mercator',
     countryColoring: true,
+    showDxcluster: true,
     surroundings: false,
 };
 

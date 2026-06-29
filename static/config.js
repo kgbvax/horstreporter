@@ -62,22 +62,6 @@ export function loadConfig() {
             if (el) el.value = savedCycleTime;
         }
 
-        const savedShowDXClusterSpots = localStorage.getItem('showDXClusterSpots');
-        const legacyShowDxclusterSpots = localStorage.getItem('showDxclusterSpots');
-        const legacyShowSpotsSameRegion = localStorage.getItem('showSpotsSameRegion');
-        const el = inputById('show-dxcluster-spots');
-        if (el) {
-            if (savedShowDXClusterSpots !== null) {
-                el.checked = savedShowDXClusterSpots === 'true';
-            } else if (legacyShowDxclusterSpots !== null) {
-                el.checked = legacyShowDxclusterSpots === 'true';
-            } else if (legacyShowSpotsSameRegion === 'true') {
-                el.checked = true;
-            } else {
-                el.checked = true;
-            }
-        }
-
     } catch (e) {
         console.error("Error parsing saved form state", e);
     }

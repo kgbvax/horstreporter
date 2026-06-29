@@ -200,6 +200,11 @@ function injectStyles() {
   #cq-close:hover { color:var(--text-color); }
   .cq-status { font:600 11px sans-serif; color:var(--cq-watch); padding:4px 12px 0; }
   .cq-status:empty { display:none; }
+  /* tiny validation footer: how many spots we know vs show vs hide, by reason */
+  .cq-counts { flex:0 0 auto; font:9.5px/1.3 var(--cq-mono); color:var(--status-color); opacity:.72;
+    padding:3px 12px 4px 15px; border-top:1px solid color-mix(in srgb,var(--border-color) 60%,transparent);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cq-counts:empty { display:none; }
 
   .cq-colhead { background:var(--surface-1); border-bottom:1px solid var(--control-border); }
   .cq-colhead.is-hidden { display:none; }
@@ -271,8 +276,12 @@ function injectStyles() {
   document.head.appendChild(s);
 }
 
-let panelEl, bodyEl, modesEl, statusEl, colheadEl;
+let panelEl, bodyEl, modesEl, statusEl, colheadEl, countsEl;
 let lastSpots = []; // last fetched+scored+enriched spots (band-filtered); sorted client-side
+// Spot-flow tallies for the validation footer: raw = from the feed, afterBand =
+// survived the band filter, afterCap = survived the TOP_N scoring cap. The mode
+// filter is applied last (per render), so its share is computed in renderCounts.
+let cqCounts = { raw: 0, afterBand: 0, afterCap: 0 };
 
 // Map-highlight state. `pinned` is the click-pinned spot (persists until another
 // is pinned or the panel closes); hover previews transiently and reverts to the
@@ -312,12 +321,14 @@ function mount() {
     </div>
     <div id="cq-status" class="cq-status"></div>
     <div class="cq-colhead is-hidden" id="cq-colhead"></div>
-    <div class="cq-body" id="cq-body"><div class="cq-empty">Loading spots…</div></div>`;
+    <div class="cq-body" id="cq-body"><div class="cq-empty">Loading spots…</div></div>
+    <div class="cq-counts" id="cq-counts" title="Spots known (from the cluster feed) vs shown, and why the rest are hidden"></div>`;
   document.body.appendChild(panelEl);
   bodyEl = panelEl.querySelector('#cq-body');
   modesEl = panelEl.querySelector('#cq-modes');
   statusEl = panelEl.querySelector('#cq-status');
   colheadEl = panelEl.querySelector('#cq-colhead');
+  countsEl = panelEl.querySelector('#cq-counts');
   renderModeFilter();
 
   const PANEL_W = 380;
@@ -339,7 +350,7 @@ function mount() {
     const cb = document.getElementById('show-dxcluster-spots');
     if (cb) {
       dxLayerWasOn = cb.checked;
-      if (!cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change')); }
+      if (!cb.checked) { window.__horstSetDxcluster ? window.__horstSetDxcluster(true) : (cb.checked = true, cb.dispatchEvent(new Event('change'))); }
     }
     reflowMap();
     refresh();
@@ -352,7 +363,7 @@ function mount() {
     pinned = null;
     clearChaseQueueHighlight();
     const cb = document.getElementById('show-dxcluster-spots');
-    if (cb && dxLayerWasOn === false && cb.checked) { cb.checked = false; cb.dispatchEvent(new Event('change')); }
+    if (cb && dxLayerWasOn === false && cb.checked) { window.__horstSetDxcluster ? window.__horstSetDxcluster(false) : (cb.checked = false, cb.dispatchEvent(new Event('change'))); }
     reflowMap();
   };
   toggle.addEventListener('click', open);
@@ -508,10 +519,12 @@ function renderRow(s) {
 
   // Rig mode prefers the spotter-reported mode, else the frequency default.
   const rigMode = mode || guessMode(s.freq_khz);
-  if (freqHz > 0 && canControlRig()) {
+  const tunable = freqHz > 0 && canControlRig();
+  let tuneBtn = null;
+  if (tunable) {
     const actions = document.createElement('div');
     actions.className = 'cq-actions';
-    const tuneBtn = document.createElement('button');
+    tuneBtn = document.createElement('button');
     tuneBtn.className = 'cq-act';
     tuneBtn.textContent = 'Tune';
     tuneBtn.title = `QSY to ${fmtFreq(s.freq_khz)} MHz${rigMode ? ` (${rigMode})` : ''}`;
@@ -533,9 +546,8 @@ function renderRow(s) {
       actions.appendChild(turnBtn);
     }
     detail.appendChild(actions);
-    el.addEventListener('dblclick', () => {
-      runCardAction(tuneBtn, 'Tune', () => rigTune(freqHz, rigMode), `Tuned ${s.dx_call} — ${fmtFreq(s.freq_khz)} MHz`);
-    });
+    const tuneHint = `Double-click to tune ${fmtFreq(s.freq_khz)} MHz${rigMode ? ` (${rigMode})` : ''}`;
+    el.title = el.title ? `${el.title} · ${tuneHint}` : tuneHint;
   }
 
   // Hover previews the map highlight; click pins it (and expands the row).
@@ -544,7 +556,11 @@ function renderRow(s) {
     el.addEventListener('mouseleave', () => { if (pinned) setChaseQueueHighlight({ ...pinned.data, pinned: true }); else clearChaseQueueHighlight(); });
     if (pinned?.key === key) el.classList.add('cq-pinned', 'cq-open');
   }
-  el.addEventListener('click', () => {
+
+  // Single click folds the row open + pins the map highlight; double click tunes.
+  // When the row is tunable we defer the single-click action briefly so a
+  // double-click can cancel it — otherwise the fold toggle "shadows" the tune.
+  const foldAndPin = () => {
     const wasOpen = el.classList.contains('cq-open');
     bodyEl.querySelectorAll('.cq-row.cq-open').forEach((n) => n.classList.remove('cq-open'));
     if (!wasOpen) el.classList.add('cq-open');
@@ -554,7 +570,21 @@ function renderRow(s) {
       el.classList.add('cq-pinned');
       setChaseQueueHighlight({ ...pinned.data, pinned: true, select: true });
     }
-  });
+  };
+  if (tunable) {
+    let clickTimer = null;
+    el.addEventListener('click', () => {
+      if (clickTimer) clearTimeout(clickTimer);
+      clickTimer = setTimeout(() => { clickTimer = null; foldAndPin(); }, 220);
+    });
+    el.addEventListener('dblclick', (e) => {
+      e.preventDefault(); // cancel text-selection and the pending single-click fold
+      if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+      runCardAction(tuneBtn, 'Tune', () => rigTune(freqHz, rigMode), `Tuned ${s.dx_call} — ${fmtFreq(s.freq_khz)} MHz`);
+    });
+  } else {
+    el.addEventListener('click', foldAndPin);
+  }
   return el;
 }
 
@@ -575,6 +605,27 @@ function renderModeFilter() {
 // sortAndRender rebuilds the sortable header (so the active marker tracks the
 // current sort) and the row list. Runs on refresh, on a header click, and on a
 // star toggle — all client-side off the cached lastSpots.
+// renderCounts writes the tiny validation footer: how many spots the queue knows
+// about (from the feed) vs how many it shows, with the hidden remainder broken
+// down by reason — band filter, the TOP_N scoring cap, and the mode filter.
+function renderCounts(shown) {
+  if (!countsEl) return;
+  const { raw, afterBand, afterCap } = cqCounts;
+  const bandHidden = Math.max(0, raw - afterBand);
+  const capHidden = Math.max(0, afterBand - afterCap);
+  const modeHidden = Math.max(0, afterCap - shown);
+  const hidden = bandHidden + capHidden + modeHidden;
+  let txt = `${raw} known \u00b7 ${shown} shown`;
+  if (hidden > 0) {
+    const reasons = [];
+    if (bandHidden) reasons.push(`${bandHidden} band`);
+    if (capHidden) reasons.push(`${capHidden} cap`);
+    if (modeHidden) reasons.push(`${modeHidden} mode`);
+    txt += ` \u00b7 ${hidden} hidden (${reasons.join(', ')})`;
+  }
+  countsEl.textContent = txt;
+}
+
 function sortAndRender() {
   colheadEl.innerHTML = fHead();
   colheadEl.querySelectorAll('button[data-k]').forEach((b) => b.addEventListener('click', () => {
@@ -585,6 +636,7 @@ function sortAndRender() {
   }));
 
   const spots = lastSpots.filter(modePass);
+  renderCounts(spots.length);
   bodyEl.innerHTML = '';
   if (!spots.length) {
     colheadEl.classList.add('is-hidden');
@@ -614,6 +666,8 @@ async function refresh() {
   } catch (e) {
     bodyEl.innerHTML = '<div class="cq-empty">Could not load /api/dxspots.</div>';
     statusEl.textContent = 'spots feed offline';
+    cqCounts = { raw: 0, afterBand: 0, afterCap: 0 };
+    if (countsEl) countsEl.textContent = '';
     return;
   }
   // Mirror the band selection on the left (the .band-enable checkboxes): show
@@ -621,8 +675,11 @@ async function refresh() {
   // the single-band "current band" radio, so band cycling never narrows the
   // queue — it stays filtered to all selected bands. Filter before the TOP_N cap
   // and scoring so the cap (and horstprop load) applies to relevant spots only.
+  const raw = Array.isArray(spots) ? spots.length : 0;
   const enabled = getEnabledBands();
-  spots = (spots || []).filter((s) => enabled.has(s.band)).slice(0, TOP_N);
+  const banded = (spots || []).filter((s) => enabled.has(s.band));
+  spots = banded.slice(0, TOP_N);
+  cqCounts = { raw, afterBand: banded.length, afterCap: spots.length };
 
   hpReachable = true;
   // Score (horstprop, per-spot) and enrich (Wavelog via agent, one batch) run

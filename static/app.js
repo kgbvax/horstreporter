@@ -1393,11 +1393,6 @@ window.__horstSurroundingsChanged = () => {
     horstKevin?.refresh();
 };
 
-document.getElementById('show-dxcluster-spots')?.addEventListener('change', (e) => {
-    localStorage.setItem('showDXClusterSpots', e.target.checked);
-    scheduleRender();
-});
-
 window.__horstCountryColoringChanged = () => {
     const enabled = document.getElementById('show-country-coloring')?.checked;
     if (!isAzimuthEnabled()) {
