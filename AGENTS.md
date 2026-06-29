@@ -79,6 +79,7 @@
 ## Canonical references
 - User-facing behavior/content: [`static/info.md`](./static/info.md)
 - DX scoring explanation: [`static/dxscore.md`](./static/dxscore.md)
+- Shared domain vocabulary: [`CONCEPTS.md`](./CONCEPTS.md) — read when orienting to the codebase or before discussing domain concepts
 
 ## What to avoid
 - Don’t refactor third-party libraries under `static/vendor/` unless absolutely necessary.
