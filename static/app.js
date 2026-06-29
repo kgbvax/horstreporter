@@ -726,6 +726,7 @@ function maybeAutoStartSavedTarget() {
 
     // Ensure the input is populated from storage even if another init step missed it.
     if (!targetInput.value?.trim()) {
+        window.__horstSetTarget?.(savedTarget);
         targetInput.value = savedTarget;
     }
 
@@ -806,7 +807,7 @@ function applyCaptureConfigToControls(config) {
     if (!config?.enabled) return;
 
     const targetEl = document.getElementById('target');
-    if (targetEl) targetEl.value = config.target;
+    if (targetEl) window.__horstSetTarget?.(config.target);
 
     const minutesEl = document.getElementById('minutes');
     if (minutesEl) {
@@ -997,7 +998,7 @@ export function attachMapEvents() {
         const targetInput = document.getElementById('target');
         if (!targetInput) return;
 
-        targetInput.value = locator;
+        window.__horstSetTarget?.(locator);
         const btnSubmit = document.getElementById('btn-submit');
         if (btnSubmit) btnSubmit.textContent = 'Go'; // Force a clean restart
         document.getElementById('fetch-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
@@ -1107,6 +1108,7 @@ if (captureConfig?.enabled) {
     // Render hook for migrated Svelte controls (SNR sliders) to trigger renders.
     window.__horstScheduleRender = scheduleRender;
     window.__horstApplyProjection = applyProjectionMode;
+    window.__horstTargetInput = syncProjectionCenterToActiveTarget;
     initMap(initialCenter, initialZoom);
     initAzimuthCanvas();
     attachProjectionGestureZoomEvents();
@@ -1311,7 +1313,6 @@ window.addEventListener('keydown', (e) => {
 document.getElementById('target')?.addEventListener('input', () => {
     syncProjectionCenterToActiveTarget();
 });
-
 document.getElementById('cycle-time')?.addEventListener('input', (e) => {
     const val = document.getElementById('cycle-time-val');
     if (val) val.textContent = e.target.value;
@@ -1444,7 +1445,7 @@ document.getElementById('btn-geo')?.addEventListener('click', () => {
             // Pre-fill with a 4-character locator (square)
             const loc = latLngToLocator(position.coords.latitude, position.coords.longitude, 4);
             const targetEl = document.getElementById('target');
-            if (targetEl) targetEl.value = loc;
+            if (targetEl) window.__horstSetTarget?.(loc);
             localStorage.setItem('target', loc);
             btn.innerHTML = originalText;
             btn.disabled = false;

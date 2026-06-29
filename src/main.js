@@ -5,6 +5,7 @@ import Toggle from './Toggle.svelte';
 import MinSnr from './MinSnr.svelte';
 import MapStyle from './MapStyle.svelte';
 import Projection from './Projection.svelte';
+import TargetInput from './TargetInput.svelte';
 import { uiStore } from './store.js';
 // Mount the Svelte UI shell into a stable host node if present. The node does
 // not exist yet (U2 migrates panels into it); guard so the bundle is inert
@@ -51,6 +52,15 @@ const savedCountry = localStorage.getItem('countryColoringEnabled');
 if (savedCountry !== null) {
     uiStore.update((s) => ({ ...s, countryColoring: savedCountry === 'true' }));
 }
+const savedTarget = localStorage.getItem('target');
+if (savedTarget) uiStore.update((s) => ({ ...s, target: savedTarget }));
+
+// External vanilla writers set the target via the store so the input stays in
+// sync; readers still read #target.value directly.
+window.__horstSetTarget = (v) => uiStore.update((s) => ({ ...s, target: v == null ? '' : String(v) }));
+
+const targetHost = document.getElementById('target-root');
+if (targetHost) new TargetInput({ target: targetHost });
 const projHost = document.getElementById('projection-group');
 if (projHost) new Projection({ target: projHost });
 

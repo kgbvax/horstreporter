@@ -50,11 +50,10 @@ describe('loadConfig defensive behavior', () => {
         expect(errSpy).not.toHaveBeenCalled();
     });
 
-    it('restores values when the elements are present', () => {
+    it('does not throw or log when form elements are present (target/minutes now store-owned)', () => {
         localStorage.setItem('target', 'JO32');
         document.body.innerHTML = '<input id="target" /><input id="minutes" />';
-        loadConfig();
-        expect(document.getElementById('target').value).toBe('JO32');
+        expect(() => loadConfig()).not.toThrow();
         expect(errSpy).not.toHaveBeenCalled();
     });
 

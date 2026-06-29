@@ -50,12 +50,6 @@ export function loadConfig() {
             }
         });
 
-        const savedTarget = localStorage.getItem('target');
-        if (savedTarget) {
-            const el = inputById('target');
-            if (el) el.value = savedTarget;
-        }
-
         const savedBand = localStorage.getItem('selectedBand');
         if (savedBand) {
             const radio = inputByQuery(`input[name="band"][value="${savedBand}"]`);
