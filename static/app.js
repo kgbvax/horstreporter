@@ -1382,8 +1382,7 @@ document.querySelectorAll('.band-enable').forEach(cb => {
     });
 });
 
-document.getElementById('surroundings')?.addEventListener('change', (e) => {
-    localStorage.setItem('surroundings', e.target.checked);
+window.__horstSurroundingsChanged = () => {
     const btnSubmit = document.getElementById('btn-submit');
     if (btnSubmit && btnSubmit.textContent === 'Stop') {
         btnSubmit.textContent = 'Go';
@@ -1391,7 +1390,7 @@ document.getElementById('surroundings')?.addEventListener('change', (e) => {
     }
     hotBandIndicator?.refresh();
     horstKevin?.refresh();
-});
+};
 
 document.getElementById('show-dxcluster-spots')?.addEventListener('change', (e) => {
     localStorage.setItem('showDXClusterSpots', e.target.checked);

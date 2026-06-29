@@ -68,12 +68,6 @@ export function loadConfig() {
             if (el) el.value = savedCycleTime;
         }
 
-        const savedSurroundings = localStorage.getItem('surroundings');
-        if (savedSurroundings !== null) {
-            const el = inputById('surroundings');
-            if (el) el.checked = savedSurroundings === 'true';
-        }
-
         const savedShowDXClusterSpots = localStorage.getItem('showDXClusterSpots');
         const legacyShowDxclusterSpots = localStorage.getItem('showDxclusterSpots');
         const legacyShowSpotsSameRegion = localStorage.getItem('showSpotsSameRegion');

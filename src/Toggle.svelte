@@ -7,11 +7,14 @@
   export let id;
   export let label;
   export let key;
+  export let render = true;
+  export let hook = null;
 
-  function render() {
-    if (typeof window.__horstScheduleRender === 'function') window.__horstScheduleRender();
+  function onChange() {
+    if (render && typeof window.__horstScheduleRender === 'function') window.__horstScheduleRender();
+    if (hook && typeof window[hook] === 'function') window[hook]();
   }
 </script>
 
-<input type="checkbox" class="btn-check" {id} autocomplete="off" bind:checked={$uiStore[key]} on:change={render} />
+<input type="checkbox" class="btn-check" {id} autocomplete="off" bind:checked={$uiStore[key]} on:change={onChange} />
 <label class="btn btn-outline-primary btn-sm w-100" for={id}>{label}</label>

@@ -26,6 +26,9 @@ if (clusterHost) new Range({ target: clusterHost, props: { id: 'cluster-distance
 const autoZoomHost = document.getElementById('auto-zoom-root');
 if (autoZoomHost) new Toggle({ target: autoZoomHost, props: { id: 'auto-zoom', label: 'Auto-zoom', key: 'autoZoom' } });
 
+const surroundingsHost = document.getElementById('surroundings-root');
+if (surroundingsHost) new Toggle({ target: surroundingsHost, props: { id: 'surroundings', label: 'Adj. Squares', key: 'surroundings', render: false, hook: '__horstSurroundingsChanged' } });
+
 const minSnrHost = document.getElementById('min-snr-group');
 if (minSnrHost) new MinSnr({ target: minSnrHost });
 
@@ -36,6 +39,10 @@ if (styleHost) new MapStyle({ target: styleHost });
 const savedProjection = localStorage.getItem('mapProjection');
 if (savedProjection === 'mercator' || savedProjection === 'azimuthal') {
     uiStore.update((s) => ({ ...s, projection: savedProjection }));
+}
+const savedSurroundings = localStorage.getItem('surroundings');
+if (savedSurroundings !== null) {
+    uiStore.update((s) => ({ ...s, surroundings: savedSurroundings === 'true' }));
 }
 const projHost = document.getElementById('projection-group');
 if (projHost) new Projection({ target: projHost });

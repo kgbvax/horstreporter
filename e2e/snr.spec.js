@@ -86,3 +86,14 @@ test('projection radios default to mercator and invoke projection hook', async (
     await page.reload();
     await expect(page.locator('#proj-azimuthal')).toBeChecked();
 });
+
+test('surroundings toggle persists and fires resubmit hook', async ({ page }) => {
+    await page.evaluate(() => { window.__sCalls = 0; window.__horstSurroundingsChanged = () => { window.__sCalls++; }; });
+    const cb = page.locator('#surroundings');
+    await expect(cb).not.toBeChecked();
+    await cb.dispatchEvent('click');
+    await expect(cb).toBeChecked();
+    expect(await page.evaluate(() => window.__sCalls)).toBeGreaterThan(0);
+    await page.reload();
+    await expect(page.locator('#surroundings')).toBeChecked();
+});
