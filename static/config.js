@@ -56,12 +56,6 @@ export function loadConfig() {
             if (el) el.value = savedTarget;
         }
 
-        const savedMinutes = localStorage.getItem('minutes');
-        if (savedMinutes) {
-            const el = inputById('minutes');
-            if (el) el.value = savedMinutes;
-        }
-
         const savedMinSnr = localStorage.getItem('minSnrSelect');
         if (savedMinSnr) {
             const radio = inputByQuery(`input[name="min-snr"][value="${savedMinSnr}"]`);
@@ -90,14 +84,6 @@ export function loadConfig() {
         if (savedCycleTime !== null) {
             const el = inputById('cycle-time');
             if (el) el.value = savedCycleTime;
-        }
-
-        const savedClusterDist = localStorage.getItem('clusterDistance');
-        if (savedClusterDist !== null) {
-            const distanceInput = inputById('cluster-distance');
-            if (distanceInput) distanceInput.value = savedClusterDist;
-            const distVal = document.getElementById('cluster-dist-val');
-            if (distVal) distVal.textContent = savedClusterDist;
         }
 
         const savedAutoZoom = localStorage.getItem('autoZoom');

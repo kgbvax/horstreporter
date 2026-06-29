@@ -35,3 +35,17 @@ test('persisted SNR values rehydrate on reload', async ({ page }) => {
     await expect(page.locator('#cw-min-db')).toHaveValue('-3');
     await expect(page.locator('#cw-min-db-val')).toHaveText('-3');
 });
+
+test('minutes and cluster-distance sliders mount with default values and ids', async ({ page }) => {
+    await expect(page.locator('#minutes')).toHaveValue('15');
+    await expect(page.locator('#minutes-val')).toHaveText('15');
+    await expect(page.locator('#cluster-distance')).toHaveValue('500');
+    await expect(page.locator('#cluster-dist-val')).toHaveText('500');
+});
+
+test('minutes slider persists and rehydrates', async ({ page }) => {
+    await page.$eval('#minutes', (el) => { el.value = '42'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+    await expect(page.locator('#minutes-val')).toHaveText('42');
+    await page.reload();
+    await expect(page.locator('#minutes')).toHaveValue('42');
+});

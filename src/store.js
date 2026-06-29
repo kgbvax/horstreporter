@@ -12,6 +12,7 @@ const defaults = {
     minutes: 15,
     ssbMinDb: 0,
     cwMinDb: -15,
+    clusterDistance: 500,
     surroundings: false,
 };
 

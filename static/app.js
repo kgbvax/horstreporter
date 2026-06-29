@@ -1331,13 +1331,6 @@ document.getElementById('target')?.addEventListener('input', () => {
     syncProjectionCenterToActiveTarget();
 });
 
-document.getElementById('minutes')?.addEventListener('input', (e) => {
-    const val = document.getElementById('minutes-val');
-    if (val) val.textContent = e.target.value;
-    localStorage.setItem('minutes', e.target.value);
-    scheduleRender();
-});
-
 document.getElementById('cycle-time')?.addEventListener('input', (e) => {
     const val = document.getElementById('cycle-time-val');
     if (val) val.textContent = e.target.value;
@@ -1369,13 +1362,6 @@ document.getElementById('dxcc-label-density')?.addEventListener('change', (e) =>
 
 document.getElementById('dk3jf-mode')?.addEventListener('change', async (e) => {
     await updateDk3jfMode(e.target.checked);
-});
-
-document.getElementById('cluster-distance')?.addEventListener('input', (e) => {
-    const val = document.getElementById('cluster-dist-val');
-    if (val) val.textContent = e.target.value;
-    localStorage.setItem('clusterDistance', e.target.value);
-    scheduleRender();
 });
 
 document.getElementById('band-container')?.addEventListener('change', (e) => {
