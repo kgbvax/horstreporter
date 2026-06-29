@@ -1,0 +1,20 @@
+// @ts-check
+// Canvas draw primitives: small reusable helpers that collapse the repeated
+// beginPath/moveTo/lineTo/stroke boilerplate scattered across the renderers.
+// Pure with respect to module state — they only touch the passed-in ctx.
+
+/**
+ * Stroke a radial line from radius r0 to r1 at a compass bearing (0=N, CW),
+ * centered at (cx,cy). Optional lineWidth; caller sets strokeStyle/alpha.
+ * @param {CanvasRenderingContext2D} ctx
+ */
+export function radialLine(ctx, cx, cy, r0, r1, bearingDeg, lineWidth) {
+    const angle = ((bearingDeg - 90) * Math.PI) / 180;
+    const cosA = Math.cos(angle);
+    const sinA = Math.sin(angle);
+    ctx.beginPath();
+    ctx.moveTo(cx + (r0 * cosA), cy + (r0 * sinA));
+    ctx.lineTo(cx + (r1 * cosA), cy + (r1 * sinA));
+    if (lineWidth != null) ctx.lineWidth = lineWidth;
+    ctx.stroke();
+}

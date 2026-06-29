@@ -1,5 +1,7 @@
 import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
 
+import { radialLine } from './canvas-draw.js';
+
 const EARTH_RADIUS_KM = 6371;
 const ANTIPODE_KM = Math.PI * EARTH_RADIUS_KM;
 const MAX_VISIBLE_C = Math.PI - 0.02;
@@ -1182,30 +1184,14 @@ function drawAzimuthIndicator(ctx, width, height) {
     ctx.strokeStyle = minorTickColor;
     for (let bearing = 0; bearing < 360; bearing += 2) {
         if (bearing % 10 === 0) continue;
-        const angle = degToRad(bearing - 90);
-        const cosA = Math.cos(angle);
-        const sinA = Math.sin(angle);
-
-        ctx.beginPath();
-        ctx.moveTo(centerX + (minorTickInner * cosA), centerY + (minorTickInner * sinA));
-        ctx.lineTo(centerX + (outerRadius * cosA), centerY + (outerRadius * sinA));
-        ctx.lineWidth = 0.6;
-        ctx.stroke();
+        radialLine(ctx, centerX, centerY, minorTickInner, outerRadius, bearing, 0.6);
     }
 
     // 10° medium subdivisions (skip major 30° positions).
     ctx.strokeStyle = tickColor;
     for (let bearing = 0; bearing < 360; bearing += 10) {
         if (bearing % 30 === 0) continue;
-        const angle = degToRad(bearing - 90);
-        const cosA = Math.cos(angle);
-        const sinA = Math.sin(angle);
-
-        ctx.beginPath();
-        ctx.moveTo(centerX + (mediumTickInner * cosA), centerY + (mediumTickInner * sinA));
-        ctx.lineTo(centerX + (outerRadius * cosA), centerY + (outerRadius * sinA));
-        ctx.lineWidth = 0.95;
-        ctx.stroke();
+        radialLine(ctx, centerX, centerY, mediumTickInner, outerRadius, bearing, 0.95);
     }
 
     // 30° major ticks + labels.
