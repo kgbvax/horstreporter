@@ -86,18 +86,6 @@ export function loadConfig() {
             if (radio) radio.checked = true;
         }
 
-        const savedSsbMinDb = localStorage.getItem('ssbMinDb');
-        if (savedSsbMinDb !== null) {
-            const el = inputById('ssb-min-db');
-            if (el) el.value = savedSsbMinDb;
-        }
-
-        const savedCwMinDb = localStorage.getItem('cwMinDb');
-        if (savedCwMinDb !== null) {
-            const el = inputById('cw-min-db');
-            if (el) el.value = savedCwMinDb;
-        }
-
         const savedCycleTime = localStorage.getItem('cycleTime');
         if (savedCycleTime !== null) {
             const el = inputById('cycle-time');

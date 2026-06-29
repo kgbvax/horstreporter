@@ -10,7 +10,7 @@ const PERSIST_KEY = 'horst-ui-state';
 const defaults = {
     target: '',
     minutes: 15,
-    ssbMinDb: -10,
+    ssbMinDb: 0,
     cwMinDb: -15,
     surroundings: false,
 };

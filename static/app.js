@@ -1104,6 +1104,8 @@ if (captureConfig?.enabled) {
 
 (async () => {
     installPerfDebugApi();
+    // Render hook for migrated Svelte controls (SNR sliders) to trigger renders.
+    window.__horstScheduleRender = scheduleRender;
     initMap(initialCenter, initialZoom);
     initAzimuthCanvas();
     attachProjectionGestureZoomEvents();
@@ -1325,28 +1327,8 @@ document.getElementById('min-snr-group')?.addEventListener('change', (e) => {
     }
 });
 
-document.getElementById('ssb-min-db')?.addEventListener('input', () => {
-    const el = document.getElementById('ssb-min-db');
-    if (el) {
-        localStorage.setItem('ssbMinDb', el.value);
-        const val = document.getElementById('ssb-min-db-val');
-        if (val) val.textContent = el.value;
-    }
-    scheduleRender();
-});
-
 document.getElementById('target')?.addEventListener('input', () => {
     syncProjectionCenterToActiveTarget();
-});
-
-document.getElementById('cw-min-db')?.addEventListener('input', () => {
-    const el = document.getElementById('cw-min-db');
-    if (el) {
-        localStorage.setItem('cwMinDb', el.value);
-        const val = document.getElementById('cw-min-db-val');
-        if (val) val.textContent = el.value;
-    }
-    scheduleRender();
 });
 
 document.getElementById('minutes')?.addEventListener('input', (e) => {

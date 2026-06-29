@@ -50,3 +50,7 @@ tmp/cq*.mjs
 tmp/dx-cluster-proto/
 # Cross-compiled binaries (scripts/build-operator-agent-win64.sh)
 dist/
+.compound-engineering/*.local.yaml
+
+test-results/
+playwright-report/
