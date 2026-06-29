@@ -2,6 +2,7 @@ import App from './App.svelte';
 import SnrThresholds from './SnrThresholds.svelte';
 import Range from './Range.svelte';
 import Toggle from './Toggle.svelte';
+import MinSnr from './MinSnr.svelte';
 import { uiStore } from './store.js';
 
 // Mount the Svelte UI shell into a stable host node if present. The node does
@@ -23,6 +24,9 @@ if (clusterHost) new Range({ target: clusterHost, props: { id: 'cluster-distance
 
 const autoZoomHost = document.getElementById('auto-zoom-root');
 if (autoZoomHost) new Toggle({ target: autoZoomHost, props: { id: 'auto-zoom', label: 'Auto-zoom', key: 'autoZoom' } });
+
+const minSnrHost = document.getElementById('min-snr-group');
+if (minSnrHost) new MinSnr({ target: minSnrHost });
 
 window.__horstUiStore = uiStore;
 

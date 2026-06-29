@@ -1320,13 +1320,6 @@ window.addEventListener('keydown', (e) => {
     }
 });
 
-document.getElementById('min-snr-group')?.addEventListener('change', (e) => {
-    if (e.target.name === 'min-snr') {
-        localStorage.setItem('minSnrSelect', e.target.value);
-        scheduleRender();
-    }
-});
-
 document.getElementById('target')?.addEventListener('input', () => {
     syncProjectionCenterToActiveTarget();
 });

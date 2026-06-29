@@ -56,12 +56,6 @@ export function loadConfig() {
             if (el) el.value = savedTarget;
         }
 
-        const savedMinSnr = localStorage.getItem('minSnrSelect');
-        if (savedMinSnr) {
-            const radio = inputByQuery(`input[name="min-snr"][value="${savedMinSnr}"]`);
-            if (radio) radio.checked = true;
-        }
-
         const savedStyle = localStorage.getItem('mapStyle');
         if (savedStyle) {
             const radio = inputByQuery(`input[name="style-select"][value="${savedStyle}"]`);

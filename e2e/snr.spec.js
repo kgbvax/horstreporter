@@ -58,3 +58,13 @@ test('auto-zoom toggle persists and rehydrates', async ({ page }) => {
     await page.reload();
     await expect(page.locator('#auto-zoom')).toBeChecked();
 });
+
+test('min-snr radios default to ssb, select+persist, fire render', async ({ page }) => {
+    await expect(page.locator('#snr-ssb')).toBeChecked();
+    await page.evaluate(() => { window.__renderCalls = 0; window.__horstScheduleRender = () => { window.__renderCalls++; }; });
+    await page.locator('#snr-cw').dispatchEvent('click');
+    await expect(page.locator('#snr-cw')).toBeChecked();
+    expect(await page.evaluate(() => window.__renderCalls)).toBeGreaterThan(0);
+    await page.reload();
+    await expect(page.locator('#snr-cw')).toBeChecked();
+});

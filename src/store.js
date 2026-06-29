@@ -10,6 +10,7 @@ const PERSIST_KEY = 'horst-ui-state';
 const defaults = {
     target: '',
     minutes: 15,
+    minSnr: 'ssb',
     ssbMinDb: 0,
     cwMinDb: -15,
     clusterDistance: 500,
