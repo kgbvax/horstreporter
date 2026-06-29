@@ -61,7 +61,78 @@ before walking away.
 
 ## Operator agent — `horstoperator-agent`
 
-Reads from the environment (loaded from a `.env` in CWD if present):
+On the Windows shack PC you can run the agent with a **tray icon** so you can
+see at a glance whether it's alive: green = everything healthy, **amber = rotator
+OK but a configured link (Wavelog/backend/…) is down**, red = starting or the
+rotator poll is failing. The amber state is driven by a background readiness
+probe (every 30 s). Hover for a tooltip, right-click for *Open opmode UI*,
+*Settings…*, *Diagnostics…*, *Log UDP traffic* (toggle), and *Quit*. When
+readiness flips, a **Windows desktop toast** fires (“attention needed” with the
+down links, or “ready” on recovery) — raised via the Win10/11 toast runtime, no
+extra modules needed.
+
+**Settings…** opens a small local page (`http://127.0.0.1:9955/config`, served by
+the agent) where you edit station / PSTrotator / Wavelog settings in the browser
+instead of hand-editing `.env`. *Save* writes the `.env`; *Save & Restart*
+writes it and restarts the agent to apply (the Wavelog API key is write-only —
+blank means “keep current”). When installed via the scheduled task (with
+`-task-name`), restart bounces the task cleanly so there's no duplicate process.
+The `.env` is the single source of truth: the agent's settings all fall back to
+env vars (`STATION_LOCATOR`, `PST_HOST`, `PST_PORT`, `BACKEND_URL`,
+`WAVELOG_API_KEY`, …), so the page and the file stay in sync.
+
+**Readiness panel.** The Settings page opens with a one-click diagnostics report
+(`GET /v1/diagnostics`) that probes every external dependency concurrently and
+shows a green/red dot + latency per system, plus an overall **READY / NOT READY**
+badge — so you can assess each link without reading logs. Checks:
+
+| Check | Probe | Required |
+| --- | --- | --- |
+| PSTrotator rotator | one-shot `AZ?` UDP query | yes |
+| HorstReporter backend | `GET <BACKEND_URL>/api/stats` (<500 = up) | no |
+| Wavelog API | throwaway `private_lookup` (verifies key) | no |
+| WaveLogGate (rig) | HTTP GET callback URL (any reply = up) | no |
+| Award engine | in-process index degraded/loaded | no |
+| POTA hunted CSV | file readable + non-empty | no |
+
+`ready` is true when every **required** check passes and nothing you've
+**configured** is failing; optional systems you haven't set up don't count
+against readiness. There's also a *Test PSTrotator connection* button that probes
+the host/port currently in the form (before saving).
+
+Build the GUI (no-console) tray exe and run it with `-tray`:
+
+```
+scripts/build-operator-agent-win64.sh        # -> dist/horstoperator-agent-windows-amd64.exe (windowsgui)
+# on the Windows box:
+horstoperator-agent-windows-amd64.exe -tray -station-locator JO62qm -pst-host 192.168.1.142
+```
+
+The tray is Windows-only; `-tray` is ignored (logs a warning, runs headless) on
+macOS/Linux, so dev and systemd workflows are unchanged. For a console build
+(visible logs when debugging the headless path) use `GUI=0 scripts/build-operator-agent-win64.sh`.
+
+### One-time setup + remote redeploy (Windows shack PC)
+
+1. Enable OpenSSH Server on the box (PowerShell as Admin):
+   ```powershell
+   Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+   Start-Service sshd; Set-Service sshd -StartupType Automatic
+   ```
+2. From your dev machine, one command does everything — build, bootstrap, ship,
+   start:
+   ```
+   HORSTOP_HOST=shack.lan ./deploy_operator_agent_win.sh
+   ```
+   On first run it creates `C:\horstoperator` and the `HorstOperatorAgent` logon
+   task (which launches the agent with `-tray`); on every run it ends the task,
+   scp's the fresh exe in, and starts it again.
+3. Configure **interactively**: once logged in, open the tray → **Settings** and
+   set the locator / PSTrotator host / Wavelog key. There is nothing to seed or
+   edit on disk — the agent persists what you save and the *Diagnostics* panel
+   shows readiness. The agent does still read these as env vars under the hood
+   (so a `.env` or systemd `EnvironmentFile` works too), but the tray is the
+   intended way to configure a shack PC:
 
 Enrichment **and the local award engine** both run here (the agent is local, so
 the operator's log never leaves the machine):
@@ -94,7 +165,7 @@ If the agent ever runs as a **systemd service** on the shack box, use the same
 WorkingDirectory=/opt/horstoperator
 EnvironmentFile=/etc/horstoperator/horstoperator.env   # root:root, 0600
 ExecStart=/opt/horstoperator/horstoperator-agent -listen 127.0.0.1:9955 \
-  -station-lat 52.52 -station-lng 13.40 \
+  -station-locator JO62qm \
   -rig-transport waveloggate -backend-url https://horstreporter.kgbvax.net
 ```
 

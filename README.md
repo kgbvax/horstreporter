@@ -90,9 +90,7 @@ go run ./cmd/horstoperator-agent \
   -listen 127.0.0.1:9955 \
   -backend-url https://horstreporter.kgbvax.net \
   -station-name DK3JF \
-  -station-lat 52.5200 \
-  -station-lng 13.4050 \
-  -station-locator JO62QM \
+  -station-locator JO62qm \
   -pst-host 127.0.0.1 \
   -pst-port 12000
 ```
@@ -114,9 +112,7 @@ Agent flags (core):
 - `-listen` HTTP listen address for local agent (default: `127.0.0.1:9955`)
 - `-backend-url` optional HorstReporter backend base URL used for reverse proxy of non-`/v1/*` routes
 - `-station-name` station display name
-- `-station-lat` station latitude (**required**)
-- `-station-lng` station longitude (**required**)
-- `-station-locator` optional Maidenhead locator
+- `-station-locator` Maidenhead locator (**required**; station position is derived from it)
 - `-control-permitted` enable/disable rotate+mode commands
 - `-beamwidth-3db-deg` reported antenna beamwidth for UI overlays
 

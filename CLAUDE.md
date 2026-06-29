@@ -16,7 +16,7 @@ DXCLUSTER_USERNAME=<yourcall> DXCLUSTER_PASSWORD=<password> \
 # Optional: QRZ_USERNAME/QRZ_PASSWORD enable callsign→locator enrichment (dx_locator).
 
 # Run local operator agent
-go run ./cmd/horstoperator-agent -listen 127.0.0.1:9955 -station-lat 52.52 -station-lng 13.40
+go run ./cmd/horstoperator-agent -listen 127.0.0.1:9955 -station-locator JO62qm
 # Rig control + Chase Queue enrichment (operator-local): add
 #   -rig-transport waveloggate   (tune via WaveLogGate)
 # and set Wavelog creds via env / a repo-root .env (NOT flags — keep secrets out of argv):

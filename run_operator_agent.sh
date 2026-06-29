@@ -7,7 +7,7 @@
 # bridges rotate/mode/status commands to a PSTrotator controller over UDP.
 #
 # Every setting can be overridden with an environment variable, e.g.:
-#   STATION_LAT=48.137 STATION_LNG=11.575 ./run_operator_agent.sh
+#   STATION_LOCATOR=JN58td ./run_operator_agent.sh
 #   PST_HOST=192.168.1.50 PST_PORT=12000 ./run_operator_agent.sh
 #   PST_LOG_TRAFFIC=1 ./run_operator_agent.sh        # UDP TX/RX diagnostics
 #
@@ -31,9 +31,7 @@ cd "$(dirname "$0")"
 LISTEN="${LISTEN:-127.0.0.1:9955}"
 
 STATION_NAME="${STATION_NAME:-operator-station}"
-STATION_LAT="${STATION_LAT:-52.184}"            # default: Berlin (CLAUDE.md example)
-STATION_LNG="${STATION_LNG:-7.875}"
-STATION_LOCATOR="${STATION_LOCATOR:-JO32we}"         # optional Maidenhead locator
+STATION_LOCATOR="${STATION_LOCATOR:-JO32we}"   # required: Maidenhead locator (station position derived from it)
 
 PST_HOST="${PST_HOST:-192.168.1.142}"
 PST_PORT="${PST_PORT:-12000}"
@@ -57,8 +55,7 @@ PST_LOG_TRAFFIC_HEX="${PST_LOG_TRAFFIC_HEX:-0}" # set 1 to add hex dumps
 args=(
   -listen "$LISTEN"
   -station-name "$STATION_NAME"
-  -station-lat "$STATION_LAT"
-  -station-lng "$STATION_LNG"
+  -station-locator "$STATION_LOCATOR"
   -pst-host "$PST_HOST"
   -pst-port "$PST_PORT"
   -pst-timeout-ms "$PST_TIMEOUT_MS"
@@ -67,7 +64,6 @@ args=(
   -beamwidth-3db-deg "$BEAMWIDTH_3DB_DEG"
 )
 
-[ -n "$STATION_LOCATOR" ] && args+=(-station-locator "$STATION_LOCATOR")
 [ -n "$BACKEND_URL" ] && args+=(-backend-url "$BACKEND_URL")
 [ "$PST_LOG_TRAFFIC" = "1" ] && args+=(-pst-log-traffic)
 [ "$PST_LOG_TRAFFIC_HEX" = "1" ] && args+=(-pst-log-traffic-hex)
@@ -77,7 +73,7 @@ args+=("$@")
 
 echo "Starting horstoperator-agent on ${LISTEN}"
 echo "  PSTrotator : ${PST_HOST}:${PST_PORT} (reply port $((PST_PORT + 1)), timeout ${PST_TIMEOUT_MS}ms)"
-echo "  Station    : ${STATION_NAME} @ ${STATION_LAT},${STATION_LNG}"
+echo "  Station    : ${STATION_NAME} @ ${STATION_LOCATOR}"
 echo "  Control    : ${CONTROL_PERMITTED} (modes: ${ALLOWED_MODES})"
 
 exec go run ./cmd/horstoperator-agent "${args[@]}"

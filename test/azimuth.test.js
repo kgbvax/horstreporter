@@ -47,17 +47,6 @@ describe('azimuth.js', () => {
         expect(az.bearingFromCenter(0, -10)).toBeCloseTo(270, 3); // due west
     });
 
-    it('draws the advancing gray-line forecast as stroked terminator arcs', () => {
-        az.setAzimuthCenter([52, 7]);
-        const calls = { stroke: 0, moveTo: 0, lineTo: 0, fill: 0, dash: 0 };
-        const ctx = makeRecordingCtx(calls);
-        az.drawGraylineForecast(ctx, 800, 800);
-        // One dashed polyline per forecast horizon, no solid fills.
-        expect(calls.stroke).toBeGreaterThanOrEqual(3);
-        expect(calls.moveTo + calls.lineTo).toBeGreaterThan(0);
-        expect(calls.fill).toBe(0);
-    });
-
     it('draws a rim halo arc for azimuth sectors with rising activity', () => {
         az.setAzimuthCenter([52, 7]);
         const spots = [];

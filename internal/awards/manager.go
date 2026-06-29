@@ -27,6 +27,7 @@ type Manager struct {
 	index      *award.Index
 	degraded   bool
 	persistErr map[string]string // source name -> last persist error ("" = ok)
+	lastErr    map[string]string // source name -> last refresh error ("" = ok)
 }
 
 // New opens the store, builds the enabled sources, and warms the index from any
@@ -40,7 +41,7 @@ func New(cfg Config) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{cfg: cfg, store: st, snaps: snaps, index: award.NewIndex(), persistErr: map[string]string{}}
+	m := &Manager{cfg: cfg, store: st, snaps: snaps, index: award.NewIndex(), persistErr: map[string]string{}, lastErr: map[string]string{}}
 
 	if cfg.WavelogEnabled() {
 		if strings.TrimSpace(cfg.WavelogStationID) == "" {
@@ -102,6 +103,9 @@ func (m *Manager) refreshOne(ctx context.Context, src source.Source) {
 
 	snap, err := src.Refresh(cctx, prev)
 	if err != nil {
+		m.mu.Lock()
+		m.lastErr[src.Name()] = err.Error()
+		m.mu.Unlock()
 		log.Printf("[WARN] awards: source %q refresh failed: %v", src.Name(), err)
 		return
 	}
@@ -113,6 +117,7 @@ func (m *Manager) refreshOne(ctx context.Context, src source.Source) {
 	m.mu.Lock()
 	m.snaps[src.Name()] = snap
 	m.persistErr[src.Name()] = persistErr
+	delete(m.lastErr, src.Name())
 	m.rebuildIndexLocked()
 	m.mu.Unlock()
 	log.Printf("[INFO] awards: source %q refreshed — %d slots, stats=%v", src.Name(), len(snap.Slots), snap.Stats)
@@ -174,17 +179,24 @@ func (m *Manager) TriggerRefresh() {
 func (m *Manager) Health() map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	srcs := make([]map[string]any, 0, len(m.snaps))
-	for name, snap := range m.snaps {
-		entry := map[string]any{
-			"name":       name,
-			"taken_at":   snap.TakenAt,
-			"slots":      len(snap.Slots),
-			"stats":      snap.Stats,
-			"persist_ok": m.persistErr[name] == "",
+	// Iterate the currently-enabled sources (not just loaded snapshots) so a
+	// source that has never loaded still appears, with its last_error.
+	srcs := make([]map[string]any, 0, len(m.sources))
+	for _, src := range m.sources {
+		name := src.Name()
+		entry := map[string]any{"name": name, "persist_ok": m.persistErr[name] == ""}
+		if snap := m.snaps[name]; snap != nil {
+			entry["taken_at"] = snap.TakenAt
+			entry["slots"] = len(snap.Slots)
+			entry["stats"] = snap.Stats
+		} else {
+			entry["slots"] = 0
 		}
 		if pe := m.persistErr[name]; pe != "" {
 			entry["last_persist_error"] = pe
+		}
+		if le := m.lastErr[name]; le != "" {
+			entry["last_error"] = le
 		}
 		srcs = append(srcs, entry)
 	}
@@ -195,6 +207,25 @@ func (m *Manager) Health() map[string]any {
 		"sources_enabled": len(m.sources),
 		"sources":         srcs,
 	}
+}
+
+// Diagnostic returns a one-line, human-readable reason for the current state of
+// each enabled source (last refresh error, or "no data yet"), for the agent's
+// readiness panel. Empty when every source has loaded cleanly.
+func (m *Manager) Diagnostic() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var parts []string
+	for _, src := range m.sources {
+		name := src.Name()
+		switch {
+		case m.lastErr[name] != "":
+			parts = append(parts, name+": "+m.lastErr[name])
+		case m.snaps[name] == nil:
+			parts = append(parts, name+": no data yet")
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // SourceLabel is a short "+"-joined list of enabled source names, for logging.

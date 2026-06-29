@@ -15,6 +15,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,6 +36,44 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// envOr / envIntOr / envBoolOr / envFloatOr resolve a flag default from the
+// environment (so the .env edited via the tray Settings page drives config),
+// falling back to a built-in default. An explicit command-line flag still wins
+// because flag defaults are only used when the flag is omitted.
+func envOr(key, def string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return def
+}
+
+func envIntOr(key string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+func envBoolOr(key string, def bool) bool {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
+	}
+	return def
+}
+
+func envFloatOr(key string, def float64) float64 {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return def
 }
 
 // .env loading is shared with horstawards via internal/dotenv.Load.
@@ -71,11 +110,16 @@ type serviceConfig struct {
 	PSTHost          string
 	PSTPort          int
 	Station          stationConfig
-	RigTransport     string        // none | waveloggate
+	RigTransport     string        // none | waveloggate | log4om
 	RigWaveLogGate   string        // WaveLogGate callback base URL
+	RigLog4OM        string        // Log4OM Remote Control inbound UDP host:port
 	WavelogURL       string        // Wavelog base URL (e.g. https://log.dclnext.darc.de/index.php)
 	WavelogAPIKey    string        // Wavelog read API key (from env; never logged)
 	Awards           awards.Config // local award-progress engine (in-process; logs stay local)
+	EnvFile          string        // absolute path to the .env the Settings page reads/writes
+	TaskName         string        // Windows scheduled task name, for clean restart-to-apply (optional)
+	LogFile          string        // absolute path of the log file, when logging to a file ("" = stderr)
+	DebugExternal    bool          // verbose logging of all external traffic (HTTP + PSTrotator UDP)
 }
 
 type rotatorState struct {
@@ -500,6 +544,8 @@ func newServer(cfg serviceConfig) *server {
 		// rig control disabled
 	case "waveloggate":
 		s.rig = newWaveLogGateBackend(cfg.RigWaveLogGate)
+	case "log4om":
+		s.rig = newLog4OMBackend(cfg.RigLog4OM)
 	default:
 		log.Printf("[WARN] unknown -rig-transport %q; rig control disabled", cfg.RigTransport)
 	}
@@ -591,6 +637,24 @@ func (s *server) beginFastPollingForTarget(targetAzimuthDeg float64) {
 	log.Printf("[INFO] Fast antenna polling enabled: target %.1f° (interval=%s)", target, fastPollInterval)
 }
 
+// Health reports whether the antenna poller is currently succeeding, with a
+// short human-readable detail string. The tray UI uses this to pick its icon
+// (green vs. red) and tooltip; it never blocks on the rotator.
+func (s *server) Health() (ok bool, detail string) {
+	s.pollMu.RLock()
+	defer s.pollMu.RUnlock()
+	if s.pollState.lastUpdated.IsZero() {
+		if s.pollState.lastErr != nil {
+			return false, "starting: " + s.pollState.lastErr.Error()
+		}
+		return false, "starting…"
+	}
+	if s.pollState.lastErr != nil {
+		return false, s.pollState.lastErr.Error()
+	}
+	return true, fmt.Sprintf("PSTrotator OK — az %.0f° %s", s.pollState.state.AzimuthDeg, s.pollState.state.Mode)
+}
+
 func (s *server) getPolledStateOrFallback(ctx context.Context) (rotatorState, error) {
 	s.pollMu.RLock()
 	hasState := !s.pollState.lastUpdated.IsZero()
@@ -622,6 +686,11 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/rig/tune", s.handleRigTune)
 	mux.HandleFunc("/v1/operate", s.handleOperate)
 	mux.HandleFunc("/v1/operate/enrich", s.handleEnrich)
+	mux.HandleFunc("/v1/config", s.handleConfig)
+	mux.HandleFunc("/v1/pst/test", s.handlePSTTest)
+	mux.HandleFunc("/v1/diagnostics", s.handleDiagnostics)
+	mux.HandleFunc("/v1/restart", s.handleRestart)
+	mux.HandleFunc("/config", s.handleConfigPage)
 	mux.Handle("/", s.newBackendProxyHandler())
 }
 
@@ -853,58 +922,151 @@ func (s *server) handleMode(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func parseRequiredFloat(name string, raw string) (float64, error) {
-	v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+var maidenheadRegex = regexp.MustCompile(`^[A-R]{2}[0-9]{2}([A-X]{2})?$`)
+
+// normalizeLocator validates a 4- or 6-character Maidenhead locator and returns
+// it upper-cased. The first two pairs are case-folded; an invalid grid is an error.
+func normalizeLocator(raw string) (string, error) {
+	loc := strings.ToUpper(strings.TrimSpace(raw))
+	if loc == "" {
+		return "", errors.New("empty")
+	}
+	if !maidenheadRegex.MatchString(loc) {
+		return "", fmt.Errorf("invalid Maidenhead locator %q (expected e.g. JO62 or JO62qm)", raw)
+	}
+	return loc, nil
+}
+
+// locatorToLatLng returns the center lat/lng of a validated Maidenhead locator.
+// Mirrors locatorToLatLng in the backend (spot.go); kept local since the agent
+// is a standalone package.
+func locatorToLatLng(locator string) (lat, lng float64) {
+	locator = strings.ToUpper(locator)
+	if len(locator) < 2 {
+		return 0, 0
+	}
+	lng = float64(locator[0]-'A')*20 - 180
+	lat = float64(locator[1]-'A')*10 - 90
+	if len(locator) >= 4 {
+		lng += float64(locator[2]-'0') * 2
+		lat += float64(locator[3]-'0') * 1
+		if len(locator) >= 6 {
+			lng += float64(locator[4]-'A')*(5.0/60.0) + (5.0 / 120.0)
+			lat += float64(locator[5]-'A')*(2.5/60.0) + (2.5 / 120.0)
+		} else {
+			lng += 1.0
+			lat += 0.5
+		}
+	} else {
+		lng += 10.0
+		lat += 5.0
+	}
+	return lat, lng
+}
+
+// setupLogging directs log output to a file when requested. The windowsgui (tray)
+// build has no console, so without this its log lines vanish; in that case we
+// default to a file next to the exe. Returns the resolved path ("" = stderr).
+func setupLogging(logFile string, tray bool) string {
+	path := strings.TrimSpace(logFile)
+	if path == "" {
+		if !tray {
+			return "" // console build: stderr is fine
+		}
+		path = defaultLogPath()
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return 0, fmt.Errorf("invalid %s: %w", name, err)
+		log.Printf("[WARN] could not open log file %q: %v", path, err)
+		return ""
 	}
-	if !isFinite(v) {
-		return 0, fmt.Errorf("invalid %s: not finite", name)
+	if tray {
+		// No usable console on the GUI build, so write to the file only (a
+		// MultiWriter including the dead stderr would error and drop file writes).
+		log.SetOutput(f)
+	} else {
+		log.SetOutput(io.MultiWriter(os.Stderr, f))
 	}
-	return v, nil
+	log.Printf("[INFO] logging to %s", path)
+	return path
+}
+
+// defaultLogPath puts the log next to the exe (i.e. the install dir on Windows),
+// falling back to the working directory if the exe path can't be resolved.
+func defaultLogPath() string {
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "horstoperator-agent.log")
+	}
+	return "horstoperator-agent.log"
 }
 
 func main() {
-	// Load .env (if present) before reading env so WAVELOG_API_KEY etc. resolve
-	// regardless of how the agent is launched (go run, systemd, run script).
-	dotenv.Load(".env")
+	// Resolve the .env path first (overridable via HORSTOP_ENV_FILE) and load it
+	// before reading flags, so env-backed flag defaults below see its values and
+	// the tray Settings page edits the same file. Stored absolute so restart and
+	// any CWD change still find it.
+	envFile := envOr("HORSTOP_ENV_FILE", ".env")
+	if abs, err := filepath.Abs(envFile); err == nil {
+		envFile = abs
+	}
+	dotenv.Load(envFile)
 
-	listenAddr := flag.String("listen", "127.0.0.1:9955", "HTTP listen address for local operator agent")
-	backendURL := flag.String("backend-url", "", "Optional HorstReporter backend base URL for reverse proxy (e.g. https://horstreporter.kgbvax.net)")
-	pstHost := flag.String("pst-host", "127.0.0.1", "PSTrotator host")
-	pstPort := flag.Int("pst-port", 12000, "PSTrotator UDP port")
-	pstTimeoutMs := flag.Int("pst-timeout-ms", 1500, "PSTrotator UDP timeout in milliseconds")
+	listenAddr := flag.String("listen", envOr("LISTEN", "127.0.0.1:9955"), "HTTP listen address for local operator agent")
+	backendURL := flag.String("backend-url", envOr("BACKEND_URL", ""), "Optional HorstReporter backend base URL for reverse proxy (e.g. https://horstreporter.kgbvax.net)")
+	pstHost := flag.String("pst-host", envOr("PST_HOST", "127.0.0.1"), "PSTrotator host")
+	pstPort := flag.Int("pst-port", envIntOr("PST_PORT", 12000), "PSTrotator UDP port")
+	pstTimeoutMs := flag.Int("pst-timeout-ms", envIntOr("PST_TIMEOUT_MS", 1500), "PSTrotator UDP timeout in milliseconds")
 	pstLogTraffic := flag.Bool("pst-log-traffic", false, "Enable UDP TX/RX logging for PSTrotator traffic diagnostics")
 	pstLogTrafficHex := flag.Bool("pst-log-traffic-hex", false, "Include hex dump (truncated) in UDP traffic logs")
 	pstLogMaxBytes := flag.Int("pst-log-max-bytes", 256, "Maximum bytes shown in UDP traffic log previews")
 
-	stationName := flag.String("station-name", "operator-station", "Station display name")
-	stationLatRaw := flag.String("station-lat", "", "Station latitude (required)")
-	stationLngRaw := flag.String("station-lng", "", "Station longitude (required)")
-	stationLocator := flag.String("station-locator", "", "Station maidenhead locator (optional)")
+	stationName := flag.String("station-name", envOr("STATION_NAME", "operator-station"), "Station display name")
+	stationLocator := flag.String("station-locator", envOr("STATION_LOCATOR", ""), "Station Maidenhead locator (required, e.g. JO62qm)")
 
-	controlPermitted := flag.Bool("control-permitted", true, "Allow rotate/mode control commands")
-	beamwidth3db := flag.Float64("beamwidth-3db-deg", 60, "Antenna 3dB beamwidth reported to UI")
-	allowedModesRaw := flag.String("allowed-modes", "forward,backward,bidirectional", "Comma-separated allowed antenna modes")
+	controlPermitted := flag.Bool("control-permitted", envBoolOr("CONTROL_PERMITTED", true), "Allow rotate/mode control commands")
+	beamwidth3db := flag.Float64("beamwidth-3db-deg", envFloatOr("BEAMWIDTH_3DB_DEG", 60), "Antenna 3dB beamwidth reported to UI")
+	allowedModesRaw := flag.String("allowed-modes", envOr("ALLOWED_MODES", "forward,backward,bidirectional"), "Comma-separated allowed antenna modes")
 
-	rigTransport := flag.String("rig-transport", "none", "Rig control backend: none|waveloggate (waveloggate = tune VFO A via WaveLogGate; preview/split need a future rigctld/FLRig backend)")
-	rigWaveLogGate := flag.String("rig-waveloggate-url", "http://127.0.0.1:54321", "WaveLogGate callback base URL (used when -rig-transport=waveloggate)")
+	rigTransport := flag.String("rig-transport", envOr("RIG_TRANSPORT", "none"), "Rig control backend: none|waveloggate|log4om (waveloggate = WaveLogGate HTTP callback; log4om = Log4OM Remote Control UDP; both tune VFO A, preview/split need a future rigctld/FLRig backend)")
+	rigWaveLogGate := flag.String("rig-waveloggate-url", envOr("RIG_WAVELOGGATE_URL", "http://127.0.0.1:54321"), "WaveLogGate callback base URL (used when -rig-transport=waveloggate)")
+	rigLog4OM := flag.String("rig-log4om-addr", envOr("RIG_LOG4OM_ADDR", log4omDefaultAddr), "Log4OM Remote Control inbound UDP host:port (used when -rig-transport=log4om)")
+	trayEnabled := flag.Bool("tray", false, "Run with a Windows tray icon showing live status (Windows only; ignored elsewhere)")
+	logFilePath := flag.String("log-file", envOr("LOG_FILE", ""), "Write logs to this file; the tray (GUI) build has no console, so it defaults to a file next to the exe")
+	debugLogging := flag.Bool("debug-logging", envBoolOr("DEBUG_LOGGING", false), "Verbose logging of all external traffic (PSTrotator UDP + Wavelog/backend/rig HTTP); secrets redacted")
+	taskName := flag.String("task-name", envOr("HORSTOP_TASK", ""), "Windows scheduled task name; lets the Settings page restart-to-apply cleanly via the task")
 	potaHuntedCSV := flag.String("pota-hunted-csv", strings.TrimSpace(os.Getenv("POTA_HUNTED_CSV")), "Path to a POTA hunted-parks CSV export (enables POTA 'wanted'); empty = disabled")
 	awardsDataDir := flag.String("awards-data-dir", firstNonEmpty(strings.TrimSpace(os.Getenv("HORSTAWARDS_DATA_DIR")), "./horstawards-data"), "Local directory for the award-progress snapshot store")
 
 	flag.Parse()
 
-	if strings.TrimSpace(*stationLatRaw) == "" || strings.TrimSpace(*stationLngRaw) == "" {
-		log.Fatal("[FATAL] station-lat and station-lng are required")
+	// Direct logs to a file when asked, or always on the tray (GUI) build since it
+	// has no console and would otherwise discard every log line.
+	resolvedLogFile := setupLogging(*logFilePath, *trayEnabled)
+
+	// Debug logging: capture all outbound HTTP (Wavelog/backend/rig/POTA + reverse
+	// proxy) by wrapping the default transport, before any client issues a request.
+	// The PSTrotator UDP half is enabled via UDPLogTraffic in the config below.
+	if *debugLogging {
+		enableExternalDebugLogging()
 	}
 
-	lat, err := parseRequiredFloat("station-lat", *stationLatRaw)
+	locator, err := normalizeLocator(*stationLocator)
 	if err != nil {
-		log.Fatalf("[FATAL] %v", err)
+		if *trayEnabled {
+			// In tray mode we must still boot so the operator can set the locator
+			// via the Settings page; an empty locator just yields a 0,0 station
+			// until they save and restart.
+			log.Printf("[WARN] station-locator not set/invalid (%v); open the tray → Settings to configure it", err)
+			locator = ""
+		} else {
+			log.Fatalf("[FATAL] station-locator is required: %v", err)
+		}
 	}
-	lng, err := parseRequiredFloat("station-lng", *stationLngRaw)
-	if err != nil {
-		log.Fatalf("[FATAL] %v", err)
+
+	// Station position is derived from the Maidenhead locator (grid-square center).
+	var lat, lng float64
+	if locator != "" {
+		lat, lng = locatorToLatLng(locator)
 	}
 
 	timeout := time.Duration(*pstTimeoutMs) * time.Millisecond
@@ -918,7 +1080,7 @@ func main() {
 		ControlPermitted: *controlPermitted,
 		Beamwidth3dBDeg:  math.Max(1, *beamwidth3db),
 		AllowedModes:     splitModes(*allowedModesRaw),
-		UDPLogTraffic:    *pstLogTraffic,
+		UDPLogTraffic:    *pstLogTraffic || *debugLogging,
 		UDPLogHex:        *pstLogTrafficHex,
 		UDPLogMaxBytes:   *pstLogMaxBytes,
 		Timeout:          timeout,
@@ -928,12 +1090,17 @@ func main() {
 			Name:    strings.TrimSpace(*stationName),
 			Lat:     lat,
 			Lng:     lng,
-			Locator: strings.TrimSpace(*stationLocator),
+			Locator: locator,
 		},
 		RigTransport:   strings.TrimSpace(*rigTransport),
 		RigWaveLogGate: strings.TrimSpace(*rigWaveLogGate),
+		RigLog4OM:      strings.TrimSpace(*rigLog4OM),
 		WavelogURL:     firstNonEmpty(strings.TrimSpace(os.Getenv("WAVELOG_URL")), defaultWavelogURL),
 		WavelogAPIKey:  strings.TrimSpace(os.Getenv("WAVELOG_API_KEY")),
+		EnvFile:        envFile,
+		TaskName:       strings.TrimSpace(*taskName),
+		LogFile:        resolvedLogFile,
+		DebugExternal:  *debugLogging,
 	}
 
 	// Local award-progress engine: runs in-process so the operator's Wavelog log
@@ -973,7 +1140,9 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	newServer(cfg).registerRoutes(mux)
+	srv := newServer(cfg)
+	srv.registerRoutes(mux)
+	handler := withCORS(mux)
 
 	log.Printf("[INFO] horstoperator-agent listening on %s", cfg.ListenAddr)
 	log.Printf("[INFO] PSTrotator UDP endpoint: %s", net.JoinHostPort(cfg.PSTHost, strconv.Itoa(cfg.PSTPort)))
@@ -982,6 +1151,8 @@ func main() {
 	switch strings.ToLower(cfg.RigTransport) {
 	case "waveloggate":
 		log.Printf("[INFO] Rig control: WaveLogGate (tune VFO A) via %s", cfg.RigWaveLogGate)
+	case "log4om":
+		log.Printf("[INFO] Rig control: Log4OM Remote Control (tune VFO A) via UDP %s", cfg.RigLog4OM)
 	default:
 		log.Printf("[INFO] Rig control: disabled (-rig-transport=%s)", cfg.RigTransport)
 	}
@@ -1000,7 +1171,12 @@ func main() {
 		log.Printf("[INFO] Backend reverse proxy disabled (set -backend-url to forward UI/API traffic)")
 	}
 
-	if err := http.ListenAndServe(cfg.ListenAddr, withCORS(mux)); err != nil {
+	if err := serveAgent(cfg, srv, handler, *trayEnabled); err != nil {
 		log.Fatalf("[FATAL] local agent server failed: %v", err)
 	}
+}
+
+// serveHTTP runs the blocking HTTP server. Shared by the headless and tray paths.
+func serveHTTP(cfg serviceConfig, handler http.Handler) error {
+	return http.ListenAndServe(cfg.ListenAddr, handler)
 }

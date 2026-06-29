@@ -1,62 +1,70 @@
 {
   "scenario": "mercator-style-burst",
-  "createdAt": "2026-06-02T10:58:57.810Z",
+  "createdAt": "2026-06-29T11:43:02.241Z",
   "metrics": {
-    "mercator.band_labels.total_ms": {
-      "count": 6,
-      "minMs": 0.15904100000011567,
-      "maxMs": 0.4392499999999018,
-      "avgMs": 0.23877066666670999,
-      "medianMs": 0.21372900000005757,
-      "p95Ms": 0.387552249999942
-    },
     "mercator.grid.aggregate_ms": {
       "count": 3,
-      "minMs": 0.32625000000007276,
-      "maxMs": 0.33666599999992286,
-      "avgMs": 0.330472000000024,
-      "medianMs": 0.3285000000000764,
-      "p95Ms": 0.33584939999993824
+      "minMs": 0.46012500000006185,
+      "maxMs": 0.6637080000000424,
+      "avgMs": 0.5386249999999867,
+      "medianMs": 0.49204199999985576,
+      "p95Ms": 0.6465414000000237
     },
     "mercator.grid.draw_ms": {
       "count": 3,
-      "minMs": 0.0038750000001073204,
-      "maxMs": 0.017959000000018932,
-      "avgMs": 0.010833333333342429,
-      "medianMs": 0.010665999999901032,
-      "p95Ms": 0.01722970000000714
+      "minMs": 0.012875000000121872,
+      "maxMs": 0.054666999999994914,
+      "avgMs": 0.02694466666673634,
+      "medianMs": 0.01329200000009223,
+      "p95Ms": 0.05052950000000464
     },
     "mercator.grid.total_ms": {
       "count": 3,
-      "minMs": 0.40133300000002237,
-      "maxMs": 0.5262090000001081,
-      "avgMs": 0.45018066666671075,
-      "medianMs": 0.4230000000000018,
-      "p95Ms": 0.5158881000000974
+      "minMs": 0.5715000000000146,
+      "maxMs": 0.911707999999976,
+      "avgMs": 0.7049443333333253,
+      "medianMs": 0.6316249999999854,
+      "p95Ms": 0.8836996999999769
+    },
+    "mercator.band_labels.total_ms": {
+      "count": 6,
+      "minMs": 0.09525000000007822,
+      "maxMs": 0.32341699999994944,
+      "avgMs": 0.17334749999999607,
+      "medianMs": 0.1334795000000213,
+      "p95Ms": 0.3016252499999439
     },
     "mercator.render.total_ms": {
       "count": 6,
-      "minMs": 0.44808400000010806,
-      "maxMs": 1.0394160000000738,
-      "avgMs": 0.7152776666666796,
-      "medianMs": 0.6436875000000555,
-      "p95Ms": 1.034541000000047
+      "minMs": 0.832540999999992,
+      "maxMs": 2.4753330000000915,
+      "avgMs": 1.4979163333334025,
+      "medianMs": 1.5456040000000257,
+      "p95Ms": 2.2653435000000854
     },
-    "mercator.heatmap.draw_ms": {
+    "mercator.active_area.aggregate_ms": {
       "count": 3,
-      "minMs": 0.19812499999989086,
-      "maxMs": 0.5815829999999096,
-      "avgMs": 0.3276943333332838,
-      "medianMs": 0.20337500000005093,
-      "p95Ms": 0.5437621999999237
+      "minMs": 1.0786669999999958,
+      "maxMs": 1.1331250000000637,
+      "avgMs": 1.108555666666689,
+      "medianMs": 1.1138750000000073,
+      "p95Ms": 1.131200000000058
     },
-    "mercator.heatmap.total_ms": {
+    "mercator.active_area.cluster_draw_ms": {
       "count": 3,
-      "minMs": 0.2555409999999938,
-      "maxMs": 0.6849159999999301,
-      "avgMs": 0.40173566666665766,
-      "medianMs": 0.2647500000000491,
-      "p95Ms": 0.642899399999942
+      "minMs": 0.15770900000006804,
+      "maxMs": 0.5639999999998508,
+      "avgMs": 0.30966699999999037,
+      "medianMs": 0.2072920000000522,
+      "p95Ms": 0.5283291999998709
+    },
+    "mercator.active_area.total_ms": {
+      "count": 3,
+      "minMs": 1.3759999999999764,
+      "maxMs": 1.822458000000097,
+      "avgMs": 1.5335830000000594,
+      "medianMs": 1.4022910000001048,
+      "p95Ms": 1.7804413000000978
     }
   },
   "counters": {
@@ -64,15 +72,15 @@
     "mercator.layers.added": 6,
     "mercator.grid.rectangles_added": 18,
     "mercator.layers.removed": 5,
-    "mercator.render.style.heatmap": 3,
-    "mercator.heatmap.layers_added": 6,
-    "mercator.heatmap.points_rendered": 13500
+    "mercator.render.style.active_area": 3,
+    "mercator.active_area.polygons_added": 0,
+    "mercator.active_area.markers_added": 6120
   },
   "metadata": {
     "spots": 4500,
     "styles": [
       "grid-snr",
-      "heatmap"
+      "active-area"
     ],
     "iterations": 6
   }

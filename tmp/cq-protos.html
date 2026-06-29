@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chase Queue — list prototypes</title>
+<style>
+  :root, body[data-theme="light"] {
+    --bg:#fff; --text:#212529; --status:#6c757d; --border:#dee2e6;
+    --control-border: color-mix(in srgb, var(--text) 32%, var(--bg));
+    --surface-1: color-mix(in srgb, var(--bg) 92%, var(--text) 8%);
+    --accent:#1f9e8f; --accent-strong:#17887a; --accent-contrast:#ffffff;
+    --accent-tint: color-mix(in srgb, var(--accent) 12%, var(--bg));
+    --gold:#d99e00; --gold-strong:#9a7000; --gold-tint: color-mix(in srgb, #f3c14b 22%, var(--bg));
+    --go:#22c55e; --watch:#f59e0b; --wait:#94a3b8;
+    --page:#e9ecef; --hair: color-mix(in srgb, var(--border) 70%, transparent);
+  }
+  body[data-theme="dark"] {
+    --bg:#212529; --text:#e0e0e0; --status:#999; --border:#444;
+    --control-border: color-mix(in srgb, var(--text) 38%, var(--bg));
+    --surface-1: color-mix(in srgb, var(--bg) 88%, var(--text) 12%);
+    --accent:#34c4b0; --accent-strong:#4dd3c0; --accent-contrast:#08201d;
+    --accent-tint: color-mix(in srgb, var(--accent) 18%, var(--bg));
+    --gold:#f3c14b; --gold-strong:#f3c14b; --gold-tint: color-mix(in srgb, #f3c14b 22%, var(--bg));
+    --go:#22c55e; --watch:#f59e0b; --wait:#64748b;
+    --page:#15181b; --hair: color-mix(in srgb, var(--border) 60%, transparent);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--page); color:var(--text); padding:24px;
+    font-family:system-ui,sans-serif; display:flex; gap:26px; align-items:flex-start; flex-wrap:wrap;
+    --mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace; }
+  .col { width:380px; }
+  .cap { font-size:12px; color:var(--status); margin:0 0 8px 2px; line-height:1.5; }
+  .cap b { color:var(--text); font-size:13px; }
+  .panel { border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--bg);
+    box-shadow:0 2px 12px rgba(0,0,0,.10); }
+  .head { padding:9px 12px; border-bottom:1px solid var(--border); background:var(--surface-1);
+    display:flex; align-items:baseline; gap:8px; }
+  .head .t { font-weight:700; font-size:.95rem; }
+  .head .c { margin-left:auto; font:600 11px var(--mono); color:var(--status); }
+  .head .x { border:0; background:transparent; color:var(--status); font-size:17px; cursor:pointer; }
+  .body { max-height:560px; overflow:auto; }
+
+  /* wanted palette helpers */
+  .w-atno { --w:var(--gold); } .w-band, .w-mode { --w:var(--accent); }
+  .w-worked { --w:var(--status); } .w-none { --w:transparent; }
+  /* rank grade dot */
+  .rk { font:700 13px var(--mono); white-space:nowrap; }
+  .rk .dot { display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:5px; vertical-align:1px; }
+  .d-go{ background:var(--go);} .d-watch{ background:var(--watch);} .d-wait{ background:var(--wait);}
+  .band { font-weight:700; }
+  .dir { color:var(--status); }
+
+  /* ───── P1 — Band-rail ledger ───── */
+  .p1-row { border-left:4px solid var(--band); border-bottom:1px solid var(--hair);
+    padding:7px 12px 8px 10px; display:grid; grid-template-columns:1fr auto; column-gap:8px; align-items:baseline; cursor:pointer; }
+  .p1-row:hover { background:var(--accent-tint); }
+  .p1-l1 { display:flex; align-items:center; gap:8px; min-width:0; }
+  .p1-call { font:700 15px var(--mono); }
+  .p1-chip { font:800 9px/1 system-ui; letter-spacing:.05em; text-transform:uppercase;
+    padding:2px 5px; border-radius:4px; color:var(--w); border:1px solid color-mix(in srgb,var(--w) 55%,transparent);
+    background:color-mix(in srgb,var(--w) 12%,transparent); }
+  .p1-chip.w-atno { color:#1c1400; background:var(--gold); border-color:var(--gold); }
+  .p1-chip.w-worked, .p1-chip.w-none { display:none; }
+  .p1-meta { grid-column:1; font:12.5px/1.45 var(--mono); color:var(--status); margin-top:2px; }
+  .p1-meta .sep { opacity:.4; margin:0 5px; }
+
+  /* ───── P2 — Wanted-rail table ───── */
+  .p2-head, .p2-row { display:grid; grid-template-columns:15px 1fr 32px 40px 90px 30px 32px; column-gap:6px; align-items:center; }
+  .p2-head { padding:6px 12px 6px 0; border-bottom:1px solid var(--control-border);
+    font:600 9px/1 system-ui; letter-spacing:.05em; text-transform:uppercase; color:var(--status); }
+  .p2-head span { text-align:right; } .p2-head .hc { text-align:left; }
+  .p2-row { border-left:4px solid var(--w); border-bottom:1px solid var(--hair);
+    min-height:32px; padding:3px 0; cursor:pointer; font:12.5px var(--mono); }
+  .p2-row:hover { background:var(--accent-tint); }
+  .p2-ico { display:flex; justify-content:center; }
+  .p2-ico svg { width:11px; height:11px; display:block; }
+  .p2-ico .i-atno { fill:var(--gold); } .p2-ico .i-new { fill:var(--accent); }
+  .p2-ico .i-worked { fill:none; stroke:var(--status); stroke-width:1.4; }
+  .p2-call { font-weight:700; font-size:13.5px; padding-left:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .p2-band { font-weight:700; text-align:right; }
+  .p2-mode { text-align:right; color:var(--text); }
+  .p2-dd { text-align:right; color:var(--status); white-space:nowrap; }
+  .p2-dd b { color:var(--text); font-weight:600; }
+  .p2-age { text-align:right; color:var(--status); font-size:11px; }
+  .p2-rk { text-align:right; font-weight:800; font-size:13px; }
+
+  /* ───── P3 — Wanted-first triage ───── */
+  .p3-group { font:700 10px/1 system-ui; letter-spacing:.06em; text-transform:uppercase; color:var(--status);
+    padding:10px 12px 4px; }
+  .p3-row { padding:7px 12px 8px; border-bottom:1px solid var(--hair); cursor:pointer; }
+  .p3-row:hover { background:var(--accent-tint); }
+  .p3-row.dim { opacity:.55; }
+  .p3-l1 { display:flex; align-items:baseline; gap:9px; }
+  .p3-want { font:800 11px/1 system-ui; letter-spacing:.02em; color:var(--w); white-space:nowrap; }
+  .p3-want.w-atno { color:var(--gold); }
+  .p3-call { font:700 15px var(--mono); }
+  .p3-ent { color:var(--status); font:12px/1 system-ui; }
+  .p3-sp { flex:1; }
+  .p3-meta { font:12px/1.4 var(--mono); color:var(--status); margin-top:3px; }
+  .p3-meta .sep { opacity:.4; margin:0 5px; }
+  .p3-meta .band { font-weight:700; }
+
+  /* ── shared P4–P6: score bar (no number), star toggle ── */
+  .bar { display:inline-block; width:44px; height:6px; border-radius:3px;
+    background:color-mix(in srgb,var(--text) 13%,transparent); overflow:hidden; vertical-align:middle; }
+  .bar > i { display:block; height:100%; border-radius:3px; }
+  .bar.g-go>i{ background:var(--go);} .bar.g-watch>i{ background:var(--watch);} .bar.g-wait>i{ background:var(--wait);}
+  .star { width:14px; height:14px; cursor:pointer; }
+  .star svg { width:14px; height:14px; display:block; }
+  .star .s-on { fill:var(--gold); } .star .s-off { fill:none; stroke:color-mix(in srgb,var(--text) 32%,transparent); stroke-width:1.1; }
+
+  /* ── P4 — quiet ledger v2 (band rail · score bar · star · strong ATNO) ── */
+  .p4-row { display:grid; grid-template-columns:16px 1fr 48px; column-gap:9px; align-items:center;
+    border-left:4px solid var(--band); border-bottom:1px solid var(--hair); padding:7px 12px 8px 9px; cursor:pointer; }
+  .p4-row:hover { background:var(--accent-tint); }
+  .p4-row.w-atno { background:color-mix(in srgb,var(--gold) 10%,var(--bg)); }
+  .p4-main { grid-column:2; min-width:0; }
+  .p4-l1 { display:flex; align-items:center; gap:8px; }
+  .p4-call { font:700 15px var(--mono); }
+  .p4-chip { font:800 9px/1 system-ui; letter-spacing:.05em; text-transform:uppercase; padding:2px 5px; border-radius:4px;
+    color:var(--w); border:1px solid color-mix(in srgb,var(--w) 55%,transparent); background:color-mix(in srgb,var(--w) 12%,transparent); }
+  .p4-chip.w-atno { color:#1c1400; background:var(--gold); border-color:var(--gold); }
+  .p4-chip.w-worked, .p4-chip.w-none { display:none; }
+  .p4-meta { font:12.5px/1.4 var(--mono); color:var(--status); margin-top:2px; }
+  .p4-meta .sep { opacity:.4; margin:0 5px; }
+  .p4-bar { grid-column:3; justify-self:end; }
+
+  /* ── P5 — sortable columns (click a header to sort) ── */
+  .p5-head, .p5-row { display:grid; grid-template-columns:14px 40px 1fr 30px 34px 74px 26px 46px; column-gap:5px; align-items:center; }
+  .p5-head { padding:6px 12px; border-bottom:1px solid var(--control-border); }
+  .p5-head button { all:unset; cursor:pointer; display:block; text-align:right; white-space:nowrap;
+    font:600 8.5px/1 system-ui; letter-spacing:.04em; text-transform:uppercase; color:var(--status); }
+  .p5-head button.lft { text-align:left; }
+  .p5-head button:hover { color:var(--accent-strong); }
+  .p5-head button.act { color:var(--accent-strong); }
+  .p5-head button.car::after { content:" \25BE"; font-size:8px; }
+  .p5-row { padding:4px 12px; border-bottom:1px solid var(--hair); font:12px var(--mono); cursor:pointer; }
+  .p5-row:hover { background:var(--accent-tint); }
+  .p5-want { font:800 8.5px/1 system-ui; letter-spacing:.03em; text-transform:uppercase; text-align:right; color:var(--w); }
+  .p5-want.w-atno { color:var(--gold); } .p5-want.w-worked, .p5-want.w-none { color:transparent; }
+  .p5-call { font-weight:700; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .p5-band { font-weight:700; text-align:right; }
+  .p5-mode { text-align:right; }
+  .p5-dd { text-align:right; color:var(--status); white-space:nowrap; } .p5-dd b { color:var(--text); font-weight:600; }
+  .p5-age { text-align:right; color:var(--status); font-size:11px; }
+  .p5-sc { justify-self:end; }
+
+  /* ── P6 — wanted-rail + friends lane (wanted owns the edge) ── */
+  .p6-row { display:grid; grid-template-columns:16px 1fr 48px; column-gap:9px; align-items:center;
+    border-left:5px solid var(--w); border-bottom:1px solid var(--hair); padding:7px 12px 8px 8px; cursor:pointer; }
+  .p6-row.w-atno { border-left-width:8px; background:color-mix(in srgb,var(--gold) 11%,var(--bg)); }
+  .p6-row.w-none, .p6-row.w-worked { border-left-color:color-mix(in srgb,var(--text) 12%,transparent); }
+  .p6-row:hover { background:var(--accent-tint); }
+  .p6-main { grid-column:2; min-width:0; }
+  .p6-l1 { display:flex; align-items:center; gap:8px; }
+  .p6-call { font:700 15px var(--mono); }
+  .p6-call.w-atno { color:var(--gold); }
+  .p6-tag { font:800 9px/1 system-ui; letter-spacing:.05em; text-transform:uppercase; color:var(--w); }
+  .p6-tag.w-worked, .p6-tag.w-none { display:none; }
+  .p6-meta { font:12.5px/1.4 var(--mono); color:var(--status); margin-top:2px; }
+  .p6-meta .band { font-weight:700; } .p6-meta .sep { opacity:.4; margin:0 5px; }
+  .p6-bar { grid-column:3; justify-self:end; }
+
+  /* ── P7–P9: #4 ledger + folded, sortable column headers ── */
+  .sh button { all:unset; cursor:pointer; display:block; text-align:right; white-space:nowrap;
+    font:600 8.5px/1 system-ui; letter-spacing:.04em; text-transform:uppercase; color:var(--status); }
+  .sh button.lft { text-align:left; }
+  .sh button:hover { color:var(--accent-strong); }
+  .sh button.act { color:var(--accent-strong); }
+  .sh button.car::after { content:" \25BE"; font-size:8px; }
+  .r7 .d, .r8 .d, .r9 .d { font:12px var(--mono); color:var(--status); }
+  .r7 .d.bandc, .r8 .d.bandc, .r9 .d.bandc { font-weight:700; }
+  .r7 .d.r, .r8 .d.r, .r9 .d.r { text-align:right; white-space:nowrap; }
+  .chip7,.chip8,.chip9 { font:800 8.5px/1 system-ui; text-transform:uppercase; letter-spacing:.04em;
+    padding:2px 5px; border-radius:4px; color:var(--w); border:1px solid color-mix(in srgb,var(--w) 55%,transparent); }
+  .chip7.w-atno,.chip8.w-atno,.chip9.w-atno { color:#1c1400; background:var(--gold); border-color:var(--gold); }
+  .chip7.w-worked,.chip7.w-none,.chip8.w-worked,.chip8.w-none,.chip9.w-worked,.chip9.w-none { display:none; }
+
+  /* V7 — split headers (primary tier + detail tier) */
+  .h7a, .r7 .l1 { display:grid; grid-template-columns:18px 1fr 60px 50px; column-gap:6px; align-items:center; }
+  .h7b, .r7 .l2 { display:grid; grid-template-columns:18px 46px 36px 1fr 34px; column-gap:6px; align-items:baseline; }
+  .h7a { padding:7px 12px 1px; } .h7b { padding:0 12px 6px; border-bottom:1px solid var(--control-border); }
+  .r7 { border-left:4px solid var(--band); border-bottom:1px solid var(--hair); padding:6px 12px 7px 9px; cursor:pointer; }
+  .r7:hover { background:var(--accent-tint); } .r7.w-atno { background:color-mix(in srgb,var(--gold) 10%,var(--bg)); }
+  .r7 .l2 { margin-top:2px; } .r7 .c7 { font:700 14px var(--mono); } .r7 .chip7, .r7 .bar { justify-self:end; }
+
+  /* V8 — score as a detail column, wanted inline, detail full-width */
+  .h8, .r8 .l2 { display:grid; grid-template-columns:46px 36px 1fr 34px 50px; column-gap:6px; align-items:baseline; }
+  .h8 { padding:7px 12px 6px; border-bottom:1px solid var(--control-border); }
+  .r8 { border-left:4px solid var(--band); border-bottom:1px solid var(--hair); padding:6px 12px 7px 9px; cursor:pointer; }
+  .r8:hover { background:var(--accent-tint); } .r8.w-atno { background:color-mix(in srgb,var(--gold) 10%,var(--bg)); }
+  .r8 .l1 { display:flex; align-items:center; gap:8px; } .r8 .c8 { font:700 14px var(--mono); }
+  .r8 .l2 { margin-top:3px; } .r8 .bar { justify-self:end; }
+
+  /* V9 — decision block (Wanted+Score) pinned right, spanning both lines */
+  .h9, .r9 { display:grid; grid-template-columns:18px 1fr 58px; column-gap:8px; }
+  .h9 { padding:7px 12px 6px; border-bottom:1px solid var(--control-border); align-items:end; }
+  .h9 .det, .r9 .det { display:grid; grid-template-columns:46px 36px 1fr 34px; column-gap:6px; }
+  .h9 .right, .r9 .right { display:flex; flex-direction:column; align-items:flex-end; gap:3px; }
+  .r9 { border-left:4px solid var(--band); border-bottom:1px solid var(--hair); padding:6px 12px 7px 9px; align-items:center; cursor:pointer; }
+  .r9:hover { background:var(--accent-tint); } .r9.w-atno { background:color-mix(in srgb,var(--gold) 10%,var(--bg)); }
+  .r9 .c9 { font:700 14px var(--mono); } .r9 .det { margin-top:2px; }
+
+  /* ── P10–P12: refined #7 — folded columns left, wanted left, age beside score,
+     dist+dir split, thick band rail, thick-gold ATNO, bigger headers ── */
+  .lh1, .lrow .l1 { display:grid; grid-template-columns:20px auto auto 1fr 54px 38px; column-gap:8px; align-items:center; }
+  .lh2, .lrow .l2 { display:grid; grid-template-columns:20px 46px 40px 78px 36px 1fr; column-gap:8px; align-items:baseline; }
+  .lh1 { padding:9px 12px 3px; } .lh2 { padding:0 12px 9px; border-bottom:1px solid var(--control-border); }
+  .lhead button { all:unset; cursor:pointer; display:block; white-space:nowrap; text-align:right;
+    font:700 10.5px/1.2 system-ui; letter-spacing:.03em; text-transform:uppercase; color:var(--status); }
+  .lhead button.lft { text-align:left; }
+  .lhead button:hover { color:var(--accent-strong); }
+  .lhead .ar { font-size:8px; margin-left:2px; }
+  .lhead button.act { color:var(--accent-strong); }
+  .lhead button.act.pill { background:var(--accent-tint-strong); border-radius:6px; padding:3px 8px; font-weight:800; }
+  .lhead button.act.under { font-weight:800; border-bottom:2px solid var(--accent); padding-bottom:3px; }
+  .lrow { border-left:6px solid var(--band); border-bottom:1px solid var(--hair); padding:7px 12px 8px 9px; cursor:pointer; }
+  .lrow:hover { background:var(--accent-tint); }
+  .lrow.w-atno { border-left:8px solid var(--gold); background:color-mix(in srgb,var(--gold) 12%,var(--bg)); }
+  .lrow.w-atno .c { color:var(--gold-strong); }
+  .lrow .l2 { margin-top:3px; }
+  .lrow .c { font:700 15px var(--mono); }
+  .lrow .badge { justify-self:start; font:800 9px/1 system-ui; text-transform:uppercase; letter-spacing:.04em;
+    padding:2px 6px; border-radius:4px; color:var(--w); border:1px solid color-mix(in srgb,var(--w) 55%,transparent); }
+  .lrow .badge.w-atno { color:#1c1400; background:var(--gold); border-color:var(--gold); }
+  .lrow .badge.w-worked, .lrow .badge.w-none { display:none; }
+  .lrow .age { text-align:right; color:var(--status); font:12.5px var(--mono); }
+  .lrow .bar { justify-self:end; }
+  .lrow .d { font:12.5px var(--mono); color:var(--status); }
+  .lrow .d.bandc { font-weight:700; }
+  .lrow .d.r { text-align:right; white-space:nowrap; }
+  .lrow .colhi { background:color-mix(in srgb,var(--accent) 10%,transparent); border-radius:3px; }
+  /* extra active-sort markers (P13–P15) */
+  .lhead button.act.solid { background:var(--accent); color:var(--accent-contrast); border-radius:6px; padding:3px 8px; font-weight:800; }
+  .lhead button.act.solid .ar { color:var(--accent-contrast); }
+  .lhead button.act.tab { font-weight:800; color:var(--accent-strong); position:relative; }
+  .lhead button.act.tab::after { content:""; position:absolute; left:0; right:0; bottom:-4px; height:3px; background:var(--accent); border-radius:2px; }
+  .lhead button.act.dir { font-weight:800; color:var(--accent-strong); }
+  .lhead button.act.dir .ar { font-size:11px; margin-left:3px; }
+
+  /* ── P16: locked spec (isolated grid; active marker = stable full-cell fill,
+     no reflow on sort) ── */
+  .head-quiet { background:var(--bg); }
+  .head-quiet .t { font-size:.8rem; font-weight:600; color:var(--status); letter-spacing:.02em; }
+  .head-quiet .c { font-size:10px; }
+  .fhead-wrap { background:var(--surface-1); border-bottom:1px solid var(--control-border); }
+  .fh1, .f1 { display:grid; grid-template-columns:24px auto auto 1fr 58px 40px; column-gap:8px; align-items:center; }
+  .fh2, .f2 { display:grid; grid-template-columns:24px 48px 50px 82px 40px; column-gap:8px; align-items:baseline; }
+  .fh1 { padding:7px 12px 2px 15px; } .fh2 { padding:0 12px 8px 15px; }
+  .f2 { margin-top:3px; }
+  /* every header is the same box in every state; only background/colour change on
+     sort, and the direction-arrow slot is always reserved → no jumping */
+  .fhead button { all:unset; cursor:pointer; display:block; box-sizing:border-box; white-space:nowrap; text-align:right;
+    font:700 10px/1.2 system-ui; letter-spacing:.02em; text-transform:uppercase; color:var(--status); padding:3px 6px; border-radius:3px; }
+  .fhead button.lft { text-align:left; }
+  .fhead button.starh { padding:3px 2px; }
+  .fhead button:hover { color:var(--accent-strong); }
+  .fhead button.act { background:var(--accent); color:var(--accent-contrast); }
+  .fhead .ar { display:inline-block; width:9px; text-align:center; font-size:8px; }
+  .fbadge { justify-self:start; box-sizing:border-box; font:800 9px/1 system-ui; text-transform:uppercase; letter-spacing:.03em; padding:3px 6px; border-radius:3px; }
+  .fbadge.atno   { color:#1c1400; background:var(--gold); }
+  .fbadge.band, .fbadge.mode { color:var(--accent-contrast); background:var(--accent); }
+  .fbadge.worked { color:var(--status); background:color-mix(in srgb,var(--status) 26%,var(--bg)); }
+  .f1 .c { font:700 15px var(--mono); }
+  .f1 .age { text-align:right; color:var(--status); font:12.5px var(--mono); }
+  .f1 .bar { justify-self:end; }
+  .f2 .d { font:12.5px var(--mono); color:var(--status); }
+  .f2 .d.bandc { font-weight:700; }
+  .f2 .d.r { text-align:right; white-space:nowrap; }
+  .lrow.w-atno .c { color:var(--gold-strong); }
+</style>
+</head>
+<body>
+  <div class="col">
+    <p class="cap"><b>1 — Band-rail ledger</b><br>band colour owns the left edge (familiar) · wanted = small colour-coded shortcode chip · one tight line + muted meta</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+    <div class="body" id="p1"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>2 — Wanted-rail table</b><br>your columns, strictly aligned · left rail + an icon encode wanted · scan straight down any column</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+      <div style="padding:0 12px;"><div class="p2-head"><span></span><span class="hc">Call</span><span>Band</span><span>Mode</span><span>Dist·Dir</span><span>Age</span><span>Rank</span></div></div>
+    <div class="body" id="p2"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>3 — Wanted-first triage</b><br>grouped by what's worth working · wanted shown as plain text · worked/known spots recede</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+    <div class="body" id="p3"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>4 — Quiet ledger v2</b> (evolves #1)<br>band rail · score = bar, no number · star to keep a station · ATNO gets a gold wash</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+    <div class="body" id="p4"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>5 — Sortable columns</b><br>click a header to sort: Want (DX hunting) · Score (confidence) · ★ (old friends) · Age (browsing). Try it.</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+      <div class="p5-head" id="p5-head"></div>
+    <div class="body" id="p5"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>6 — Wanted-rail + friends</b><br>wanted owns the left edge (ATNO = thick gold + wash) · star in a left lane · band as text</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+    <div class="body" id="p6"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>7 — Folded columns, split headers</b> (your sketch)<br>primary tier <b>★·Call·Wanted·Score</b> over detail tier <b>Band·Mode·Dist·Age</b> — every header sorts</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+      <div id="p7-head"></div><div class="body" id="p7"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>8 — Score as a detail column</b><br>Wanted is an inline chip; <b>Band·Mode·Dist·Age·Score</b> share one sortable header row</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+      <div id="p8-head"></div><div class="body" id="p8"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>9 — Decision block right</b><br>Wanted + Score pinned right, spanning both lines · detail columns + headers on the left</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+      <div id="p9-head"></div><div class="body" id="p9"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>10 — Refined #7 · sort = filled pill</b><br>folded columns left-only · wanted moved left · age beside score · dist & dir split · thick-gold ATNO</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+      <div id="p10-head"></div><div class="body" id="p10"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>11 — same · sort = column highlight</b><br>active sort tints the whole column (header + cells), not just a caret</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+      <div id="p11-head"></div><div class="body" id="p11"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>12 — same · sort = underline + arrow</b><br>active sort header bold, accent-underlined, with a direction arrow</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+      <div id="p12-head"></div><div class="body" id="p12"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>13 — sort = solid fill</b><br>active header is a solid accent chip — the loudest, unmistakable from across the panel</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+      <div id="p13-head"></div><div class="body" id="p13"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>14 — sort = tab indicator</b><br>a thick accent bar sits under the active header, tab-style — reads as "current view"</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+      <div id="p14-head"></div><div class="body" id="p14"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>15 — sort = direction toggle</b><br>bold header + arrow; click the active header again to flip asc/desc (nearest↔farthest, new↔old)</p>
+    <div class="panel"><div class="head"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+      <div id="p15-head"></div><div class="body" id="p15"></div></div>
+  </div>
+
+  <div class="col">
+    <p class="cap"><b>16 — Locked spec</b> · solid marker + direction toggle<br>wanted labels always shown &amp; filled · header band separated (surface) · title de-emphasised · click the active header to flip ▲/▼</p>
+    <div class="panel"><div class="head head-quiet"><span class="t">Chase Queue</span><span class="c">10 spots</span><button class="x">×</button></div>
+      <div id="p16-head"></div><div class="body" id="p16"></div></div>
+  </div>
+
+<script>
+const BANDC={'160m':'#8B0000','80m':'#800080','60m':'#4B0082','40m':'#0000FF','30m':'#03b1b1','20m':'#008000','17m':'#808000','15m':'#FFA500','12m':'#00FFFF','10m':'#FF0000','6m':'#FF00FF','4m':'#FF1493','2m':'#008080'};
+const grade=g=>(g==='A'||g==='B')?'go':g==='C'?'watch':'wait';
+// call, entity, band, mode, distKm, dir, age, rank, g, want('atno'|'band'|'mode'|'worked'|'')
+const S=[
+ ['3Y0J','Bouvet I.','17m','FT8',14230,'S','21s',92,'A','atno'],
+ ['ZL4AS','New Zealand','10m','SSB',18600,'SE','30s',90,'A','band'],
+ ['5R8AL','Madagascar','20m','SSB',8430,'SSE','55s',88,'A','band'],
+ ['VK9XX','Christmas I.','20m','CW',13900,'SE','40s',78,'B','atno'],
+ ['VK6LC','Australia','20m','CW',14380,'E','48s',74,'B','band'],
+ ['JD1BMH','Ogasawara','15m','FT8',9600,'NE','1m',70,'B','mode'],
+ ['OH2BH','Finland','40m','CW',1450,'N','2m',66,'B','worked'],
+ ['EA8RM','Canary Is.','12m','SSB',3100,'SW','1m',60,'C','band'],
+ ['JA3XYZ','Japan','15m','FT4',9120,'NE','12s',58,'C','worked'],
+ ['PY2NY','Brazil','15m','RTTY',9740,'SW','3m',40,'D','worked'],
+];
+const dist=k=>k.toLocaleString();
+const wCode={atno:'ATNO',band:'NEW BAND',mode:'NEW MODE',worked:'worked','':''};
+const wShort={atno:'ATNO',band:'+BAND',mode:'+MODE',worked:'','':''};
+const wText={atno:'ALL-TIME NEW',band:'NEW BAND',mode:'NEW MODE',worked:'worked before','':''};
+const ICON={
+  atno:'<svg viewBox="0 0 10 10"><path class="i-atno" d="M5 0l1.3 3 3.2.3-2.4 2.1.7 3.1L5 7.9 2.2 8.6l.7-3.1L.5 3.3l3.2-.3z"/></svg>',
+  band:'<svg viewBox="0 0 10 10"><path class="i-new" d="M4 0h2v4h4v2H6v4H4V6H0V4h4z"/></svg>',
+  mode:'<svg viewBox="0 0 10 10"><path class="i-new" d="M4 0h2v4h4v2H6v4H4V6H0V4h4z"/></svg>',
+  worked:'<svg viewBox="0 0 10 10"><path class="i-worked" d="M1 5l2.5 2.5L9 2"/></svg>',
+  '':''
+};
+
+// P1 — band-rail ledger
+document.getElementById('p1').innerHTML=S.map(([call,ent,band,mode,dk,dir,age,rank,g,w])=>`
+  <div class="p1-row w-${w||'none'}" style="--band:${BANDC[band]}">
+    <div class="p1-l1"><span class="p1-call">${call}</span><span class="p1-chip w-${w||'none'}">${wShort[w]}</span></div>
+    <span class="rk"><span class="dot d-${grade(g)}"></span>${rank}</span>
+    <div class="p1-meta"><span class="band" style="color:${BANDC[band]}">${band}</span><span class="sep">·</span>${mode}<span class="sep">·</span>${dist(dk)} km <span class="dir">${dir}</span><span class="sep">·</span>${age}</div>
+  </div>`).join('');
+
+// P2 — wanted-rail table
+document.getElementById('p2').innerHTML=S.map(([call,ent,band,mode,dk,dir,age,rank,g,w])=>`
+  <div class="p2-row w-${w||'none'}" style="--w:${w==='atno'?'var(--gold)':(w==='band'||w==='mode')?'var(--accent)':'transparent'}">
+    <span class="p2-ico" title="${wCode[w]}">${ICON[w]}</span>
+    <span class="p2-call">${call}</span>
+    <span class="p2-band" style="color:${BANDC[band]}">${band}</span>
+    <span class="p2-mode">${mode}</span>
+    <span class="p2-dd"><b>${dist(dk)}</b> ${dir}</span>
+    <span class="p2-age">${age}</span>
+    <span class="p2-rk g-${grade(g)}">${rank}</span>
+  </div>`).join('');
+
+// P3 — wanted-first triage (sort wanted first, then rank)
+const order={atno:0,band:1,mode:1,worked:3,'':4};
+const sorted=[...S].sort((a,b)=>(order[a[9]]-order[b[9]])|| (b[7]-a[7]));
+let html=''; let lastGrp=null;
+const grpName=w=>w==='atno'?'New entities':(w==='band'||w==='mode')?'New slots':'Already worked';
+sorted.forEach(([call,ent,band,mode,dk,dir,age,rank,g,w])=>{
+  const grp=grpName(w);
+  if(grp!==lastGrp){ html+=`<div class="p3-group">${grp}</div>`; lastGrp=grp; }
+  const dim = (w==='worked'||w==='')?' dim':'';
+  const wt = wText[w]?`<span class="p3-want w-${w}">${wText[w]}</span>`:'';
+  html+=`<div class="p3-row${dim} w-${w||'none'}">
+    <div class="p3-l1">${wt}<span class="p3-call">${call}</span><span class="p3-ent">${ent}</span><span class="p3-sp"></span><span class="rk"><span class="dot d-${grade(g)}"></span>${rank}</span></div>
+    <div class="p3-meta"><span class="band" style="color:${BANDC[band]}">${band}</span><span class="sep">·</span>${mode}<span class="sep">·</span>${dist(dk)} km ${dir}<span class="sep">·</span>${age}</div>
+  </div>`;
+});
+document.getElementById('p3').innerHTML=html;
+
+/* ───── P4–P6: score-as-bar, star toggle, sortable columns ───── */
+const STAR=new Set(['OH2BH','JA3XYZ']); // demo: starred calls (OH2BH is "worked" — that's the point)
+const wOrder={atno:0,band:1,mode:2,worked:3,'':4};
+const wColor=w=>w==='atno'?'var(--gold)':(w==='band'||w==='mode')?'var(--accent)':(w==='worked'?'var(--status)':'transparent');
+const wShortC={atno:'ATNO',band:'+BAND',mode:'+MODE',worked:'','':''};
+const starSVG=on=>`<span class="star" title="${on?'Starred — always shown':'Star this station'}"><svg viewBox="0 0 14 14"><path class="${on?'s-on':'s-off'}" d="M7 1l1.7 3.9 4.3.4-3.2 2.8 1 4.2L7 10.9 3.2 12.3l1-4.2L1 5.3l4.3-.4z"/></svg></span>`;
+const barH=(rank,g)=>`<span class="bar g-${grade(g)}"><i style="width:${rank}%"></i></span>`;
+
+// P4 — quiet ledger v2
+document.getElementById('p4').innerHTML=S.map(([call,ent,band,mode,dk,dir,age,rank,g,w])=>`
+  <div class="p4-row w-${w||'none'}" style="--band:${BANDC[band]};--w:${wColor(w)}">
+    ${starSVG(STAR.has(call))}
+    <div class="p4-main"><div class="p4-l1"><span class="p4-call">${call}</span><span class="p4-chip w-${w||'none'}">${wShortC[w]}</span></div>
+      <div class="p4-meta"><span style="color:${BANDC[band]};font-weight:700">${band}</span><span class="sep">·</span>${mode}<span class="sep">·</span>${dist(dk)} km ${dir}<span class="sep">·</span>${age}</div></div>
+    <span class="p4-bar">${barH(rank,g)}</span>
+  </div>`).join('');
+
+// P6 — wanted-rail + friends lane
+document.getElementById('p6').innerHTML=S.map(([call,ent,band,mode,dk,dir,age,rank,g,w])=>`
+  <div class="p6-row w-${w||'none'}" style="--w:${wColor(w)}">
+    ${starSVG(STAR.has(call))}
+    <div class="p6-main"><div class="p6-l1"><span class="p6-call w-${w||'none'}">${call}</span><span class="p6-tag w-${w||'none'}">${wShortC[w]}</span></div>
+      <div class="p6-meta"><span class="band" style="color:${BANDC[band]}">${band}</span><span class="sep">·</span>${mode}<span class="sep">·</span>${dist(dk)} km ${dir}<span class="sep">·</span>${age}</div></div>
+    <span class="p6-bar">${barH(rank,g)}</span>
+  </div>`).join('');
+
+// P5 — sortable columns (interactive)
+const ageSec=a=>a.endsWith('s')?+a.slice(0,-1):a.endsWith('m')?+a.slice(0,-1)*60:+a.slice(0,-1)*3600;
+const COLS=[
+  {key:'star',label:'★',lft:true,sort:(a,b)=>(STAR.has(b[0])-STAR.has(a[0]))||(b[7]-a[7])},
+  {key:'want',label:'Want',sort:(a,b)=>(wOrder[a[9]]-wOrder[b[9]])||(b[7]-a[7])},
+  {key:'call',label:'Call',lft:true,sort:(a,b)=>a[0].localeCompare(b[0])},
+  {key:'band',label:'Band',sort:(a,b)=>parseInt(b[2])-parseInt(a[2])},
+  {key:'mode',label:'Mode',sort:(a,b)=>a[3].localeCompare(b[3])},
+  {key:'dd',label:'Dist',sort:(a,b)=>b[4]-a[4]},
+  {key:'age',label:'Age',sort:(a,b)=>ageSec(a[6])-ageSec(b[6])},
+  {key:'score',label:'Score',sort:(a,b)=>b[7]-a[7]},
+];
+let p5sort='want';
+function renderP5(){
+  document.getElementById('p5-head').innerHTML=COLS.map(c=>
+    `<button data-k="${c.key}" class="${c.lft?'lft ':''}${p5sort===c.key?'act car':''}">${c.label}</button>`).join('');
+  const rows=[...S].sort(COLS.find(c=>c.key===p5sort).sort);
+  document.getElementById('p5').innerHTML=rows.map(([call,ent,band,mode,dk,dir,age,rank,g,w])=>`
+    <div class="p5-row" style="--w:${wColor(w)}">
+      ${starSVG(STAR.has(call))}
+      <span class="p5-want w-${w||'none'}">${wShortC[w]||''}</span>
+      <span class="p5-call">${call}</span>
+      <span class="p5-band" style="color:${BANDC[band]}">${band}</span>
+      <span class="p5-mode">${mode}</span>
+      <span class="p5-dd"><b>${dist(dk)}</b> ${dir}</span>
+      <span class="p5-age">${age}</span>
+      <span class="p5-sc">${barH(rank,g)}</span>
+    </div>`).join('');
+  document.querySelectorAll('#p5-head button').forEach(b=>b.addEventListener('click',()=>{p5sort=b.dataset.k;renderP5();}));
+}
+renderP5();
+
+/* ───── P7–P9: two-tier ledger with sortable folded headers ───── */
+const SORTS={
+  star:(a,b)=>(STAR.has(b[0])-STAR.has(a[0]))||(b[7]-a[7]),
+  wanted:(a,b)=>(wOrder[a[9]]-wOrder[b[9]])||(b[7]-a[7]),
+  score:(a,b)=>b[7]-a[7],
+  band:(a,b)=>parseInt(b[2])-parseInt(a[2]),
+  mode:(a,b)=>a[3].localeCompare(b[3]),
+  dist:(a,b)=>b[4]-a[4],
+  age:(a,b)=>ageSec(a[6])-ageSec(b[6]),
+  call:(a,b)=>a[0].localeCompare(b[0]),
+};
+const sortS=k=>[...S].sort(SORTS[k]);
+const hb=(k,label,active,lft)=>`<button data-k="${k}" class="${lft?'lft ':''}${active===k?'act car':''}">${label}</button>`;
+const detCells=(band,mode,dk,dir,age)=>`<span class="d bandc" style="color:${BANDC[band]}">${band}</span><span class="d">${mode}</span><span class="d r">${dist(dk)} km ${dir}</span><span class="d r">${age}</span>`;
+const wire=(id,set)=>document.querySelectorAll(`#${id} button`).forEach(b=>b.onclick=()=>set(b.dataset.k));
+
+// V7 — split headers
+let s7='wanted';
+function rV7(){
+  document.getElementById('p7-head').innerHTML=
+    `<div class="h7a sh">${hb('star','★',s7,1)}${hb('call','Call',s7,1)}${hb('wanted','Wanted',s7)}${hb('score','Score',s7)}</div>`+
+    `<div class="h7b sh"><span></span>${hb('band','Band',s7,1)}${hb('mode','Mode',s7,1)}${hb('dist','Dist·Dir',s7)}${hb('age','Age',s7)}</div>`;
+  document.getElementById('p7').innerHTML=sortS(s7).map(([call,ent,band,mode,dk,dir,age,rank,g,w])=>`
+    <div class="r7 w-${w||'none'}" style="--band:${BANDC[band]};--w:${wColor(w)}">
+      <div class="l1">${starSVG(STAR.has(call))}<span class="c7">${call}</span><span class="chip7 w-${w||'none'}">${wShortC[w]}</span>${barH(rank,g)}</div>
+      <div class="l2"><span></span>${detCells(band,mode,dk,dir,age)}</div>
+    </div>`).join('');
+  wire('p7-head',k=>{s7=k;rV7();});
+}
+rV7();
+
+// V8 — score as a detail column
+let s8='wanted';
+function rV8(){
+  document.getElementById('p8-head').innerHTML=`<div class="h8 sh">${hb('band','Band',s8,1)}${hb('mode','Mode',s8,1)}${hb('dist','Dist·Dir',s8)}${hb('age','Age',s8)}${hb('score','Score',s8)}</div>`;
+  document.getElementById('p8').innerHTML=sortS(s8).map(([call,ent,band,mode,dk,dir,age,rank,g,w])=>`
+    <div class="r8 w-${w||'none'}" style="--band:${BANDC[band]};--w:${wColor(w)}">
+      <div class="l1">${starSVG(STAR.has(call))}<span class="c8">${call}</span><span class="chip8 w-${w||'none'}">${wShortC[w]}</span></div>
+      <div class="l2">${detCells(band,mode,dk,dir,age)}${barH(rank,g)}</div>
+    </div>`).join('');
+  wire('p8-head',k=>{s8=k;rV8();});
+}
+rV8();
+
+// V9 — decision block right
+let s9='wanted';
+function rV9(){
+  document.getElementById('p9-head').innerHTML=
+    `<div class="h9 sh"><span></span><div class="det">${hb('band','Band',s9,1)}${hb('mode','Mode',s9,1)}${hb('dist','Dist·Dir',s9)}${hb('age','Age',s9)}</div><div class="right">${hb('wanted','Wanted',s9)}${hb('score','Score',s9)}</div></div>`;
+  document.getElementById('p9').innerHTML=sortS(s9).map(([call,ent,band,mode,dk,dir,age,rank,g,w])=>`
+    <div class="r9 w-${w||'none'}" style="--band:${BANDC[band]};--w:${wColor(w)}">
+      <span class="st">${starSVG(STAR.has(call))}</span>
+      <div class="main"><span class="c9">${call}</span><div class="det">${detCells(band,mode,dk,dir,age)}</div></div>
+      <div class="right"><span class="chip9 w-${w||'none'}">${wShortC[w]}</span>${barH(rank,g)}</div>
+    </div>`).join('');
+  wire('p9-head',k=>{s9=k;rV9();});
+}
+rV9();
+
+/* ───── P10–P12: refined #7, three takes on the active-sort indicator ───── */
+const DIRORD=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+SORTS.dir=(a,b)=>DIRORD.indexOf(a[5])-DIRORD.indexOf(b[5]); // sort by compass heading
+// (SORTS.dist already sorts farthest-first; dist & dir are now separate dimensions)
+
+function lHead(active, variant, asc){
+  const vc = {pill:'pill',under:'under',solid:'solid',tab:'tab',dir:'dir'}[variant] || '';
+  const H=(k,label,lft)=>{
+    const act=active===k;
+    const cls=[lft?'lft':'',act?'act':'',act&&vc?vc:''].filter(Boolean).join(' ');
+    const arrow = act ? `<span class="ar">${(variant==='dir'&&asc)?'▲':'▼'}</span>` : '';
+    return `<button data-k="${k}" class="${cls}">${label}${arrow}</button>`;
+  };
+  return `<div class="lh1 lhead">${H('star','★',1)}${H('call','Call',1)}${H('wanted','Wanted',1)}<span></span>${H('score','Score')}${H('age','Age')}</div>`
+       + `<div class="lh2 lhead"><span></span>${H('band','Band',1)}${H('mode','Mode',1)}${H('dist','Dist',1)}${H('dir','Dir',1)}</div>`;
+}
+function lRow([call,ent,band,mode,dk,dir,age,rank,g,w], active, tint){
+  const hi=k=>(tint&&active===k)?' colhi':'';
+  return `<div class="lrow w-${w||'none'}" style="--band:${BANDC[band]};--w:${wColor(w)}">
+    <div class="l1">
+      <span class="${hi('star').trim()}">${starSVG(STAR.has(call))}</span>
+      <span class="c${hi('call')}">${call}</span>
+      <span class="badge w-${w||'none'}${hi('wanted')}">${wShortC[w]}</span>
+      <span></span>
+      <span class="bar g-${grade(g)}${hi('score')}"><i style="width:${rank}%"></i></span>
+      <span class="age${hi('age')}">${age}</span>
+    </div>
+    <div class="l2">
+      <span></span>
+      <span class="d bandc${hi('band')}" style="color:${BANDC[band]}">${band}</span>
+      <span class="d${hi('mode')}">${mode}</span>
+      <span class="d r${hi('dist')}">${dist(dk)} km</span>
+      <span class="d r${hi('dir')}">${dir}</span>
+    </div>
+  </div>`;
+}
+function mkLedger(headId, bodyId, variant){
+  let sk='wanted', asc=false;
+  const draw=()=>{
+    document.getElementById(headId).innerHTML=lHead(sk,variant,asc);
+    let arr=[...S].sort(SORTS[sk]);
+    if(variant==='dir' && asc) arr.reverse();
+    document.getElementById(bodyId).innerHTML=arr.map(s=>lRow(s,sk,variant==='tint')).join('');
+    document.querySelectorAll(`#${headId} button`).forEach(b=>b.onclick=()=>{
+      const k=b.dataset.k;
+      if(variant==='dir' && k===sk) asc=!asc; else { sk=k; asc=false; }
+      draw();
+    });
+  };
+  draw();
+}
+mkLedger('p10-head','p10','pill');
+mkLedger('p11-head','p11','tint');
+mkLedger('p12-head','p12','under');
+mkLedger('p13-head','p13','solid');
+mkLedger('p14-head','p14','tab');
+mkLedger('p15-head','p15','dir');
+
+/* ───── P16: the locked spec ───── */
+const FW={atno:['atno','ATNO'],band:['band','+BAND'],mode:['mode','+MODE'],worked:['worked','WORKED']};
+const fbadge=w=>{ const f=FW[w]; return f?`<span class="fbadge ${f[0]}">${f[1]}</span>`:'<span></span>'; };
+function fHead(active, asc){
+  // arrow slot is always present (glyph only when active) so column widths never
+  // change between sorts
+  const H=(k,label,lft)=>{
+    const act=active===k;
+    const cls=['fh-b',lft?'lft':'',act?'act':''].filter(Boolean).join(' ');
+    return `<button data-k="${k}" class="${cls}">${label}<span class="ar">${act?(asc?'▲':'▼'):''}</span></button>`;
+  };
+  const star=`<button data-k="star" class="fh-b starh lft ${active==='star'?'act':''}">★</button>`;
+  return `<div class="fhead-wrap">`
+       + `<div class="fh1 fhead">${star}${H('call','Call',1)}${H('wanted','Wanted',1)}<span></span>${H('score','Score')}${H('age','Age')}</div>`
+       + `<div class="fh2 fhead"><span></span>${H('band','Band',1)}${H('mode','Mode',1)}${H('dist','Dist')}${H('dir','Dir')}</div></div>`;
+}
+function fRow([call,ent,band,mode,dk,dir,age,rank,g,w]){
+  return `<div class="lrow w-${w||'none'}" style="--band:${BANDC[band]}">
+    <div class="f1"><span>${starSVG(STAR.has(call))}</span><span class="c">${call}</span>${fbadge(w)}<span></span><span class="bar g-${grade(g)}"><i style="width:${rank}%"></i></span><span class="age">${age}</span></div>
+    <div class="f2"><span></span><span class="d bandc" style="color:${BANDC[band]}">${band}</span><span class="d">${mode}</span><span class="d r">${dist(dk)} km</span><span class="d r">${dir}</span></div>
+  </div>`;
+}
+function mkFinal(headId, bodyId){
+  let sk='wanted', asc=false;
+  const draw=()=>{
+    document.getElementById(headId).innerHTML=fHead(sk,asc);
+    let arr=[...S].sort(SORTS[sk]); if(asc) arr.reverse();
+    document.getElementById(bodyId).innerHTML=arr.map(fRow).join('');
+    document.querySelectorAll(`#${headId} button`).forEach(b=>b.onclick=()=>{ const k=b.dataset.k; if(k===sk) asc=!asc; else { sk=k; asc=false; } draw(); });
+  };
+  draw();
+}
+mkFinal('p16-head','p16');
+</script>
+</body>
+</html>
