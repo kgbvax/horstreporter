@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { radialLine } from '../static/canvas-draw.js';
-
+import { dashedLine } from '../static/canvas-draw.js';
 function recordingCtx() {
     const calls = [];
     return {
@@ -9,6 +9,7 @@ function recordingCtx() {
         moveTo(x, y) { calls.push(['moveTo', x, y]); },
         lineTo(x, y) { calls.push(['lineTo', x, y]); },
         stroke() { calls.push(['stroke']); },
+        setLineDash(d) { calls.push(['setLineDash', d.join(',')]); },
         set lineWidth(v) { calls.push(['lineWidth', v]); },
     };
 }
@@ -32,5 +33,21 @@ describe('radialLine', () => {
         const lineTo = ctx.calls.find((c) => c[0] === 'lineTo');
         expect(lineTo[1]).toBeCloseTo(150);
         expect(lineTo[2]).toBeCloseTo(100);
+    });
+});
+
+describe('dashedLine', () => {
+    it('sets dash, strokes the segment, then resets dash', () => {
+        const ctx = recordingCtx();
+        dashedLine(ctx, 10, 20, 30, 40, [4, 3], 1.5);
+        expect(ctx.calls).toEqual([
+            ['lineWidth', 1.5],
+            ['setLineDash', '4,3'],
+            ['beginPath'],
+            ['moveTo', 10, 20],
+            ['lineTo', 30, 40],
+            ['stroke'],
+            ['setLineDash', ''],
+        ]);
     });
 });

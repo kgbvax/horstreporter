@@ -1,5 +1,6 @@
 import { state } from './state.js';
 import { bandColors, formatNumber, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds, haversineKm, hexToRgba } from './utils.js';
+import { dashedLine } from './canvas-draw.js';
 
 const ENABLE_KEY = 'bandLabEnabled';
 const UPDATE_THROTTLE_MS = 300;
@@ -348,13 +349,7 @@ function drawScatterChart(canvas, points, targetCenter, band, globalMaxDistanceK
         const y = pad.t + ph - ((snr - minSnr) / snrRange) * ph;
         if (!Number.isFinite(y) || y < pad.t || y > (pad.t + ph)) return;
         ctx.strokeStyle = hexToRgba(color, 0.85);
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 3]);
-        ctx.beginPath();
-        ctx.moveTo(pad.l, y);
-        ctx.lineTo(pad.l + pw, y);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        dashedLine(ctx, pad.l, y, pad.l + pw, y, [4, 3], 1);
 
         ctx.fillStyle = hexToRgba(color, 0.95);
         ctx.font = '10px sans-serif';
@@ -371,25 +366,13 @@ function drawScatterChart(canvas, points, targetCenter, band, globalMaxDistanceK
     if (Number.isFinite(p50Dist)) {
         const x = pad.l + (p50Dist / maxDist) * pw;
         ctx.strokeStyle = hexToRgba('#64748b', 0.38);
-        ctx.lineWidth = 0.9;
-        ctx.setLineDash([2, 4]);
-        ctx.beginPath();
-        ctx.moveTo(x, pad.t);
-        ctx.lineTo(x, pad.t + ph);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        dashedLine(ctx, x, pad.t, x, pad.t + ph, [2, 4], 0.9);
     }
 
     if (Number.isFinite(p90Dist)) {
         const x = pad.l + (p90Dist / maxDist) * pw;
         ctx.strokeStyle = hexToRgba('#64748b', 0.3);
-        ctx.lineWidth = 0.9;
-        ctx.setLineDash([2, 5]);
-        ctx.beginPath();
-        ctx.moveTo(x, pad.t);
-        ctx.lineTo(x, pad.t + ph);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        dashedLine(ctx, x, pad.t, x, pad.t + ph, [2, 5], 0.9);
     }
 
     ctx.fillStyle = hexToRgba(bandColors[band] || '#4f46e5', 0.5);
@@ -609,13 +592,7 @@ function drawActivityChart(canvas, points, bandMetrics, minutes) {
         const y = Math.max(pad.t + 1, Math.min(pad.t + ph - 1, yRaw));
         const color = used ? '#ef4444' : '#94a3b8';
         ctx.strokeStyle = hexToRgba(color, used ? 0.95 : 0.85);
-        ctx.lineWidth = 1.2;
-        ctx.setLineDash([4, 3]);
-        ctx.beginPath();
-        ctx.moveTo(x0, y);
-        ctx.lineTo(x1, y);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        dashedLine(ctx, x0, y, x1, y, [4, 3], 1.2);
         return { startIdx, endIdx, y, color, used };
     };
 
@@ -631,13 +608,7 @@ function drawActivityChart(canvas, points, bandMetrics, minutes) {
         if (lastSegment && seg) {
             const xJoin = pad.l + i * barWidth;
             ctx.strokeStyle = hexToRgba('#94a3b8', 0.55);
-            ctx.lineWidth = 1;
-            ctx.setLineDash([2, 2]);
-            ctx.beginPath();
-            ctx.moveTo(xJoin, lastSegment.y);
-            ctx.lineTo(xJoin, seg.y);
-            ctx.stroke();
-            ctx.setLineDash([]);
+            dashedLine(ctx, xJoin, lastSegment.y, xJoin, seg.y, [2, 2], 1);
         }
         if (seg) lastSegment = seg;
         runStart = i;

@@ -18,3 +18,18 @@ export function radialLine(ctx, cx, cy, r0, r1, bearingDeg, lineWidth) {
     if (lineWidth != null) ctx.lineWidth = lineWidth;
     ctx.stroke();
 }
+
+/**
+ * Stroke a dashed straight line from (x0,y0) to (x1,y1); caller sets
+ * strokeStyle. Restores a solid dash pattern afterward.
+ * @param {CanvasRenderingContext2D} ctx
+ */
+export function dashedLine(ctx, x0, y0, x1, y1, dash, lineWidth) {
+    if (lineWidth != null) ctx.lineWidth = lineWidth;
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+    ctx.setLineDash([]);
+}
