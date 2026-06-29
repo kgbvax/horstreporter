@@ -49,3 +49,12 @@ test('minutes slider persists and rehydrates', async ({ page }) => {
     await page.reload();
     await expect(page.locator('#minutes')).toHaveValue('42');
 });
+
+test('auto-zoom toggle persists and rehydrates', async ({ page }) => {
+    const cb = page.locator('#auto-zoom');
+    await expect(cb).not.toBeChecked();
+    await cb.dispatchEvent('click');
+    await expect(cb).toBeChecked();
+    await page.reload();
+    await expect(page.locator('#auto-zoom')).toBeChecked();
+});

@@ -86,12 +86,6 @@ export function loadConfig() {
             if (el) el.value = savedCycleTime;
         }
 
-        const savedAutoZoom = localStorage.getItem('autoZoom');
-        if (savedAutoZoom !== null) {
-            const el = inputById('auto-zoom');
-            if (el) el.checked = savedAutoZoom === 'true';
-        }
-
         const savedSurroundings = localStorage.getItem('surroundings');
         if (savedSurroundings !== null) {
             const el = inputById('surroundings');

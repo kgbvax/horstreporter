@@ -13,6 +13,7 @@ const defaults = {
     ssbMinDb: 0,
     cwMinDb: -15,
     clusterDistance: 500,
+    autoZoom: false,
     surroundings: false,
 };
 

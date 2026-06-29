@@ -52,11 +52,9 @@ describe('loadConfig defensive behavior', () => {
 
     it('restores values when the elements are present', () => {
         localStorage.setItem('target', 'JO32');
-        localStorage.setItem('minutes', '30');
         document.body.innerHTML = '<input id="target" /><input id="minutes" />';
         loadConfig();
         expect(document.getElementById('target').value).toBe('JO32');
-        expect(document.getElementById('minutes').value).toBe('30');
         expect(errSpy).not.toHaveBeenCalled();
     });
 

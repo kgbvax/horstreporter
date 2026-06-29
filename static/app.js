@@ -1401,11 +1401,6 @@ document.querySelectorAll('.band-enable').forEach(cb => {
     });
 });
 
-document.getElementById('auto-zoom')?.addEventListener('change', (e) => {
-    localStorage.setItem('autoZoom', e.target.checked);
-    if (e.target.checked) scheduleRender();
-});
-
 document.getElementById('surroundings')?.addEventListener('change', (e) => {
     localStorage.setItem('surroundings', e.target.checked);
     const btnSubmit = document.getElementById('btn-submit');

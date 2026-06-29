@@ -1,6 +1,7 @@
 import App from './App.svelte';
 import SnrThresholds from './SnrThresholds.svelte';
 import Range from './Range.svelte';
+import Toggle from './Toggle.svelte';
 import { uiStore } from './store.js';
 
 // Mount the Svelte UI shell into a stable host node if present. The node does
@@ -19,6 +20,9 @@ if (minutesHost) new Range({ target: minutesHost, props: { id: 'minutes', valId:
 
 const clusterHost = document.getElementById('cluster-root');
 if (clusterHost) new Range({ target: clusterHost, props: { id: 'cluster-distance', valId: 'cluster-dist-val', label: 'Max Cluster Dist:', unit: 'km', key: 'clusterDistance', min: 100, max: 2000, step: 50 } });
+
+const autoZoomHost = document.getElementById('auto-zoom-root');
+if (autoZoomHost) new Toggle({ target: autoZoomHost, props: { id: 'auto-zoom', label: 'Auto-zoom', key: 'autoZoom' } });
 
 window.__horstUiStore = uiStore;
 
