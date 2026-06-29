@@ -15,6 +15,7 @@ const defaults = {
     cwMinDb: -15,
     clusterDistance: 500,
     autoZoom: false,
+    mapStyle: 'grid-snr',
     surroundings: false,
 };
 

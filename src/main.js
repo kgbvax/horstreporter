@@ -3,8 +3,8 @@ import SnrThresholds from './SnrThresholds.svelte';
 import Range from './Range.svelte';
 import Toggle from './Toggle.svelte';
 import MinSnr from './MinSnr.svelte';
+import MapStyle from './MapStyle.svelte';
 import { uiStore } from './store.js';
-
 // Mount the Svelte UI shell into a stable host node if present. The node does
 // not exist yet (U2 migrates panels into it); guard so the bundle is inert
 // until then. Expose the store for vanilla modules to interop during migration.
@@ -27,6 +27,9 @@ if (autoZoomHost) new Toggle({ target: autoZoomHost, props: { id: 'auto-zoom', l
 
 const minSnrHost = document.getElementById('min-snr-group');
 if (minSnrHost) new MinSnr({ target: minSnrHost });
+
+const styleHost = document.getElementById('style-group');
+if (styleHost) new MapStyle({ target: styleHost });
 
 window.__horstUiStore = uiStore;
 

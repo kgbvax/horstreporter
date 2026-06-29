@@ -56,12 +56,6 @@ export function loadConfig() {
             if (el) el.value = savedTarget;
         }
 
-        const savedStyle = localStorage.getItem('mapStyle');
-        if (savedStyle) {
-            const radio = inputByQuery(`input[name="style-select"][value="${savedStyle}"]`);
-            if (radio) radio.checked = true;
-        }
-
         const savedProjection = localStorage.getItem('mapProjection');
         if (savedProjection) {
             const radio = inputByQuery(`input[name="projection-select"][value="${savedProjection}"]`);

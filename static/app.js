@@ -1270,13 +1270,6 @@ document.getElementById('controls')?.addEventListener('transitionend', (e) => {
     }
 });
 
-document.getElementById('style-group')?.addEventListener('change', (e) => {
-    if (e.target.name === 'style-select') {
-        localStorage.setItem('mapStyle', e.target.value);
-        scheduleRender();
-    }
-});
-
 document.getElementById('projection-group')?.addEventListener('change', async (e) => {
     if (e.target?.name !== 'projection-select') return;
     localStorage.setItem('mapProjection', e.target.value);

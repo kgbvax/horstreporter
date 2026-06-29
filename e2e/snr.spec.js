@@ -68,3 +68,11 @@ test('min-snr radios default to ssb, select+persist, fire render', async ({ page
     await page.reload();
     await expect(page.locator('#snr-cw')).toBeChecked();
 });
+
+test('style radios default to grid, switch+persist', async ({ page }) => {
+    await expect(page.locator('#style-grid')).toBeChecked();
+    await page.locator('#style-area').dispatchEvent('click');
+    await expect(page.locator('#style-area')).toBeChecked();
+    await page.reload();
+    await expect(page.locator('#style-area')).toBeChecked();
+});
