@@ -97,3 +97,14 @@ test('surroundings toggle persists and fires resubmit hook', async ({ page }) =>
     await page.reload();
     await expect(page.locator('#surroundings')).toBeChecked();
 });
+
+test('country-coloring defaults on, toggles off, fires hook', async ({ page }) => {
+    await page.evaluate(() => { window.__cCalls = 0; window.__horstCountryColoringChanged = () => { window.__cCalls++; }; });
+    const cb = page.locator('#show-country-coloring');
+    await expect(cb).toBeChecked();
+    await cb.dispatchEvent('click');
+    await expect(cb).not.toBeChecked();
+    expect(await page.evaluate(() => window.__cCalls)).toBeGreaterThan(0);
+    await page.reload();
+    await expect(page.locator('#show-country-coloring')).not.toBeChecked();
+});

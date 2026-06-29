@@ -1397,14 +1397,14 @@ document.getElementById('show-dxcluster-spots')?.addEventListener('change', (e) 
     scheduleRender();
 });
 
-document.getElementById('show-country-coloring')?.addEventListener('change', (e) => {
-    localStorage.setItem('countryColoringEnabled', e.target.checked ? 'true' : 'false');
+window.__horstCountryColoringChanged = () => {
+    const enabled = document.getElementById('show-country-coloring')?.checked;
     if (!isAzimuthEnabled()) {
-        void syncMercatorCountryLayer({ force: true, enabled: e.target.checked });
+        void syncMercatorCountryLayer({ force: true, enabled });
     } else {
         scheduleRender();
     }
-});
+};
 
 // Forecast overlay toggle (azimuthal advancing gray-line + rising-activity halo).
 // Local-only, default on.

@@ -29,6 +29,9 @@ if (autoZoomHost) new Toggle({ target: autoZoomHost, props: { id: 'auto-zoom', l
 const surroundingsHost = document.getElementById('surroundings-root');
 if (surroundingsHost) new Toggle({ target: surroundingsHost, props: { id: 'surroundings', label: 'Adj. Squares', key: 'surroundings', render: false, hook: '__horstSurroundingsChanged' } });
 
+const countryHost = document.getElementById('country-coloring-root');
+if (countryHost) new Toggle({ target: countryHost, props: { id: 'show-country-coloring', label: 'Country Color', key: 'countryColoring', render: false, hook: '__horstCountryColoringChanged' } });
+
 const minSnrHost = document.getElementById('min-snr-group');
 if (minSnrHost) new MinSnr({ target: minSnrHost });
 
@@ -43,6 +46,10 @@ if (savedProjection === 'mercator' || savedProjection === 'azimuthal') {
 const savedSurroundings = localStorage.getItem('surroundings');
 if (savedSurroundings !== null) {
     uiStore.update((s) => ({ ...s, surroundings: savedSurroundings === 'true' }));
+}
+const savedCountry = localStorage.getItem('countryColoringEnabled');
+if (savedCountry !== null) {
+    uiStore.update((s) => ({ ...s, countryColoring: savedCountry === 'true' }));
 }
 const projHost = document.getElementById('projection-group');
 if (projHost) new Projection({ target: projHost });

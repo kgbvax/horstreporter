@@ -17,6 +17,7 @@ const defaults = {
     autoZoom: false,
     mapStyle: 'grid-snr',
     projection: 'mercator',
+    countryColoring: true,
     surroundings: false,
 };
 

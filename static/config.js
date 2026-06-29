@@ -84,11 +84,6 @@ export function loadConfig() {
             }
         }
 
-        const savedCountryColoring = localStorage.getItem('countryColoringEnabled');
-        const countryColoringEl = inputById('show-country-coloring');
-        if (countryColoringEl) {
-            countryColoringEl.checked = savedCountryColoring === null ? true : savedCountryColoring === 'true';
-        }
     } catch (e) {
         console.error("Error parsing saved form state", e);
     }
