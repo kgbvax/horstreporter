@@ -311,6 +311,25 @@ function getTargetCenter(target) {
     };
 }
 
+// Pure: turn spots + target center into scatter samples + axis ranges, or null
+// when there is no usable distance data. Extracted from drawScatterChart so the
+// math is unit-testable without a canvas.
+export function computeScatterData(points, targetCenter, globalMaxDistanceKm) {
+    if (!targetCenter || !points || points.length === 0) return null;
+    const samples = points
+        .map((p) => ({
+            d: haversineKm(targetCenter.lat, targetCenter.lng, Number(p.lat), Number(p.lng)),
+            s: Number(p.snr || 0)
+        }))
+        .filter((v) => Number.isFinite(v.d) && Number.isFinite(v.s));
+    if (samples.length === 0) return null;
+    const maxDist = Math.max(500, Number(globalMaxDistanceKm) || 0, ...samples.map((s) => s.d));
+    const minSnr = Math.min(-20, -15, ...samples.map((s) => s.s));
+    const maxSnr = Math.max(20, 0, ...samples.map((s) => s.s));
+    const snrRange = Math.max(10, maxSnr - minSnr);
+    return { samples, maxDist, minSnr, maxSnr, snrRange };
+}
+
 function drawScatterChart(canvas, points, targetCenter, band, globalMaxDistanceKm) {
     const prepared = prepareCanvas(canvas, 230, 120);
     if (!prepared) return;
@@ -323,27 +342,12 @@ function drawScatterChart(canvas, points, targetCenter, band, globalMaxDistanceK
     ctx.clearRect(0, 0, w, h);
     drawChartFrame(ctx, pad, pw, ph);
 
-    if (!targetCenter || points.length === 0) {
+    const data = computeScatterData(points, targetCenter, globalMaxDistanceKm);
+    if (!data) {
         drawNoData(ctx, w, h, 'no distance data');
         return;
     }
-
-    const samples = points
-        .map((p) => ({
-            d: haversineKm(targetCenter.lat, targetCenter.lng, Number(p.lat), Number(p.lng)),
-            s: Number(p.snr || 0)
-        }))
-        .filter((v) => Number.isFinite(v.d) && Number.isFinite(v.s));
-
-    if (samples.length === 0) {
-        drawNoData(ctx, w, h, 'no distance data');
-        return;
-    }
-
-    const maxDist = Math.max(500, Number(globalMaxDistanceKm) || 0, ...samples.map((s) => s.d));
-    const minSnr = Math.min(-20, -15, ...samples.map((s) => s.s));
-    const maxSnr = Math.max(20, 0, ...samples.map((s) => s.s));
-    const snrRange = Math.max(10, maxSnr - minSnr);
+    const { samples, maxDist, minSnr, maxSnr, snrRange } = data;
 
     const drawSnrGuide = (snr, color, label) => {
         const y = pad.t + ph - ((snr - minSnr) / snrRange) * ph;
