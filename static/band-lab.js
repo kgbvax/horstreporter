@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { bandColors, formatNumber, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds, haversineKm, hexToRgba } from './utils.js';
-import { dashedLine } from './canvas-draw.js';
+import { dashedLine, fillCircle } from './canvas-draw.js';
 
 const ENABLE_KEY = 'bandLabEnabled';
 const UPDATE_THROTTLE_MS = 300;
@@ -379,9 +379,7 @@ function drawScatterChart(canvas, points, targetCenter, band, globalMaxDistanceK
     for (const sample of samples) {
         const x = pad.l + (sample.d / maxDist) * pw;
         const y = pad.t + ph - ((sample.s - minSnr) / snrRange) * ph;
-        ctx.beginPath();
-        ctx.arc(x, y, 2.2, 0, Math.PI * 2);
-        ctx.fill();
+        fillCircle(ctx, x, y, 2.2);
     }
 
     const yTicks = [maxSnr, (maxSnr + minSnr) / 2, minSnr];

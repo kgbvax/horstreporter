@@ -1,6 +1,6 @@
 import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
 
-import { radialLine } from './canvas-draw.js';
+import { radialLine, strokeCircle } from './canvas-draw.js';
 
 const EARTH_RADIUS_KM = 6371;
 const ANTIPODE_KM = Math.PI * EARTH_RADIUS_KM;
@@ -1155,11 +1155,8 @@ function drawAzimuthIndicator(ctx, width, height) {
     ctx.save();
 
     // Circular scale ring.
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, outerRadius, 0, Math.PI * 2);
     ctx.strokeStyle = ringColor;
-    ctx.lineWidth = 1.0;
-    ctx.stroke();
+    strokeCircle(ctx, centerX, centerY, outerRadius, 1.0);
 
     // NS6T-style helper spokes: draw full spokes every 10° and
     // emphasize cardinal N/S/E/W lines.

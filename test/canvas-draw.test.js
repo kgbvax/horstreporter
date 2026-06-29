@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { radialLine } from '../static/canvas-draw.js';
 import { dashedLine } from '../static/canvas-draw.js';
+import { fillCircle, strokeCircle } from '../static/canvas-draw.js';
 function recordingCtx() {
     const calls = [];
     return {
@@ -8,6 +9,8 @@ function recordingCtx() {
         beginPath() { calls.push(['beginPath']); },
         moveTo(x, y) { calls.push(['moveTo', x, y]); },
         lineTo(x, y) { calls.push(['lineTo', x, y]); },
+        arc(x, y, r, a, b) { calls.push(['arc', x, y, r]); },
+        fill() { calls.push(['fill']); },
         stroke() { calls.push(['stroke']); },
         setLineDash(d) { calls.push(['setLineDash', d.join(',')]); },
         set lineWidth(v) { calls.push(['lineWidth', v]); },
@@ -49,5 +52,18 @@ describe('dashedLine', () => {
             ['stroke'],
             ['setLineDash', ''],
         ]);
+    });
+});
+
+describe('fillCircle / strokeCircle', () => {
+    it('fillCircle draws and fills an arc', () => {
+        const ctx = recordingCtx();
+        fillCircle(ctx, 5, 6, 2.2);
+        expect(ctx.calls).toEqual([['beginPath'], ['arc', 5, 6, 2.2], ['fill']]);
+    });
+    it('strokeCircle draws and strokes with lineWidth', () => {
+        const ctx = recordingCtx();
+        strokeCircle(ctx, 5, 6, 10, 1);
+        expect(ctx.calls).toEqual([['beginPath'], ['arc', 5, 6, 10], ['lineWidth', 1], ['stroke']]);
     });
 });

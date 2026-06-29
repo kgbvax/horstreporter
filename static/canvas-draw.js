@@ -33,3 +33,24 @@ export function dashedLine(ctx, x0, y0, x1, y1, dash, lineWidth) {
     ctx.stroke();
     ctx.setLineDash([]);
 }
+
+/**
+ * Fill a circle at (cx,cy) radius r; caller sets fillStyle.
+ * @param {CanvasRenderingContext2D} ctx
+ */
+export function fillCircle(ctx, cx, cy, r) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+/**
+ * Stroke a circle at (cx,cy) radius r; caller sets strokeStyle.
+ * @param {CanvasRenderingContext2D} ctx
+ */
+export function strokeCircle(ctx, cx, cy, r, lineWidth) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    if (lineWidth != null) ctx.lineWidth = lineWidth;
+    ctx.stroke();
+}
