@@ -26,7 +26,9 @@ import {
     pillTextColor,
     greatCircleDistanceKm,
     initialBearingDeg,
-    greatCirclePoints
+    greatCirclePoints,
+    setSubmitMode,
+    isStreaming
 } from './utils.js';
 
 describe('utils.js', () => {
@@ -286,6 +288,48 @@ describe('utils.js', () => {
 
             document.body.innerHTML = '<input type="checkbox" id="show-dxcc-labels" />';
             expect(getMercatorDxccLabelsEnabled()).toBe(false);
+        });
+    });
+
+    describe('Go/Stop submit button state', () => {
+        beforeEach(() => {
+            document.body.innerHTML = '<button id="btn-submit" data-mode="go" title="Go" aria-label="Go"><i class="fas fa-play"></i></button>';
+        });
+
+        it('setSubmitMode("stop") sets streaming state, stop icon, and label', () => {
+            const btn = document.getElementById('btn-submit');
+            setSubmitMode(btn, 'stop');
+            expect(btn.dataset.mode).toBe('stop');
+            expect(btn.innerHTML).toContain('fa-stop');
+            expect(btn.innerHTML).not.toContain('fa-play');
+            expect(btn.title).toBe('Stop');
+            expect(btn.getAttribute('aria-label')).toBe('Stop');
+        });
+
+        it('setSubmitMode("go") sets idle state, play icon, and label', () => {
+            const btn = document.getElementById('btn-submit');
+            setSubmitMode(btn, 'stop');
+            setSubmitMode(btn, 'go');
+            expect(btn.dataset.mode).toBe('go');
+            expect(btn.innerHTML).toContain('fa-play');
+            expect(btn.innerHTML).not.toContain('fa-stop');
+            expect(btn.title).toBe('Go');
+            expect(btn.getAttribute('aria-label')).toBe('Go');
+        });
+
+        it('isStreaming reflects the data-mode attribute', () => {
+            const btn = document.getElementById('btn-submit');
+            expect(isStreaming(btn)).toBe(false);
+            setSubmitMode(btn, 'stop');
+            expect(isStreaming(btn)).toBe(true);
+            setSubmitMode(btn, 'go');
+            expect(isStreaming(btn)).toBe(false);
+        });
+
+        it('helpers are null-safe when the button is missing', () => {
+            expect(() => setSubmitMode(null, 'stop')).not.toThrow();
+            expect(isStreaming(null)).toBe(false);
+            expect(isStreaming(undefined)).toBe(false);
         });
     });
 });

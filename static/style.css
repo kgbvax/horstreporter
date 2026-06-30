@@ -905,13 +905,9 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     --bs-btn-disabled-border-color: var(--border-color);
 }
 
-/* Selected toggle / segment reads clearly without becoming a solid block. */
-.btn-check:checked + .btn-outline-primary,
-.btn-check:checked + .btn-outline-secondary,
-.btn-check:active + .btn-outline-primary,
-.btn-check:active + .btn-outline-secondary {
-    font-weight: 600;
-}
+/* Selected toggle / segment reads clearly via the accent tint alone (see the
+   --bs-btn-active-* vars above). Weight is deliberately left unchanged across
+   states so selecting a button never reflows its width. */
 
 /* The single solid call-to-action (Go). */
 .btn-primary {
@@ -961,7 +957,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
    it's open (the panel has its own close). Stats is translucent so it reads as
    secondary and lets the map show through. */
 .panel-toggle {
-    font: 600 12px sans-serif;
+    font: 600 13px sans-serif;
     border: 1px solid var(--control-border);
     background: var(--bg-color);
     color: var(--text-color);

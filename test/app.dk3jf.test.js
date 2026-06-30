@@ -119,7 +119,7 @@ function setupDom() {
         <input type="checkbox" id="surroundings" />
 
         <button id="btn-geo" type="button"></button>
-        <button id="btn-submit" type="button">Go</button>
+        <button id="btn-submit" type="button" data-mode="go" title="Go" aria-label="Go"><i class="fas fa-play"></i></button>
         <button id="btn-cycle" type="button"></button>
 
         <div id="current-band-display"></div>
@@ -257,7 +257,9 @@ describe('app.js DK3JF mode behavior', () => {
         await importAppFresh();
         await new Promise((resolve) => setTimeout(resolve, 0));
 
-        expect(document.getElementById('btn-submit').textContent).toBe('Stop');
+        const submitBtn = document.getElementById('btn-submit');
+        expect(submitBtn.dataset.mode).toBe('stop');
+        expect(submitBtn.innerHTML).toContain('fa-stop');
         expect(document.getElementById('stream-status').innerHTML).toContain('Connecting to Target: W1AW');
     });
 

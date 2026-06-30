@@ -3,6 +3,28 @@ export function formatNumber(num) {
     return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 }
 
+// The Go/Stop submit button (#btn-submit) toggles between an idle ("go") and a
+// streaming ("stop") state. The state lives in the data-mode attribute rather
+// than the visible text so the button can stay an icon-only, fixed-width pill.
+// setSubmitMode keeps the icon, accessible label, and state attribute in sync;
+// isStreaming reads the attribute (replacing the old textContent === 'Stop'
+// check).
+export function setSubmitMode(btn, mode) {
+    if (!btn) return;
+    const stop = mode === 'stop';
+    btn.dataset.mode = stop ? 'stop' : 'go';
+    btn.innerHTML = stop
+        ? '<i class="fas fa-stop"></i>'
+        : '<i class="fas fa-play"></i>';
+    const label = stop ? 'Stop' : 'Go';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+}
+
+export function isStreaming(btn) {
+    return btn?.dataset?.mode === 'stop';
+}
+
 const COUNTRY_PALETTE_LIGHT = [
     '#FBEFF0', '#FBD3D1', '#FEE5DA', '#FFE2B7', '#FFFBD4', '#E8EDAD', '#E4F0DB',
     '#C3E6E5', '#E1F3FC', '#BFD3ED', '#E0DEEF', '#DFCBE3', '#E3D9C6', '#FFFFFF'

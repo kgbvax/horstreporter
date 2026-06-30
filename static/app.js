@@ -7,7 +7,7 @@ import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-la
 import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { updateMapVisualization, updateBandLabels } from './renderers.js';
-import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor } from './utils.js';
+import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
 
@@ -797,7 +797,7 @@ function maybeAutoStartSavedTarget() {
     }
 
     const btnSubmit = document.getElementById('btn-submit');
-    if (btnSubmit) btnSubmit.textContent = 'Go';
+    if (btnSubmit) setSubmitMode(btnSubmit, 'go');
 
     const form = document.getElementById('fetch-form');
     if (!form) {
@@ -806,7 +806,7 @@ function maybeAutoStartSavedTarget() {
 
     form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
 
-    const streamStarted = Boolean(state.eventSource) || document.getElementById('btn-submit')?.textContent === 'Stop';
+    const streamStarted = Boolean(state.eventSource) || isStreaming(document.getElementById('btn-submit'));
     if (streamStarted) {
         autoStartTriggered = true;
         return;
@@ -1057,7 +1057,7 @@ export function attachMapEvents() {
 
         window.__horstSetTarget?.(locator);
         const btnSubmit = document.getElementById('btn-submit');
-        if (btnSubmit) btnSubmit.textContent = 'Go'; // Force a clean restart
+        if (btnSubmit) setSubmitMode(btnSubmit, 'go'); // Force a clean restart
         document.getElementById('fetch-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
     };
 
@@ -1450,8 +1450,8 @@ document.getElementById('btn-show-all')?.addEventListener('click', () => {
 
 window.__horstSurroundingsChanged = () => {
     const btnSubmit = document.getElementById('btn-submit');
-    if (btnSubmit && btnSubmit.textContent === 'Stop') {
-        btnSubmit.textContent = 'Go';
+    if (btnSubmit && isStreaming(btnSubmit)) {
+        setSubmitMode(btnSubmit, 'go');
         document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
     }
     hotBandIndicator?.refresh();
@@ -1511,7 +1511,7 @@ document.getElementById('btn-geo')?.addEventListener('click', () => {
             btn.disabled = false;
             
             const btnSubmit = document.getElementById('btn-submit');
-            if (btnSubmit) btnSubmit.textContent = 'Go';
+            if (btnSubmit) setSubmitMode(btnSubmit, 'go');
             document.getElementById('fetch-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
         },
         (error) => {
@@ -1555,7 +1555,7 @@ document.getElementById('target')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
         e.preventDefault();
         const btnSubmit = document.getElementById('btn-submit');
-        if (btnSubmit) btnSubmit.textContent = 'Go';
+        if (btnSubmit) setSubmitMode(btnSubmit, 'go');
         document.getElementById('fetch-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
     }
 });
@@ -1566,7 +1566,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     const btnSubmit = document.getElementById('btn-submit');
 
-    if (btnSubmit && btnSubmit.textContent === 'Stop') {
+    if (btnSubmit && isStreaming(btnSubmit)) {
         if (state.eventSource) {
             state.eventSource.close();
             state.eventSource = null;
@@ -1585,7 +1585,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
             state.targetLayer = null;
         }
 
-        btnSubmit.textContent = 'Go';
+        setSubmitMode(btnSubmit, 'go');
         const status = document.getElementById('stream-status');
         if (status) status.innerHTML = 'Status: Not subscribed';
         setFaviconColor('#6c757d');
@@ -1661,7 +1661,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
     let lastStatusUpdate = 0;
     statusEl.innerHTML = `Status: Connecting to ${currentSub}...`;
 
-    if (btnSubmit) btnSubmit.textContent = 'Stop';
+    if (btnSubmit) setSubmitMode(btnSubmit, 'stop');
 
     // On mobile, hide sidebar after submitting so the map is immediately visible
     if (window.innerWidth <= 575) {
@@ -1688,7 +1688,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         state.eventSource.close();
         statusEl.innerHTML = `Status: <span style="color: red;">${e.data}</span>`;
         setFaviconColor('#dc3545'); // Red for error
-        if (btnSubmit) btnSubmit.textContent = 'Go';
+        if (btnSubmit) setSubmitMode(btnSubmit, 'go');
     });
 
     state.eventSource.addEventListener('history_end', () => {
