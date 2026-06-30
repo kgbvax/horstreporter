@@ -187,14 +187,16 @@
                         <input type="checkbox" class="btn-check" id="opmode-allow-control" autocomplete="off">
                         <label class="btn btn-outline-secondary btn-sm w-100" for="opmode-allow-control">Permit Antenna Control</label>
                     </div>
-                    <!-- Collapsible antenna controls -->
-                    <div id="opmode-controls-group" style="display: none;" class="d-flex align-items-center gap-2">
-                        <select id="opmode-antenna-mode" class="form-select form-select-sm" style="max-width: 160px;">
-                            <option value="forward">forward</option>
-                            <option value="backward">backward</option>
-                            <option value="bidirectional">bidirectional</option>
-                        </select>
-                        <button type="button" id="opmode-antenna-mode-btn" class="btn btn-outline-secondary btn-sm">Set mode</button>
+                    <!-- Collapsible beam-direction controls (UltraBeam over MQTT) -->
+                    <div id="opmode-controls-group" style="display: none;" class="d-flex flex-column gap-1">
+                        <div class="small text-muted">Beam direction:</div>
+                        <div id="opmode-beam-group" class="opmode-beam-group d-flex gap-1" role="group" aria-label="UltraBeam beam direction">
+                            <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn flex-fill" id="opmode-beam-forward" data-mode="forward" aria-pressed="false">forward</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn flex-fill" id="opmode-beam-180" data-mode="reverse" aria-pressed="false">180&deg;</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn flex-fill" id="opmode-beam-bidir" data-mode="bidirectional" aria-pressed="false">bi-dir</button>
+                        </div>
+                        <div class="small text-muted" id="opmode-beam-unavailable" style="display: none;"></div>
+                        <div class="small fw-bold opmode-reverse-badge" id="opmode-reverse-badge" style="display: none;" role="status" aria-live="assertive">&#9888; REVERSE (180&deg;)</div>
                     </div>
                     <!-- Azimuth -->
                     <div id="azimuth-options-group" class="d-flex flex-column gap-2">

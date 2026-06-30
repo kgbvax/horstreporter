@@ -20,7 +20,9 @@ const opModeState = {
     pendingTargetBearingDeg: null,
     pendingTargetLabel: '',
     rigCapabilities: null,
-    lookupCapabilities: null
+    lookupCapabilities: null,
+    ultrabeamCapabilities: null,
+    reverseSince: null
 };
 
 const BASE_DOCUMENT_TITLE = typeof document !== 'undefined'
@@ -32,11 +34,20 @@ function toNumber(v) {
     return Number.isFinite(n) ? n : null;
 }
 
-function normalizeMode(raw) {
+export function normalizeMode(raw) {
     const mode = String(raw || '').trim().toLowerCase();
-    if (mode === 'backward' || mode === 'reverse' || mode === 'back') return 'backward';
-    if (mode === 'bi' || mode === 'bi-directional' || mode === 'bidirectional') return 'bidirectional';
+    // 'reverse' is first-class for the UltraBeam (forward | reverse | bidirectional).
+    // Legacy 'backward'/'back' map onto it so older payloads still resolve.
+    if (mode === 'reverse' || mode === '180' || mode === '180°' || mode === 'back' || mode === 'backward') return 'reverse';
+    if (mode === 'bi' || mode === 'bidir' || mode === 'bi-dir' || mode === 'bi-directional' || mode === 'bidirectional') return 'bidirectional';
     return 'forward';
+}
+
+// overlayModeFor maps the canonical beam direction onto the azimuth runtime's
+// internal vocabulary (which understands forward | backward | bidirectional).
+// The runtime draws the 180° lobe on 'backward', so 'reverse' translates to it.
+export function overlayModeFor(mode) {
+    return mode === 'reverse' ? 'backward' : mode;
 }
 
 function getCurrentOriginBaseUrl() {
@@ -143,7 +154,12 @@ function extractStation(payload) {
 function extractAntenna(payload) {
     const src = payload?.antenna || payload?.rotator || payload || {};
     const azimuthDeg = toNumber(src.azimuth_deg ?? src.azimuth ?? src.heading_deg ?? src.heading);
-    if (azimuthDeg === null) return null;
+    const hasMode = src.mode != null || src.pattern_mode != null || src.direction_mode != null;
+
+    // Return an antenna object whenever there is a beam direction OR an azimuth.
+    // A missing azimuth (rotator outage) must NOT drop the object — the beam
+    // buttons and the reverse alarm keep working off the UltraBeam mode alone.
+    if (azimuthDeg === null && !hasMode) return null;
 
     const mode = normalizeMode(src.mode ?? src.pattern_mode ?? src.direction_mode);
     const configuredBeamwidth = toNumber(src.beamwidth_3db_deg ?? src.beamwidth_deg ?? src.beamwidth ?? src.wedge_deg) ?? 60;
@@ -153,6 +169,10 @@ function extractAntenna(payload) {
         azimuthDeg,
         beamwidth3dBDeg,
         mode,
+        // Default true when the flag is absent (legacy PSTrotator payloads) so
+        // existing overlay behavior is unchanged when UltraBeam is disabled.
+        beamOnline: src.beam_online !== false,
+        azimuthOnline: src.azimuth_online !== false,
         availableModes: Array.isArray(src.available_modes) ? src.available_modes : []
     };
 }
@@ -218,50 +238,116 @@ function calculateGreatCircleDistanceKm(fromLat, fromLng, toLat, toLng) {
 
 function syncControlWidgets() {
     const allowControlEl = document.getElementById('opmode-allow-control');
-    const modeSelect = document.getElementById('opmode-antenna-mode');
-    const modeBtn = document.getElementById('opmode-antenna-mode-btn');
+    const buttons = document.querySelectorAll('.opmode-beam-btn');
+    const unavailableEl = document.getElementById('opmode-beam-unavailable');
 
     const agentAllowsControl = opModeState.controlPermittedByAgent === null ? true : opModeState.controlPermittedByAgent;
-    const canControl = opModeState.enabled
+    const ub = opModeState.ultrabeamCapabilities;
+    const ubConfigured = ub != null;
+    const ubOnline = ub?.online === true;
+
+    const permitted = opModeState.enabled
         && opModeState.controlPermittedByServer
         && agentAllowsControl
         && opModeState.controlPermittedByUser
         && !opModeState.commandInFlight;
+    const canControl = permitted && ubConfigured && ubOnline;
 
     if (allowControlEl) {
         allowControlEl.disabled = !opModeState.enabled || !opModeState.controlPermittedByServer || !agentAllowsControl;
     }
-    if (modeSelect) modeSelect.disabled = !canControl;
-    if (modeBtn) modeBtn.disabled = !canControl;
+    buttons.forEach((btn) => { btn.disabled = !canControl; });
+
+    // Cause-specific unavailable copy so the operator knows the remedy rather
+    // than facing three identically greyed-out buttons.
+    if (unavailableEl) {
+        let msg = '';
+        if (opModeState.enabled && opModeState.controlPermittedByUser) {
+            if (!ubConfigured) msg = 'UltraBeam not configured';
+            else if (!ubOnline) msg = 'UltraBeam offline';
+        } else if (opModeState.enabled && ubConfigured && !opModeState.controlPermittedByUser) {
+            msg = 'Antenna control not permitted';
+        }
+        unavailableEl.textContent = msg;
+        unavailableEl.style.display = msg ? '' : 'none';
+    }
 }
 
-function syncModeUiFromAntenna(antenna) {
-    const modeSelect = document.getElementById('opmode-antenna-mode');
-    const modeBtn = document.getElementById('opmode-antenna-mode-btn');
-    if (!modeSelect || !modeBtn) return;
+// canSendBeamControl extends the base control gate with the UltraBeam-online
+// requirement, used before publishing a beam-direction command.
+function canSendBeamControl() {
+    const [allowed, reason] = canSendControl();
+    if (!allowed) return [false, reason];
+    if (opModeState.ultrabeamCapabilities == null) return [false, 'ultrabeam not configured'];
+    if (opModeState.ultrabeamCapabilities.online !== true) return [false, 'ultrabeam offline'];
+    return [true, ''];
+}
 
-    const allModes = ['forward', 'backward', 'bidirectional'];
-    const available = Array.isArray(antenna?.availableModes)
-        ? antenna.availableModes.map(normalizeMode).filter((m, i, arr) => arr.indexOf(m) === i)
-        : [];
+export function syncBeamButtonsFromAntenna(antenna) {
+    const buttons = document.querySelectorAll('.opmode-beam-btn');
+    if (!buttons.length) return;
+    const current = normalizeMode(antenna?.mode || 'forward');
+    buttons.forEach((btn) => {
+        const isActive = btn.dataset.mode === current;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+}
 
-    const effectiveAvailable = available.length > 0 ? available : allModes;
-    for (const option of modeSelect.options) {
-        option.disabled = !effectiveAvailable.includes(option.value);
+// REVERSE_ALARM_RAMP_MS is the window over which the 180° reverse alarm escalates
+// from minimum to maximum prominence.
+export const REVERSE_ALARM_RAMP_MS = 90000;
+
+// reverseAlarmIntensity maps elapsed time in reverse to a 0..1 intensity, clamped.
+export function reverseAlarmIntensity(elapsedMs) {
+    const n = Number(elapsedMs);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.min(1, n / REVERSE_ALARM_RAMP_MS);
+}
+
+// updateReverseAlarm drives the escalating 180° alarm off observed status. When
+// reverse is the live direction, the 180° button pulses red with intensity
+// ramping over REVERSE_ALARM_RAMP_MS, and a non-color REVERSE text cue (an
+// aria-live region) is shown so the alarm reads without color or motion. Any
+// non-reverse state (or an offline UltraBeam) clears it and resets the ramp.
+export function updateReverseAlarm(antenna) {
+    const btn = document.getElementById('opmode-beam-180');
+    const badge = document.getElementById('opmode-reverse-badge');
+    const isReverse = normalizeMode(antenna?.mode) === 'reverse' && antenna?.beamOnline !== false;
+
+    if (!isReverse) {
+        opModeState.reverseSince = null;
+        if (btn) {
+            btn.classList.remove('opmode-reverse-alarm');
+            btn.style.removeProperty('--reverse-alarm-intensity');
+        }
+        if (badge) badge.style.display = 'none';
+        return;
     }
 
-    const currentMode = normalizeMode(antenna?.mode || modeSelect.value || 'forward');
-    if (effectiveAvailable.includes(currentMode)) {
-        modeSelect.value = currentMode;
-    } else {
-        modeSelect.value = effectiveAvailable[0] || 'forward';
+    if (opModeState.reverseSince == null) {
+        opModeState.reverseSince = Date.now();
     }
-
-    modeBtn.disabled = modeSelect.disabled || modeSelect.options[modeSelect.selectedIndex]?.disabled === true;
+    const intensity = reverseAlarmIntensity(Date.now() - opModeState.reverseSince);
+    if (btn) {
+        btn.classList.add('opmode-reverse-alarm');
+        btn.style.setProperty('--reverse-alarm-intensity', intensity.toFixed(3));
+    }
+    if (badge) badge.style.display = '';
 }
 
 function syncAntennaOverlay() {
-    if (!opModeState.enabled || !opModeState.station || !opModeState.antenna) {
+    const a = opModeState.antenna;
+    // Suppress the directional overlay when there is no station, no antenna,
+    // no usable azimuth, or the UltraBeam is offline — never draw the 'forward'
+    // fallback as if it were authoritative (R7).
+    const canDraw = opModeState.enabled
+        && opModeState.station
+        && a
+        && Number.isFinite(a.azimuthDeg)
+        && a.beamOnline !== false;
+
+    if (!canDraw) {
         setAzimuthAntennaOverlay({ enabled: false });
         opModeState.requestRender();
         return;
@@ -273,9 +359,9 @@ function syncAntennaOverlay() {
         stationLng: opModeState.station.lng,
         stationLocator: opModeState.station.locator,
         stationName: opModeState.station.name,
-        azimuthDeg: opModeState.antenna.azimuthDeg,
-        beamwidth3dBDeg: opModeState.antenna.beamwidth3dBDeg,
-        mode: opModeState.antenna.mode,
+        azimuthDeg: a.azimuthDeg,
+        beamwidth3dBDeg: a.beamwidth3dBDeg,
+        mode: overlayModeFor(a.mode),
         pendingTargetBearingDeg: opModeState.pendingTargetBearingDeg,
         pendingTargetLabel: opModeState.pendingTargetLabel
     });
@@ -360,6 +446,11 @@ async function refreshOpModeStatus() {
         ? { wavelog: lookupCaps.wavelog === true, awards: lookupCaps.awards === true }
         : null;
 
+    const ubCaps = status?.capabilities?.ultrabeam;
+    opModeState.ultrabeamCapabilities = (ubCaps && typeof ubCaps === 'object')
+        ? { control: ubCaps.control === true, online: ubCaps.online === true }
+        : null;
+
     syncControlWidgets();
 
     setStatus('online (direct)');
@@ -393,18 +484,28 @@ async function refreshAntennaState() {
         clearPendingTargetPreview();
     }
     updateStationUi(opModeState.station);
-    syncModeUiFromAntenna(antenna);
+    syncBeamButtonsFromAntenna(antenna);
+    updateReverseAlarm(antenna);
 
     const headingEl = document.getElementById('opmode-heading');
     if (headingEl) {
         if (antenna) {
-            headingEl.textContent = `${Math.round(antenna.azimuthDeg)}° ${antenna.mode}`;
+            const az = Number.isFinite(antenna.azimuthDeg) ? `${Math.round(antenna.azimuthDeg)}°` : '—';
+            headingEl.textContent = `${az} ${beamModeLabel(antenna.mode)}`;
         } else {
             headingEl.textContent = 'n/a';
         }
     }
 
     syncAntennaOverlay();
+}
+
+// beamModeLabel renders a canonical beam direction with the operator-facing
+// label used on the buttons (reverse shows as "180°").
+export function beamModeLabel(mode) {
+    if (mode === 'reverse') return '180°';
+    if (mode === 'bidirectional') return 'bi-dir';
+    return 'forward';
 }
 
 async function pollTick() {
@@ -460,6 +561,7 @@ function syncEnabledStateFromUi() {
         opModeState.station = null;
         opModeState.antenna = null;
         clearPendingTargetPreview();
+        updateReverseAlarm(null);
         syncAntennaOverlay();
         syncControlWidgets();
         return;
@@ -480,20 +582,18 @@ function syncControlPermissionFromUi() {
 }
 
 export async function setAntennaMode(modeValue) {
-    const [allowed, reason] = canSendControl();
+    const [allowed, reason] = canSendBeamControl();
     if (!allowed) throw new Error(reason);
 
     const mode = normalizeMode(modeValue);
 
-    await runControlAction('setting mode', async () => {
-        await fetchJson(opModeEndpoint('antenna/mode'), {
+    await runControlAction('setting beam', async () => {
+        await fetchJson(opModeEndpoint('antenna/beam'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 permit_control: true,
-                mode,
-                station_lat: opModeState.station?.lat ?? null,
-                station_lng: opModeState.station?.lng ?? null
+                mode
             })
         });
         await refreshAntennaState();
@@ -683,39 +783,24 @@ export function initOpMode({ requestRender } = {}) {
     opModeState.requestRender = typeof requestRender === 'function' ? requestRender : () => {};
 
     const allowControlEl = document.getElementById('opmode-allow-control');
-    const modeSelect = document.getElementById('opmode-antenna-mode');
-    const modeBtn = document.getElementById('opmode-antenna-mode-btn');
+    const beamButtons = document.querySelectorAll('.opmode-beam-btn');
 
     if (allowControlEl) {
         allowControlEl.checked = localStorage.getItem('opModeControlPermitted') === 'true';
         allowControlEl.addEventListener('change', syncControlPermissionFromUi);
     }
 
-    if (modeBtn) {
-        modeBtn.addEventListener('click', async () => {
+    beamButtons.forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const mode = normalizeMode(btn.dataset.mode || 'forward');
             try {
-                const mode = normalizeMode(modeSelect?.value || 'forward');
                 await setAntennaMode(mode);
-                setStatus(`mode set to ${mode}`);
+                setStatus(`beam set to ${beamModeLabel(mode)}`);
             } catch (err) {
-                setStatus(`mode change failed: ${err?.message || 'unknown error'}`, true);
+                setStatus(`beam change failed: ${err?.message || 'unknown error'}`, true);
             }
         });
-    }
-
-    if (modeSelect) {
-        modeSelect.addEventListener('keydown', async (e) => {
-            if (e.key !== 'Enter') return;
-            e.preventDefault();
-            try {
-                const mode = normalizeMode(modeSelect.value || 'forward');
-                await setAntennaMode(mode);
-                setStatus(`mode set to ${mode}`);
-            } catch (err) {
-                setStatus(`mode change failed: ${err?.message || 'unknown error'}`, true);
-            }
-        });
-    }
+    });
 
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) return;
