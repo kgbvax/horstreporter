@@ -13,8 +13,13 @@ import {
     reverseAlarmIntensity,
     REVERSE_ALARM_RAMP_MS,
     syncBeamButtonsFromAntenna,
-    updateReverseAlarm
+    updateReverseAlarm,
+    syncControlWidgets,
+    syncAntennaOverlay,
+    setAntennaMode,
+    __setOpModeStateForTest
 } from './opmode.js';
+import { setAzimuthAntennaOverlay } from './azimuth-runtime.js';
 
 describe('normalizeMode (UltraBeam vocabulary)', () => {
     it('maps reverse aliases to canonical reverse', () => {
@@ -69,7 +74,7 @@ describe('beam button + alarm DOM behavior', () => {
             <button class="opmode-beam-btn" id="opmode-beam-forward" data-mode="forward"></button>
             <button class="opmode-beam-btn" id="opmode-beam-180" data-mode="reverse"></button>
             <button class="opmode-beam-btn" id="opmode-beam-bidir" data-mode="bidirectional"></button>
-            <div id="opmode-reverse-badge" style="display: none;"></div>
+            <div id="opmode-reverse-badge" style="display: none;" role="status" aria-live="assertive"></div>
         `;
         // Reset the module-level reverseSince between tests.
         updateReverseAlarm({ mode: 'forward', beamOnline: true });
@@ -126,5 +131,130 @@ describe('beam button + alarm DOM behavior', () => {
         } finally {
             Date.now = realNow;
         }
+    });
+
+    it('announces via an assertive live region with text content on entry', () => {
+        const badge = document.getElementById('opmode-reverse-badge');
+        expect(badge.getAttribute('aria-live')).toBe('assertive');
+        updateReverseAlarm({ mode: 'reverse', beamOnline: true });
+        expect(badge.textContent).toMatch(/REVERSE/);
+        updateReverseAlarm({ mode: 'forward', beamOnline: true });
+        expect(badge.textContent).toBe(''); // cleared so it re-announces next time
+    });
+});
+
+const PERMITTED_ONLINE = {
+    enabled: true,
+    controlPermittedByServer: true,
+    controlPermittedByAgent: true,
+    controlPermittedByUser: true,
+    commandInFlight: false,
+    transport: 'direct',
+    directBaseUrl: 'http://localhost:9955',
+    ultrabeamCapabilities: { control: true, online: true }
+};
+
+describe('beam control gating (syncControlWidgets)', () => {
+    beforeEach(() => {
+        document.body.innerHTML = `
+            <input type="checkbox" id="opmode-allow-control">
+            <button class="opmode-beam-btn" id="opmode-beam-forward" data-mode="forward"></button>
+            <button class="opmode-beam-btn" id="opmode-beam-180" data-mode="reverse"></button>
+            <button class="opmode-beam-btn" id="opmode-beam-bidir" data-mode="bidirectional"></button>
+            <div id="opmode-beam-unavailable" style="display: none;"></div>
+        `;
+    });
+
+    const buttonsDisabled = () =>
+        [...document.querySelectorAll('.opmode-beam-btn')].every((b) => b.disabled);
+
+    it('enables buttons and shows no message when permitted + online', () => {
+        __setOpModeStateForTest(PERMITTED_ONLINE);
+        syncControlWidgets();
+        expect(buttonsDisabled()).toBe(false);
+        expect(document.getElementById('opmode-beam-unavailable').textContent).toBe('');
+    });
+
+    it('disables buttons with "UltraBeam offline" when online=false', () => {
+        __setOpModeStateForTest({ ...PERMITTED_ONLINE, ultrabeamCapabilities: { control: true, online: false } });
+        syncControlWidgets();
+        expect(buttonsDisabled()).toBe(true);
+        expect(document.getElementById('opmode-beam-unavailable').textContent).toBe('UltraBeam offline');
+    });
+
+    it('shows "UltraBeam not configured" when capability absent', () => {
+        __setOpModeStateForTest({ ...PERMITTED_ONLINE, ultrabeamCapabilities: null });
+        syncControlWidgets();
+        expect(buttonsDisabled()).toBe(true);
+        expect(document.getElementById('opmode-beam-unavailable').textContent).toBe('UltraBeam not configured');
+    });
+
+    it('shows "Antenna control not permitted" even when also not configured', () => {
+        __setOpModeStateForTest({ ...PERMITTED_ONLINE, controlPermittedByUser: false, ultrabeamCapabilities: null });
+        syncControlWidgets();
+        expect(buttonsDisabled()).toBe(true);
+        expect(document.getElementById('opmode-beam-unavailable').textContent).toBe('Antenna control not permitted');
+    });
+});
+
+describe('setAntennaMode posts to the beam endpoint', () => {
+    beforeEach(() => {
+        document.body.innerHTML = '';
+        __setOpModeStateForTest({ ...PERMITTED_ONLINE, station: { lat: 50, lng: 8 } });
+    });
+
+    it('POSTs canonical mode + permit_control to /v1/antenna/beam', async () => {
+        const fetchMock = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ antenna: { mode: 'bidirectional', azimuth_deg: 90, beam_online: true, azimuth_online: true } })
+        }));
+        globalThis.fetch = fetchMock;
+
+        await setAntennaMode('bidirectional');
+
+        const [url, opts] = fetchMock.mock.calls[0];
+        expect(String(url).endsWith('/v1/antenna/beam')).toBe(true);
+        expect(opts.method).toBe('POST');
+        const body = JSON.parse(opts.body);
+        expect(body).toMatchObject({ mode: 'bidirectional', permit_control: true });
+    });
+
+    it('rejects when the UltraBeam is offline', async () => {
+        __setOpModeStateForTest({ ultrabeamCapabilities: { control: true, online: false } });
+        await expect(setAntennaMode('reverse')).rejects.toThrow(/offline/);
+    });
+});
+
+describe('overlay suppression (syncAntennaOverlay)', () => {
+    beforeEach(() => {
+        document.body.innerHTML = '';
+        setAzimuthAntennaOverlay.mockClear();
+        __setOpModeStateForTest({
+            enabled: true,
+            station: { lat: 50, lng: 8, locator: 'JO40', name: 'TEST' },
+            requestRender: () => {}
+        });
+    });
+
+    it('suppresses the overlay when the beam is offline', () => {
+        __setOpModeStateForTest({ antenna: { azimuthDeg: 90, mode: 'reverse', beamOnline: false, beamwidth3dBDeg: 60 } });
+        syncAntennaOverlay();
+        const arg = setAzimuthAntennaOverlay.mock.calls.at(-1)[0];
+        expect(arg.enabled).toBe(false);
+    });
+
+    it('suppresses the overlay when azimuth is missing', () => {
+        __setOpModeStateForTest({ antenna: { azimuthDeg: null, mode: 'reverse', beamOnline: true, beamwidth3dBDeg: 60 } });
+        syncAntennaOverlay();
+        const arg = setAzimuthAntennaOverlay.mock.calls.at(-1)[0];
+        expect(arg.enabled).toBe(false);
+    });
+
+    it('draws the reverse lobe via the backward runtime vocabulary', () => {
+        __setOpModeStateForTest({ antenna: { azimuthDeg: 90, mode: 'reverse', beamOnline: true, beamwidth3dBDeg: 80 } });
+        syncAntennaOverlay();
+        const arg = setAzimuthAntennaOverlay.mock.calls.at(-1)[0];
+        expect(arg.enabled).toBe(true);
+        expect(arg.mode).toBe('backward');
     });
 });

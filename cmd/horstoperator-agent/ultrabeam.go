@@ -66,18 +66,23 @@ type ultrabeamClient struct {
 	lastErr            string
 }
 
+// resolveUltrabeamPrefix returns the configured ubctrl topic prefix, falling
+// back to the default. Pure (no client), so it is unit-testable without dialing.
+func resolveUltrabeamPrefix(cfg serviceConfig) string {
+	prefix := strings.TrimRight(strings.TrimSpace(cfg.UBTopicPrefix), "/")
+	if prefix == "" {
+		return defaultUltrabeamTopicPrefix
+	}
+	return prefix
+}
+
 // newUltrabeamClient builds and (asynchronously) connects an UltraBeam MQTT
 // client from config. Connection is non-blocking: paho's connect-retry +
 // auto-reconnect keep trying in the background so a broker that is down at
 // startup never blocks the agent or its existing rotor/rig behavior.
 func newUltrabeamClient(cfg serviceConfig) *ultrabeamClient {
-	prefix := strings.TrimRight(strings.TrimSpace(cfg.UBTopicPrefix), "/")
-	if prefix == "" {
-		prefix = defaultUltrabeamTopicPrefix
-	}
-
 	uc := &ultrabeamClient{
-		prefix: prefix,
+		prefix: resolveUltrabeamPrefix(cfg),
 		mode:   "forward",
 	}
 

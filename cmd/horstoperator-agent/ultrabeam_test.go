@@ -96,6 +96,15 @@ func TestOnlineKeysOnConnectionNotRecency(t *testing.T) {
 	}
 }
 
+func TestPublishWhenDisconnectedReturnsError(t *testing.T) {
+	// The concrete client must surface a disconnected broker as an error rather
+	// than a silent QoS-0 loss — exercises the real guard, not the fake.
+	uc := newTestUltrabeamClient(false) // connectedFn => false, client nil
+	if err := uc.Publish("reverse"); err == nil {
+		t.Fatal("Publish() returned nil while disconnected, want error")
+	}
+}
+
 func TestNormalizeUltrabeamMode(t *testing.T) {
 	cases := map[string]string{
 		"reverse":       "reverse",

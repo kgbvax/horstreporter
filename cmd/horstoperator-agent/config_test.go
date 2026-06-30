@@ -46,10 +46,12 @@ func TestValidateConfigUltrabeam(t *testing.T) {
 }
 
 func TestUltrabeamTopicPrefixDefault(t *testing.T) {
-	// An empty prefix in config falls back to the ubctrl default in the client.
-	uc := newUltrabeamClient(serviceConfig{UBBrokerURL: "tcp://127.0.0.1:1883", UBTopicPrefix: ""})
-	if uc.prefix != defaultUltrabeamTopicPrefix {
-		t.Fatalf("prefix = %q, want %q", uc.prefix, defaultUltrabeamTopicPrefix)
+	// Pure resolution — no broker connection (must not dial or leak goroutines).
+	if got := resolveUltrabeamPrefix(serviceConfig{UBTopicPrefix: ""}); got != defaultUltrabeamTopicPrefix {
+		t.Fatalf("prefix = %q, want %q", got, defaultUltrabeamTopicPrefix)
+	}
+	if got := resolveUltrabeamPrefix(serviceConfig{UBTopicPrefix: "shack/ub/"}); got != "shack/ub" {
+		t.Fatalf("prefix = %q, want trimmed shack/ub", got)
 	}
 }
 

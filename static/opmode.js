@@ -236,7 +236,7 @@ function calculateGreatCircleDistanceKm(fromLat, fromLng, toLat, toLng) {
     return 6371 * c;
 }
 
-function syncControlWidgets() {
+export function syncControlWidgets() {
     const allowControlEl = document.getElementById('opmode-allow-control');
     const buttons = document.querySelectorAll('.opmode-beam-btn');
     const unavailableEl = document.getElementById('opmode-beam-unavailable');
@@ -259,14 +259,15 @@ function syncControlWidgets() {
     buttons.forEach((btn) => { btn.disabled = !canControl; });
 
     // Cause-specific unavailable copy so the operator knows the remedy rather
-    // than facing three identically greyed-out buttons.
+    // than facing three identically greyed-out buttons. Permission is named
+    // first so the "not permitted + not configured" combination still gets a
+    // message instead of an ambiguous blank.
     if (unavailableEl) {
         let msg = '';
-        if (opModeState.enabled && opModeState.controlPermittedByUser) {
-            if (!ubConfigured) msg = 'UltraBeam not configured';
+        if (opModeState.enabled) {
+            if (!opModeState.controlPermittedByUser) msg = 'Antenna control not permitted';
+            else if (!ubConfigured) msg = 'UltraBeam not configured';
             else if (!ubOnline) msg = 'UltraBeam offline';
-        } else if (opModeState.enabled && ubConfigured && !opModeState.controlPermittedByUser) {
-            msg = 'Antenna control not permitted';
         }
         unavailableEl.textContent = msg;
         unavailableEl.style.display = msg ? '' : 'none';
@@ -286,9 +287,11 @@ function canSendBeamControl() {
 export function syncBeamButtonsFromAntenna(antenna) {
     const buttons = document.querySelectorAll('.opmode-beam-btn');
     if (!buttons.length) return;
-    const current = normalizeMode(antenna?.mode || 'forward');
+    // A null antenna (outage) clears all active highlights rather than defaulting
+    // to forward — there is no known direction to indicate.
+    const current = antenna ? normalizeMode(antenna.mode || 'forward') : null;
     buttons.forEach((btn) => {
-        const isActive = btn.dataset.mode === current;
+        const isActive = current != null && btn.dataset.mode === current;
         btn.classList.toggle('active', isActive);
         btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
     });
@@ -321,7 +324,12 @@ export function updateReverseAlarm(antenna) {
             btn.classList.remove('opmode-reverse-alarm');
             btn.style.removeProperty('--reverse-alarm-intensity');
         }
-        if (badge) badge.style.display = 'none';
+        if (badge) {
+            // Clear the text (not just hide) so the live region re-announces on
+            // the next entry into reverse.
+            badge.textContent = '';
+            badge.style.display = 'none';
+        }
         return;
     }
 
@@ -333,10 +341,18 @@ export function updateReverseAlarm(antenna) {
         btn.classList.add('opmode-reverse-alarm');
         btn.style.setProperty('--reverse-alarm-intensity', intensity.toFixed(3));
     }
-    if (badge) badge.style.display = '';
+    if (badge) {
+        // Set the content at the transition so the aria-live region fires an
+        // assertive announcement (screen readers may not announce a region whose
+        // text was already present and merely un-hidden).
+        if (badge.textContent === '') {
+            badge.textContent = '\u26A0 REVERSE (180\u00B0)';
+        }
+        badge.style.display = '';
+    }
 }
 
-function syncAntennaOverlay() {
+export function syncAntennaOverlay() {
     const a = opModeState.antenna;
     // Suppress the directional overlay when there is no station, no antenna,
     // no usable azimuth, or the UltraBeam is offline — never draw the 'forward'
@@ -473,14 +489,14 @@ async function refreshAntennaState() {
 
     opModeState.station = station;
     opModeState.antenna = antenna;
-    if (antenna && Number.isFinite(opModeState.pendingTargetBearingDeg)) {
+    if (antenna && Number.isFinite(antenna.azimuthDeg) && Number.isFinite(opModeState.pendingTargetBearingDeg)) {
         // Keep dotted target line alive across status polling until the heading has
         // reasonably converged to the pending target.
         const delta = angularDeltaDeg(antenna.azimuthDeg, opModeState.pendingTargetBearingDeg);
         if (delta <= 20) {
             clearPendingTargetPreview();
         }
-    } else if (antenna) {
+    } else if (antenna && Number.isFinite(antenna.azimuthDeg)) {
         clearPendingTargetPreview();
     }
     updateStationUi(opModeState.station);
@@ -530,6 +546,13 @@ async function pollTick() {
             }
             opModeState.station = null;
             opModeState.antenna = null;
+            // A total outage means there is no UltraBeam truth either — the beam
+            // UI must go neutral, not leave the reverse alarm latched or a stale
+            // button active/enabled (which would let a click hit a dead agent).
+            opModeState.ultrabeamCapabilities = null;
+            updateReverseAlarm(null);
+            syncBeamButtonsFromAntenna(null);
+            syncControlWidgets();
             syncAntennaOverlay();
         }
     }
@@ -602,6 +625,12 @@ export async function setAntennaMode(modeValue) {
 
 export function isOpModeActive() {
     return opModeState.enabled === true;
+}
+
+// __setOpModeStateForTest patches internal opmode state. Test-only seam so the
+// gating/command paths can be exercised in unit tests without a live agent.
+export function __setOpModeStateForTest(patch) {
+    Object.assign(opModeState, patch);
 }
 
 // getOpModeStation returns the operator station {lat,lng} when operator mode is
