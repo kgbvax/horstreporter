@@ -216,15 +216,23 @@ func (c *ultrabeamClient) Publish(mode string) error {
 // this keeps "reverse" canonical for the UltraBeam contract. Unknown values
 // coerce to forward, mirroring ubctrl's own coercion (API §4.2).
 func normalizeUltrabeamMode(raw string) string {
-	m := strings.ToLower(strings.TrimSpace(raw))
-	switch m {
+	mode, _ := parseUltrabeamMode(raw)
+	return mode
+}
+
+// parseUltrabeamMode resolves an input to a canonical ubctrl beam direction and
+// reports whether the input was a recognized token. Command handlers use the
+// ok flag to reject unknown input with 400 rather than silently coercing it to
+// forward; status parsing ignores ok and takes ubctrl's coerce-to-forward rule.
+func parseUltrabeamMode(raw string) (mode string, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "reverse", "180", "180°", "back", "backward":
-		return "reverse"
+		return "reverse", true
 	case "bidirectional", "bidir", "bi", "bi-directional", "bi-dir":
-		return "bidirectional"
+		return "bidirectional", true
 	case "forward", "normal":
-		return "forward"
+		return "forward", true
 	default:
-		return "forward"
+		return "forward", false
 	}
 }

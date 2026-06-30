@@ -697,6 +697,7 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/antenna/state", s.handleAntennaState)
 	mux.HandleFunc("/v1/antenna/rotate", s.handleRotate)
 	mux.HandleFunc("/v1/antenna/mode", s.handleMode)
+	mux.HandleFunc("/v1/antenna/beam", s.handleBeam)
 	mux.HandleFunc("/v1/rig/tune", s.handleRigTune)
 	mux.HandleFunc("/v1/operate", s.handleOperate)
 	mux.HandleFunc("/v1/operate/enrich", s.handleEnrich)
@@ -765,6 +766,12 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		// dxcc/band/mode/was/pota). The frontend keys off this.
 		capabilities["lookup"] = map[string]any{"wavelog": true, "awards": s.awards != nil}
 	}
+	if s.ub != nil {
+		// UltraBeam beam-direction control over MQTT. online == broker connected
+		// AND last availability not offline. The frontend gates the beam buttons
+		// on this, same shape as rig/lookup.
+		capabilities["ultrabeam"] = map[string]any{"control": true, "online": s.ub.Online()}
+	}
 
 	resp := map[string]any{
 		"service":           "horstoperator-agent",
@@ -812,16 +819,46 @@ func (s *server) handleAntennaState(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.Timeout)
 	defer cancel()
 
-	state, err := s.getPolledStateOrFallback(ctx)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+	state, azErr := s.getPolledStateOrFallback(ctx)
+	azimuthOnline := azErr == nil
+
+	// Beam direction is sourced from the UltraBeam when configured, else from
+	// the PSTrotator (legacy behavior when UltraBeam control is disabled).
+	mode := state.Mode
+	beamOnline := false
+	availableModes := s.cfg.AllowedModes
+	if s.ub != nil {
+		ub := s.ub.Status()
+		mode = ub.Mode
+		beamOnline = ub.Online
+		availableModes = []string{"forward", "reverse", "bidirectional"}
+	}
+
+	// Only hard-fail when neither device has usable state — a routine PSTrotator
+	// poll error must not blank UltraBeam beam status or silence the reverse
+	// alarm (the two transports are independent).
+	if azErr != nil && s.ub == nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": azErr.Error()})
 		return
 	}
 
-	s.pollMu.RLock()
-	fastPolling := s.pollState.fastPollingActive
-	targetAzimuth := s.pollState.targetAzimuthDeg
-	s.pollMu.RUnlock()
+	antenna := map[string]any{
+		"mode":              mode,
+		"beamwidth_3db_deg": s.cfg.Beamwidth3dBDeg,
+		"available_modes":   availableModes,
+		"beam_online":       beamOnline,
+		"azimuth_online":    azimuthOnline,
+	}
+	if azimuthOnline {
+		s.pollMu.RLock()
+		fastPolling := s.pollState.fastPollingActive
+		targetAzimuth := s.pollState.targetAzimuthDeg
+		s.pollMu.RUnlock()
+
+		antenna["azimuth_deg"] = state.AzimuthDeg
+		antenna["fast_polling"] = fastPolling
+		antenna["target_azimuth_deg"] = targetAzimuth
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"station": map[string]any{
@@ -830,14 +867,7 @@ func (s *server) handleAntennaState(w http.ResponseWriter, r *http.Request) {
 			"lng":     s.cfg.Station.Lng,
 			"locator": strings.ToUpper(strings.TrimSpace(s.cfg.Station.Locator)),
 		},
-		"antenna": map[string]any{
-			"azimuth_deg":        state.AzimuthDeg,
-			"mode":               state.Mode,
-			"beamwidth_3db_deg":  s.cfg.Beamwidth3dBDeg,
-			"available_modes":    s.cfg.AllowedModes,
-			"fast_polling":       fastPolling,
-			"target_azimuth_deg": targetAzimuth,
-		},
+		"antenna": antenna,
 	})
 }
 
@@ -927,6 +957,62 @@ func (s *server) handleMode(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if err := s.client.SetMode(ctx, mode); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":   true,
+		"mode": mode,
+	})
+}
+
+type beamRequest struct {
+	PermitControl bool   `json:"permit_control"`
+	Mode          string `json:"mode"`
+}
+
+// handleBeam sets the UltraBeam beam direction by publishing to the ubctrl
+// command topic over MQTT. Unlike handleMode (PSTrotator/UDP), this drives the
+// antenna's element pattern (forward | reverse | bidirectional).
+func (s *server) handleBeam(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	if !s.cfg.ControlPermitted {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "control disabled by agent configuration"})
+		return
+	}
+
+	var req beamRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	if !req.PermitControl {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "permit_control must be true"})
+		return
+	}
+
+	if s.ub == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "ultrabeam control not configured"})
+		return
+	}
+
+	mode, ok := parseUltrabeamMode(req.Mode)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "mode must be forward, reverse, or bidirectional"})
+		return
+	}
+
+	// Verify the publish rather than assuming success: MQTT QoS 0 is
+	// fire-and-forget, so a dropped broker link would otherwise report a false
+	// success. Publish returns an error when it cannot enqueue on a live
+	// connection.
+	if err := s.ub.Publish(mode); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 
