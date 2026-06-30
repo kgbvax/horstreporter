@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -51,6 +52,11 @@ var configFields = []configField{
 	{Key: "WAVELOG_URL", Label: "Wavelog URL", Help: "Default: " + defaultWavelogURL, Kind: "text"},
 	{Key: "POTA_HUNTED_CSV", Label: "POTA hunted CSV", Help: "Path to a POTA hunted-parks export (optional)", Kind: "text"},
 	{Key: "DEBUG_LOGGING", Label: "Debug logging", Help: "Log all traffic to external systems (PSTrotator UDP + Wavelog/backend/rig HTTP). Verbose; secrets redacted. Applied on restart.", Kind: "bool"},
+	{Key: "UB_ENABLED", Label: "UltraBeam control", Help: "Enable UltraBeam beam-direction control over MQTT. Off = no broker connection.", Kind: "bool"},
+	{Key: "UB_BROKER_URL", Label: "UltraBeam broker URL", Help: "MQTT broker the ubctrl controller uses, e.g. tcp://127.0.0.1:1883 (tls:// for an authenticated remote broker)", Kind: "text"},
+	{Key: "UB_TOPIC_PREFIX", Label: "UltraBeam topic prefix", Help: "ubctrl topic prefix. Default ubctrl", Kind: "text"},
+	{Key: "UB_USERNAME", Label: "UltraBeam broker user", Help: "MQTT username, if the broker requires auth", Kind: "text"},
+	{Key: "UB_PASSWORD", Label: "UltraBeam broker password", Help: "MQTT password; over a plain tcp:// broker this is sent in cleartext — use tls:// for non-localhost brokers. Never leaves this PC.", Kind: "password", Secret: true},
 }
 
 // managedEnvKeys returns the set of keys the Settings page owns, used both when
@@ -284,6 +290,39 @@ func validateConfig(updates map[string]string) error {
 		if _, _, err := net.SplitHostPort(v); err != nil {
 			return fmt.Errorf("Log4OM address must be host:port (e.g. %s)", log4omDefaultAddr)
 		}
+	}
+	if v, ok := updates["UB_ENABLED"]; ok && v != "" {
+		if _, err := strconv.ParseBool(v); err != nil {
+			return fmt.Errorf("UltraBeam control must be true/false")
+		}
+	}
+	// Broker URL is only validated when UltraBeam control is enabled — disabled
+	// means the field is inert, so a stale/blank value must not block a save.
+	if enabled, _ := strconv.ParseBool(updates["UB_ENABLED"]); enabled {
+		broker := strings.TrimSpace(updates["UB_BROKER_URL"])
+		if broker == "" {
+			return fmt.Errorf("UltraBeam broker URL is required when UltraBeam control is enabled")
+		}
+		if err := validateBrokerURL(broker); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateBrokerURL checks an MQTT broker URL has a recognized scheme and host.
+func validateBrokerURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("UltraBeam broker URL is not a valid URL: %v", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "tcp", "tls", "ssl", "ws", "wss", "mqtt", "mqtts":
+	default:
+		return fmt.Errorf("UltraBeam broker URL must use tcp://, tls://, ws:// or wss:// (got %q)", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("UltraBeam broker URL must include a host:port")
 	}
 	return nil
 }

@@ -51,6 +51,17 @@ BEAMWIDTH_3DB_DEG="${BEAMWIDTH_3DB_DEG:-60}"
 PST_LOG_TRAFFIC="${PST_LOG_TRAFFIC:-0}"        # set 1 to log UDP traffic
 PST_LOG_TRAFFIC_HEX="${PST_LOG_TRAFFIC_HEX:-0}" # set 1 to add hex dumps
 
+# UltraBeam RCU-06 beam-direction control over MQTT (separate from PSTrotator
+# rotation). Disabled by default; set UB_ENABLED=true and a broker URL to turn on.
+#   UB_PASSWORD comes from the environment / .env only (never a flag, never logged).
+#   Over a plain tcp:// broker the password is sent in cleartext — use tls:// for
+#   any non-localhost broker.
+UB_ENABLED="${UB_ENABLED:-false}"
+UB_BROKER_URL="${UB_BROKER_URL:-tcp://127.0.0.1:1883}"
+UB_TOPIC_PREFIX="${UB_TOPIC_PREFIX:-ubctrl}"
+UB_CLIENT_ID="${UB_CLIENT_ID:-}"               # empty = auto horstoperator-<nanos>
+UB_USERNAME="${UB_USERNAME:-}"
+
 # --- Build the argument list -------------------------------------------------
 args=(
   -listen "$LISTEN"
@@ -68,6 +79,12 @@ args=(
 [ "$PST_LOG_TRAFFIC" = "1" ] && args+=(-pst-log-traffic)
 [ "$PST_LOG_TRAFFIC_HEX" = "1" ] && args+=(-pst-log-traffic-hex)
 
+if [ "$UB_ENABLED" = "true" ] || [ "$UB_ENABLED" = "1" ]; then
+  args+=(-ub-enabled -ub-broker-url "$UB_BROKER_URL" -ub-topic-prefix "$UB_TOPIC_PREFIX")
+  [ -n "$UB_CLIENT_ID" ] && args+=(-ub-client-id "$UB_CLIENT_ID")
+  [ -n "$UB_USERNAME" ] && args+=(-ub-username "$UB_USERNAME")
+fi
+
 # Append any extra flags the caller passed on the command line.
 args+=("$@")
 
@@ -75,5 +92,8 @@ echo "Starting horstoperator-agent on ${LISTEN}"
 echo "  PSTrotator : ${PST_HOST}:${PST_PORT} (reply port $((PST_PORT + 1)), timeout ${PST_TIMEOUT_MS}ms)"
 echo "  Station    : ${STATION_NAME} @ ${STATION_LOCATOR}"
 echo "  Control    : ${CONTROL_PERMITTED} (modes: ${ALLOWED_MODES})"
+if [ "$UB_ENABLED" = "true" ] || [ "$UB_ENABLED" = "1" ]; then
+  echo "  UltraBeam  : ${UB_BROKER_URL} (prefix: ${UB_TOPIC_PREFIX})"
+fi
 
 exec go run ./cmd/horstoperator-agent "${args[@]}"

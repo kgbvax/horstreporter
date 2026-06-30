@@ -120,6 +120,15 @@ type serviceConfig struct {
 	TaskName         string        // Windows scheduled task name, for clean restart-to-apply (optional)
 	LogFile          string        // absolute path of the log file, when logging to a file ("" = stderr)
 	DebugExternal    bool          // verbose logging of all external traffic (HTTP + PSTrotator UDP)
+
+	// UltraBeam RCU-06 antenna controller (MQTT). Beam direction only; rotation
+	// stays with PSTrotator. Disabled unless UBEnabled && UBBrokerURL is set.
+	UBEnabled     bool
+	UBBrokerURL   string // e.g. tcp://127.0.0.1:1883 (tls:// for an authenticated remote broker)
+	UBClientID    string // must differ from ubctrl's own id; empty = auto horstoperator-<nanos>
+	UBTopicPrefix string // default "ubctrl"
+	UBUsername    string
+	UBPassword    string // from env only (UB_PASSWORD); never logged
 }
 
 type rotatorState struct {
@@ -503,6 +512,7 @@ type server struct {
 	rig     rigController   // nil when -rig-transport=none
 	wavelog *wavelogClient  // nil when WAVELOG_API_KEY is unset
 	awards  *awards.Manager // nil when no award source is configured
+	ub      beamController  // nil when UltraBeam control is disabled
 
 	pollMu    sync.RWMutex
 	pollState polledAntennaState
@@ -560,6 +570,10 @@ func newServer(cfg serviceConfig) *server {
 			mgr.Run(context.Background())
 			log.Printf("[INFO] awards engine enabled (sources: %s)", mgr.SourceLabel())
 		}
+	}
+	if cfg.UBEnabled && cfg.UBBrokerURL != "" {
+		s.ub = newUltrabeamClient(cfg)
+		log.Printf("[INFO] UltraBeam control enabled (broker: %s, prefix: %s)", cfg.UBBrokerURL, firstNonEmpty(cfg.UBTopicPrefix, defaultUltrabeamTopicPrefix))
 	}
 	s.startAntennaPoller()
 	return s
@@ -1037,6 +1051,12 @@ func main() {
 	potaHuntedCSV := flag.String("pota-hunted-csv", strings.TrimSpace(os.Getenv("POTA_HUNTED_CSV")), "Path to a POTA hunted-parks CSV export (enables POTA 'wanted'); empty = disabled")
 	awardsDataDir := flag.String("awards-data-dir", firstNonEmpty(strings.TrimSpace(os.Getenv("HORSTAWARDS_DATA_DIR")), "./horstawards-data"), "Local directory for the award-progress snapshot store")
 
+	ubEnabled := flag.Bool("ub-enabled", envBoolOr("UB_ENABLED", false), "Enable UltraBeam beam-direction control over MQTT")
+	ubBrokerURL := flag.String("ub-broker-url", envOr("UB_BROKER_URL", ""), "UltraBeam MQTT broker URL, e.g. tcp://127.0.0.1:1883 (tls:// for an authenticated remote broker)")
+	ubClientID := flag.String("ub-client-id", envOr("UB_CLIENT_ID", ""), "UltraBeam MQTT client ID; must differ from ubctrl's own id. Empty = auto horstoperator-<nanos>")
+	ubTopicPrefix := flag.String("ub-topic-prefix", envOr("UB_TOPIC_PREFIX", defaultUltrabeamTopicPrefix), "UltraBeam ubctrl topic prefix")
+	ubUsername := flag.String("ub-username", envOr("UB_USERNAME", ""), "UltraBeam MQTT username (if the broker requires auth)")
+
 	flag.Parse()
 
 	// Direct logs to a file when asked, or always on the tray (GUI) build since it
@@ -1101,6 +1121,13 @@ func main() {
 		TaskName:       strings.TrimSpace(*taskName),
 		LogFile:        resolvedLogFile,
 		DebugExternal:  *debugLogging,
+
+		UBEnabled:     *ubEnabled,
+		UBBrokerURL:   strings.TrimSpace(*ubBrokerURL),
+		UBClientID:    strings.TrimSpace(*ubClientID),
+		UBTopicPrefix: strings.TrimSpace(*ubTopicPrefix),
+		UBUsername:    strings.TrimSpace(*ubUsername),
+		UBPassword:    os.Getenv("UB_PASSWORD"),
 	}
 
 	// Local award-progress engine: runs in-process so the operator's Wavelog log
@@ -1137,6 +1164,12 @@ func main() {
 	}
 	if cfg.UDPLogMaxBytes < 32 {
 		cfg.UDPLogMaxBytes = 32
+	}
+	if cfg.UBEnabled {
+		if err := validateBrokerURL(cfg.UBBrokerURL); err != nil {
+			log.Printf("[WARN] UltraBeam control disabled: %v", err)
+			cfg.UBEnabled = false
+		}
 	}
 
 	mux := http.NewServeMux()
