@@ -108,3 +108,7 @@ The operator-facing list of recent DX-cluster spots, enriched per station with a
 
 ### Award slot
 The atomic unit of award progress — one workable or confirmable thing (a DXCC entity, a band, a mode, a US state, a park). A spot's "wanted" status is the candidate slots it could fill minus the slots already satisfied in the operator's own log; flags such as ATNO (all-time-new-one), +BAND, +MODE, WAS and POTA name common slot kinds.
+
+### Beam direction
+The pattern direction of the operator's UltraBeam RCU-06 antenna: **forward**, **180°** (reverse), or **bi-directional**. Distinct from rotation — rotation (azimuth) stays with the PSTrotator, while beam direction is read from and set on the UltraBeam over MQTT (the `ubctrl` topics). In operation mode it surfaces as three buttons on the left panel, with the live direction sourced from the antenna's own status rather than a local guess. The 180°/reverse state carries a deliberately escalating red alarm (ramping over 90 seconds, with a non-color text cue) because a forgotten reverse is a recurring operational footgun.
+*Avoid:* mode (overloaded — the PSTrotator and Spot "mode" concepts are unrelated).
