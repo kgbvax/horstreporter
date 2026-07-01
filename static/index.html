@@ -225,15 +225,14 @@
         <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent position-absolute" style="top: 12px; left: 12px; z-index: 1000;" title="Show Band Stats">Stats</button>
         <canvas id="azimuth-canvas" class="position-absolute top-0 start-0 w-100 h-100"></canvas>
         <!-- Collapsible beam-direction controls (UltraBeam over MQTT) -->
-        <div id="opmode-controls-group" style="display: none;" class="d-flex flex-column gap-1">
-            <div class="small text-muted">Beam direction:</div>
+        <div id="opmode-controls-group" style="display: none;">
             <div id="opmode-beam-group" class="opmode-beam-group d-flex gap-1" role="group" aria-label="UltraBeam beam direction">
-                <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn flex-fill" id="opmode-beam-forward" data-mode="forward" aria-pressed="false">forward</button>
-                <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn flex-fill" id="opmode-beam-180" data-mode="reverse" aria-pressed="false">180&deg;</button>
-                <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn flex-fill" id="opmode-beam-bidir" data-mode="bidirectional" aria-pressed="false">bi-dir</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn" id="opmode-beam-forward" data-mode="forward" aria-pressed="false">forward</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn" id="opmode-beam-180" data-mode="reverse" aria-pressed="false">180&deg;</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn" id="opmode-beam-bidir" data-mode="bidirectional" aria-pressed="false">bi-dir</button>
             </div>
-            <div class="small text-muted" id="opmode-beam-unavailable" style="display: none;"></div>
-            <div class="small fw-bold opmode-reverse-badge" id="opmode-reverse-badge" style="display: none;" role="status" aria-live="assertive"></div>
+            <div class="small opmode-map-status" id="opmode-beam-unavailable" style="display: none;"></div>
+            <div class="small fw-bold opmode-reverse-badge opmode-map-status" id="opmode-reverse-badge" style="display: none;" role="status" aria-live="assertive"></div>
         </div>
         <div id="hot-band-indicator" class="hot-band-indicator is-hidden" aria-live="polite" aria-label="Recommended bands"></div>
         <div id="azimuth-zoom-controls" class="position-absolute bottom-0 end-0 m-3" style="display:none; z-index: 1001;">
