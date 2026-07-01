@@ -182,22 +182,6 @@
                     <div class="small text-muted" id="opmode-status-row">opmode status: <strong id="opmode-status">disabled</strong></div>
                     <div class="small text-muted" id="opmode-station-row">station: <strong id="opmode-station">n/a</strong></div>
                     <div class="small text-muted" id="opmode-heading-row">antenna: <strong id="opmode-heading">n/a</strong></div>
-                    <!-- Antenna control toggle -->
-                    <div>
-                        <input type="checkbox" class="btn-check" id="opmode-allow-control" autocomplete="off">
-                        <label class="btn btn-outline-secondary btn-sm w-100" for="opmode-allow-control">Permit Antenna Control</label>
-                    </div>
-                    <!-- Collapsible beam-direction controls (UltraBeam over MQTT) -->
-                    <div id="opmode-controls-group" style="display: none;" class="d-flex flex-column gap-1">
-                        <div class="small text-muted">Beam direction:</div>
-                        <div id="opmode-beam-group" class="opmode-beam-group d-flex gap-1" role="group" aria-label="UltraBeam beam direction">
-                            <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn flex-fill" id="opmode-beam-forward" data-mode="forward" aria-pressed="false">forward</button>
-                            <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn flex-fill" id="opmode-beam-180" data-mode="reverse" aria-pressed="false">180&deg;</button>
-                            <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn flex-fill" id="opmode-beam-bidir" data-mode="bidirectional" aria-pressed="false">bi-dir</button>
-                        </div>
-                        <div class="small text-muted" id="opmode-beam-unavailable" style="display: none;"></div>
-                        <div class="small fw-bold opmode-reverse-badge" id="opmode-reverse-badge" style="display: none;" role="status" aria-live="assertive"></div>
-                    </div>
                     <!-- Azimuth -->
                     <div id="azimuth-options-group" class="d-flex flex-column gap-2">
                         <label class="d-flex align-items-center justify-content-between">Azimuthal horizon (km, auto):
@@ -240,6 +224,17 @@
         <div id="map" class="w-100 h-100"></div>
         <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent position-absolute" style="top: 12px; left: 12px; z-index: 1000;" title="Show Band Stats">Stats</button>
         <canvas id="azimuth-canvas" class="position-absolute top-0 start-0 w-100 h-100"></canvas>
+        <!-- Collapsible beam-direction controls (UltraBeam over MQTT) -->
+        <div id="opmode-controls-group" style="display: none;" class="d-flex flex-column gap-1">
+            <div class="small text-muted">Beam direction:</div>
+            <div id="opmode-beam-group" class="opmode-beam-group d-flex gap-1" role="group" aria-label="UltraBeam beam direction">
+                <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn flex-fill" id="opmode-beam-forward" data-mode="forward" aria-pressed="false">forward</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn flex-fill" id="opmode-beam-180" data-mode="reverse" aria-pressed="false">180&deg;</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn flex-fill" id="opmode-beam-bidir" data-mode="bidirectional" aria-pressed="false">bi-dir</button>
+            </div>
+            <div class="small text-muted" id="opmode-beam-unavailable" style="display: none;"></div>
+            <div class="small fw-bold opmode-reverse-badge" id="opmode-reverse-badge" style="display: none;" role="status" aria-live="assertive"></div>
+        </div>
         <div id="hot-band-indicator" class="hot-band-indicator is-hidden" aria-live="polite" aria-label="Recommended bands"></div>
         <div id="azimuth-zoom-controls" class="position-absolute bottom-0 end-0 m-3" style="display:none; z-index: 1001;">
             <button id="azimuth-zoom-in" class="btn btn-outline-secondary btn-sm mb-1" title="Zoom in" tabindex="-1">+</button><br>

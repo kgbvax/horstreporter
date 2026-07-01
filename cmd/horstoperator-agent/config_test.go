@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestValidateConfigUltrabeam(t *testing.T) {
 	t.Run("rejects enabled with empty broker", func(t *testing.T) {
@@ -67,4 +70,34 @@ func TestUltrabeamPasswordNotInConfigFields(t *testing.T) {
 		}
 	}
 	t.Fatal("UB_PASSWORD field not found in configFields")
+}
+
+func TestRestartArgs(t *testing.T) {
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+
+	os.Args = []string{
+		"./horstoperator-agent",
+		"-listen", "127.0.0.1:9955",
+		"-station-locator", "JO32we",
+		"-ub-enabled",
+		"-pst-host=127.0.0.1",
+		"-dev",
+	}
+
+	got := restartArgs()
+	want := []string{
+		"./horstoperator-agent",
+		"-listen", "127.0.0.1:9955",
+		"-dev",
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d; got=%v", len(got), len(want), got)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("got[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
 }

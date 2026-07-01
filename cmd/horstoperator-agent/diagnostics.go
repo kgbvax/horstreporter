@@ -264,7 +264,13 @@ func (s *server) checkRig(ctx context.Context, cfg serviceConfig, pending map[st
 		}
 		resp.Body.Close()
 		c.OK = true
-		c.Detail = withPending(fmt.Sprintf("WaveLogGate reachable \u2014 HTTP %d", resp.StatusCode), pending["rig"])
+		var statusText string
+		if resp.StatusCode == http.StatusNotFound {
+			statusText = "WaveLogGate reachable \u2014 server active"
+		} else {
+			statusText = fmt.Sprintf("WaveLogGate reachable \u2014 HTTP %d", resp.StatusCode)
+		}
+		c.Detail = withPending(statusText, pending["rig"])
 		return c
 	case "log4om":
 		c.Configured = true

@@ -157,7 +157,6 @@ const PERMITTED_ONLINE = {
 describe('beam control gating (syncControlWidgets)', () => {
     beforeEach(() => {
         document.body.innerHTML = `
-            <input type="checkbox" id="opmode-allow-control">
             <button class="opmode-beam-btn" id="opmode-beam-forward" data-mode="forward"></button>
             <button class="opmode-beam-btn" id="opmode-beam-180" data-mode="reverse"></button>
             <button class="opmode-beam-btn" id="opmode-beam-bidir" data-mode="bidirectional"></button>

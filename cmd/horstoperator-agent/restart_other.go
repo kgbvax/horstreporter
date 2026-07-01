@@ -17,5 +17,5 @@ func restartAgent(_ serviceConfig) error {
 	if err != nil {
 		return err
 	}
-	return syscall.Exec(exe, os.Args, restartEnviron())
+	return syscall.Exec(exe, restartArgs(), restartEnviron())
 }

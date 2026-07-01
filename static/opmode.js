@@ -4,7 +4,7 @@ import { locatorToBounds } from './utils.js';
 const opModeState = {
     enabled: false,
     runtimeViaLocalAgent: false,
-    controlPermittedByUser: false,
+    controlPermittedByUser: true,
     controlPermittedByServer: false,
     controlPermittedByAgent: null,
     transport: 'unknown',
@@ -237,9 +237,9 @@ function calculateGreatCircleDistanceKm(fromLat, fromLng, toLat, toLng) {
 }
 
 export function syncControlWidgets() {
-    const allowControlEl = document.getElementById('opmode-allow-control');
     const buttons = document.querySelectorAll('.opmode-beam-btn');
     const unavailableEl = document.getElementById('opmode-beam-unavailable');
+    const opGroup = document.getElementById('opmode-controls-group');
 
     const agentAllowsControl = opModeState.controlPermittedByAgent === null ? true : opModeState.controlPermittedByAgent;
     const ub = opModeState.ultrabeamCapabilities;
@@ -253,10 +253,12 @@ export function syncControlWidgets() {
         && !opModeState.commandInFlight;
     const canControl = permitted && ubConfigured && ubOnline;
 
-    if (allowControlEl) {
-        allowControlEl.disabled = !opModeState.enabled || !opModeState.controlPermittedByServer || !agentAllowsControl;
-    }
     buttons.forEach((btn) => { btn.disabled = !canControl; });
+
+    if (opGroup) {
+        const showGroup = opModeState.enabled && opModeState.ultrabeamCapabilities != null;
+        opGroup.style.display = showGroup ? 'flex' : 'none';
+    }
 
     // Cause-specific unavailable copy so the operator knows the remedy rather
     // than facing three identically greyed-out buttons. Permission is named
@@ -597,13 +599,6 @@ function syncEnabledStateFromUi() {
     void pollTick();
 }
 
-function syncControlPermissionFromUi() {
-    const allowEl = document.getElementById('opmode-allow-control');
-    opModeState.controlPermittedByUser = allowEl?.checked === true;
-    localStorage.setItem('opModeControlPermitted', opModeState.controlPermittedByUser ? 'true' : 'false');
-    syncControlWidgets();
-}
-
 export async function setAntennaMode(modeValue) {
     const [allowed, reason] = canSendBeamControl();
     if (!allowed) throw new Error(reason);
@@ -811,13 +806,7 @@ export async function setBeamTargetFromMapClick({ lat, lng, label = '' } = {}) {
 export function initOpMode({ requestRender } = {}) {
     opModeState.requestRender = typeof requestRender === 'function' ? requestRender : () => {};
 
-    const allowControlEl = document.getElementById('opmode-allow-control');
     const beamButtons = document.querySelectorAll('.opmode-beam-btn');
-
-    if (allowControlEl) {
-        allowControlEl.checked = localStorage.getItem('opModeControlPermitted') === 'true';
-        allowControlEl.addEventListener('change', syncControlPermissionFromUi);
-    }
 
     beamButtons.forEach((btn) => {
         btn.addEventListener('click', async () => {
@@ -839,7 +828,6 @@ export function initOpMode({ requestRender } = {}) {
     });
 
     updateBranding(false);
-    syncControlPermissionFromUi();
     void (async () => {
         try {
             await detectTransport();

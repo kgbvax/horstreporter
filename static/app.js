@@ -1483,11 +1483,6 @@ document.getElementById('show-dxcc-labels')?.addEventListener('change', (e) => {
     updateDxccLabelsEnabled(e.target.checked);
 });
 
-document.getElementById('opmode-allow-control')?.addEventListener('change', (e) => {
-    const group = document.getElementById('opmode-controls-group');
-    if (group) group.style.display = e.target.checked ? '' : 'none';
-});
-
 document.getElementById('btn-geo')?.addEventListener('click', () => {
     if (!navigator.geolocation) {
         alert('Geolocation is not supported by your browser.');
@@ -1751,11 +1746,6 @@ syncSoftPauseWithVisibility();
 
 // Sync opmode controls visibility (initOpMode may have set checkbox from localStorage)
 requestAnimationFrame(() => {
-    const opGroup = document.getElementById('opmode-controls-group');
-    if (opGroup) {
-        opGroup.style.display = document.getElementById('opmode-allow-control')?.checked ? '' : 'none';
-    }
-
     // Auto-hide sidebar on mobile at startup
     if (window.innerWidth <= 575) {
         const controls = document.getElementById('controls');

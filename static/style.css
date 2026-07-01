@@ -1026,3 +1026,21 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
         animation: none;
     }
 }
+
+/* absolute overlay for map-based UltraBeam beam controls (bottom-left) */
+#opmode-controls-group {
+    position: absolute;
+    bottom: 15px;
+    left: 15px;
+    z-index: 1005;
+    background: var(--tooltip-bg);
+    border: 1px solid var(--tooltip-border);
+    border-radius: 8px;
+    padding: 10px;
+    box-shadow: 0 4px 12px var(--shadow-color);
+    backdrop-filter: blur(4px);
+    display: none; /* Controlled by syncControlWidgets */
+    flex-direction: column;
+    gap: 6px;
+    min-width: 220px;
+}

@@ -89,8 +89,8 @@ func (s *server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 		v, ok := current[f.Key]
 		if !ok {
 			// Fall back to whatever the process actually resolved (e.g. a value
-			// supplied via a flag rather than the file) so the page isn't blank.
-			v = strings.TrimSpace(os.Getenv(f.Key))
+			// supplied via a flag or environment defaults) so the page isn't blank.
+			v = strings.TrimSpace(s.runningValue(f.Key))
 			ok = v != ""
 		}
 		set[f.Key] = ok && v != ""
@@ -107,6 +107,58 @@ func (s *server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 		"log_file":    s.cfg.LogFile,
 		"can_restart": true,
 	})
+}
+
+func (s *server) runningValue(key string) string {
+	switch key {
+	case "STATION_LOCATOR":
+		return s.cfg.Station.Locator
+	case "STATION_NAME":
+		return s.cfg.Station.Name
+	case "PST_HOST":
+		return s.cfg.PSTHost
+	case "PST_PORT":
+		if s.cfg.PSTPort > 0 {
+			return strconv.Itoa(s.cfg.PSTPort)
+		}
+		return ""
+	case "CONTROL_PERMITTED":
+		return strconv.FormatBool(s.cfg.ControlPermitted)
+	case "RIG_TRANSPORT":
+		return s.cfg.RigTransport
+	case "RIG_LOG4OM_ADDR":
+		return s.cfg.RigLog4OM
+	case "RIG_WAVELOGGATE_URL":
+		return s.cfg.RigWaveLogGate
+	case "ALLOWED_MODES":
+		return strings.Join(s.cfg.AllowedModes, ",")
+	case "BEAMWIDTH_3DB_DEG":
+		return strconv.FormatFloat(s.cfg.Beamwidth3dBDeg, 'f', -1, 64)
+	case "BACKEND_URL":
+		return s.cfg.BackendBaseURL
+	case "WAVELOG_API_KEY":
+		return s.cfg.WavelogAPIKey
+	case "WAVELOG_STATION_ID":
+		return s.cfg.Awards.WavelogStationID
+	case "WAVELOG_URL":
+		return s.cfg.WavelogURL
+	case "POTA_HUNTED_CSV":
+		return s.cfg.Awards.POTAHuntedCSV
+	case "DEBUG_LOGGING":
+		return strconv.FormatBool(s.cfg.DebugExternal)
+	case "UB_ENABLED":
+		return strconv.FormatBool(s.cfg.UBEnabled)
+	case "UB_BROKER_URL":
+		return s.cfg.UBBrokerURL
+	case "UB_TOPIC_PREFIX":
+		return s.cfg.UBTopicPrefix
+	case "UB_USERNAME":
+		return s.cfg.UBUsername
+	case "UB_PASSWORD":
+		return s.cfg.UBPassword
+	default:
+		return ""
+	}
 }
 
 type configPostRequest struct {
@@ -434,6 +486,66 @@ func restartEnviron() []string {
 			}
 		}
 		out = append(out, kv)
+	}
+	return out
+}
+
+// restartArgs returns a filtered copy of os.Args with any Settings-managed flags
+// stripped out, so the restarted process falls back to reading them from the
+// freshly saved .env file instead of being forced to use the original startup flags.
+func restartArgs() []string {
+	managedFlags := map[string]bool{
+		"station-locator":     true,
+		"station-name":        true,
+		"pst-host":            true,
+		"pst-port":            true,
+		"control-permitted":   true,
+		"rig-transport":       true,
+		"rig-log4om-addr":     true,
+		"rig-waveloggate-url": true,
+		"allowed-modes":       true,
+		"beamwidth-3db-deg":   true,
+		"backend-url":         true,
+		"pota-hunted-csv":     true,
+		"debug-logging":       true,
+		"ub-enabled":          true,
+		"ub-broker-url":       true,
+		"ub-topic-prefix":     true,
+		"ub-username":         true,
+	}
+
+	boolFlags := map[string]bool{
+		"control-permitted": true,
+		"debug-logging":     true,
+		"ub-enabled":        true,
+	}
+
+	var out []string
+	args := os.Args
+	if len(args) == 0 {
+		return nil
+	}
+	out = append(out, args[0])
+
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			name := strings.TrimLeft(arg, "-")
+			if eq := strings.IndexByte(name, '='); eq > 0 {
+				flagName := name[:eq]
+				if managedFlags[flagName] {
+					continue
+				}
+			} else {
+				if managedFlags[name] {
+					if !boolFlags[name] && i+1 < len(args) {
+						i++
+					}
+					continue
+				}
+			}
+		}
+		out = append(out, arg)
 	}
 	return out
 }

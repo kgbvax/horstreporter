@@ -42,7 +42,7 @@ func restartAgent(cfg serviceConfig) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(exe, os.Args[1:]...)
+	cmd := exec.Command(exe, restartArgs()[1:]...)
 	cmd.Env = restartEnviron()
 	if wd, err := os.Getwd(); err == nil {
 		cmd.Dir = wd
