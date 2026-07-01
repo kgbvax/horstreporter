@@ -270,10 +270,14 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
             pill.style.opacity = (soloing && !shown) ? '0.5' : '1';
         } else {
             // Enabled but no data: muted band color + band-color border + tag.
+            // While soloing, a non-focused band's spots are filtered out of the
+            // render, so `hasData` is false even when the band actually has data.
+            // Suppress the misleading "no data" tag for those dimmed bands; only
+            // show it for the band that's actually being rendered (focused, or all).
             pill.style.backgroundColor = hexToRgba(color, 0.18);
             pill.style.color = 'var(--text-color, #212529)';
             pill.style.filter = 'none';
-            if (nodata) nodata.hidden = false;
+            if (nodata) nodata.hidden = soloing && !shown;
             if (icon) icon.style.opacity = isFocused ? '1' : '0.4';
             pill.style.borderColor = color;
             pill.style.boxShadow = 'none';

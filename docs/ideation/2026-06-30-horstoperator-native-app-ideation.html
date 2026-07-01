@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: #horstoperator — a native, no-webview HorstReporter</title>
+<link rel="preconnect" href="https://fonts.bunny.net">
+<link rel="stylesheet" href="https://fonts.bunny.net/css?family=inter:400,500,600,700|jetbrains-mono:400,500">
+<style>
+:root{
+  --bg:#f6f7f5; --canvas:#ffffff; --ink:#1c2420; --muted:#5b6660;
+  --line:#e2e6e1; --line-strong:#cfd6cf;
+  --accent:#1f7a4d; --accent-soft:#e6f3ec; --accent-ink:#155c3a;
+  --warn:#9a6a12; --warn-soft:#f7efdc;
+  --info:#2d5fa6; --info-soft:#e7eef8;
+  --grey-soft:#eef1ee;
+  --radius:10px;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#11140f; --canvas:#181c16; --ink:#e8ece6; --muted:#9aa69d;
+    --line:#2a2f27; --line-strong:#3a4036;
+    --accent:#4fb27e; --accent-soft:#16241c; --accent-ink:#8fd6ab;
+    --warn:#d8a33d; --warn-soft:#2a2212;
+    --info:#7aa6df; --info-soft:#15202f;
+    --grey-soft:#20251d;
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);font-size:16px;line-height:1.6;
+  -webkit-font-smoothing:antialiased;font-feature-settings:"cv05","ss01";
+}
+.wrap{max-width:900px;margin-inline:auto;padding:48px 24px 96px}
+p,li{max-width:72ch}
+a{color:var(--accent-ink)}
+code{font-family:var(--mono);font-size:.85em;background:var(--grey-soft);
+  padding:.1em .38em;border-radius:5px;border:1px solid var(--line)}
+h1,h2,h3{line-height:1.25;font-weight:700}
+h1{font-size:2rem;margin:.2em 0 .1em}
+h2{font-size:1.4rem;margin:2.4em 0 .6em;padding-bottom:.3em;border-bottom:2px solid var(--line-strong)}
+h3{font-size:1.18rem;margin:0}
+.eyebrow{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent-ink);font-weight:600;margin-bottom:.4em}
+.lede{font-size:1.08rem;color:var(--muted);max-width:74ch}
+.meta{display:flex;flex-wrap:wrap;gap:.5rem;margin:1.2em 0 0}
+.meta .pill{font-size:.78rem;background:var(--canvas);border:1px solid var(--line-strong);
+  border-radius:999px;padding:.25em .8em;color:var(--muted)}
+.meta .pill b{color:var(--ink);font-weight:600}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+  gap:12px;margin:1.8em 0 0}
+.stat{background:var(--canvas);border:1px solid var(--line);border-radius:var(--radius);
+  padding:14px 16px}
+.stat .n{font-size:1.7rem;font-weight:700;font-family:var(--mono);color:var(--accent-ink)}
+.stat .l{font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+section{margin-top:.5em}
+.ground{background:var(--canvas);border:1px solid var(--line);border-radius:var(--radius);padding:4px 22px 8px}
+.axes{list-style:none;padding:0;margin:.4em 0;counter-reset:ax}
+.axes li{counter-increment:ax;padding:.55em 0 .55em 2.4em;border-bottom:1px solid var(--line);position:relative;max-width:none}
+.axes li:last-child{border-bottom:0}
+.axes li::before{content:counter(ax);position:absolute;left:0;top:.5em;
+  width:1.7em;height:1.7em;display:grid;place-items:center;
+  background:var(--accent-soft);color:var(--accent-ink);border-radius:6px;
+  font-family:var(--mono);font-weight:600;font-size:.85rem}
+.axes b{font-weight:600}
+.jump{display:flex;flex-wrap:wrap;gap:8px;margin:.6em 0 1.6em;padding:0;list-style:none}
+.jump a{font-size:.82rem;text-decoration:none;background:var(--canvas);
+  border:1px solid var(--line-strong);border-radius:7px;padding:.35em .7em;color:var(--ink)}
+.jump a:hover{border-color:var(--accent);color:var(--accent-ink)}
+.jump a .k{font-family:var(--mono);color:var(--accent-ink);font-weight:600;margin-right:.4em}
+.idea{background:var(--canvas);border:1px solid var(--line);border-radius:var(--radius);
+  padding:22px 24px;margin:18px 0;scroll-margin-top:20px}
+.idea-head{display:flex;align-items:baseline;gap:.6em;flex-wrap:wrap}
+.idnum{font-family:var(--mono);font-weight:700;color:var(--accent-ink);font-size:1.18rem}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin:.9em 0 .2em}
+.chip{font-size:.74rem;border-radius:999px;padding:.25em .75em;font-weight:500;
+  border:1px solid transparent;white-space:nowrap}
+.chip.axis{background:var(--info-soft);color:var(--info);border-color:color-mix(in srgb,var(--info) 25%,transparent)}
+.chip.conf{background:var(--accent-soft);color:var(--accent-ink);border-color:color-mix(in srgb,var(--accent) 25%,transparent)}
+.chip.cx{background:var(--warn-soft);color:var(--warn);border-color:color-mix(in srgb,var(--warn) 28%,transparent)}
+.idea dl{display:grid;grid-template-columns:auto 1fr;gap:.3em 1.1em;margin:1.1em 0 0}
+.idea dt{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+  font-weight:600;padding-top:.18em}
+.idea dd{margin:0}
+.idea dd p{margin:.1em 0}
+.basis{font-family:var(--mono);font-size:.82rem;background:var(--grey-soft);
+  border:1px solid var(--line);border-radius:7px;padding:.6em .8em;display:block}
+.basis .tag{color:var(--accent-ink);font-weight:600}
+.fig{margin:1.3em 0 .3em;background:var(--bg);border:1px solid var(--line);
+  border-radius:8px;padding:14px}
+.fig svg{display:block;width:100%;height:auto}
+.fig figcaption{font-size:.78rem;color:var(--muted);margin-top:.5em;text-align:center}
+table{width:100%;border-collapse:collapse;margin:.6em 0;font-size:.92rem}
+th,td{text-align:left;padding:.55em .7em;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+td.r{font-family:var(--mono);color:var(--accent-ink);white-space:nowrap}
+footer.composition-signal{margin-top:3em;padding-top:1.2em;border-top:1px solid var(--line);
+  font-size:.78rem;color:var(--muted)}
+.note{background:var(--info-soft);border:1px solid color-mix(in srgb,var(--info) 22%,transparent);
+  border-radius:8px;padding:.7em 1em;font-size:.9rem;color:var(--ink);margin:1em 0}
+.note .e{font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--info);font-weight:600;display:block;margin-bottom:.2em}
+/* svg shared */
+.s-box{fill:var(--canvas);stroke:var(--line-strong)}
+.s-acc{fill:var(--accent-soft);stroke:var(--accent)}
+.s-warn{fill:var(--warn-soft);stroke:var(--warn)}
+.s-grey{fill:var(--grey-soft);stroke:var(--line-strong)}
+.s-t{fill:var(--ink);font-family:var(--sans);font-size:13px}
+.s-tm{fill:var(--muted);font-family:var(--sans);font-size:11px}
+.s-tc{fill:var(--accent-ink);font-family:var(--mono);font-size:11px;font-weight:600}
+.s-arrow{stroke:var(--muted);stroke-width:2;fill:none;marker-end:url(#ah)}
+.s-lbl{fill:var(--muted);font-family:var(--sans);font-size:10.5px;
+  paint-order:stroke;stroke:var(--bg);stroke-width:3px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="eyebrow">Ideation · Compound Engineering</div>
+<h1>#horstoperator — a native, no-webview HorstReporter</h1>
+<p class="lede">Strong directions for reimagining HorstReporter as a native code app: small, blazingly fast, always around. Ranked, critiqued, and grounded in the existing Go core and the half-finished Windows operator agent.</p>
+
+<div class="meta">
+  <span class="pill"><b>Date</b> <time datetime="2026-06-30">2026-06-30</time></span>
+  <span class="pill"><b>Topic</b> horstoperator-native-app</span>
+  <span class="pill"><b>Focus</b> native code app, no webviews, small, fast, always around</span>
+  <span class="pill"><b>Mode</b> repo-grounded</span>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="n">7</div><div class="l">Ranked ideas</div></div>
+  <div class="stat"><div class="n">42</div><div class="l">Raw candidates</div></div>
+  <div class="stat"><div class="n">12</div><div class="l">Cut / folded</div></div>
+  <div class="stat"><div class="n">5 / 5</div><div class="l">Axes covered</div></div>
+</div>
+
+<section>
+<h2>Grounding Context</h2>
+<div class="ground">
+<p><b>What it is.</b> HorstReporter is a single Go 1.24 binary that ingests the PSK Reporter MQTT firehose of amateur-radio reception reports (FT8/FT4 spots), keeps a rolling in-memory history in a hub, and streams matched spots over SSE to a browser SPA (Leaflet + Bootstrap + Turf, ~9.8k LOC, with an in-progress Svelte migration). It gives operators real-time HF propagation awareness — point at your callsign/grid and see which bands are open, how far signals reach, best directions, and a per-band "DX Potential" score against a historical baseline, all without transmitting.</p>
+<p><b>A native operator app already half-exists.</b> <code>cmd/horstoperator-agent</code> uses <code>fyne.io/systray</code> for a Windows tray with a 3-colour status icon, a menu, PowerShell toast notifications, scheduled-task restart logic, a local-first reverse-proxy on <code>127.0.0.1:9955</code>, and a <code>Health()</code>/<code>runDiagnostics()</code> readiness model. But it is Windows-only, and its "Open UI" action still just opens the <em>browser</em>. There is no native rendering and no macOS/Linux presence.</p>
+<p><b>The core is already browser-independent.</b> <code>mqtt.go</code>, <code>hub.go</code>, <code>spot.go</code>, <code>dx_conditions.go</code>, and <code>hot_bands.go</code> are largely pure Go: scoring takes a <code>history []MQTTMessage</code> slice plus <code>now</code>, and Postgres is optional behind <code>store == nil</code> guards. The load-bearing coupling is that the Hub exposes <em>no</em> Subscribe/Unsubscribe API — the only way to register a client and drain its channel is inlined inside the SSE handler in <code>server.go</code>, interleaved with event-stream framing and gzip.</p>
+<p><b>Where the weight is.</b> The desktop path inherits server-grade defaults: a <em>required</em> Postgres (<code>-dx-postgres-fail-fast</code> defaults true), a subscription to the entire global <code>pskr/filter/v2/#</code> feed, an ~80&nbsp;MB <code>dx_baseline.json</code> loaded at runtime, and a 5.3&nbsp;MB embedded static tree (2.9&nbsp;MB of which is <code>world.geojson</code>, plus vendored Leaflet/Bootstrap/Turf). The canonical map math — azimuthal-equidistant projection, great-circle interpolation, Maidenhead locator — currently lives in JavaScript and is duplicated and divergent versus the Go side (Go's locator returns a square centre; JS returns corner bounds). The 2026 native-Go landscape (Gio, Ebiten, <code>energye/systray</code>, <code>caseymrm/menuet</code>, Paho MQTT channel-feeds) makes a small always-on native client genuinely feasible — Tailscale's menubar GUI is the gold-standard precedent.</p>
+</div>
+</section>
+
+<section>
+<h2>Topic Axes</h2>
+<ol class="axes">
+  <li><b>Always-on presence</b> — menubar/tray shell, native notifications, start-at-login, idle footprint.</li>
+  <li><b>Native rendering</b> — map projections, azimuthal/great-circle, the spot canvas, without a browser.</li>
+  <li><b>Core reuse &amp; data plane</b> — extracting the Go core as a library; MQTT-direct vs SSE; lightweight data.</li>
+  <li><b>Glanceability &amp; interaction</b> — what surfaces at a glance vs on click; the operator's workflow.</li>
+  <li><b>Footprint &amp; distribution</b> — binary size, startup, memory, packaging, cross-platform, offline.</li>
+</ol>
+</section>
+
+<section>
+<h2>Ranked Ideas</h2>
+<ul class="jump">
+  <li><a href="#i1"><span class="k">1</span>The horstcore seam</a></li>
+  <li><a href="#i2"><span class="k">2</span>Lean embedded profile</a></li>
+  <li><a href="#i3"><span class="k">3</span>Native renderer</a></li>
+  <li><a href="#i4"><span class="k">4</span>Cross-platform presence</a></li>
+  <li><a href="#i5"><span class="k">5</span>Menubar instrument</a></li>
+  <li><a href="#i6"><span class="k">6</span>Sentinel mode</a></li>
+  <li><a href="#i7"><span class="k">7</span>Close the loop</a></li>
+</ul>
+
+<!-- IDEA 1 -->
+<article class="idea" id="i1">
+  <div class="idea-head"><span class="idnum">1.</span><h3>The <code>horstcore</code> seam — give the Hub a <code>Subscribe()</code> and let the GUI read spots in-process</h3></div>
+  <div class="chips">
+    <span class="chip axis">Axis 3 · Core reuse &amp; data plane</span>
+    <span class="chip conf">Confidence 90%</span>
+    <span class="chip cx">Complexity High</span>
+  </div>
+
+  <div class="fig">
+  <svg viewBox="0 0 860 230" role="img" aria-label="Before and after data path: today spots leave the hub only through the SSE HTTP handler; after the refactor the native UI reads a Go channel directly.">
+    <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker></defs>
+    <text x="12" y="20" class="s-tm">TODAY — the only exit is the SSE handler</text>
+    <rect class="s-box" x="12" y="32" width="86" height="40" rx="6"/><text x="55" y="56" class="s-t" text-anchor="middle">MQTT</text>
+    <rect class="s-box" x="138" y="32" width="86" height="40" rx="6"/><text x="181" y="56" class="s-t" text-anchor="middle">Hub</text>
+    <rect class="s-warn" x="264" y="22" width="190" height="60" rx="6"/>
+    <text x="359" y="44" class="s-t" text-anchor="middle">SSE streamHandler</text>
+    <text x="359" y="62" class="s-tm" text-anchor="middle">register Client · JSON · gzip</text>
+    <rect class="s-box" x="494" y="32" width="110" height="40" rx="6"/><text x="549" y="56" class="s-t" text-anchor="middle">loopback HTTP</text>
+    <rect class="s-grey" x="644" y="32" width="100" height="40" rx="6"/><text x="694" y="56" class="s-t" text-anchor="middle">Browser</text>
+    <line class="s-arrow" x1="98" y1="52" x2="136" y2="52"/>
+    <line class="s-arrow" x1="224" y1="52" x2="262" y2="52"/>
+    <line class="s-arrow" x1="454" y1="52" x2="492" y2="52"/>
+    <line class="s-arrow" x1="604" y1="52" x2="642" y2="52"/>
+
+    <text x="12" y="138" class="s-tm">AFTER — Subscribe() returns a channel; SSE becomes one optional adapter</text>
+    <rect class="s-box" x="12" y="150" width="86" height="40" rx="6"/><text x="55" y="174" class="s-t" text-anchor="middle">MQTT</text>
+    <rect class="s-acc" x="138" y="150" width="200" height="40" rx="6"/>
+    <text x="238" y="168" class="s-t" text-anchor="middle">horstcore Hub</text>
+    <text x="238" y="184" class="s-tc" text-anchor="middle">Subscribe() ⟶ &lt;-chan Spot</text>
+    <rect class="s-acc" x="430" y="150" width="150" height="40" rx="6"/><text x="505" y="174" class="s-t" text-anchor="middle">Native UI (Gio)</text>
+    <rect class="s-grey" x="636" y="150" width="180" height="40" rx="6"/>
+    <text x="726" y="168" class="s-t" text-anchor="middle">SSE adapter</text>
+    <text x="726" y="184" class="s-tm" text-anchor="middle">optional, for browser</text>
+    <line class="s-arrow" x1="98" y1="170" x2="136" y2="170"/>
+    <line class="s-arrow" x1="338" y1="170" x2="428" y2="170"/>
+    <text x="383" y="143" class="s-lbl" text-anchor="middle">in-process, no serialization</text>
+    <line class="s-arrow" x1="580" y1="170" x2="634" y2="170"/>
+  </svg>
+  <figcaption>The seam is the keystone: every other native idea depends on getting spots out of the hub without an HTTP round-trip.</figcaption>
+  </div>
+
+  <dl>
+    <dt>Description</dt><dd><p>Carve <code>mqtt</code>/<code>hub</code>/<code>spot</code>/<code>dx</code> into a reusable <code>horstcore</code> module and add a real <code>Subscribe(targets) (&lt;-chan Spot, cancel)</code> / <code>Unsubscribe</code> API to the Hub. The native render loop ranges over that channel directly; SSE, JSON marshalling, gzip, and the loopback server become one optional adapter layered on top of the seam rather than the seam itself.</p></dd>
+    <dt>Basis</dt><dd><span class="basis"><span class="tag">direct:</span> Verified — <code>hub.go</code> exposes only <code>broadcastMsg</code>; client registration is inlined in <code>server.go</code> (~lines 94–155); <code>go.mod</code> already carries <code>replace dxlens =&gt; ../dxlens</code> as a sibling-library carve-out precedent.</span></dd>
+    <dt>Rationale</dt><dd><p>This is the single structural blocker. While the only path to a spot is an HTTP handler, "native" is a browser tab in disguise wrapped around a localhost server. Cutting this seam once converts an HTTP-shaped product into a library-shaped one and unblocks the renderer, the menubar instrument, in-process scoring, the recorder, and any future HorstSuite frontend.</p></dd>
+    <dt>Downsides</dt><dd><p>Largest refactor in the set; touches the hottest code path. Needs care around the history-backfill scan and client lifecycle currently entangled with the flusher. Package globals (<code>hub</code>, <code>dxBaseline</code>, <code>logLevel</code>) must become injected dependencies, which ripples through <code>main.go</code> wiring.</p></dd>
+  </dl>
+</article>
+
+<!-- IDEA 2 -->
+<article class="idea" id="i2">
+  <div class="idea-head"><span class="idnum">2.</span><h3>The lean embedded profile — your horizon, not the planet; no database; a baseline that grows itself</h3></div>
+  <div class="chips">
+    <span class="chip axis">Axis 5 · Footprint &amp; distribution</span>
+    <span class="chip conf">Confidence 85%</span>
+    <span class="chip cx">Complexity Medium</span>
+  </div>
+  <dl>
+    <dt>Description</dt><dd><p>Three server-era weights that sabotage "small + always around," removed together as one desktop profile: (a) subscribe to topic patterns scoped to the operator's target instead of the global <code>pskr/filter/v2/#</code> firehose, letting the broker filter; (b) default to in-memory and compile Postgres out of the desktop build via a build tag; (c) drop the ~80&nbsp;MB <code>dx_baseline.json</code> and self-bootstrap a small per-target baseline from the operator's own live stream via the existing <code>Observe()</code> accumulation.</p></dd>
+    <dt>Basis</dt><dd><span class="basis"><span class="tag">direct:</span> Verified — <code>mqtt.go:91</code> subscribes <code>pskr/filter/v2/#</code> ("Subscribed to global PSKReporter MQTT feed"); the topic encodes <code>…/{senderCall}/{receiverCall}/{senderLocator}/{receiverLocator}</code>. <code>-dx-postgres-fail-fast</code> defaults <code>true</code> (<code>main.go:195</code>) yet <code>store == nil</code> is first-class. <code>dx_baseline.json</code> is 84&nbsp;MB loaded at runtime; <code>Observe()</code> is pure in-memory accumulation.</span></dd>
+    <dt>Rationale</dt><dd><p>An always-on app cannot demand a Postgres daemon, parse every FT8 spot on Earth to watch one grid, and load 80&nbsp;MB of strangers' history at startup. The code already proves each weight is optional; the desktop profile is mostly <em>removal</em>, which compounds into a deployable single-file app that idles cheaply on a laptop or a shack Raspberry Pi.</p></dd>
+    <dt>Downsides</dt><dd><p>Verifier caveat: MQTT cannot prefix-match within a topic segment, so the "neighbouring squares / reachable horizon" case requires enumerating exact locator squares, not a single wildcard. A self-bootstrapped baseline starts at low confidence (grey) and needs run-time before scores are trustworthy — a cold-start window the global file avoided.</p></dd>
+  </dl>
+</article>
+
+<!-- IDEA 3 -->
+<article class="idea" id="i3">
+  <div class="idea-head"><span class="idnum">3.</span><h3>A native vector renderer — azimuthal-first, no tiles, no browser, one canonical Go geo package</h3></div>
+  <div class="chips">
+    <span class="chip axis">Axis 2 · Native rendering</span>
+    <span class="chip conf">Confidence 80%</span>
+    <span class="chip cx">Complexity High</span>
+  </div>
+
+  <div class="fig">
+  <svg viewBox="0 0 860 250" role="img" aria-label="Today's browser rendering stack versus a native Gio vector stack fed by a canonical Go geo package.">
+    <defs><marker id="ah3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker></defs>
+    <text x="12" y="20" class="s-tm">TODAY · browser-bound (~7 MB of assets)</text>
+    <rect class="s-grey" x="12" y="30" width="360" height="34" rx="6"/><text x="192" y="52" class="s-t" text-anchor="middle">DOM · Leaflet · Bootstrap · Turf</text>
+    <rect class="s-warn" x="12" y="72" width="360" height="34" rx="6"/><text x="192" y="94" class="s-t" text-anchor="middle">world.geojson — 2.9 MB</text>
+    <rect class="s-grey" x="12" y="114" width="360" height="34" rx="6"/><text x="192" y="136" class="s-t" text-anchor="middle">JS geo math (AEQD, haversine) — duplicated</text>
+    <rect class="s-grey" x="12" y="156" width="360" height="34" rx="6"/><text x="192" y="178" class="s-t" text-anchor="middle">Go locator math — divergent copy</text>
+    <text x="192" y="214" class="s-lbl" text-anchor="middle">two map-math sources that drift</text>
+
+    <text x="488" y="20" class="s-tm">NATIVE · Gio immediate-mode GPU</text>
+    <rect class="s-acc" x="488" y="30" width="360" height="48" rx="6"/>
+    <text x="668" y="50" class="s-t" text-anchor="middle">Gio / Ebiten vector canvas</text>
+    <text x="668" y="68" class="s-tm" text-anchor="middle">spots · grid cells · great-circles · grey-line</text>
+    <line class="s-arrow" stroke="var(--muted)" stroke-width="2" fill="none" marker-end="url(#ah3)" x1="668" y1="120" x2="668" y2="82"/>
+    <text x="690" y="104" class="s-lbl" text-anchor="start">draws from</text>
+    <rect class="s-acc" x="488" y="122" width="360" height="48" rx="6"/>
+    <text x="668" y="142" class="s-tc" text-anchor="middle">horstgeo (Go)</text>
+    <text x="668" y="160" class="s-tm" text-anchor="middle">AEQD · great-circle · locator · terminator</text>
+    <rect class="s-box" x="488" y="186" width="360" height="34" rx="6"/><text x="668" y="208" class="s-t" text-anchor="middle">quantized coastline (small) — no map library</text>
+  </svg>
+  <figcaption>The azimuthal view needs no map tiles — it is pure trig feeding vector draws, the one screen that is genuinely <em>cheaper</em> native than in a browser.</figcaption>
+  </div>
+
+  <dl>
+    <dt>Description</dt><dd><p>Build the map/azimuth surface on Gio's immediate-mode GPU vector renderer (Ebiten is the alternative), driving both projections from a single canonical Go geo package — <code>horstgeo</code> — that owns AEQD project/unproject, great-circle interpolation, Maidenhead locator, the DXCC palettes, and the grey-line terminator. Ship a quantized low-poly coastline instead of the 2.9&nbsp;MB GeoJSON. Start with the azimuthal (PPI radar-scope) framing: spots are blips that fade with <code>Spot.AgeSeconds</code>, range rings show distance, bearing shows great-circle azimuth.</p></dd>
+    <dt>Basis</dt><dd><span class="basis"><span class="tag">direct:</span> AEQD is self-contained math in <code>azimuth-runtime.js</code>; <code>world.geojson</code> is 2.94&nbsp;MB; Go locator returns centre (<code>spot.go</code> "Center of field") vs JS corners — a real divergence.  <span class="tag">external:</span> Gio (gioui.org) — tiny GPU-vector binaries, proven by Tailscale's menubar and gotraceui.</span></dd>
+    <dt>Rationale</dt><dd><p>"No webviews" is decided here. A native renderer <em>must</em> reimplement the map math regardless — doing it once in Go (not a fifth fork in a fifth language) retires the JS↔Go drift permanently and gives scoring and rendering one shared geodesy. The radar-scope framing maps 1:1 onto an egocentric "who can hear me, which way, how far" question the data was always about.</p></dd>
+    <dt>Downsides</dt><dd><p>Largest build effort and a one-way-door toolkit choice (Gio vs Ebiten vs Fyne) for the whole rendering future. Dropping <code>world.geojson</code> means sourcing a smaller coastline — it is reference geography, not tiles, so "drop it" really means "replace with a lighter vector," not "no land." A tiled Mercator mode, if wanted, still needs a tile cache and Web-Mercator math.</p></dd>
+  </dl>
+</article>
+
+<!-- IDEA 4 -->
+<article class="idea" id="i4">
+  <div class="idea-head"><span class="idnum">4.</span><h3>A cross-platform native presence shell — one <code>Presence</code> interface, not a Windows-only tray</h3></div>
+  <div class="chips">
+    <span class="chip axis">Axis 1 · Always-on presence</span>
+    <span class="chip conf">Confidence 85%</span>
+    <span class="chip cx">Complexity Medium</span>
+  </div>
+  <dl>
+    <dt>Description</dt><dd><p>Define a small <code>Presence</code> interface — <code>SetStatus(running/warn/error)</code>, <code>SetTitle(live)</code>, <code>Notify(title, body)</code>, <code>OnMenu(...)</code> — implemented by the existing Windows tray and by <code>caseymrm/menuet</code> (macOS NSStatusBar, <code>SMAppService</code> start-at-login) and <code>energye/systray</code> on Linux. Keep the agent's tested ops scaffolding — <code>Health()</code>/<code>runDiagnostics()</code> readiness, clean restart, login-at-startup, diagnostics menu — and replace only the single "Open UI → browser" action with "open the native window."</p></dd>
+    <dt>Basis</dt><dd><span class="basis"><span class="tag">direct:</span> <code>tray_other.go</code> logs "<code>-tray is only supported on Windows; running headless</code>"; the Windows <code>openURL</code> action reverse-proxies the browser UI; <code>Health()</code> already yields the green/amber/red signal. <span class="tag">external:</span> <code>fyne.io/systray</code> is already a dependency and is cross-platform — the Windows-only restriction is self-imposed via build tags, so this is lower-effort than it looks.</span></dd>
+    <dt>Rationale</dt><dd><p>"Always around" is currently a Windows-only promise that doesn't exist for roughly half of hams' machines. An interface seam makes macOS/Linux presence an <em>implementation</em>, not a rewrite, and a surprising amount of supervisor/readiness/restart plumbing already survives the native pivot — the work is far smaller framed as "replace the render target" than "build an agent."</p></dd>
+    <dt>Downsides</dt><dd><p>Tray libraries carry platform-specific packaging realities (macOS wants an <code>.app</code> bundle + <code>LSUIElement</code>; Linux DBus StatusNotifier variance). Whether one Gio app owns both tray and window, or tray (menuet) composes with a Gio window, is an architecture decision that interacts with idea 3's toolkit choice.</p></dd>
+  </dl>
+</article>
+
+<!-- IDEA 5 -->
+<article class="idea" id="i5">
+  <div class="idea-head"><span class="idnum">5.</span><h3>The menubar <em>is</em> the instrument — a live title and glyph, not a window you open</h3></div>
+  <div class="chips">
+    <span class="chip axis">Axis 4 · Glanceability &amp; interaction</span>
+    <span class="chip conf">Confidence 85%</span>
+    <span class="chip cx">Complexity Low</span>
+  </div>
+  <dl>
+    <dt>Description</dt><dd><p>Render the richest signal the product computes — the green/yellow/red overall status plus the best band and the hot-band trend glyph — <em>as the menubar text itself</em>, e.g. <code>20m ↗ green</code>, updating in place. Optionally draw a tiny per-band histogram into the ~22&nbsp;px status icon (one bar per band, height = DX score, tint = band colour). The map window becomes the rare drill-down; most days the operator reads one line and never opens anything.</p></dd>
+    <dt>Basis</dt><dd><span class="basis"><span class="tag">direct:</span> <code>classifyOverallStatus</code> returns green (≥65) / yellow (≥35) / red / grey (<code>dx_conditions.go</code>); hot-band glyphs ★/↗/↑ with reasons exist in <code>hot_bands.go</code> + <code>hot-band-indicator.js</code>; today's tray icon is only tri-state health. <span class="tag">external:</span> <code>menuet</code> live NSStatusBar titles; the "live title + small menu" pattern is loved (Tailscale, "Why Awake?", iStat Menus / MenuMeters for the in-glyph histogram).</span></dd>
+    <dt>Rationale</dt><dd><p>"Scan the whole spectrum in a few seconds" is the product's core promise; a live menubar title delivers it in <em>zero</em> seconds and zero clicks — the literal payoff of "always around." Because scoring is a pure in-process function, the same evaluation drives the title, the dropdown, and notifications from one call per cycle.</p></dd>
+    <dt>Downsides</dt><dd><p>Deciding exactly what belongs in the always-visible title vs the dropdown is a genuine product call — too much and it's noise, too little and it's a status dot. The in-glyph histogram is fiddly at 22&nbsp;px and platform-specific. Depends on idea 1's in-process feed to be cheap.</p></dd>
+  </dl>
+</article>
+
+<!-- IDEA 6 -->
+<article class="idea" id="i6">
+  <div class="idea-head"><span class="idnum">6.</span><h3>Sentinel mode — the app watches the operator, not the reverse</h3></div>
+  <div class="chips">
+    <span class="chip axis">Axis 1 · Always-on presence &nbsp;/&nbsp; Axis 4 · Interaction</span>
+    <span class="chip conf">Confidence 80%</span>
+    <span class="chip cx">Complexity Medium</span>
+  </div>
+
+  <div class="fig">
+  <svg viewBox="0 0 860 150" role="img" aria-label="Today the operator opens a tab and stares; in sentinel mode a silent daemon taps the operator on the shoulder only when a band opens.">
+    <defs><marker id="ah6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker></defs>
+    <text x="12" y="18" class="s-tm">TODAY — pull</text>
+    <rect class="s-grey" x="12" y="28" width="110" height="36" rx="6"/><text x="67" y="51" class="s-t" text-anchor="middle">Operator</text>
+    <rect class="s-grey" x="170" y="28" width="110" height="36" rx="6"/><text x="225" y="51" class="s-t" text-anchor="middle">opens tab</text>
+    <rect class="s-grey" x="328" y="28" width="110" height="36" rx="6"/><text x="383" y="51" class="s-t" text-anchor="middle">stares</text>
+    <line class="s-arrow" x1="122" y1="46" x2="168" y2="46"/>
+    <line class="s-arrow" x1="280" y1="46" x2="326" y2="46"/>
+
+    <text x="12" y="100" class="s-tm">SENTINEL — push, on change only</text>
+    <rect class="s-acc" x="12" y="110" width="150" height="36" rx="6"/>
+    <text x="87" y="133" class="s-t" text-anchor="middle">silent daemon</text>
+    <rect class="s-acc" x="210" y="110" width="210" height="36" rx="6"/>
+    <text x="315" y="128" class="s-t" text-anchor="middle">hot_bands: surprise / surge</text>
+    <text x="315" y="143" class="s-tm" text-anchor="middle">state transition?</text>
+    <rect class="s-box" x="470" y="110" width="170" height="36" rx="6"/>
+    <text x="555" y="133" class="s-t" text-anchor="middle">native notification</text>
+    <rect class="s-grey" x="688" y="110" width="150" height="36" rx="6"/><text x="763" y="133" class="s-t" text-anchor="middle">Operator (at rig)</text>
+    <line class="s-arrow" x1="162" y1="128" x2="208" y2="128"/>
+    <line class="s-arrow" x1="420" y1="128" x2="468" y2="128"/>
+    <line class="s-arrow" x1="640" y1="128" x2="686" y2="128"/>
+  </svg>
+  <figcaption>The default mode renders nothing and interrupts only when a band genuinely opens — the one moment of value, delivered without ever being looked at.</figcaption>
+  </div>
+
+  <dl>
+    <dt>Description</dt><dd><p>Invert "operator opens a tab." The default is a silent background daemon that fires a native OS notification when a band actually opens — driven by the existing <code>hot_bands</code> classifier (surprise / dx-surge / rising). Gate firing on <em>state transitions</em>, not polling, so a steady band stays quiet (calm-technology policy) and alert fatigue doesn't set in. Let the operator author their own rules over the in-process stream ("10m, bearing 290–320°, rate &gt; 3× baseline"), and optionally surface events as audio — a soft CW-style chirp, pitch mapped to band — since hams decode tones natively and their eyes are on the rig.</p></dd>
+    <dt>Basis</dt><dd><span class="basis"><span class="tag">direct:</span> <code>hot_bands.go</code> defines surprise (baseline ≤0.1 &amp; ratio ≥5×), dx-surge (≥5000&nbsp;km), and rising as hardcoded gates; <code>OVERVIEW.md</code> roadmap asks for "per-band opening alerts … browser alert or audio cue when a quiet band spikes above baseline"; <code>notify</code> today is Windows-only PowerShell; <code>SpotsPerMinute</code> exists. <span class="tag">reasoned:</span> a ham shack and a trading desk both watch a high-rate firehose the operator can't stare at — pre-declared conditions + push on match is the proven shape.</span></dd>
+    <dt>Rationale</dt><dd><p>6m/10m openings are short and unpredictable — exactly the case where a closed browser tab fails the operator. An always-on native notifier turns a roadmap aspiration into the feature that justifies running this 24/7, and answers "if the operator never opens a window all day, did the app still do its job?" with yes.</p></dd>
+    <dt>Downsides</dt><dd><p>Alert cadence, dedup, and quiet-hours are make-or-break — get them wrong and it's muted on day one. User-authored rules add a config surface and a small rule-evaluation engine. The audio channel is a genuinely different mode some operators will want off by default.</p></dd>
+  </dl>
+</article>
+
+<!-- IDEA 7 -->
+<article class="idea" id="i7">
+  <div class="idea-head"><span class="idnum">7.</span><h3>Close the loop — from "best DX is at 47°" to one-tap antenna command</h3></div>
+  <div class="chips">
+    <span class="chip axis">Axis 4 · Glanceability &amp; interaction</span>
+    <span class="chip conf">Confidence 65%</span>
+    <span class="chip cx">Complexity Medium</span>
+  </div>
+  <dl>
+    <dt>Description</dt><dd><p>The scoring engine already computes a <code>DominantDirection</code> per band; the operator panel already commands a PSTRotator. A native app can fuse these in-process — surface "best DX is at 47°" <em>and</em> offer one-tap "turn the antenna there" — with no browser, no SSE, no reverse proxy. The propagation viewer becomes a station controller, collapsing the viewer and the operator-agent into one native loop.</p></dd>
+    <dt>Basis</dt><dd><span class="basis"><span class="tag">direct:</span> Verified — per-band <code>DominantDirection</code> exists (<code>dx_conditions.go</code>); <code>opmode.js</code> drives a real PSTRotator over the agent's local API; <code>OVERVIEW.md</code> describes "click spot → command rotator." Today this requires the agent's loopback reverse-proxy to the browser UI — a native app removes that whole layer.</span></dd>
+    <dt>Rationale</dt><dd><p>It shifts the product from "tells you where DX is" to "points your antenna at it" — a category change the browser architecture actively obstructs (it needs the loopback proxy bridge). And it collapses two apps plus a proxy into a single native loop.</p></dd>
+    <dt>Downsides</dt><dd><p>Rig/rotator control is safety- and hardware-sensitive — accidental antenna movement is a real failure mode, so it needs guardrails and explicit confirmation. Only relevant to operators who run a rotator, narrowing the audience. Depends on the native shell (ideas 1, 3, 4) to remove the proxy it currently relies on.</p></dd>
+  </dl>
+</article>
+</section>
+
+<section>
+<h2>Rejection Summary</h2>
+<table>
+  <thead><tr><th>Candidate</th><th>Reason cut or folded</th></tr></thead>
+  <tbody>
+    <tr><td class="r">Histogram-in-glyph</td><td>Folded into idea 5 as a variant of the menubar instrument.</td></tr>
+    <tr><td class="r">Canonical Go geo pkg</td><td>Folded into idea 3 — a native renderer forces the extraction; not separable.</td></tr>
+    <tr><td class="r">PPI radar framing</td><td>Folded into idea 3 — a framing layer on the same vector engine, not an independent idea (verifier).</td></tr>
+    <tr><td class="r">Squawk-box watchlist</td><td>Folded into idea 6 — a rules layer on the alert engine.</td></tr>
+    <tr><td class="r">Calm / saccade policy</td><td>Weak as a standalone — a firing-policy parameter on idea 6, captured there (verifier).</td></tr>
+    <tr><td class="r">Opening Nowcast</td><td>Overreach — the basis supports a trend sparkline, not the claimed "peak in ~8&nbsp;min" forecast; no cell-tracking model exists (verifier).</td></tr>
+    <tr><td class="r">Audio-beacon mode</td><td>Folded into idea 6 as a notification channel rather than a standalone direction.</td></tr>
+    <tr><td class="r">Native config + presets</td><td>Necessary plumbing implied by ideas 1/5; not a discussion-worthy direction on its own.</td></tr>
+    <tr><td class="r">Auto band selection</td><td>A UX opinion riding on ideas 5/6; better resolved during brainstorm than as a separate direction.</td></tr>
+    <tr><td class="r">Sub-5 MB / 50 ms target</td><td>Weak — sub-5&nbsp;MB is unachievable for Go + MQTT + a native GUI (8–15&nbsp;MB realistic); the directional footprint goal lives in ideas 2/3 (verifier).</td></tr>
+    <tr><td class="r">Reuse agent scaffolding</td><td>Folded into idea 4 — the presence shell already inherits the supervisor/readiness machinery.</td></tr>
+    <tr><td class="r">E-ink shack dial</td><td>Weak — scope-drift onto speculative hardware, off the native-desktop subject (verifier).</td></tr>
+  </tbody>
+</table>
+<p style="font-size:.88rem;color:var(--muted)">All five topic axes have at least one survivor — no coverage gaps.</p>
+</section>
+
+<footer class="composition-signal">Composed 2026-06-30 by ce-ideate from the user prompt <code>#horstoperator as a native code app, no webviews. small. blazingly fast. always around</code>, grounded in the horstreporter repository. Run adb690b8 · directional discovery artifact, not a plan.</footer>
+
+</div>
+</body>
+</html>
