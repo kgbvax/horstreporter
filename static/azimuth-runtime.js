@@ -1164,8 +1164,8 @@ function drawAzimuthIndicator(ctx, width, height) {
         const isCardinal = bearing === 0 || bearing === 90 || bearing === 180 || bearing === 270;
         const isMajor = bearing % 30 === 0;
         ctx.strokeStyle = spokeColor;
-        ctx.globalAlpha = isCardinal ? 0.72 : isMajor ? 0.50 : 0.34;
-        radialLine(ctx, centerX, centerY, 0, spokeRadius, bearing, isCardinal ? 1.9 : isMajor ? 1.15 : 0.85);
+        ctx.globalAlpha = isCardinal ? 0.42 : isMajor ? 0.26 : 0.16;
+        radialLine(ctx, centerX, centerY, 0, spokeRadius, bearing, isCardinal ? 1.0 : isMajor ? 0.6 : 0.45);
     }
 
     // 2° minor subdivisions (skip 10° and 30° positions).
