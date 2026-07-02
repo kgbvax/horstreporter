@@ -249,9 +249,9 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
         const nodata = pill.querySelector('.band-nodata-tag');
 
         if (!enabled) {
-            // Disabled: gray pill, muted text.
-            pill.style.backgroundColor = '#6c757d';
-            pill.style.color = '#dee2e6';
+            // Disabled: muted surface + status text, adapts per theme.
+            pill.style.backgroundColor = 'var(--surface-1)';
+            pill.style.color = 'var(--status-color)';
             pill.style.borderColor = 'transparent';
             pill.style.boxShadow = 'none';
             pill.style.opacity = '1';

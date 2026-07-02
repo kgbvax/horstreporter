@@ -104,6 +104,14 @@ body[data-theme="dark"] {
     --accent-tint-strong: color-mix(in srgb, var(--accent) 28%, var(--bg-color));
     --surface-1: color-mix(in srgb, var(--bg-color) 88%, var(--text-color) 12%);
     --control-border: color-mix(in srgb, var(--text-color) 38%, var(--bg-color));
+
+    /* Bridge Bootstrap's body tokens to ours so form controls (.form-control /
+       .form-select use --bs-body-bg, color:--bs-body-color) follow the theme
+       instead of staying white. */
+    --bs-body-bg: var(--bg-color);
+    --bs-body-color: var(--text-color);
+    --bs-secondary-bg: var(--surface-1);
+    --bs-tertiary-bg: var(--surface-1);
 }
 
 body {
@@ -139,6 +147,34 @@ body {
 .leaflet-dragging .leaflet-marker-draggable,
 #azimuth-canvas {
     cursor: default !important;
+}
+
+/* Dark mode: vendor leaflet.css hardcodes #fff on .leaflet-bar (zoom +/−) and
+   the attribution control, leaving white controls floating on the dark map. */
+body[data-theme="dark"] .leaflet-bar a,
+body[data-theme="dark"] .leaflet-bar a:hover,
+body[data-theme="dark"] .leaflet-bar a.leaflet-disabled {
+    background-color: var(--surface-1);
+    color: var(--text-color);
+    border-color: var(--border-color);
+}
+body[data-theme="dark"] .leaflet-bar a:hover {
+    background-color: var(--accent-tint);
+}
+body[data-theme="dark"] .leaflet-control-attribution {
+    background-color: rgba(33, 37, 41, 0.7);
+    color: var(--status-color);
+}
+body[data-theme="dark"] .leaflet-control-attribution a {
+    color: var(--accent);
+}
+
+/* Dark mode: Bootstrap pins .text-muted to a light-theme grey (#6c757d); map
+   the muted status rows in the controls panel and opmode readouts to the
+   brighter --status-color token. */
+body[data-theme="dark"] #controls .text-muted,
+body[data-theme="dark"] #map-stack .text-muted {
+    color: var(--status-color);
 }
 
 .dxcc-entity-marker {
@@ -217,7 +253,7 @@ body {
 
 .spinner {
     border: 3px solid var(--border-color);
-    border-top: 3px solid var(--button-bg);
+    border-top: 3px solid var(--accent);
     border-radius: 50%;
     width: 14px;
     height: 14px;
@@ -664,6 +700,11 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     border-radius: 0.25rem;
     padding: 0 0.3rem;
     white-space: nowrap;
+}
+
+/* Dark mode: a near-black chip vanishes on muted dark pills; use a light chip. */
+body[data-theme="dark"] .band-pill .band-nodata-tag {
+    background: rgba(255, 255, 255, 0.16);
 }
 
 .hot-band-indicator {

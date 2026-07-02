@@ -10,6 +10,18 @@ const WINDOW_SIZE_KEY = 'bandLabWindowSize';
 const TIME_RANGE_KEY = 'bandLabTimeRangeMinutes';
 const BAND_LAB_TIME_RANGE_MINUTES = [15, 30, 60, 120];
 
+// Canvas charts live on the Band Stats panel, whose background follows the
+// theme. Axis text / gridlines that were tuned for a light surface vanish on
+// the dark surface, so pick them per theme. Data-driven colors (band colors,
+// phone/cw guide lines, baseline markers) are readable on both and stay fixed.
+const CHART_PALETTE_LIGHT = { axisText: '#334155', grid: '#64748b', frame: '#64748b' };
+const CHART_PALETTE_DARK = { axisText: '#cbd5e1', grid: '#94a3b8', frame: '#64748b' };
+function chartPalette() {
+    return document.body.getAttribute('data-theme') === 'dark'
+        ? CHART_PALETTE_DARK
+        : CHART_PALETTE_LIGHT;
+}
+
 const runtime = {
     enabled: false,
     initialized: false,
@@ -340,11 +352,12 @@ function drawScatterChart(canvas, points, targetCenter, band, globalMaxDistanceK
     const ph = h - pad.t - pad.b;
 
     ctx.clearRect(0, 0, w, h);
-    drawChartFrame(ctx, pad, pw, ph);
+    const pal = chartPalette();
+    drawChartFrame(ctx, pad, pw, ph, pal);
 
     const data = computeScatterData(points, targetCenter, globalMaxDistanceKm);
     if (!data) {
-        drawNoData(ctx, w, h, 'no distance data');
+        drawNoData(ctx, w, h, 'no distance data', pal);
         return;
     }
     const { samples, maxDist, minSnr, maxSnr, snrRange } = data;
@@ -369,13 +382,13 @@ function drawScatterChart(canvas, points, targetCenter, band, globalMaxDistanceK
 
     if (Number.isFinite(p50Dist)) {
         const x = pad.l + (p50Dist / maxDist) * pw;
-        ctx.strokeStyle = hexToRgba('#64748b', 0.38);
+        ctx.strokeStyle = hexToRgba(pal.grid, 0.38);
         dashedLine(ctx, x, pad.t, x, pad.t + ph, [2, 4], 0.9);
     }
 
     if (Number.isFinite(p90Dist)) {
         const x = pad.l + (p90Dist / maxDist) * pw;
-        ctx.strokeStyle = hexToRgba('#64748b', 0.3);
+        ctx.strokeStyle = hexToRgba(pal.grid, 0.3);
         dashedLine(ctx, x, pad.t, x, pad.t + ph, [2, 5], 0.9);
     }
 
@@ -387,7 +400,7 @@ function drawScatterChart(canvas, points, targetCenter, band, globalMaxDistanceK
     }
 
     const yTicks = [maxSnr, (maxSnr + minSnr) / 2, minSnr];
-    ctx.fillStyle = hexToRgba('#334155', 0.92);
+    ctx.fillStyle = hexToRgba(pal.axisText, 0.92);
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'right';
     yTicks.forEach((tick) => {
@@ -400,16 +413,17 @@ function drawScatterChart(canvas, points, targetCenter, band, globalMaxDistanceK
     ctx.textAlign = 'center';
     xTicks.forEach((tickKm) => {
         const x = pad.l + (tickKm / maxDist) * pw;
-        ctx.strokeStyle = hexToRgba('#64748b', 0.35);
+        ctx.strokeStyle = hexToRgba(pal.grid, 0.35);
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(x, pad.t + ph);
         ctx.lineTo(x, pad.t + ph + 4);
         ctx.stroke();
-        ctx.fillStyle = hexToRgba('#334155', 0.9);
+        ctx.fillStyle = hexToRgba(pal.axisText, 0.9);
         ctx.fillText(formatKmLabel(tickKm), x, pad.t + ph + 12);
     });
     ctx.textAlign = 'left';
+    ctx.fillStyle = hexToRgba(pal.axisText, 0.9);
     ctx.fillText('SNR dB', 2, pad.t + 8);
 }
 
@@ -554,13 +568,14 @@ function drawActivityChart(canvas, points, bandMetrics, minutes) {
     const ph = h - pad.t - pad.b;
 
     ctx.clearRect(0, 0, w, h);
-    drawChartFrame(ctx, pad, pw, ph);
+    const pal = chartPalette();
+    drawChartFrame(ctx, pad, pw, ph, pal);
 
     const data = computeActivityChartData(points, bandMetrics, minutes, Date.now());
     const { binRates, baselineRatesPerBin, baselineTargetUsedPerBin, yMax } = data;
 
     // Faint horizontal gridlines at 0, half, full.
-    ctx.strokeStyle = hexToRgba('#64748b', 0.2);
+    ctx.strokeStyle = hexToRgba(pal.grid, 0.2);
     ctx.lineWidth = 1;
     for (const tick of [0, yMax / 2, yMax]) {
         const y = pad.t + ph - (tick / yMax) * ph;
@@ -631,7 +646,7 @@ function drawActivityChart(canvas, points, bandMetrics, minutes) {
     }
 
     // Y-axis labels (spots/min).
-    ctx.fillStyle = hexToRgba('#334155', 0.95);
+    ctx.fillStyle = hexToRgba(pal.axisText, 0.95);
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'right';
     ctx.fillText(formatRate(yMax), pad.l - 4, pad.t + 8);
@@ -644,8 +659,8 @@ function drawActivityChart(canvas, points, bandMetrics, minutes) {
     ctx.textAlign = 'left';
 }
 
-function drawChartFrame(ctx, pad, pw, ph) {
-    ctx.strokeStyle = hexToRgba('#64748b', 0.45);
+function drawChartFrame(ctx, pad, pw, ph, pal = CHART_PALETTE_LIGHT) {
+    ctx.strokeStyle = hexToRgba(pal.frame, 0.45);
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(pad.l, pad.t + ph);
@@ -654,8 +669,8 @@ function drawChartFrame(ctx, pad, pw, ph) {
     ctx.stroke();
 }
 
-function drawNoData(ctx, w, h, text) {
-    ctx.fillStyle = hexToRgba('#64748b', 0.9);
+function drawNoData(ctx, w, h, text, pal = CHART_PALETTE_LIGHT) {
+    ctx.fillStyle = hexToRgba(pal.grid, 0.9);
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';

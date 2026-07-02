@@ -1463,19 +1463,9 @@ function drawAntennaDirectionalLobe(ctx, width, height, station, centerBearingDe
     for (const p of leftEdge.slice(1)) {
         ctx.lineTo(p.x, p.y);
     }
-    if (leftArcConnectOk && rightArcConnectOk) {
-        for (const p of arcPoints.slice(1)) {
-            ctx.lineTo(p.x, p.y);
-        }
-    }
-    for (const p of rightInward) {
+    ctx.moveTo(station.x, station.y);
+    for (const p of rightEdge.slice(1)) {
         ctx.lineTo(p.x, p.y);
-    }
-    ctx.moveTo(leftTip.x, leftTip.y);
-    if (leftArcConnectOk && rightArcConnectOk) {
-        for (const p of arcPoints.slice(1)) {
-            ctx.lineTo(p.x, p.y);
-        }
     }
     ctx.strokeStyle = lineStyle;
     ctx.lineWidth = 1.7;
@@ -1497,7 +1487,7 @@ function drawAntennaOverlay(ctx, width, height) {
         y: stationPoint.y
     };
 
-    const radiusKm = Math.max(1000, Math.min(state.horizonKm * 0.9, 12000));
+    const radiusKm = state.horizonKm;
     const heading = overlay.azimuthDeg;
     const beamwidth = overlay.beamwidth3dBDeg;
     const isDark = state.theme === 'dark';
