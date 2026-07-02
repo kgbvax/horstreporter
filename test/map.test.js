@@ -27,8 +27,7 @@ function installLeafletMock() {
     };
 
     mockLayerGroup = {
-        addTo: vi.fn(function addTo() { return this; }),
-        clearLayers: vi.fn()
+        addTo: vi.fn(function addTo() { return this; })
     };
 
     globalThis.L = {
@@ -39,8 +38,6 @@ function installLeafletMock() {
         tileLayer: vi.fn(() => ({ addTo: vi.fn() })),
         layerGroup: vi.fn(() => mockLayerGroup),
         marker: vi.fn(() => ({ addTo: vi.fn() })),
-        polygon: vi.fn(() => ({ addTo: vi.fn() })),
-        polyline: vi.fn(() => ({ addTo: vi.fn() })),
         divIcon: vi.fn((options) => options),
         geoJSON: vi.fn(() => ({ addTo: vi.fn() })),
         imageOverlay: vi.fn(() => ({ addTo: vi.fn() })),
@@ -56,11 +53,7 @@ async function importFreshMapModule() {
         getGraylineEnabled: vi.fn(() => false),
         getGraylineOverlayOpacities: vi.fn(() => ({ graylineOpacity: 0, nightOpacity: 0 })),
         getMercatorDxccLabelsEnabled: vi.fn(() => true),
-        getSubsolarPoint: vi.fn(() => ({ lat: 0, lng: 0 })),
-        greatCirclePoints: vi.fn(() => [[52, 7], [40, -74]]),
-        destinationPoint: vi.fn((lat, lng, bearing, dist) => [lat + dist / 111, lng + bearing / 100]),
-        hexToRgb: vi.fn(() => [0, 0, 0]),
-        blendOverlayColors: vi.fn((base) => base)
+        getSubsolarPoint: vi.fn(() => ({ lat: 0, lng: 0 }))
     }));
     vi.doMock('../static/azimuth-runtime.js', () => ({
         selectProminentDxccLabels: vi.fn(() => ([{ lat: 52, lng: 7, prefix: 'DL' }]))
@@ -113,76 +106,6 @@ describe('map.js mercator dxcc labels', () => {
 
         // The resize hook re-derives the constraint when the container changes.
         expect(mockMap.on).toHaveBeenCalledWith('resize', expect.any(Function));
-    });
-});
-
-describe('map.js mercator antenna overlay', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-        setupDom();
-        installLeafletMock();
-        document.body.setAttribute('data-theme', 'light');
-    });
-
-    it('draws one cone (polygon + two side edges) for a forward beam', async () => {
-        await importFreshMapModule();
-        mapModule.initMap([52, 7], 2);
-
-        mapModule.setMercatorAntennaOverlay({
-            enabled: true,
-            stationLat: 52,
-            stationLng: 7,
-            azimuthDeg: 90,
-            beamwidth3dBDeg: 60,
-            mode: 'forward'
-        });
-
-        expect(globalThis.L.polygon).toHaveBeenCalledTimes(1);
-        expect(globalThis.L.polyline).toHaveBeenCalledTimes(2); // left + right edge
-    });
-
-    it('draws two cones for bidirectional', async () => {
-        await importFreshMapModule();
-        mapModule.initMap([52, 7], 2);
-
-        mapModule.setMercatorAntennaOverlay({
-            enabled: true,
-            stationLat: 52,
-            stationLng: 7,
-            azimuthDeg: 90,
-            beamwidth3dBDeg: 60,
-            mode: 'bidirectional'
-        });
-
-        expect(globalThis.L.polygon).toHaveBeenCalledTimes(2);
-        expect(globalThis.L.polyline).toHaveBeenCalledTimes(4);
-    });
-
-    it('clears the layer and draws nothing when disabled', async () => {
-        await importFreshMapModule();
-        mapModule.initMap([52, 7], 2);
-
-        mapModule.setMercatorAntennaOverlay({ enabled: false });
-
-        expect(globalThis.L.polygon).not.toHaveBeenCalled();
-        expect(mockLayerGroup.clearLayers).toHaveBeenCalled();
-    });
-
-    it('unwrapLngSeq keeps longitudes continuous across the antimeridian', async () => {
-        await importFreshMapModule();
-        // A path stepping across +180 → -180 must become continuous (…178,182,…)
-        // rather than jumping, so Leaflet never draws a line across the whole map.
-        const seq = mapModule.unwrapLngSeq([
-            [10, 170], [11, 178], [12, -176], [13, -170]
-        ]);
-        const lngs = seq.map((p) => p[1]);
-        expect(lngs[0]).toBe(170);
-        expect(lngs[1]).toBe(178);
-        expect(lngs[2]).toBe(184);  // -176 unwrapped to +184
-        expect(lngs[3]).toBe(190);  // -170 unwrapped to +190
-        for (let i = 1; i < lngs.length; i += 1) {
-            expect(Math.abs(lngs[i] - lngs[i - 1])).toBeLessThanOrEqual(180);
-        }
     });
 });
 

@@ -1,5 +1,4 @@
 import { setAzimuthAntennaOverlay } from './azimuth-runtime.js';
-import { setMercatorAntennaOverlay } from './map.js';
 import { locatorToBounds, freqHzToBand } from './utils.js';
 
 const opModeState = {
@@ -392,12 +391,11 @@ export function syncAntennaOverlay() {
 
     if (!canDraw) {
         setAzimuthAntennaOverlay({ enabled: false });
-        setMercatorAntennaOverlay({ enabled: false });
         opModeState.requestRender();
         return;
     }
 
-    const overlayPayload = {
+    setAzimuthAntennaOverlay({
         enabled: true,
         stationLat: opModeState.station.lat,
         stationLng: opModeState.station.lng,
@@ -408,9 +406,7 @@ export function syncAntennaOverlay() {
         mode: overlayModeFor(a.mode),
         pendingTargetBearingDeg: opModeState.pendingTargetBearingDeg,
         pendingTargetLabel: opModeState.pendingTargetLabel
-    };
-    setAzimuthAntennaOverlay(overlayPayload);
-    setMercatorAntennaOverlay(overlayPayload);
+    });
     opModeState.requestRender();
 }
 
