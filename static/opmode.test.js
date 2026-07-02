@@ -4,6 +4,7 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 // opmode.js pulls in the heavy azimuth runtime and locator utils only for side
 // effects we don't exercise here; stub them so the module imports cleanly.
 vi.mock('./azimuth-runtime.js', () => ({ setAzimuthAntennaOverlay: vi.fn() }));
+vi.mock('./map.js', () => ({ setMercatorAntennaOverlay: vi.fn() }));
 vi.mock('./utils.js', () => ({
     locatorToBounds: vi.fn(() => null),
     freqHzToBand: (hz) => {

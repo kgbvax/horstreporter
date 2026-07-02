@@ -17,6 +17,7 @@ vi.mock('../static/map.js', () => ({
     syncMercatorCountryLayer: vi.fn(async () => {}),
     syncMercatorGraylineLayer: vi.fn(async () => {}),
     syncMercatorDxccLabelLayer: vi.fn(async () => {}),
+    setMercatorAntennaOverlay: vi.fn(),
     map: { on: vi.fn(), invalidateSize: vi.fn(), setView: vi.fn(), getZoom: vi.fn(() => 4) }
 }));
 

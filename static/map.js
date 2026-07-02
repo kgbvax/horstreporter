@@ -5,7 +5,7 @@ export let currentCountryLayer = null;
 export let currentGraylineLayer = null;
 export let currentDxccLabelLayer = null;
 
-import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, hexToRgb, blendOverlayColors } from './utils.js';
+import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, destinationPoint, hexToRgb, blendOverlayColors } from './utils.js';
 import { selectProminentDxccLabels } from './azimuth-runtime.js';
 import { endPerfTimer, incrementPerfCounter, startPerfTimer } from './perf.js';
 
@@ -101,6 +101,12 @@ export function initMap(initialCenter, initialZoom) {
     if (!map.getPane('dx-highlight-pane')) {
         const pane = map.createPane('dx-highlight-pane');
         pane.style.zIndex = '650';
+        pane.style.pointerEvents = 'none';
+    }
+    // Operator antenna beam lobe (opmode), below the chase-queue highlight.
+    if (!map.getPane('antenna-pane')) {
+        const pane = map.createPane('antenna-pane');
+        pane.style.zIndex = '500';
         pane.style.pointerEvents = 'none';
     }
 
@@ -502,6 +508,127 @@ export function clearMercatorDxHighlight() {
     if (dxHighlightLayer) dxHighlightLayer.clearLayers();
 }
 
+// --- Operator antenna beam overlay (Mercator) ---------------------------------
+// Mirrors the azimuthal beam lobe (azimuth-runtime.js drawAntennaDirectionalLobe)
+// on the Leaflet map: a great-circle cone from the station along the beam
+// bearing, filled and edged, with the outer arc left open (no end line) to match
+// the azimuth look. Updated imperatively (like setMercatorDxHighlight), so it
+// stays in sync without a full re-render.
+
+// Beam reach on the Mercator map (km). Long enough to read as a clear pointer
+// without collapsing near the antipode; Leaflet clips whatever leaves the view.
+const MERCATOR_BEAM_RADIUS_KM = 9000;
+
+let antennaLayer = null;
+let lastAntennaOverlay = null; // cached payload so setTheme can recolor + redraw
+
+function ensureAntennaLayer() {
+    if (!map) return null;
+    if (!antennaLayer) {
+        antennaLayer = L.layerGroup([], { pane: 'antenna-pane' }).addTo(map);
+    }
+    return antennaLayer;
+}
+
+const _normBearing = (deg) => ((deg % 360) + 360) % 360;
+
+// sampleBeamEdge walks the station outward along a fixed bearing, returning
+// [[lat,lng],…] (station first). Multiple samples keep the great-circle curve on
+// the Mercator projection instead of a straight screen line.
+function sampleBeamEdge(lat, lng, bearingDeg, radiusKm, segments = 24) {
+    const pts = [];
+    for (let i = 0; i <= segments; i += 1) {
+        pts.push(destinationPoint(lat, lng, bearingDeg, (radiusKm * i) / segments));
+    }
+    return pts;
+}
+
+// sampleBeamArc samples the constant-distance outer arc across the beamwidth.
+function sampleBeamArc(lat, lng, startBearingDeg, sweepDeg, radiusKm) {
+    const steps = Math.max(12, Math.ceil(sweepDeg / 2));
+    const pts = [];
+    for (let i = 0; i <= steps; i += 1) {
+        const b = _normBearing(startBearingDeg + (sweepDeg * i) / steps);
+        pts.push(destinationPoint(lat, lng, b, radiusKm));
+    }
+    return pts;
+}
+
+function drawBeamLobe(layer, lat, lng, centerBearingDeg, beamwidthDeg, radiusKm, fillColor, fillOpacity, lineColor) {
+    const half = Math.max(2, beamwidthDeg / 2);
+    const bw = half * 2;
+    const leftBearing = _normBearing(centerBearingDeg - half);
+    const leftEdge = sampleBeamEdge(lat, lng, leftBearing, radiusKm);
+    const rightEdge = sampleBeamEdge(lat, lng, _normBearing(centerBearingDeg + half), radiusKm);
+    const arc = sampleBeamArc(lat, lng, leftBearing, bw, radiusKm);
+
+    // Filled cone: station → left edge → outer arc → right edge (auto-closed).
+    const poly = [...leftEdge, ...arc, ...rightEdge.slice().reverse()];
+    L.polygon(poly, {
+        pane: 'antenna-pane',
+        stroke: false,
+        fill: true,
+        fillColor,
+        fillOpacity,
+        interactive: false
+    }).addTo(layer);
+
+    // Stroke only the two side edges — the rounded outer end stays open.
+    for (const edge of [leftEdge, rightEdge]) {
+        L.polyline(edge, {
+            pane: 'antenna-pane',
+            color: lineColor,
+            weight: 1.7,
+            opacity: 0.9,
+            interactive: false
+        }).addTo(layer);
+    }
+}
+
+// setMercatorAntennaOverlay draws the operator antenna beam on the Leaflet map.
+// Accepts the same payload shape as setAzimuthAntennaOverlay so opmode.js can call
+// both together. Pass { enabled: false } (or omit) to clear.
+export function setMercatorAntennaOverlay(overlay = {}) {
+    const layer = ensureAntennaLayer();
+    if (!layer) return;
+    layer.clearLayers();
+
+    if (!overlay || overlay.enabled !== true) {
+        lastAntennaOverlay = null;
+        return;
+    }
+    const lat = Number(overlay.stationLat);
+    const lng = Number(overlay.stationLng);
+    const heading = Number(overlay.azimuthDeg);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(heading)) {
+        lastAntennaOverlay = null;
+        return;
+    }
+    lastAntennaOverlay = overlay;
+
+    const beamwidth = Number.isFinite(Number(overlay.beamwidth3dBDeg)) ? Number(overlay.beamwidth3dBDeg) : 60;
+    const mode = overlay.mode || 'forward';
+    const dark = document.body.getAttribute('data-theme') === 'dark';
+
+    const forwardFill = dark ? '#ffc454' : '#ffa140';
+    const forwardLine = dark ? '#ffde9b' : '#b85200';
+    const backwardFill = dark ? '#6fb9ff' : '#3f89ff';
+    const backwardLine = dark ? '#9bd1ff' : '#145bbb';
+    const fillOpacity = dark ? 0.14 : 0.16;
+
+    if (mode === 'forward' || mode === 'bidirectional') {
+        drawBeamLobe(layer, lat, lng, heading, beamwidth, MERCATOR_BEAM_RADIUS_KM, forwardFill, fillOpacity, forwardLine);
+    }
+    if (mode === 'backward' || mode === 'bidirectional') {
+        drawBeamLobe(layer, lat, lng, heading + 180, beamwidth, MERCATOR_BEAM_RADIUS_KM, backwardFill, fillOpacity, backwardLine);
+    }
+}
+
+export function clearMercatorAntennaOverlay() {
+    lastAntennaOverlay = null;
+    if (antennaLayer) antennaLayer.clearLayers();
+}
+
 export function setTheme(theme) {
     document.body.setAttribute('data-theme', theme);
     localStorage.setItem('theme', theme);
@@ -536,6 +663,11 @@ export function setTheme(theme) {
     if (map) {
         currentTileLayer.addTo(map);
         map.getContainer().style.background = '';
+    }
+
+    // Beam colors are theme-dependent; redraw from the cached payload.
+    if (lastAntennaOverlay) {
+        setMercatorAntennaOverlay(lastAntennaOverlay);
     }
 
     const toggleBtn = document.getElementById('theme-toggle');

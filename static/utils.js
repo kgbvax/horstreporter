@@ -531,6 +531,28 @@ export function greatCirclePoints(aLat, aLng, bLat, bLng, segments = 48) {
     return out;
 }
 
+// destinationPoint returns the [lat,lng] reached by travelling distanceKm along
+// the great circle from (lat,lng) on the given initial bearing (degrees). Shared
+// direct-geodesic (spherical, R=6371) used by both the azimuth canvas beam and
+// the Mercator beam overlay so the math lives once.
+export function destinationPoint(lat, lng, bearingDeg, distanceKm) {
+    const R = 6371;
+    const ang = distanceKm / R;
+    const br = _toRad(bearingDeg);
+    const la1 = _toRad(lat);
+    const lo1 = _toRad(lng);
+    const sinLa1 = Math.sin(la1);
+    const cosLa1 = Math.cos(la1);
+    const sinAng = Math.sin(ang);
+    const cosAng = Math.cos(ang);
+    const la2 = Math.asin(sinLa1 * cosAng + cosLa1 * sinAng * Math.cos(br));
+    const lo2 = lo1 + Math.atan2(
+        Math.sin(br) * sinAng * cosLa1,
+        cosAng - sinLa1 * Math.sin(la2)
+    );
+    return [_toDeg(la2), normalizeLongitude(_toDeg(lo2))];
+}
+
 export function continentFromLatLng(lat, lng) {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
 
