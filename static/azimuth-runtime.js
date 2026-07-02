@@ -1382,7 +1382,7 @@ function drawAntennaDirectionalLobe(ctx, width, height, station, centerBearingDe
         for (let i = 1; i <= segments; i += 1) {
             const d = (maxDistanceKm * i) / segments;
             const [lat, lng] = destinationPoint(station.lat, station.lng, bearingDeg, d);
-            const p = projectToCanvas(lat, lng, width, height);
+            const p = projectToCanvas(lat, lng, width, height, { enforceHorizon: false });
             if (!p) break;
             pts.push(p);
         }
@@ -1681,7 +1681,7 @@ function drawActiveAreaOverlay(ctx, width, height, filteredSpots, maxClusterDist
             let started = false;
             let visibleCount = 0;
             ring.forEach(([lng, lat]) => {
-                const p = projectToCanvas(lat, lng, width, height);
+        const p = projectToCanvas(lat, lng, width, height, { enforceHorizon: false });
                 if (!p) {
                     started = false;
                     return;
