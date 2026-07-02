@@ -26,26 +26,46 @@ type rigCapabilities struct {
 	Split   bool // split TX/RX — needs a rigctld/FLRig backend
 }
 
+// rigStateProvider is an optional capability: a backend that can report the rig's
+// live operating state (frequency/mode, and split RX). WaveLogGate implements it
+// via its WebSocket status broadcast; Log4OM/none do not. Handlers type-assert.
+type rigStateProvider interface {
+	RadioState() (rigRadioState, bool)
+}
+
 // waveLogGateBackend drives the rig via WaveLogGate's local tune callback:
 //
 //	GET <base>/{freq_hz}/{mode}
 //
 // WaveLogGate performs the actual CAT write (via rigctld/FLRig) and applies
-// mode-on-QSY. Single VFO only — no preview/split.
+// mode-on-QSY. Tune is single-VFO; live status (incl. split RX) is read back over
+// WaveLogGate's WebSocket broadcast (see waveLogGateWS), not the tune callback.
 type waveLogGateBackend struct {
 	base string
 	http *http.Client
+	ws   *waveLogGateWS // nil when the WS URL couldn't be derived
 }
 
 func newWaveLogGateBackend(base string) *waveLogGateBackend {
+	trimmed := strings.TrimRight(strings.TrimSpace(base), "/")
 	return &waveLogGateBackend{
-		base: strings.TrimRight(strings.TrimSpace(base), "/"),
+		base: trimmed,
 		http: &http.Client{Timeout: 5 * time.Second},
+		ws:   newWaveLogGateWS(trimmed),
 	}
 }
 
 func (b *waveLogGateBackend) Capabilities() rigCapabilities {
 	return rigCapabilities{Tune: true} // preview/split intentionally false
+}
+
+// RadioState surfaces WaveLogGate's live radio status (freq/mode + split RX) when
+// the WS subscription has received at least one update.
+func (b *waveLogGateBackend) RadioState() (rigRadioState, bool) {
+	if b.ws == nil {
+		return rigRadioState{}, false
+	}
+	return b.ws.RadioState()
 }
 
 func (b *waveLogGateBackend) Tune(ctx context.Context, freqHz int64, mode string) error {

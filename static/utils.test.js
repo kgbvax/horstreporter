@@ -28,10 +28,29 @@ import {
     initialBearingDeg,
     greatCirclePoints,
     setSubmitMode,
-    isStreaming
+    isStreaming,
+    freqHzToBand
 } from './utils.js';
 
 describe('utils.js', () => {
+    describe('freqHzToBand', () => {
+        it('maps common frequencies to bands', () => {
+            expect(freqHzToBand(7040000)).toBe('40m');
+            expect(freqHzToBand(14074000)).toBe('20m');
+            expect(freqHzToBand(21074000)).toBe('15m');
+            expect(freqHzToBand(28074000)).toBe('10m');
+            expect(freqHzToBand(3573000)).toBe('80m');
+            expect(freqHzToBand(50313000)).toBe('6m');
+        });
+        it('returns empty string outside known bands or for bad input', () => {
+            expect(freqHzToBand(9000000)).toBe('');
+            expect(freqHzToBand(0)).toBe('');
+            expect(freqHzToBand(-1)).toBe('');
+            expect(freqHzToBand(NaN)).toBe('');
+            expect(freqHzToBand(undefined)).toBe('');
+        });
+    });
+
     describe('Great-circle geometry', () => {
         // Berlin (52.52, 13.40) → Tokyo (35.68, 139.69)
         it('greatCircleDistanceKm matches the known ~8900 km Berlin→Tokyo path', () => {

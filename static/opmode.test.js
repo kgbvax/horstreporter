@@ -4,7 +4,21 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 // opmode.js pulls in the heavy azimuth runtime and locator utils only for side
 // effects we don't exercise here; stub them so the module imports cleanly.
 vi.mock('./azimuth-runtime.js', () => ({ setAzimuthAntennaOverlay: vi.fn() }));
-vi.mock('./utils.js', () => ({ locatorToBounds: vi.fn(() => null) }));
+vi.mock('./utils.js', () => ({
+    locatorToBounds: vi.fn(() => null),
+    freqHzToBand: (hz) => {
+        const ranges = [
+            ['160m', 1800000, 2000000], ['80m', 3500000, 4000000], ['40m', 7000000, 7300000],
+            ['30m', 10100000, 10150000], ['20m', 14000000, 14350000], ['17m', 18068000, 18168000],
+            ['15m', 21000000, 21450000], ['12m', 24890000, 24990000], ['10m', 28000000, 29700000],
+            ['6m', 50000000, 54000000]
+        ];
+        const f = Number(hz);
+        if (!Number.isFinite(f) || f <= 0) return '';
+        for (const [label, lo, hi] of ranges) if (f >= lo && f <= hi) return label;
+        return '';
+    }
+}));
 
 import {
     normalizeMode,
@@ -17,6 +31,7 @@ import {
     syncControlWidgets,
     syncAntennaOverlay,
     setAntennaMode,
+    updateOpModeStatusLine,
     __setOpModeStateForTest
 } from './opmode.js';
 import { setAzimuthAntennaOverlay } from './azimuth-runtime.js';
@@ -255,5 +270,78 @@ describe('overlay suppression (syncAntennaOverlay)', () => {
         const arg = setAzimuthAntennaOverlay.mock.calls.at(-1)[0];
         expect(arg.enabled).toBe(true);
         expect(arg.mode).toBe('backward');
+    });
+});
+
+describe('opmode status line (Band | Mode | QRG | Antenna)', () => {
+    beforeEach(() => {
+        document.body.innerHTML = `
+            <div id="opmode-status-line" style="display: none;">
+                <span id="opmode-sl-band">—</span>
+                <span id="opmode-sl-mode">—</span>
+                <span id="opmode-sl-qrg">—</span>
+                <span id="opmode-sl-antenna">—</span>
+            </div>`;
+        __setOpModeStateForTest({
+            enabled: true,
+            antenna: null,
+            liveRig: null,
+            lastTuned: null
+        });
+    });
+
+    const txt = (id) => document.getElementById(id).textContent;
+
+    it('is hidden when opmode is disabled', () => {
+        __setOpModeStateForTest({ enabled: false });
+        updateOpModeStatusLine();
+        expect(document.getElementById('opmode-status-line').style.display).toBe('none');
+    });
+
+    it('shows live rig band/mode/QRG when a rig readback is present', () => {
+        __setOpModeStateForTest({
+            liveRig: { freqHz: 14074000, mode: 'USB', split: false, online: true, freqRxHz: null, modeRx: '' },
+            antenna: { azimuthDeg: 245, mode: 'forward', azimuthOnline: true }
+        });
+        updateOpModeStatusLine();
+        expect(document.getElementById('opmode-status-line').style.display).toBe('flex');
+        expect(txt('opmode-sl-band')).toBe('20m');
+        expect(txt('opmode-sl-mode')).toBe('USB');
+        expect(txt('opmode-sl-qrg')).toBe('14.074 MHz');
+        expect(txt('opmode-sl-antenna')).toBe('245° forward');
+    });
+
+    it('surfaces split operation with TX/RX frequencies', () => {
+        __setOpModeStateForTest({
+            liveRig: { freqHz: 14074000, mode: 'CW', split: true, online: true, freqRxHz: 14080000, modeRx: 'CW' },
+            antenna: { azimuthDeg: 90, mode: 'forward', azimuthOnline: true }
+        });
+        updateOpModeStatusLine();
+        expect(txt('opmode-sl-qrg')).toBe('TX 14.074 / RX 14.080 MHz');
+        expect(txt('opmode-sl-mode')).toContain('split');
+    });
+
+    it('falls back to the last commanded tune when no live rig', () => {
+        __setOpModeStateForTest({
+            liveRig: null,
+            lastTuned: { freqHz: 7040000, mode: 'CW' },
+            antenna: null
+        });
+        updateOpModeStatusLine();
+        expect(txt('opmode-sl-band')).toBe('40m');
+        expect(txt('opmode-sl-mode')).toBe('CW');
+        expect(txt('opmode-sl-qrg')).toBe('7.040 MHz');
+        expect(txt('opmode-sl-antenna')).toBe('—');
+    });
+
+    it('prefers live rig over the last commanded tune', () => {
+        __setOpModeStateForTest({
+            liveRig: { freqHz: 21074000, mode: 'USB', split: false, online: true, freqRxHz: null, modeRx: '' },
+            lastTuned: { freqHz: 7040000, mode: 'CW' },
+            antenna: null
+        });
+        updateOpModeStatusLine();
+        expect(txt('opmode-sl-band')).toBe('15m');
+        expect(txt('opmode-sl-qrg')).toBe('21.074 MHz');
     });
 });

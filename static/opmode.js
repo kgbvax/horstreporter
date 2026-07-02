@@ -1,5 +1,5 @@
 import { setAzimuthAntennaOverlay } from './azimuth-runtime.js';
-import { locatorToBounds } from './utils.js';
+import { locatorToBounds, freqHzToBand } from './utils.js';
 
 const opModeState = {
     enabled: false,
@@ -22,7 +22,13 @@ const opModeState = {
     rigCapabilities: null,
     lookupCapabilities: null,
     ultrabeamCapabilities: null,
-    reverseSince: null
+    reverseSince: null,
+    // Last frequency/mode the operator commanded from the browser (tune / operate).
+    // Fallback for the status line when no live rig readback is available.
+    lastTuned: null, // { freqHz, mode }
+    // Live rig state from WaveLogGate's WebSocket broadcast (via the agent's
+    // /v1/antenna/state `rig` block): actual frequency/mode + split RX.
+    liveRig: null // { freqHz, mode, freqRxHz, modeRx, split, online }
 };
 
 const BASE_DOCUMENT_TITLE = typeof document !== 'undefined'
@@ -174,6 +180,24 @@ function extractAntenna(payload) {
         beamOnline: src.beam_online !== false,
         azimuthOnline: src.azimuth_online !== false,
         availableModes: Array.isArray(src.available_modes) ? src.available_modes : []
+    };
+}
+
+// extractRig reads the live rig block (WaveLogGate WebSocket readback) from an
+// /v1/antenna/state payload. Returns null for tune-only backends that omit it.
+function extractRig(payload) {
+    const src = payload?.rig;
+    if (!src || typeof src !== 'object') return null;
+    const freqHz = toNumber(src.freq_hz);
+    if (freqHz === null || freqHz <= 0) return null;
+    const freqRxHz = toNumber(src.freq_rx_hz);
+    return {
+        freqHz,
+        mode: String(src.mode || '').trim().toUpperCase(),
+        split: src.split === true,
+        online: src.online !== false,
+        freqRxHz: freqRxHz !== null && freqRxHz > 0 ? freqRxHz : null,
+        modeRx: String(src.mode_rx || '').trim().toUpperCase()
     };
 }
 
@@ -491,6 +515,7 @@ async function refreshAntennaState() {
 
     opModeState.station = station;
     opModeState.antenna = antenna;
+    opModeState.liveRig = extractRig(payload);
     if (antenna && Number.isFinite(antenna.azimuthDeg) && Number.isFinite(opModeState.pendingTargetBearingDeg)) {
         // Keep dotted target line alive across status polling until the heading has
         // reasonably converged to the pending target.
@@ -516,6 +541,7 @@ async function refreshAntennaState() {
     }
 
     syncAntennaOverlay();
+    updateOpModeStatusLine();
 }
 
 // beamModeLabel renders a canonical beam direction with the operator-facing
@@ -524,6 +550,81 @@ export function beamModeLabel(mode) {
     if (mode === 'reverse') return '180°';
     if (mode === 'bidirectional') return 'bi-dir';
     return 'forward';
+}
+
+// formatQrg renders a frequency in Hz as MHz with 3 decimals (kHz precision),
+// e.g. 14074000 → "14.074".
+function formatQrg(freqHz) {
+    const hz = Number(freqHz);
+    if (!Number.isFinite(hz) || hz <= 0) return '';
+    return (hz / 1_000_000).toFixed(3);
+}
+
+// updateOpModeStatusLine renders the on-map "Band | Mode | QRG | Antenna" line.
+// Shown only in opmode. Band/Mode/QRG prefer WaveLogGate's live WebSocket
+// readback (incl. split RX), falling back to the last browser-issued tune when no
+// live rig source is available. Antenna direction is always live.
+export function updateOpModeStatusLine() {
+    const line = document.getElementById('opmode-status-line');
+    if (!line) return;
+
+    if (!opModeState.enabled) {
+        line.style.display = 'none';
+        if (typeof document !== 'undefined' && document.body) {
+            document.body.classList.remove('opmode-status-visible');
+        }
+        return;
+    }
+
+    // Prefer live rig readback; fall back to the last commanded tune.
+    const live = opModeState.liveRig;
+    const useLive = live && live.online && live.freqHz > 0;
+    const src = useLive
+        ? { freqHz: live.freqHz, mode: live.mode }
+        : (opModeState.lastTuned || null);
+
+    const band = src ? freqHzToBand(src.freqHz) : '';
+    const mode = src && src.mode ? String(src.mode).toUpperCase() : '';
+
+    // QRG: TX frequency, plus the split RX frequency when the rig reports split.
+    let qrg = src ? formatQrg(src.freqHz) : '';
+    if (qrg) {
+        qrg = `${qrg} MHz`;
+        if (useLive && live.split && live.freqRxHz) {
+            qrg = `TX ${formatQrg(live.freqHz)} / RX ${formatQrg(live.freqRxHz)} MHz`;
+        }
+    }
+    // Mode: append RX mode when split and it differs from TX.
+    let modeTxt = mode;
+    if (useLive && live.split && live.modeRx && live.modeRx !== mode) {
+        modeTxt = `${mode} / ${live.modeRx}`;
+    }
+    if (useLive && live.split) {
+        modeTxt = modeTxt ? `${modeTxt} (split)` : 'split';
+    }
+
+    const antenna = opModeState.antenna;
+    let antennaTxt = '—';
+    if (antenna && Number.isFinite(antenna.azimuthDeg) && antenna.azimuthOnline !== false) {
+        antennaTxt = `${Math.round(antenna.azimuthDeg)}° ${beamModeLabel(antenna.mode)}`;
+    } else if (antenna) {
+        antennaTxt = beamModeLabel(antenna.mode);
+    }
+
+    const setVal = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val && val.length ? val : '—';
+    };
+    setVal('opmode-sl-band', band);
+    setVal('opmode-sl-mode', modeTxt);
+    setVal('opmode-sl-qrg', qrg);
+    setVal('opmode-sl-antenna', antennaTxt);
+
+    line.style.display = 'flex';
+    // Push the top-center hot-band indicator below this line so they don't overlap.
+    if (typeof document !== 'undefined' && document.body) {
+        document.body.classList.add('opmode-status-visible');
+    }
 }
 
 async function pollTick() {
@@ -548,6 +649,7 @@ async function pollTick() {
             }
             opModeState.station = null;
             opModeState.antenna = null;
+            opModeState.liveRig = null;
             // A total outage means there is no UltraBeam truth either — the beam
             // UI must go neutral, not leave the reverse alarm latched or a stale
             // button active/enabled (which would let a click hit a dead agent).
@@ -556,6 +658,7 @@ async function pollTick() {
             syncBeamButtonsFromAntenna(null);
             syncControlWidgets();
             syncAntennaOverlay();
+            updateOpModeStatusLine();
         }
     }
 }
@@ -585,10 +688,12 @@ function syncEnabledStateFromUi() {
         setStatus('inactive (direct backend mode)');
         opModeState.station = null;
         opModeState.antenna = null;
+        opModeState.liveRig = null;
         clearPendingTargetPreview();
         updateReverseAlarm(null);
         syncAntennaOverlay();
         syncControlWidgets();
+        updateOpModeStatusLine();
         return;
     }
 
@@ -698,6 +803,8 @@ export async function rigTune(freqHz, mode) {
             })
         });
     });
+    opModeState.lastTuned = { freqHz: hz, mode: String(mode || '').trim() };
+    updateOpModeStatusLine();
 }
 
 // operate is the composite "Tune + Turn": QSY the rig AND rotate the beam to
@@ -732,6 +839,8 @@ export async function operate(freqHz, mode, azimuthDeg, label = '') {
         });
         await refreshAntennaState();
     }, { preserveTargetPreview: az !== null });
+    opModeState.lastTuned = { freqHz: hz, mode: String(mode || '').trim() };
+    updateOpModeStatusLine();
 }
 
 export async function setBeamTargetFromMapClick({ lat, lng, label = '' } = {}) {

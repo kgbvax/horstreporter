@@ -70,11 +70,19 @@ func (t *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 
 var enableExternalDebugLoggingOnce sync.Once
 
+// externalDebugEnabled mirrors the Settings "Debug logging" switch at package
+// scope so components without a serviceConfig handle (e.g. the WaveLogGate WS
+// client) can gate verbose logs. Set once at startup; read-only thereafter.
+var externalDebugEnabled bool
+
+func debugExternalEnabled() bool { return externalDebugEnabled }
+
 // enableExternalDebugLogging swaps the process default transport for the logging
 // one. Idempotent. Clients with a nil Transport resolve http.DefaultTransport at
 // request time, so doing this before any request is issued covers them all.
 func enableExternalDebugLogging() {
 	enableExternalDebugLoggingOnce.Do(func() {
+		externalDebugEnabled = true
 		base := http.DefaultTransport
 		if base == nil {
 			base = &http.Transport{}

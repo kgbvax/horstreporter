@@ -868,7 +868,42 @@ func (s *server) handleAntennaState(w http.ResponseWriter, r *http.Request) {
 			"locator": strings.ToUpper(strings.TrimSpace(s.cfg.Station.Locator)),
 		},
 		"antenna": antenna,
+		"rig":     s.liveRigState(),
 	})
+}
+
+// liveRigState returns the rig's live operating state (frequency/mode, plus split
+// RX) when the backend can report it (WaveLogGate over its WebSocket broadcast),
+// or nil so the JSON omits the block for tune-only backends. Powers the operator
+// status line's Band | Mode | QRG fields.
+func (s *server) liveRigState() map[string]any {
+	provider, ok := s.rig.(rigStateProvider)
+	if !ok {
+		return nil
+	}
+	st, have := provider.RadioState()
+	if !have {
+		return nil
+	}
+	out := map[string]any{
+		"freq_hz": st.FreqHz,
+		"mode":    st.Mode,
+		"split":   st.Split,
+		"online":  st.Online,
+	}
+	if st.Power > 0 {
+		out["power"] = st.Power
+	}
+	if st.Radio != "" {
+		out["radio"] = st.Radio
+	}
+	if st.Split && st.FreqRxHz > 0 {
+		out["freq_rx_hz"] = st.FreqRxHz
+		if st.ModeRx != "" {
+			out["mode_rx"] = st.ModeRx
+		}
+	}
+	return out
 }
 
 type rotateRequest struct {

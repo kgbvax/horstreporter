@@ -591,6 +591,34 @@ export const bandColors = {
     'all': '#555555'
 };
 
+// freqHzToBand maps a frequency in Hz to its amateur band label (matching the
+// bandColors keys), or '' when it falls outside a known band. Used by the opmode
+// status line to show the band for the last-tuned frequency.
+const BAND_RANGES_HZ = [
+    ['160m', 1_800_000, 2_000_000],
+    ['80m', 3_500_000, 4_000_000],
+    ['60m', 5_250_000, 5_450_000],
+    ['40m', 7_000_000, 7_300_000],
+    ['30m', 10_100_000, 10_150_000],
+    ['20m', 14_000_000, 14_350_000],
+    ['17m', 18_068_000, 18_168_000],
+    ['15m', 21_000_000, 21_450_000],
+    ['12m', 24_890_000, 24_990_000],
+    ['10m', 28_000_000, 29_700_000],
+    ['6m', 50_000_000, 54_000_000],
+    ['4m', 70_000_000, 70_500_000],
+    ['2m', 144_000_000, 148_000_000]
+];
+
+export function freqHzToBand(hz) {
+    const f = Number(hz);
+    if (!Number.isFinite(f) || f <= 0) return '';
+    for (const [label, lo, hi] of BAND_RANGES_HZ) {
+        if (f >= lo && f <= hi) return label;
+    }
+    return '';
+}
+
 export function getGridResolution() {
     const target = document.getElementById('target')?.value.trim() || '';
     if (/^[A-Za-z]{2}[0-9]{2}[A-Za-z]{2}/.test(target)) {
