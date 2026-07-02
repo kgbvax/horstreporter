@@ -568,11 +568,10 @@ export function updateOpModeStatusLine() {
     const line = document.getElementById('opmode-status-line');
     if (!line) return;
 
+    const hide = () => { line.style.display = 'none'; };
+
     if (!opModeState.enabled) {
-        line.style.display = 'none';
-        if (typeof document !== 'undefined' && document.body) {
-            document.body.classList.remove('opmode-status-visible');
-        }
+        hide();
         return;
     }
 
@@ -583,11 +582,18 @@ export function updateOpModeStatusLine() {
         ? { freqHz: live.freqHz, mode: live.mode }
         : (opModeState.lastTuned || null);
 
-    const band = src ? freqHzToBand(src.freqHz) : '';
-    const mode = src && src.mode ? String(src.mode).toUpperCase() : '';
+    // No frequency source at all (no live rig, no last tune) → hide the line
+    // entirely rather than showing an all-empty row.
+    if (!src) {
+        hide();
+        return;
+    }
+
+    const band = freqHzToBand(src.freqHz);
+    const mode = src.mode ? String(src.mode).toUpperCase() : '';
 
     // QRG: TX frequency, plus the split RX frequency when the rig reports split.
-    let qrg = src ? formatQrg(src.freqHz) : '';
+    let qrg = formatQrg(src.freqHz);
     if (qrg) {
         qrg = `${qrg} MHz`;
         if (useLive && live.split && live.freqRxHz) {
@@ -621,10 +627,6 @@ export function updateOpModeStatusLine() {
     setVal('opmode-sl-antenna', antennaTxt);
 
     line.style.display = 'flex';
-    // Push the top-center hot-band indicator below this line so they don't overlap.
-    if (typeof document !== 'undefined' && document.body) {
-        document.body.classList.add('opmode-status-visible');
-    }
 }
 
 async function pollTick() {

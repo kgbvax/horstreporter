@@ -298,6 +298,17 @@ describe('opmode status line (Band | Mode | QRG | Antenna)', () => {
         expect(document.getElementById('opmode-status-line').style.display).toBe('none');
     });
 
+    it('is hidden when there are no values (no live rig, no last tune)', () => {
+        __setOpModeStateForTest({
+            enabled: true,
+            liveRig: null,
+            lastTuned: null,
+            antenna: { azimuthDeg: 245, mode: 'forward', azimuthOnline: true }
+        });
+        updateOpModeStatusLine();
+        expect(document.getElementById('opmode-status-line').style.display).toBe('none');
+    });
+
     it('shows live rig band/mode/QRG when a rig readback is present', () => {
         __setOpModeStateForTest({
             liveRig: { freqHz: 14074000, mode: 'USB', split: false, online: true, freqRxHz: null, modeRx: '' },

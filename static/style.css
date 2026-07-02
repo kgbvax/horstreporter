@@ -1111,10 +1111,10 @@ body[data-theme="dark"] .band-pill .band-nodata-tag {
     box-shadow: 0 2px 5px var(--shadow-color);
 }
 
-/* Operator status line: Band | Mode | QRG | Antenna — top-center of the map */
+/* Operator status line: Band | Mode | QRG | Antenna — bottom-center of the map */
 #opmode-status-line {
     position: absolute;
-    top: 12px;
+    bottom: 15px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 1006;
@@ -1150,9 +1150,4 @@ body[data-theme="dark"] .band-pill .band-nodata-tag {
 }
 #opmode-status-line .opmode-sl-sep {
     opacity: 0.35;
-}
-/* When the operator status line occupies top-center, drop the hot-band
-   indicator below it so the two don't overlap. */
-body.opmode-status-visible .hot-band-indicator {
-    top: 50px;
 }
