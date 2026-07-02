@@ -1393,70 +1393,40 @@ function drawAntennaDirectionalLobe(ctx, width, height, station, centerBearingDe
     const rightEdge = sampleGeodesic(rightBearing, radiusKm, 24);
     if (leftEdge.length < 2 || rightEdge.length < 2) return;
 
-    const arcSegments = [];
-    let currentArcSegment = [];
-    const arcSteps = Math.max(8, Math.ceil(beamwidthDeg / 3));
+    // Rounded outer boundary: sample the constant-distance arc from leftBearing
+    // to rightBearing at the full radius. This traces the map-border curve (when
+    // the station is the map center), so the lobe always ends rounded — never a
+    // chord — regardless of which quadrant it points to. enforceHorizon:false so
+    // border points aren't culled by float rounding; the map clip trims overflow.
+    const arcSteps = Math.max(12, Math.ceil(beamwidthDeg / 2));
+    const arcPoints = [];
     for (let i = 0; i <= arcSteps; i += 1) {
         const t = i / arcSteps;
         const b = ((leftBearing + (beamwidthDeg * t)) % 360 + 360) % 360;
         const [lat, lng] = destinationPoint(station.lat, station.lng, b, radiusKm);
-        const p = projectToCanvas(lat, lng, width, height);
-        if (p) {
-            currentArcSegment.push(p);
-        } else if (currentArcSegment.length > 0) {
-            arcSegments.push(currentArcSegment);
-            currentArcSegment = [];
-        }
-    }
-    if (currentArcSegment.length > 0) {
-        arcSegments.push(currentArcSegment);
-    }
-
-    const leftTip = leftEdge[leftEdge.length - 1];
-    const rightTip = rightEdge[rightEdge.length - 1];
-    const distance = (a, b) => Math.hypot((a?.x ?? 0) - (b?.x ?? 0), (a?.y ?? 0) - (b?.y ?? 0));
-
-    let arcPoints = [];
-    if (arcSegments.length > 0) {
-        let bestSegment = null;
-        let bestScore = Number.POSITIVE_INFINITY;
-        for (const seg of arcSegments) {
-            if (seg.length < 2) continue;
-            const score = distance(leftTip, seg[0]) + distance(rightTip, seg[seg.length - 1]);
-            if (score < bestScore) {
-                bestScore = score;
-                bestSegment = seg;
-            }
-        }
-        arcPoints = bestSegment || [];
-    }
-
-    if (arcPoints.length < 2) {
-        arcPoints = [leftTip, rightTip];
+        const p = projectToCanvas(lat, lng, width, height, { enforceHorizon: false });
+        if (p) arcPoints.push(p);
     }
 
     const rightInward = rightEdge.slice().reverse().slice(1);
-    const jumpLimit = Math.max(24, Math.min(width, height) * 0.35);
-    const leftArcConnectOk = distance(leftTip, arcPoints[0]) <= jumpLimit;
-    const rightArcConnectOk = distance(rightTip, arcPoints[arcPoints.length - 1]) <= jumpLimit;
 
+    // Fill the full swept region: station → left edge → rounded arc → right edge.
+    // Always filled (no connection gating), so the cone is never left empty.
     ctx.save();
-    if (leftArcConnectOk && rightArcConnectOk) {
-        ctx.beginPath();
-        ctx.moveTo(station.x, station.y);
-        for (const p of leftEdge.slice(1)) {
-            ctx.lineTo(p.x, p.y);
-        }
-        for (const p of arcPoints.slice(1)) {
-            ctx.lineTo(p.x, p.y);
-        }
-        for (const p of rightInward) {
-            ctx.lineTo(p.x, p.y);
-        }
-        ctx.closePath();
-        ctx.fillStyle = fillStyle;
-        ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(station.x, station.y);
+    for (const p of leftEdge.slice(1)) {
+        ctx.lineTo(p.x, p.y);
     }
+    for (const p of arcPoints) {
+        ctx.lineTo(p.x, p.y);
+    }
+    for (const p of rightInward) {
+        ctx.lineTo(p.x, p.y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = fillStyle;
+    ctx.fill();
 
     ctx.beginPath();
     ctx.moveTo(station.x, station.y);
