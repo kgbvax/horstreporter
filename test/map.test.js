@@ -167,6 +167,23 @@ describe('map.js mercator antenna overlay', () => {
         expect(globalThis.L.polygon).not.toHaveBeenCalled();
         expect(mockLayerGroup.clearLayers).toHaveBeenCalled();
     });
+
+    it('unwrapLngSeq keeps longitudes continuous across the antimeridian', async () => {
+        await importFreshMapModule();
+        // A path stepping across +180 → -180 must become continuous (…178,182,…)
+        // rather than jumping, so Leaflet never draws a line across the whole map.
+        const seq = mapModule.unwrapLngSeq([
+            [10, 170], [11, 178], [12, -176], [13, -170]
+        ]);
+        const lngs = seq.map((p) => p[1]);
+        expect(lngs[0]).toBe(170);
+        expect(lngs[1]).toBe(178);
+        expect(lngs[2]).toBe(184);  // -176 unwrapped to +184
+        expect(lngs[3]).toBe(190);  // -170 unwrapped to +190
+        for (let i = 1; i < lngs.length; i += 1) {
+            expect(Math.abs(lngs[i] - lngs[i - 1])).toBeLessThanOrEqual(180);
+        }
+    });
 });
 
 describe('map.js initMap without Leaflet', () => {

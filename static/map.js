@@ -515,9 +515,11 @@ export function clearMercatorDxHighlight() {
 // the azimuth look. Updated imperatively (like setMercatorDxHighlight), so it
 // stays in sync without a full re-render.
 
-// Beam reach on the Mercator map (km). Long enough to read as a clear pointer
-// without collapsing near the antipode; Leaflet clips whatever leaves the view.
-const MERCATOR_BEAM_RADIUS_KM = 9000;
+// Beam reach on the Mercator map (km). Kept short enough that a due-north beam
+// from a typical mid-latitude station does not cross the pole (which would flip
+// longitude by ~180° and smear the polygon across the map); longitude unwrapping
+// (below) handles the remaining antimeridian cases.
+const MERCATOR_BEAM_RADIUS_KM = 4000;
 
 let antennaLayer = null;
 let lastAntennaOverlay = null; // cached payload so setTheme can recolor + redraw
@@ -531,6 +533,26 @@ function ensureAntennaLayer() {
 }
 
 const _normBearing = (deg) => ((deg % 360) + 360) % 360;
+
+// unwrapLngSeq rewrites a [[lat,lng],…] sequence so consecutive longitudes never
+// jump more than 180° — i.e. it lets longitude run past ±180 continuously. Leaflet
+// (worldCopyJump) renders such coordinates correctly and, crucially, will NOT draw
+// a stray line straight across the map when a great-circle path crosses the
+// antimeridian or sweeps a wide longitude range near the pole. Exported for tests.
+export function unwrapLngSeq(points) {
+    const out = [];
+    let prev = null;
+    for (const [lat, lng] of points) {
+        let l = lng;
+        if (prev !== null) {
+            while (l - prev > 180) l -= 360;
+            while (l - prev < -180) l += 360;
+        }
+        out.push([lat, l]);
+        prev = l;
+    }
+    return out;
+}
 
 // sampleBeamEdge walks the station outward along a fixed bearing, returning
 // [[lat,lng],…] (station first). Multiple samples keep the great-circle curve on
@@ -563,7 +585,8 @@ function drawBeamLobe(layer, lat, lng, centerBearingDeg, beamwidthDeg, radiusKm,
     const arc = sampleBeamArc(lat, lng, leftBearing, bw, radiusKm);
 
     // Filled cone: station → left edge → outer arc → right edge (auto-closed).
-    const poly = [...leftEdge, ...arc, ...rightEdge.slice().reverse()];
+    // Unwrap the whole ring so it never jumps across the antimeridian.
+    const poly = unwrapLngSeq([...leftEdge, ...arc, ...rightEdge.slice().reverse()]);
     L.polygon(poly, {
         pane: 'antenna-pane',
         stroke: false,
@@ -575,7 +598,7 @@ function drawBeamLobe(layer, lat, lng, centerBearingDeg, beamwidthDeg, radiusKm,
 
     // Stroke only the two side edges — the rounded outer end stays open.
     for (const edge of [leftEdge, rightEdge]) {
-        L.polyline(edge, {
+        L.polyline(unwrapLngSeq(edge), {
             pane: 'antenna-pane',
             color: lineColor,
             weight: 1.7,
