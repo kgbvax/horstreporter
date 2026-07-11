@@ -683,6 +683,21 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		}
 	}
 
+	// activityByBinMap is the Postgres-backed, server-side-aggregated spots/min
+	// time series per band for the chart bars. Built once for all bands (one
+	// bounded GROUP BY query) so a high-volume dx_raw_spots table can't truncate
+	// it the way recentEvents' row materialisation does. nil when there's no
+	// store or the query fails; the per-band loop then falls back to in-memory
+	// binning from `events`.
+	var activityByBinMap map[string][]float64
+	if st != nil {
+		if m, err := st.activityByBinForTargets(targets, cwMinDb, minutes, now); err == nil {
+			activityByBinMap = m
+		} else {
+			logDebug("dx activityByBinForTargets failed (falling back to in-memory binning): %v", err)
+		}
+	}
+
 	cutoff := now - int64(minutes*60)
 	bandAcc := make(map[string]*bandAccumulator)
 	dedupSeen := make(map[string]struct{})
@@ -788,7 +803,13 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		}
 
 		historicalBandSeries := buildBandSparkline(events, targets, band, cwMinDb, now)
-		activityByBin := buildBandActivityByBin(events, targets, band, cwMinDb, minutes, now)
+		// Prefer the Postgres aggregate; fall back to in-memory binning from
+		// `events` when the map is unavailable (no store, query failed, or band
+		// had no matched rows in the window).
+		activityByBin := activityByBinMap[band]
+		if activityByBin == nil {
+			activityByBin = buildBandActivityByBin(events, targets, band, cwMinDb, minutes, now)
+		}
 		trend, trendDelta := computeTrend(historicalBandSeries)
 
 		uniqueCount := len(acc.uniqueLinks)

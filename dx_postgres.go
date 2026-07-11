@@ -1138,6 +1138,91 @@ func (s *dxPostgresStore) recentEvents(now int64) ([]dxObservedEvent, error) {
 	return out, rows.Err()
 }
 
+// activityByBinForTargets returns raw spots/min per (band, time-bin) over the
+// selected `minutes` window, target-filtered the same way the live stream
+// matches (callsign or 4-char locator prefix). This is the Postgres-backed
+// source for the Band Stats "Reports over time" chart bars.
+//
+// Unlike recentEvents (which materializes every raw row in the window and
+// chokes on a high-volume feed, leaving the in-memory fallback holding only
+// ~10 min), this aggregates server-side via GROUP BY band, bin and returns
+// ~12 × #bands rows, so it stays fast and bounded even when dx_raw_spots holds
+// tens of millions of rows. Predicate mirrors recent24hBandSlotCountsForTokens.
+// minutes<=0 or no targets → nil map (caller falls back to in-memory binning).
+func (s *dxPostgresStore) activityByBinForTargets(targets []string, cwMinDb, minutes int, now int64) (map[string][]float64, error) {
+	if s == nil || minutes <= 0 || now <= 0 {
+		return nil, nil
+	}
+	norm := make([]string, 0, len(targets))
+	seen := make(map[string]struct{}, len(targets))
+	for _, t := range targets {
+		u := strings.ToUpper(strings.TrimSpace(t))
+		if u == "" {
+			continue
+		}
+		if _, dup := seen[u]; dup {
+			continue
+		}
+		seen[u] = struct{}{}
+		norm = append(norm, u)
+	}
+	if len(norm) == 0 {
+		return nil, nil
+	}
+
+	const bins = 12
+	windowSec := int64(minutes) * 60
+	binSec := windowSec / bins
+	if binSec <= 0 {
+		return nil, nil
+	}
+	binMinutes := float64(binSec) / 60.0
+	windowStart := now - windowSec
+
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		SELECT band,
+		       ((spot_time - $1) / $2)::int AS bin,
+		       COUNT(*)::bigint
+		FROM dx_raw_spots
+		WHERE spot_time BETWEEN $1 AND $4
+		  AND signal_report_db >= $5
+		  AND (sender_callsign = ANY($3)
+		    OR receiver_callsign = ANY($3)
+		    OR substring(sender_locator from 1 for 4) = ANY($3)
+		    OR substring(receiver_locator from 1 for 4) = ANY($3))
+		GROUP BY band, bin
+	`, windowStart, binSec, norm, now, cwMinDb)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string][]float64, 32)
+	for rows.Next() {
+		var band string
+		var bin int32
+		var count int64
+		if err := rows.Scan(&band, &bin, &count); err != nil {
+			return nil, err
+		}
+		if bin < 0 {
+			bin = 0
+		}
+		if bin >= bins {
+			bin = bins - 1
+		}
+		series := out[band]
+		if series == nil {
+			series = make([]float64, bins)
+			out[band] = series
+		}
+		series[bin] += float64(count) / binMinutes
+	}
+	return out, rows.Err()
+}
+
 func (s *dxPostgresStore) baselineStats(now int64) (int, int, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
