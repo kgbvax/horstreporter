@@ -494,7 +494,22 @@ export function computeActivityChartData(points, bandMetrics, minutes, nowMs) {
             counts[idx] += 1;
         }
     }
-    const binRates = counts.map((c) => c / binMinutes);
+    const liveBinRates = counts.map((c) => c / binMinutes);
+
+    // Prefer the backend's Postgres-backed activity series when present: it
+    // covers the full selected window (incl. 120 min) from dx_raw_spots,
+    // whereas liveSpots is bounded by the ≤60-min SSE stream/retention and
+    // leaves the older bins empty. Fall back to live-spot counts for backends
+    // that don't supply activity_by_bin (e.g. dev without Postgres).
+    const backendByBin = Array.isArray(bandMetrics?.activity_by_bin)
+        ? bandMetrics.activity_by_bin
+        : null;
+    let binRates;
+    if (backendByBin && backendByBin.length === ACTIVITY_BINS) {
+        binRates = backendByBin.map((v) => (Number.isFinite(v) && v > 0 ? Number(v) : 0));
+    } else {
+        binRates = liveBinRates;
+    }
 
     const baselineBySlot = Array.isArray(bandMetrics?.baseline_activity_by_slot) ? bandMetrics.baseline_activity_by_slot : [];
     const slotUsedByTarget = Array.isArray(bandMetrics?.baseline_slot_used_by_target) ? bandMetrics.baseline_slot_used_by_target : [];

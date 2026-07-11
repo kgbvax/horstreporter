@@ -879,6 +879,93 @@ func TestDxBucketTiering(t *testing.T) {
 	}
 }
 
+func TestBuildBandActivityByBin(t *testing.T) {
+	// 20-min window → 12 bins of 100s each (binMinutes = 100/60).
+	const now int64 = 1_000_000
+	const minutes = 20
+	const binSec = int64(minutes * 60 / 12)
+	binMinutes := float64(binSec) / 60.0
+
+	evt := func(t int64, band, sc, rc, sl, rl string, rp int) dxObservedEvent {
+		return dxObservedEvent{T: t, B: band, SC: sc, RC: rc, SL: sl, RL: rl, RP: rp}
+	}
+	events := []dxObservedEvent{
+		// Three reports in the newest bin (idx 11).
+		evt(now-10, "20m", "W1AW", "DL1ABC", "FN31", "JO32", -8),
+		evt(now-20, "20m", "W1AW", "DL2XYZ", "FN31", "JO33", -8),
+		evt(now-30, "20m", "W1AW", "DL3ZZZ", "FN31", "JO42", -8),
+		// One report in the oldest bin (idx 0).
+		evt(now-1190, "20m", "W1AW", "DL4QQQ", "FN31", "JO32", -8),
+		// Out of window (older than 20 min): ignored.
+		evt(now-2000, "20m", "W1AW", "DL5OLD", "FN31", "JO32", -8),
+		// Different band: ignored.
+		evt(now-10, "40m", "W1AW", "DL6BND", "FN31", "JO32", -8),
+		// Does not match target: ignored.
+		evt(now-10, "20m", "K9ZZZ", "DL7NOM", "FN20", "JO32", -8),
+		// Below CW SNR gate (-15): ignored.
+		evt(now-10, "20m", "W1AW", "DL8SNR", "FN31", "JO32", -25),
+	}
+
+	got := buildBandActivityByBin(events, []string{"W1AW"}, "20m", -15, minutes, now)
+	if len(got) != 12 {
+		t.Fatalf("expected 12 bins, got %d", len(got))
+	}
+	wantNewest := 3.0 / binMinutes
+	wantOldest := 1.0 / binMinutes
+	if math.Abs(got[11]-wantNewest) > 1e-6 {
+		t.Fatalf("newest bin: want %.4f, got %.4f", wantNewest, got[11])
+	}
+	if math.Abs(got[0]-wantOldest) > 1e-6 {
+		t.Fatalf("oldest bin: want %.4f, got %.4f", wantOldest, got[0])
+	}
+	for i, v := range got {
+		if i == 0 || i == 11 {
+			continue
+		}
+		if v != 0 {
+			t.Fatalf("bin %d: expected 0, got %f", i, v)
+		}
+	}
+
+	// Empty events → all-zero, full-length series.
+	empty := buildBandActivityByBin(nil, []string{"W1AW"}, "20m", -15, minutes, now)
+	if len(empty) != 12 || empty[0] != 0 {
+		t.Fatalf("expected 12 zero bins for empty events, got %v", empty)
+	}
+
+	// minutes<=0 → all-zero series (no divide-by-zero).
+	zero := buildBandActivityByBin(events, []string{"W1AW"}, "20m", -15, 0, now)
+	if len(zero) != 12 || zero[0] != 0 {
+		t.Fatalf("expected 12 zero bins for minutes<=0, got %v", zero)
+	}
+
+	// Window scales with minutes: at 120 min the same recent events still land
+	// in the newest bin, but an event ~1h old is now in-window (would be ignored
+	// at 20 min).
+	wide := buildBandActivityByBin(events, []string{"W1AW"}, "20m", -15, 120, now)
+	if len(wide) != 12 {
+		t.Fatalf("expected 12 bins at 120 min, got %d", len(wide))
+	}
+	// The 1h-old event (now-2000 ~ 33 min) is in-window at 120 min and matches:
+	// it must land somewhere non-zero, so the 120-min series has more non-zero
+	// bins than the 20-min one.
+	nonZero20 := 0
+	for _, v := range got {
+		if v > 0 {
+			nonZero20++
+		}
+	}
+	nonZero120 := 0
+	for _, v := range wide {
+		if v > 0 {
+			nonZero120++
+		}
+	}
+	if nonZero120 <= nonZero20 {
+		t.Fatalf("expected wider window to expose more bins: 120m=%d 20m=%d", nonZero120, nonZero20)
+	}
+}
+
 func TestDxConditionsEvaluateIncludesTrendAndSparkline(t *testing.T) {
 	engine := newDxBaselineEngine("")
 	now := time.Now().Unix()

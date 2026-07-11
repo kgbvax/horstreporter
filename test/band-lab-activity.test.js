@@ -107,4 +107,46 @@ describe('computeActivityChartData', () => {
         expect(data.baselineRatesPerBin.every((r) => r === 1.5)).toBe(true);
         expect(data.baselineTargetUsedPerBin.every((u) => u === true)).toBe(true);
     });
+
+    it('prefers backend activity_by_bin over live-spot counts when present', () => {
+        // Backend series covers the full window (e.g. 120 min from Postgres);
+        // liveSpots would only fill the newest ~half. The backend series must
+        // win even when live points exist, so older bins are no longer empty.
+        const backendByBin = new Array(12).fill(0).map((_, i) => 0.5 + i * 0.1);
+        const points = [
+            { ageSeconds: 1 },
+            { ageSeconds: 2 },
+        ];
+        const data = computeActivityChartData(
+            points,
+            { activity_by_bin: backendByBin },
+            120,
+            nowMidnightMs,
+        );
+        for (let i = 0; i < 12; i++) {
+            expect(data.binRates[i]).toBeCloseTo(backendByBin[i], 6);
+        }
+        // yMax driven by the largest backend bin (1.6) × 1.1.
+        expect(data.yMax).toBeCloseTo(1.76, 6);
+    });
+
+    it('falls back to live-spot counts when activity_by_bin is absent', () => {
+        // No backend field → existing liveSpot-counting behaviour is preserved.
+        const points = [{ ageSeconds: 1 }, { ageSeconds: 2 }];
+        const data = computeActivityChartData(points, {}, 15, nowMidnightMs);
+        expect(data.binRates[11]).toBeCloseTo(1.6, 6);
+        expect(data.binRates.slice(0, 11).every((r) => r === 0)).toBe(true);
+    });
+
+    it('falls back to live-spot counts when activity_by_bin has the wrong length', () => {
+        // A malformed/truncated backend series must not be trusted.
+        const points = [{ ageSeconds: 1 }, { ageSeconds: 2 }];
+        const data = computeActivityChartData(
+            points,
+            { activity_by_bin: [0.1, 0.2, 0.3] },
+            15,
+            nowMidnightMs,
+        );
+        expect(data.binRates[11]).toBeCloseTo(1.6, 6);
+    });
 });

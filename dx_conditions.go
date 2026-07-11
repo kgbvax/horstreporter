@@ -133,6 +133,13 @@ type dxBandCondition struct {
 	Trend                    string         `json:"trend"`
 	TrendDelta               float64        `json:"trend_delta"`
 	Sparkline                []float64      `json:"sparkline"`
+	// ActivityByBin is the raw spots/min per time bin over the selected window
+	// (length 12, i=0 oldest), backed by Postgres dx_raw_spots via recentEvents
+	// when a store is configured. The Band Stats "Reports over time" chart uses
+	// this for its bars so they cover the full window (incl. 120 min) instead
+	// of the ≤60-min in-memory live stream. Absent on backends/depots that
+	// can't supply it; the frontend falls back to live-spot counts.
+	ActivityByBin []float64 `json:"activity_by_bin,omitempty"`
 }
 
 type dxConditionsResponse struct {
@@ -781,6 +788,7 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		}
 
 		historicalBandSeries := buildBandSparkline(events, targets, band, cwMinDb, now)
+		activityByBin := buildBandActivityByBin(events, targets, band, cwMinDb, minutes, now)
 		trend, trendDelta := computeTrend(historicalBandSeries)
 
 		uniqueCount := len(acc.uniqueLinks)
@@ -849,13 +857,14 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 			P90Snr:                   round1(p90Snr),
 			BaselineActivity:         round2(baselineActivity),
 			TargetBaselineUsed:       targetBaselineUsed,
-			BaselineActivityBySlot:   roundSlotRates(baselineActivityBySlot),
+			BaselineActivityBySlot:   roundFloats2(baselineActivityBySlot),
 			BaselineSlotUsedByTarget: baselineSlotUsedByTarget,
 			DominantDirection:        direction,
 			AzimuthSectors:           acc.directionBins,
 			Trend:                    trend,
 			TrendDelta:               trendDelta,
 			Sparkline:                historicalBandSeries,
+			ActivityByBin:            roundFloats2(activityByBin),
 		})
 
 		weight := float64(acc.total)
@@ -915,13 +924,15 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 	return resp
 }
 
-func roundSlotRates(rates []float64) []float64 {
-	if rates == nil {
+// roundFloats2 returns a copy of v with each element rounded to 2 decimals;
+// nil stays nil so omitempty fields drop cleanly.
+func roundFloats2(v []float64) []float64 {
+	if v == nil {
 		return nil
 	}
-	out := make([]float64, len(rates))
-	for i, v := range rates {
-		out[i] = round2(v)
+	out := make([]float64, len(v))
+	for i, x := range v {
+		out[i] = round2(x)
 	}
 	return out
 }
@@ -1301,6 +1312,61 @@ func buildBandSparkline(events []dxObservedEvent, targets []string, band string,
 		for i := range series {
 			series[i] = round2((series[i] / maxV) * 100.0)
 		}
+	}
+	return series
+}
+
+// buildBandActivityByBin bins raw observed events for one band into ACTIVITY_BINS
+// (12) equal bins spanning the selected `minutes` window and returns spots/min
+// per bin (i=0 oldest). Unlike buildBandSparkline it uses the caller-selected
+// window (not the fixed 120-min sparkline window), counts raw events (no
+// quality weighting, no 0-100 normalization), and returns a real spots/min
+// rate so the chart bars are directly comparable to the baseline line.
+//
+// Backed by the same `events` slice Evaluate already assembles — Postgres
+// recentEvents (120 min) when a store is configured, the in-memory snapshot
+// otherwise — so no extra DB query is needed; for windows ≤120 min the slice
+// already contains the full window.
+func buildBandActivityByBin(events []dxObservedEvent, targets []string, band string, cwMinDb int, minutes int, now int64) []float64 {
+	const bins = 12
+	series := make([]float64, bins)
+	if minutes <= 0 {
+		return series
+	}
+	if len(events) == 0 {
+		return series
+	}
+	windowSec := int64(minutes) * 60
+	binSec := windowSec / bins
+	if binSec <= 0 {
+		return series
+	}
+	binMinutes := float64(binSec) / 60.0
+	windowStart := now - windowSec
+	for _, e := range events {
+		if e.B != band {
+			continue
+		}
+		if e.T < windowStart || e.T > now {
+			continue
+		}
+		if !eventMatchesTargets(e, targets) {
+			continue
+		}
+		if e.RP < cwMinDb {
+			continue
+		}
+		idx := int((e.T - windowStart) / binSec)
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= bins {
+			idx = bins - 1
+		}
+		series[idx]++
+	}
+	for i := range series {
+		series[i] = series[i] / binMinutes
 	}
 	return series
 }
