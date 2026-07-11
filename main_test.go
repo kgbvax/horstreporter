@@ -879,6 +879,37 @@ func TestDxBucketTiering(t *testing.T) {
 	}
 }
 
+func TestNormalizeSeriesTo100(t *testing.T) {
+	// Empty / all-zero / negative-max series → all zeros (no division by zero).
+	if got := normalizeSeriesTo100(nil); len(got) != 0 {
+		t.Fatalf("nil input → empty, got %v", got)
+	}
+	for _, in := range [][]float64{{0, 0, 0}, {-1, -2, -3}} {
+		got := normalizeSeriesTo100(in)
+		for i, v := range got {
+			if v != 0 {
+				t.Fatalf("%v → expected all zeros, got %v (idx %d = %f)", in, got, i, v)
+			}
+		}
+	}
+
+	// Max value scales to exactly 100; others proportionally; input unmutated.
+	in := []float64{1, 4, 2, 0}
+	got := normalizeSeriesTo100(in)
+	want := []float64{25, 100, 50, 0}
+	if len(got) != len(want) {
+		t.Fatalf("length changed: %d → %d", len(in), len(got))
+	}
+	for i, w := range want {
+		if math.Abs(got[i]-w) > 1e-6 {
+			t.Fatalf("normalizeSeriesTo100(%v)[%d] = %f, want %f", in, i, got[i], w)
+		}
+	}
+	if in[1] != 4 {
+		t.Fatalf("input slice was mutated: %v", in)
+	}
+}
+
 func TestBuildBandActivityByBin(t *testing.T) {
 	// 20-min window → 12 bins of 100s each (binMinutes = 100/60).
 	const now int64 = 1_000_000

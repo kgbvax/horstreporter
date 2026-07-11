@@ -18,8 +18,7 @@ const (
 	defaultDxCwViableMinDb       = -15
 	maxDxWindowMinutes           = 180
 	defaultDxBaselineMaxEvents   = 1000000
-	dxSparklineBins              = 12
-	dxSparklineBinSeconds        = 10 * 60
+	dxSparklineBins              = 12 // # of time bins in the per-band activity series / Sparkline
 	dxLongHaulThresholdKm        = 3000.0
 	dxDedupWindowSeconds         = 30
 	dxMinBaselineQuantileSupport = 200
@@ -654,9 +653,20 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 
 	e.mu.RLock()
 	st := e.store
-	globalBuckets := cloneBuckets(e.buckets)
-	targetBuckets := cloneBuckets(e.targetBuckets)
-	events := e.snapshotEventsLocked()
+	// In-memory (dev/no-store) path: clone the baseline bucket maps and snapshot
+	// the event ring for the per-band baseline calls + activity fallback below.
+	// The store path skips these — the bucket clones are unused there, and the
+	// event snapshot is only needed if the Postgres aggregate fails (deferred to
+	// that case) — avoiding a full bucket-map + ~1M-event ring copy per request
+	// and not holding the RLock through the copy (which blocks the 20k/min
+	// ingest Observe path).
+	var globalBuckets, targetBuckets map[string]*baselineBucket
+	var events []dxObservedEvent
+	if st == nil {
+		globalBuckets = cloneBuckets(e.buckets)
+		targetBuckets = cloneBuckets(e.targetBuckets)
+		events = e.snapshotEventsLocked()
+	}
 	e.mu.RUnlock()
 
 	var aggGlobalBuckets map[string]*baselineBucket
@@ -678,17 +688,14 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 			// previously caused the baseline normaliser to over-inflate.
 			logDebug("dx baselineStats failed (baseline_history_minutes defaults to 0): %v", err)
 		}
-		if recent, err := st.recentEvents(now); err == nil {
-			events = recent
-		}
 	}
 
 	// activityByBinMap is the Postgres-backed, server-side-aggregated spots/min
-	// time series per band for the chart bars. Built once for all bands (one
-	// bounded GROUP BY query) so a high-volume dx_raw_spots table can't truncate
-	// it the way recentEvents' row materialisation does. nil when there's no
-	// store or the query fails; the per-band loop then falls back to in-memory
-	// binning from `events`.
+	// time series per band for the chart bars AND the trend/sparkline. Built
+	// once for all bands via one bounded GROUP BY query so a high-volume
+	// dx_raw_spots table can't truncate it (the old recentEvents row-
+	// materialisation path did). nil when there's no store or the query fails;
+	// the per-band loop then falls back to in-memory binning from `events`.
 	var activityByBinMap map[string][]float64
 	if st != nil {
 		if m, err := st.activityByBinForTargets(targets, cwMinDb, minutes, now); err == nil {
@@ -696,6 +703,14 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		} else {
 			logDebug("dx activityByBinForTargets failed (falling back to in-memory binning): %v", err)
 		}
+	}
+	// Only when the Postgres aggregate failed: snapshot the in-memory event ring
+	// so the per-band buildBandActivityByBin fallback has data. Skipped on the
+	// common prod path to avoid the ~80MB ring copy.
+	if st != nil && activityByBinMap == nil {
+		e.mu.RLock()
+		events = e.snapshotEventsLocked()
+		e.mu.RUnlock()
 	}
 
 	cutoff := now - int64(minutes*60)
@@ -802,7 +817,6 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 			}
 		}
 
-		historicalBandSeries := buildBandSparkline(events, targets, band, cwMinDb, now)
 		// Prefer the Postgres aggregate; fall back to in-memory binning from
 		// `events` when the map is unavailable (no store, query failed, or band
 		// had no matched rows in the window).
@@ -810,6 +824,11 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		if activityByBin == nil {
 			activityByBin = buildBandActivityByBin(events, targets, band, cwMinDb, minutes, now)
 		}
+		// Sparkline = the activity series normalised to 0..100 (max-scaling),
+		// so hot_bands' sustainedRecentBins floor (30.0) and computeTrend stay
+		// meaningful. Backed by the full-window activity series now, not the old
+		// recentEvents path that only ever populated the newest bins.
+		historicalBandSeries := normalizeSeriesTo100(activityByBin)
 		trend, trendDelta := computeTrend(historicalBandSeries)
 
 		uniqueCount := len(acc.uniqueLinks)
@@ -1294,60 +1313,35 @@ func extractMatchedBandEvent(m MQTTMessage, targets []string) (matchedBandEvent,
 	}, true
 }
 
-func buildBandSparkline(events []dxObservedEvent, targets []string, band string, cwMinDb int, now int64) []float64 {
-	series := make([]float64, dxSparklineBins)
-	if len(events) == 0 {
-		return series
-	}
-	windowStart := now - int64(dxSparklineBins*dxSparklineBinSeconds)
-	for _, e := range events {
-		if e.T < windowStart || e.T > now {
-			continue
-		}
-		if e.B != band {
-			continue
-		}
-		if !eventMatchesTargets(e, targets) {
-			continue
-		}
-		if e.RP < cwMinDb {
-			continue
-		}
-		idx := int((e.T - windowStart) / dxSparklineBinSeconds)
-		if idx < 0 {
-			idx = 0
-		}
-		if idx >= dxSparklineBins {
-			idx = dxSparklineBins - 1
-		}
-		series[idx] += eventQualityWeight(e)
-	}
-
+// normalizeSeriesTo100 returns a copy of `series` max-scaled to the 0..100
+// range (each value = value/max*100, rounded to 2 dp). A series whose max is
+// <=0 is returned as all-zeros. This produces the 0..100 Sparkline shape that
+// hot_bands.sustainedRecentBins (floor 30.0) and computeTrend expect, derived
+// from the per-band activity series instead of the old per-event scan.
+func normalizeSeriesTo100(series []float64) []float64 {
+	out := make([]float64, len(series))
 	maxV := 0.0
 	for _, v := range series {
 		if v > maxV {
 			maxV = v
 		}
 	}
-	if maxV > 0 {
-		for i := range series {
-			series[i] = round2((series[i] / maxV) * 100.0)
-		}
+	if maxV <= 0 {
+		return out
 	}
-	return series
+	for i, v := range series {
+		out[i] = round2((v / maxV) * 100.0)
+	}
+	return out
 }
 
-// buildBandActivityByBin bins raw observed events for one band into ACTIVITY_BINS
-// (12) equal bins spanning the selected `minutes` window and returns spots/min
-// per bin (i=0 oldest). Unlike buildBandSparkline it uses the caller-selected
-// window (not the fixed 120-min sparkline window), counts raw events (no
-// quality weighting, no 0-100 normalization), and returns a real spots/min
-// rate so the chart bars are directly comparable to the baseline line.
-//
-// Backed by the same `events` slice Evaluate already assembles — Postgres
-// recentEvents (120 min) when a store is configured, the in-memory snapshot
-// otherwise — so no extra DB query is needed; for windows ≤120 min the slice
-// already contains the full window.
+// buildBandActivityByBin bins raw observed events for one band into 12 equal
+// bins spanning the selected `minutes` window and returns spots/min per bin
+// (i=0 oldest). It counts raw events (no quality weighting, no 0-100
+// normalization) and returns a real spots/min rate so the chart bars are
+// directly comparable to the baseline line. Evaluate prefers the Postgres
+// aggregate (activityByBinForTargets) and only falls back to this in-memory
+// binning from `events` when there is no store or that query failed.
 func buildBandActivityByBin(events []dxObservedEvent, targets []string, band string, cwMinDb int, minutes int, now int64) []float64 {
 	const bins = 12
 	series := make([]float64, bins)
@@ -1402,12 +1396,6 @@ func eventMatchesTargets(e dxObservedEvent, targets []string) bool {
 		}
 	}
 	return false
-}
-
-func eventQualityWeight(e dxObservedEvent) float64 {
-	d := distanceKmForLocators(e.SL, e.RL)
-	s := float64(snrTierFromDb(e.RP))
-	return 1.0 + clamp01(d/6000.0) + (s * 0.25)
 }
 
 func computeTrend(series []float64) (string, float64) {

@@ -31,6 +31,16 @@ type dxPostgresStore struct {
 	flushCh chan struct{}
 	stopCh  chan struct{}
 	wg      sync.WaitGroup
+
+	// baselineStatsCache memoizes the display-only baseline stats (bucket/event
+	// planner estimates + the baseline_first_observed_at history span). These
+	// change on the scale of minutes but baselineStats ran 2–3 PG round-trips on
+	// every /api/dx_conditions poll (~15s per active browser). 60s TTL.
+	baselineStatsMu   sync.Mutex
+	baselineStatsAt   int64
+	baselineStatsBkt  int
+	baselineStatsEv   int
+	baselineStatsHist int
 }
 
 type baselineDelta struct {
@@ -1111,33 +1121,6 @@ func (s *dxPostgresStore) baselineQuantilesForBand(targets []string, band string
 	return q25, q75, true, nil
 }
 
-func (s *dxPostgresStore) recentEvents(now int64) ([]dxObservedEvent, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	windowStart := now - int64(dxSparklineBins*dxSparklineBinSeconds)
-	rows, err := s.pool.Query(ctx, `
-		SELECT
-			spot_time, band, sender_callsign, receiver_callsign,
-			sender_locator, receiver_locator, signal_report_db
-		FROM dx_raw_spots
-		WHERE spot_time BETWEEN $1 AND $2
-		ORDER BY spot_time ASC
-	`, windowStart, now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]dxObservedEvent, 0, 4096)
-	for rows.Next() {
-		var ev dxObservedEvent
-		if err := rows.Scan(&ev.T, &ev.B, &ev.SC, &ev.RC, &ev.SL, &ev.RL, &ev.RP); err != nil {
-			return nil, err
-		}
-		out = append(out, ev)
-	}
-	return out, rows.Err()
-}
-
 // activityByBinForTargets returns raw spots/min per (band, time-bin) over the
 // selected `minutes` window, target-filtered the same way the live stream
 // matches (callsign or 4-char locator prefix). This is the Postgres-backed
@@ -1224,6 +1207,29 @@ func (s *dxPostgresStore) activityByBinForTargets(targets []string, cwMinDb, min
 }
 
 func (s *dxPostgresStore) baselineStats(now int64) (int, int, int, error) {
+	const ttl int64 = 60
+	s.baselineStatsMu.Lock()
+	if s.baselineStatsAt != 0 && now-s.baselineStatsAt < ttl {
+		b, ev, hm := s.baselineStatsBkt, s.baselineStatsEv, s.baselineStatsHist
+		s.baselineStatsMu.Unlock()
+		return b, ev, hm, nil
+	}
+	s.baselineStatsMu.Unlock()
+
+	b, ev, hm, err := s.baselineStatsUncached(now)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	s.baselineStatsMu.Lock()
+	s.baselineStatsAt = now
+	s.baselineStatsBkt = b
+	s.baselineStatsEv = ev
+	s.baselineStatsHist = hm
+	s.baselineStatsMu.Unlock()
+	return b, ev, hm, nil
+}
+
+func (s *dxPostgresStore) baselineStatsUncached(now int64) (int, int, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
