@@ -26,6 +26,13 @@ type MQTTMessage struct {
 	OpName     string  `json:"-"` // DX operator name (QRZ)
 	Country    string  `json:"-"` // DX country / DXCC entity (cty.dat, else QRZ)
 	CountryISO string  `json:"-"` // ISO-3166 alpha-2 for the flag (cty.dat)
+
+	// Source identifies which ingest produced this spot: "mqtt" (PSKReporter),
+	// "dxcluster", or "rbn". Set by each ingest and by the startup backfill (from
+	// dx_raw_spots.source_type) so sourceTypeForMessage can tag the stream without
+	// abusing MD (RBN's real modes CW/RTTY are not source markers). json:"-" —
+	// surfaces via toStreamSpot.sourceType, never the raw MQTT payload.
+	Source string `json:"-"`
 }
 
 func startMQTT() {

@@ -85,3 +85,26 @@ func TestIsNonConditionsMode(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceTypeForMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		m    MQTTMessage
+		want string
+	}{
+		{name: "explicit rbn source wins regardless of mode", m: MQTTMessage{Source: "rbn", MD: "CW"}, want: "rbn"},
+		{name: "explicit dxcluster source", m: MQTTMessage{Source: "dxcluster", MD: "DXCLUSTER"}, want: "dxcluster"},
+		{name: "explicit mqtt source", m: MQTTMessage{Source: "mqtt", MD: "FT8"}, want: "mqtt"},
+		{name: "source is case-insensitive", m: MQTTMessage{Source: "RBN"}, want: "rbn"},
+		{name: "no source: DXCLUSTER mode fallback", m: MQTTMessage{MD: "DXCLUSTER"}, want: "dxcluster"},
+		{name: "no source: anything else defaults to mqtt", m: MQTTMessage{MD: "CW"}, want: "mqtt"},
+		{name: "empty message defaults to mqtt", m: MQTTMessage{}, want: "mqtt"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sourceTypeForMessage(tc.m); got != tc.want {
+				t.Fatalf("sourceTypeForMessage() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

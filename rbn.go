@@ -308,6 +308,7 @@ func handleRBNSpot(spot rbnSpot, resolver CallsignLocatorResolver, ctyResolver *
 		OpName:     dxName,
 		Country:    dxCountry,
 		CountryISO: dxCountryISO,
+		Source:     "rbn",
 	}
 
 	// Persist unconditionally with full fidelity (real frequency, mode, dB, skimmer) so the

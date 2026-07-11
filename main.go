@@ -348,6 +348,13 @@ func main() {
 			if rbnCall == "" {
 				rbnCall = strings.TrimSpace(os.Getenv("RBN_CALLSIGN"))
 			}
+			// RBN only needs a callsign for identification at the relay prompt (no
+			// password). When none is set, reuse the operator's DX-cluster callsign —
+			// it's the same station identity and is already configured on prod via
+			// DXCLUSTER_USERNAME, so activating RBN needs only -rbn-enable.
+			if rbnCall == "" {
+				rbnCall = strings.TrimSpace(os.Getenv("DXCLUSTER_USERNAME"))
+			}
 			reconnectDelay := time.Duration(*rbnReconnectSeconds) * time.Second
 			go startRBNIngest(rbnConfig{
 				Enabled:        true,

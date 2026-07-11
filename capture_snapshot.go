@@ -53,6 +53,10 @@ func captureSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("include_dxcluster")); raw != "" {
 		includeDxcluster = strings.EqualFold(raw, "true") || raw == "1"
 	}
+	includeRbn := true
+	if raw := strings.TrimSpace(r.URL.Query().Get("include_rbn")); raw != "" {
+		includeRbn = strings.EqualFold(raw, "true") || raw == "1"
+	}
 
 	targets := []string{target}
 	if surroundings && isLocator(target) {
@@ -79,6 +83,9 @@ func captureSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if !includeDxcluster && strings.EqualFold(spot.SourceType, "dxcluster") {
+			continue
+		}
+		if !includeRbn && strings.EqualFold(spot.SourceType, "rbn") {
 			continue
 		}
 
