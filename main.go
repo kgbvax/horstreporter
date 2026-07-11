@@ -200,6 +200,11 @@ func main() {
 	dxClusterVerbose := flag.Bool("dxcluster-verbose", false, "Enable verbose DX cluster connection logging")
 	dxClusterUsername := flag.String("dxcluster-username", "", "Callsign sent when connecting to DX cluster")
 	dxClusterPassword := flag.String("dxcluster-password", "", "Optional password sent when connecting to DX cluster")
+	rbnEnable := flag.Bool("rbn-enable", false, "Enable optional RBN (Reverse Beacon Network) CW/RTTY telnet ingest")
+	rbnEndpoint := flag.String("rbn-endpoint", "telnet.reversebeacon.net:7000", "RBN raw telnet endpoint (host:port). :7000 = CW/RTTY no-auth; :7001 = FT8 (redundant with PSKReporter)")
+	rbnCallsign := flag.String("rbn-callsign", "", "Callsign sent at the RBN relay's \"enter your call\" prompt (required-in-practice to get a spot stream; no password/auth). Falls back to env RBN_CALLSIGN")
+	rbnReconnectSeconds := flag.Int("rbn-reconnect-seconds", 15, "Delay before reconnecting to RBN after disconnect")
+	rbnVerbose := flag.Bool("rbn-verbose", false, "Enable verbose RBN connection logging")
 	ctyPath := flag.String("cty-path", os.Getenv("CTY_DAT_PATH"), "Path to AD1C cty.dat for DX-cluster country/flag labelling (empty disables)")
 	qrzUsernameFlag := flag.String("qrz-username", "", "QRZ username for optional callsign->locator enrichment")
 	qrzPasswordFlag := flag.String("qrz-password", "", "QRZ password for optional callsign->locator enrichment")
@@ -296,16 +301,9 @@ func main() {
 
 	go startMQTT()
 
-	if *dxClusterEnable {
-		dxClusterUser := strings.TrimSpace(*dxClusterUsername)
-		dxClusterPass := strings.TrimSpace(*dxClusterPassword)
-		if dxClusterUser == "" {
-			dxClusterUser = strings.TrimSpace(os.Getenv("DXCLUSTER_USERNAME"))
-		}
-		if dxClusterPass == "" {
-			dxClusterPass = strings.TrimSpace(os.Getenv("DXCLUSTER_PASSWORD"))
-		}
-
+	// QRZ callsign->locator enrichment + cty.dat DXCC resolver are shared by the optional
+	// DX-cluster and RBN ingests; construct once when either is enabled.
+	if *dxClusterEnable || *rbnEnable {
 		qrzUsername := strings.TrimSpace(*qrzUsernameFlag)
 		qrzPassword := strings.TrimSpace(*qrzPasswordFlag)
 		if qrzUsername == "" {
@@ -314,28 +312,53 @@ func main() {
 		if qrzPassword == "" {
 			qrzPassword = strings.TrimSpace(os.Getenv("QRZ_PASSWORD"))
 		}
-
 		resolver := CallsignLocatorResolver(nil)
 		if qrzUsername != "" && qrzPassword != "" {
 			resolver = newQRZLookupClient(qrzUsername, qrzPassword)
-			logInfo("DX cluster QRZ enrichment enabled")
+			logInfo("QRZ callsign enrichment enabled (shared by DX-cluster + RBN)")
 		} else {
-			logInfo("DX cluster QRZ enrichment disabled (missing credentials)")
+			logInfo("QRZ callsign enrichment disabled (missing credentials); DX-cluster/RBN spots are chart-only")
 		}
-
 		ctyResolver := loadCtyResolver(strings.TrimSpace(*ctyPath))
 
-		reconnectDelay := time.Duration(*dxClusterReconnectSeconds) * time.Second
-		go startDXClusterIngest(dxClusterConfig{
-			Enabled:        true,
-			Endpoint:       strings.TrimSpace(*dxClusterEndpoint),
-			ReconnectDelay: reconnectDelay,
-			Verbose:        *dxClusterVerbose,
-			Username:       dxClusterUser,
-			Password:       dxClusterPass,
-			Resolver:       resolver,
-			CtyResolver:    ctyResolver,
-		})
+		if *dxClusterEnable {
+			dxClusterUser := strings.TrimSpace(*dxClusterUsername)
+			dxClusterPass := strings.TrimSpace(*dxClusterPassword)
+			if dxClusterUser == "" {
+				dxClusterUser = strings.TrimSpace(os.Getenv("DXCLUSTER_USERNAME"))
+			}
+			if dxClusterPass == "" {
+				dxClusterPass = strings.TrimSpace(os.Getenv("DXCLUSTER_PASSWORD"))
+			}
+			reconnectDelay := time.Duration(*dxClusterReconnectSeconds) * time.Second
+			go startDXClusterIngest(dxClusterConfig{
+				Enabled:        true,
+				Endpoint:       strings.TrimSpace(*dxClusterEndpoint),
+				ReconnectDelay: reconnectDelay,
+				Verbose:        *dxClusterVerbose,
+				Username:       dxClusterUser,
+				Password:       dxClusterPass,
+				Resolver:       resolver,
+				CtyResolver:    ctyResolver,
+			})
+		}
+
+		if *rbnEnable {
+			rbnCall := strings.TrimSpace(*rbnCallsign)
+			if rbnCall == "" {
+				rbnCall = strings.TrimSpace(os.Getenv("RBN_CALLSIGN"))
+			}
+			reconnectDelay := time.Duration(*rbnReconnectSeconds) * time.Second
+			go startRBNIngest(rbnConfig{
+				Enabled:        true,
+				Endpoint:       strings.TrimSpace(*rbnEndpoint),
+				ReconnectDelay: reconnectDelay,
+				Verbose:        *rbnVerbose,
+				Callsign:       rbnCall,
+				Resolver:       resolver,
+				CtyResolver:    ctyResolver,
+			})
+		}
 	}
 
 	go func() {
