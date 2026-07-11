@@ -342,6 +342,96 @@ func TestPruneLiveHistoryUsesConfiguredRetention(t *testing.T) {
 	}
 }
 
+// TestPruneLiveHistoryResliceInPlace verifies the in-place reslice retains the
+// correct live elements (and only them) across a partial prune, including that
+// a subsequent append still works after the prefix was dropped.
+func TestPruneLiveHistoryResliceInPlace(t *testing.T) {
+	hub.Lock()
+	origHistory := hub.history
+	hub.history = []MQTTMessage{
+		{T: 100, SC: "old1"},
+		{T: 200, SC: "old2"},
+		{T: 300, SC: "old3"},
+		{T: 2000, SC: "keep1"},
+		{T: 2100, SC: "keep2"},
+	}
+	hub.Unlock()
+	defer func() {
+		hub.Lock()
+		hub.history = origHistory
+		hub.Unlock()
+	}()
+
+	// cutoff = 2400 - 600 = 1800 → drops the three T<1800 entries.
+	pruneLiveHistory(2400, 10)
+
+	hub.RLock()
+	if len(hub.history) != 2 {
+		t.Fatalf("expected 2 retained, got %d (%v)", len(hub.history), hub.history)
+	}
+	if hub.history[0].T != 2000 || hub.history[1].T != 2100 {
+		t.Fatalf("retained wrong elements: %v", hub.history)
+	}
+	hub.RUnlock()
+
+	// Append after the reslice must still work (the resliced header is appendable).
+	hub.Lock()
+	hub.history = append(hub.history, MQTTMessage{T: 2500, SC: "new"})
+	hub.Unlock()
+
+	hub.RLock()
+	if len(hub.history) != 3 || hub.history[2].T != 2500 {
+		t.Fatalf("post-prune append failed: %v", hub.history)
+	}
+	hub.RUnlock()
+}
+
+func TestBuildRawSpotInsertSQL(t *testing.T) {
+	chunk := []rawSpotRow{
+		{m: MQTTMessage{T: 100, RP: -8}, band: "20m", source4: "FN31", lat: 41.7, lon: -72.7, sc: "W1AW", rc: "DL1A", sl: "FN31", rl: "JO32", md: "FT8"},
+		{m: MQTTMessage{T: 200, RP: -12}, band: "40m", source4: "JO32", lat: 50.1, lon: 8.0, sc: "DL2B", rc: "W1AW", sl: "JO32", rl: "FN31", md: "CW"},
+	}
+	q, args := buildRawSpotInsertSQL(chunk)
+
+	const cols = 15
+	if len(args) != len(chunk)*cols {
+		t.Fatalf("args len = %d, want %d", len(args), len(chunk)*cols)
+	}
+	// Row 0 layout: T, band, sc, rc, sl, rl, md, RP, source4, lat, lon, "mqtt", "", nil, "".
+	if args[0] != int64(100) || args[1] != "20m" || args[2] != "W1AW" || args[8] != "FN31" {
+		t.Fatalf("row0 args mismatch: %v", args[:9])
+	}
+	if args[9] != 41.7 || args[10] != -72.7 {
+		t.Fatalf("row0 lat/lon args mismatch: %v %v", args[9], args[10])
+	}
+	if args[11] != "mqtt" || args[12] != "" || args[13] != (*float64)(nil) || args[14] != "" {
+		t.Fatalf("row0 trailing args mismatch: %v", args[11:15])
+	}
+	// Row 1 starts at offset 15.
+	if args[15] != int64(200) || args[16] != "40m" {
+		t.Fatalf("row1 start args mismatch: %v %v", args[15], args[16])
+	}
+
+	// Placeholder indices: row0 uses $1..$15 (geom CASE at col 10 refs $10=lat,$11=lon);
+	// row1 uses $16..$30. Spot-check the geom expression and the row1 start.
+	if !strings.Contains(q, "ST_SetSRID(ST_MakePoint($11, $10), 4326)") {
+		t.Fatalf("row0 geom expression missing/wrong: %s", q)
+	}
+	if !strings.Contains(q, "WHEN $10::float8 = 0 AND $11::float8 = 0") {
+		t.Fatalf("row0 geom NULL-guard missing/wrong: %s", q)
+	}
+	if !strings.Contains(q, "($16,$17") {
+		t.Fatalf("row1 VALUES tuple missing: %s", q)
+	}
+	if !strings.Contains(q, "ST_SetSRID(ST_MakePoint($26, $25), 4326)") {
+		t.Fatalf("row1 geom expression missing/wrong (expected $26/$25): %s", q)
+	}
+	// Two VALUE tuples ⇒ exactly one comma between tuples (no trailing comma).
+	if strings.Count(q, "),(") != 1 {
+		t.Fatalf("expected 1 tuple-separator, got %d in: %s", strings.Count(q, "),("), q)
+	}
+}
+
 func TestDxBaselineEventCapIsConfigurable(t *testing.T) {
 	origCap := dxBaselineMaxEvents
 	dxBaselineMaxEvents = 2

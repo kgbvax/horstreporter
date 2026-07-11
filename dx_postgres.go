@@ -74,9 +74,16 @@ type bandSlotKey struct {
 	Slot int
 }
 
+// rawSpotRow is one spot enqueued for the next flushRawSpots batch. The
+// derived columns (source4, lat/lon, upper-trimmed callsigns/locators/mode) are
+// precomputed in observe BEFORE the store lock so flushRawSpots can build the
+// multi-VALUES INSERT without recomputing per row.
 type rawSpotRow struct {
-	m    MQTTMessage
-	band string
+	m                  MQTTMessage
+	band               string
+	source4            string
+	lat, lon           float64
+	sc, rc, sl, rl, md string
 }
 
 type dxPulseRegionBaselineDailyKey struct {
@@ -689,6 +696,29 @@ func (s *dxPostgresStore) dxPulseBaselineForTargets(targets []string, lookbackDa
 func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTier, snrTier int, targetTokens [4]string) error {
 	uniqueTargets := dedupeTargetTokens(targetTokens)
 
+	// Precompute the derived dx_raw_spots columns BEFORE taking the store lock
+	// (these only depend on m) so flushRawSpots can emit a multi-VALUES INSERT
+	// without recomputing per row and so the ingest lock critical section isn't
+	// extended by the normalization/geo work.
+	isDXCluster := strings.EqualFold(strings.TrimSpace(m.MD), "DXCLUSTER")
+	var row rawSpotRow
+	if !isDXCluster {
+		source4 := normalizeSource4(m.SL)
+		lat, lon := locatorToLatLng(source4)
+		row = rawSpotRow{
+			m:       m,
+			band:    band,
+			source4: source4,
+			lat:     lat,
+			lon:     lon,
+			sc:      strings.ToUpper(strings.TrimSpace(m.SC)),
+			rc:      strings.ToUpper(strings.TrimSpace(m.RC)),
+			sl:      strings.ToUpper(strings.TrimSpace(m.SL)),
+			rl:      strings.ToUpper(strings.TrimSpace(m.RL)),
+			md:      strings.ToUpper(strings.TrimSpace(m.MD)),
+		}
+	}
+
 	s.mu.Lock()
 	gk := baselineGlobalKey{
 		Band:         band,
@@ -726,8 +756,8 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 	// unscorable "0 MHz" spot in the Chase Queue and can shadow the real
 	// dxcluster row during /api/dxspots dedup. Baseline/region aggregation above
 	// still counts the spot.
-	if !strings.EqualFold(strings.TrimSpace(m.MD), "DXCLUSTER") {
-		s.pendingRawSpots = append(s.pendingRawSpots, rawSpotRow{m: m, band: band})
+	if !isDXCluster {
+		s.pendingRawSpots = append(s.pendingRawSpots, row)
 	}
 	shouldFlush := s.pendingCount >= dxBaselineFlushMaxPending
 	s.mu.Unlock()
@@ -737,6 +767,11 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 	}
 	return nil
 }
+
+// rawSpotInsertChunkSize bounds the number of rows per multi-VALUES INSERT so
+// the per-statement parameter count (rows×15) stays well under pgx's 65535-param
+// limit and each statement stays manageable. 1000 rows ⇒ 15000 params.
+const rawSpotInsertChunkSize = 1000
 
 func (s *dxPostgresStore) flushRawSpots(ctx context.Context) error {
 	s.mu.Lock()
@@ -748,55 +783,75 @@ func (s *dxPostgresStore) flushRawSpots(ctx context.Context) error {
 	s.pendingRawSpots = make([]rawSpotRow, 0, len(rows)/2+16)
 	s.mu.Unlock()
 
-	batch := &pgx.Batch{}
 	var minSpotTime int64
-	for _, row := range rows {
-		if row.m.T > 0 && (minSpotTime == 0 || row.m.T < minSpotTime) {
-			minSpotTime = row.m.T
+	for start := 0; start < len(rows); start += rawSpotInsertChunkSize {
+		end := start + rawSpotInsertChunkSize
+		if end > len(rows) {
+			end = len(rows)
 		}
-		source4 := normalizeSource4(row.m.SL)
-		lat, lon := locatorToLatLng(source4)
-		batch.Queue(`
-			INSERT INTO dx_raw_spots (
-				spot_time, band, sender_callsign, receiver_callsign,
-				sender_locator, receiver_locator, mode, signal_report_db,
-				source_grid4, spot_geom,
-				source_type, spotter_callsign, frequency_khz, comment
-			)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
-				CASE WHEN $10::float8 = 0 AND $11::float8 = 0 THEN NULL
-				ELSE ST_SetSRID(ST_MakePoint($11, $10), 4326) END,
-				$12,$13,$14,$15)
-		`,
+		chunk := rows[start:end]
+		for _, row := range chunk {
+			if row.m.T > 0 && (minSpotTime == 0 || row.m.T < minSpotTime) {
+				minSpotTime = row.m.T
+			}
+		}
+		q, args := buildRawSpotInsertSQL(chunk)
+		if _, err := s.pool.Exec(ctx, q, args...); err != nil {
+			return err
+		}
+	}
+	s.touchBaselineFirstObserved(ctx, minSpotTime)
+	return nil
+}
+
+// buildRawSpotInsertSQL builds one multi-VALUES INSERT for a chunk of precomputed
+// rawSpotRows. Each row contributes 15 parameters; the spot_geom column is built
+// in SQL via ST_SetSRID(ST_MakePoint(lon, lat), 4326) (NULL when lat=lon=0),
+// identical to the old per-row INSERT. Extracted so it can be unit-tested without
+// a database.
+func buildRawSpotInsertSQL(chunk []rawSpotRow) (string, []any) {
+	const cols = 15
+	var b strings.Builder
+	b.WriteString(`INSERT INTO dx_raw_spots (
+		spot_time, band, sender_callsign, receiver_callsign,
+		sender_locator, receiver_locator, mode, signal_report_db,
+		source_grid4, spot_geom,
+		source_type, spotter_callsign, frequency_khz, comment)
+	VALUES `)
+	args := make([]any, 0, len(chunk)*cols)
+	for ri, row := range chunk {
+		if ri > 0 {
+			b.WriteByte(',')
+		}
+		base := ri*cols + 1           // 1-indexed placeholder base
+		latp, lonp := base+9, base+10 // $lat, $lon
+		// spot_time..source_grid4 (9 direct), spot_geom (CASE expr), source_type..comment (4)
+		fmt.Fprintf(&b, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,"+
+			"CASE WHEN $%d::float8 = 0 AND $%d::float8 = 0 THEN NULL "+
+			"ELSE ST_SetSRID(ST_MakePoint($%d, $%d), 4326) END,"+
+			"$%d,$%d,$%d,$%d)",
+			base, base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8,
+			latp, lonp, lonp, latp,
+			base+11, base+12, base+13, base+14)
+		args = append(args,
 			row.m.T,
 			row.band,
-			strings.ToUpper(strings.TrimSpace(row.m.SC)),
-			strings.ToUpper(strings.TrimSpace(row.m.RC)),
-			strings.ToUpper(strings.TrimSpace(row.m.SL)),
-			strings.ToUpper(strings.TrimSpace(row.m.RL)),
-			strings.ToUpper(strings.TrimSpace(row.m.MD)),
+			row.sc,
+			row.rc,
+			row.sl,
+			row.rl,
+			row.md,
 			row.m.RP,
-			source4,
-			lat,
-			lon,
+			row.source4,
+			row.lat,
+			row.lon,
 			"mqtt",
 			"",
 			(*float64)(nil),
 			"",
 		)
 	}
-	br := s.pool.SendBatch(ctx, batch)
-	for range rows {
-		if _, err := br.Exec(); err != nil {
-			_ = br.Close()
-			return err
-		}
-	}
-	if err := br.Close(); err != nil {
-		return err
-	}
-	s.touchBaselineFirstObserved(ctx, minSpotTime)
-	return nil
+	return b.String(), args
 }
 
 func (s *dxPostgresStore) insertRawSpot(ctx context.Context, m MQTTMessage, band, sourceType, spotter string, frequencyKHz *float64, comment string) error {
@@ -1311,21 +1366,47 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 	return out, rows.Err()
 }
 
-// pruneRawSpotsOlderThan deletes dx_raw_spots rows whose spot_time is
-// older than `cutoff` (a Unix-seconds value). Returns the number of rows
-// deleted. The DELETE is index-supported (idx_dx_raw_spots_spot_time) and
-// safe to run with horstreporter live; pages are reclaimed by autovacuum.
+// pruneRawSpotsOlderThan deletes dx_raw_spots rows whose spot_time is older
+// than `cutoff` (a Unix-seconds value). Returns the total number of rows
+// deleted across all batches.
+//
+// Deletion runs in index-backed batches (idx_dx_raw_spots_spot_time feeds the
+// LIMIT subquery, the outer DELETE hits the id PK): a fresh short context per
+// batch means a slow/timeout batch returns the rows already deleted (committed)
+// plus an error, and the next hourly run resumes from the then-current cutoff —
+// no more wholesale 60s abort losing all progress. Smaller per-statement work
+// also lets autovacuum reclaim pages and refresh pg_class.reltuples (used by
+// baselineStats) between batches. pruneMaxBatches is a runaway-loop backstop.
+const (
+	pruneRawSpotsBatchSize    = 50_000
+	pruneRawSpotsBatchTimeout = 15 * time.Second
+	pruneRawSpotsMaxBatches   = 1000
+)
+
 func (s *dxPostgresStore) pruneRawSpotsOlderThan(cutoff int64) (int64, error) {
 	if s == nil {
 		return 0, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	tag, err := s.pool.Exec(ctx, `DELETE FROM dx_raw_spots WHERE spot_time < $1`, cutoff)
-	if err != nil {
-		return 0, err
+	var total int64
+	for b := 0; b < pruneRawSpotsMaxBatches; b++ {
+		ctx, cancel := context.WithTimeout(context.Background(), pruneRawSpotsBatchTimeout)
+		tag, err := s.pool.Exec(ctx, `
+			DELETE FROM dx_raw_spots
+			WHERE id IN (SELECT id FROM dx_raw_spots
+			             WHERE spot_time < $1
+			             ORDER BY spot_time
+			             LIMIT $2)`, cutoff, pruneRawSpotsBatchSize)
+		cancel()
+		if err != nil {
+			return total, err
+		}
+		n := tag.RowsAffected()
+		total += n
+		if n < pruneRawSpotsBatchSize {
+			break // caught up to cutoff
+		}
 	}
-	return tag.RowsAffected(), nil
+	return total, nil
 }
 
 func (s *dxPostgresStore) loadRecentSpotCache(minutes int, now int64, includeDXCluster bool) ([]MQTTMessage, error) {
