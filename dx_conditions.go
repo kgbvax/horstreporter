@@ -704,6 +704,21 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 			logDebug("dx activityByBinForTargets failed (falling back to in-memory binning): %v", err)
 		}
 	}
+
+	// baselinePairs{Target,Global} are the all-bands/all-slots/all-tiers
+	// baseline breakdown fetched ONCE (2 PG round-trips) so the per-band loop
+	// below can derive activity/support/quantiles/all-slots in memory instead of
+	// issuing ~100 per-band round-trips. nil on no-store or query error; the
+	// per-band derivation then yields zero/unused, matching the old per-call
+	// err == nil guards.
+	var baselinePairsTarget, baselinePairsGlobal map[bandSlotKey][]baselinePair
+	if st != nil {
+		if tt, tg, err := st.allBandBaselinePairs(baselineTargets); err == nil {
+			baselinePairsTarget, baselinePairsGlobal = tt, tg
+		} else {
+			logDebug("dx allBandBaselinePairs failed (per-band baseline falls back to zero): %v", err)
+		}
+	}
 	// Only when the Postgres aggregate failed: snapshot the in-memory event ring
 	// so the per-band buildBandActivityByBin fallback has data. Skipped on the
 	// common prod path to avoid the ~80MB ring copy.
@@ -801,19 +816,28 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 			q25, q75, quantileOK = baselineScoreQuantilesForBand(aggGlobalBuckets, aggTargetBuckets, baselineTargets, band, resp.CurrentSlotOfDay)
 			baselineActivityBySlot, baselineSlotUsedByTarget = baselineActivityForBandAllSlots(aggGlobalBuckets, aggTargetBuckets, baselineTargets, band, resp.BaselineHistoryM)
 		} else {
-			if act, used, err := st.baselineActivityForBand(baselineTargets, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM); err == nil {
-				baselineActivity = act
-				targetBaselineUsed = used
-			}
-			if support, err := st.baselineSupportForBand(baselineTargets, band, resp.CurrentSlotOfDay); err == nil {
-				baselineSupport = support
-			}
-			if ql, qh, ok, err := st.baselineQuantilesForBand(baselineTargets, band, resp.CurrentSlotOfDay); err == nil {
-				q25, q75, quantileOK = ql, qh, ok
-			}
-			if rates, used, err := st.baselineActivityForBandAllSlots(baselineTargets, band, resp.BaselineHistoryM); err == nil {
+			// Derive all four baseline values from the single all-bands/all-slots
+			// index fetched above (2 PG round-trips total) instead of ~100
+			// per-band round-trips. On fetch failure both indexes are nil and
+			// every value stays zero/unused, matching the old per-call err guards.
+			pairs, used := pairsForBandSlot(baselinePairsTarget, baselinePairsGlobal, band, resp.CurrentSlotOfDay)
+			baselineActivity = normalizeBaselineToSpotsPerMinute(float64(sumPairs(pairs)), resp.BaselineHistoryM)
+			targetBaselineUsed = used
+			baselineSupport = sumPairs(pairs)
+			q25, q75, quantileOK = quantilesFromPairs(pairs)
+			// Length-48 per-slot series, built only when the fetch succeeded
+			// (nil global index ⇒ fetch failed ⇒ leave nil, as the old call did
+			// on its own error).
+			if baselinePairsGlobal != nil {
+				rates := make([]float64, SlotsOfDay)
+				usedSlot := make([]bool, SlotsOfDay)
+				for slot := 0; slot < SlotsOfDay; slot++ {
+					ps, u := pairsForBandSlot(baselinePairsTarget, baselinePairsGlobal, band, slot)
+					rates[slot] = normalizeBaselineToSpotsPerMinute(float64(sumPairs(ps)), resp.BaselineHistoryM)
+					usedSlot[slot] = u
+				}
 				baselineActivityBySlot = rates
-				baselineSlotUsedByTarget = used
+				baselineSlotUsedByTarget = usedSlot
 			}
 		}
 

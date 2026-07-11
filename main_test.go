@@ -879,6 +879,79 @@ func TestDxBucketTiering(t *testing.T) {
 	}
 }
 
+func TestSumPairs(t *testing.T) {
+	if got := sumPairs(nil); got != 0 {
+		t.Fatalf("nil → 0, got %d", got)
+	}
+	pairs := []baselinePair{{Count: 10}, {Count: 0}, {Count: 5}, {Count: -3}}
+	if got := sumPairs(pairs); got != 12 {
+		t.Fatalf("sum = %d, want 12", got)
+	}
+}
+
+func TestPairsForBandSlot(t *testing.T) {
+	target := map[bandSlotKey][]baselinePair{
+		{Band: "20m", Slot: 10}: {{DistanceTier: 1, SnrTier: 2, Count: 50}},
+	}
+	global := map[bandSlotKey][]baselinePair{
+		{Band: "20m", Slot: 10}: {{DistanceTier: 0, SnrTier: 0, Count: 7}}, // shadowed by target
+		{Band: "40m", Slot: 3}:  {{DistanceTier: 2, SnrTier: 1, Count: 9}},
+	}
+
+	// Target wins when present → used=true, target pairs.
+	p, used := pairsForBandSlot(target, global, "20m", 10)
+	if !used || len(p) != 1 || p[0].Count != 50 {
+		t.Fatalf("20m/10: expected target(50) used=true, got %v used=%v", p, used)
+	}
+	// No target row → global fallback, used=false.
+	p, used = pairsForBandSlot(target, global, "40m", 3)
+	if used || len(p) != 1 || p[0].Count != 9 {
+		t.Fatalf("40m/3: expected global(9) used=false, got %v used=%v", p, used)
+	}
+	// Neither → nil, false.
+	p, used = pairsForBandSlot(target, global, "80m", 0)
+	if used || p != nil {
+		t.Fatalf("80m/0: expected nil/false, got %v used=%v", p, used)
+	}
+	// Nil target index → global fallback, used=false.
+	p, used = pairsForBandSlot(nil, global, "40m", 3)
+	if used || len(p) != 1 || p[0].Count != 9 {
+		t.Fatalf("nil target: expected global(9) used=false, got %v used=%v", p, used)
+	}
+}
+
+func TestQuantilesFromPairs(t *testing.T) {
+	// Empty / below-support → not ok.
+	if _, _, ok := quantilesFromPairs(nil); ok {
+		t.Fatalf("nil pairs → ok=true, want false")
+	}
+	if _, _, ok := quantilesFromPairs([]baselinePair{{DistanceTier: 0, SnrTier: 0, Count: 100}}); ok {
+		t.Fatalf("totalWeight < dxMinBaselineQuantileSupport → ok=true, want false")
+	}
+
+	// 4 pairs, equal weight 100 (total 400 ≥ 200). With maxCount=100 every
+	// activityNorm=1, so score = (0.45*tier/4 + 0.35 + 0.20*snr/3)*100.
+	// tiers 0..3, snr 0 → scores 35, 46.25, 57.5, 68.75. q25Target=100, q75Target=300
+	// → q25 = score@cum≥100 = 35; q75 = score@cum≥300 = 57.5.
+	// Input deliberately reverse-sorted to exercise the insertion sort.
+	pairs := []baselinePair{
+		{DistanceTier: 3, SnrTier: 0, Count: 100},
+		{DistanceTier: 2, SnrTier: 0, Count: 100},
+		{DistanceTier: 1, SnrTier: 0, Count: 100},
+		{DistanceTier: 0, SnrTier: 0, Count: 100},
+	}
+	q25, q75, ok := quantilesFromPairs(pairs)
+	if !ok {
+		t.Fatalf("expected ok=true")
+	}
+	if math.Abs(q25-35.0) > 1e-6 {
+		t.Fatalf("q25 = %f, want 35", q25)
+	}
+	if math.Abs(q75-57.5) > 1e-6 {
+		t.Fatalf("q75 = %f, want 57.5", q75)
+	}
+}
+
 func TestNormalizeSeriesTo100(t *testing.T) {
 	// Empty / all-zero / negative-max series → all zeros (no division by zero).
 	if got := normalizeSeriesTo100(nil); len(got) != 0 {

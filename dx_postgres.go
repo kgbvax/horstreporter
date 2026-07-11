@@ -68,6 +68,12 @@ type baselinePair struct {
 	Count        int64
 }
 
+// bandSlotKey indexes the all-bands/all-slots baseline breakdown by (band, slot).
+type bandSlotKey struct {
+	Band string
+	Slot int
+}
+
 type rawSpotRow struct {
 	m    MQTTMessage
 	band string
@@ -874,112 +880,163 @@ func (s *dxPostgresStore) bandPairs(ctx context.Context, table string, targets [
 	return out, rows.Err()
 }
 
-func (s *dxPostgresStore) baselineActivityForBand(targets []string, band string, slot int, historyMinutes int) (float64, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	targetPairs, err := s.bandPairs(ctx, "dx_baseline_target", targets, band, slot)
-	if err != nil {
-		return 0, false, err
-	}
-	if len(targetPairs) > 0 {
-		total := 0.0
-		for _, p := range targetPairs {
-			total += float64(p.Count)
-		}
-		return normalizeBaselineToSpotsPerMinute(total, historyMinutes), true, nil
-	}
-	globalPairs, err := s.bandPairs(ctx, "dx_baseline_global", nil, band, slot)
-	if err != nil {
-		return 0, false, err
-	}
-	if len(globalPairs) == 0 {
-		return 0, false, nil
-	}
-	total := 0.0
-	for _, p := range globalPairs {
-		total += float64(p.Count)
-	}
-	return normalizeBaselineToSpotsPerMinute(total, historyMinutes), false, nil
-}
-
-// baselineActivityForBandAllSlots returns expected spots/minute per 30-min UTC
-// slot (length-48 array) and a parallel per-slot bool indicating whether the
-// target baseline was used for that slot (true) or the global fallback (false
-// — either because no target rows existed for that slot, or because no data
-// exists at all there). Two GROUP BY queries instead of 48 separate calls.
-func (s *dxPostgresStore) baselineActivityForBandAllSlots(targets []string, band string, historyMinutes int) ([]float64, []bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+// allBandBaselinePairs fetches the full baseline bucket breakdown for every band
+// and slot in two queries: target-filtered (summed across the given tokens) and
+// global. Returns indexes keyed by (band, slot) → per-(distance_tier, snr_tier)
+// pairs, from which every per-band baseline value Evaluate needs (activity,
+// support, quantiles, all-slots rates) is derived in memory. Replaces ~100
+// per-band round-trips (4 methods × ~13 bands × 1-2 RT each) with 2.
+//
+// targetIdx is nil when targets is empty. Both indexes are nil only on query
+// error; callers fall back to zero/unused, matching the old per-call err paths.
+func (s *dxPostgresStore) allBandBaselinePairs(targets []string) (map[bandSlotKey][]baselinePair, map[bandSlotKey][]baselinePair, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 
-	rates := make([]float64, SlotsOfDay)
-	used := make([]bool, SlotsOfDay)
-	targetTotals := [SlotsOfDay]int64{}
-
+	var targetIdx map[bandSlotKey][]baselinePair
 	if len(targets) > 0 {
 		rows, err := s.pool.Query(ctx, `
-			SELECT slot_of_day, SUM(count)::bigint
+			SELECT band, slot_of_day, distance_tier, snr_tier, SUM(count)::bigint
 			FROM dx_baseline_target
-			WHERE band = $1 AND target_token = ANY($2)
-			GROUP BY slot_of_day
-		`, band, targets)
+			WHERE target_token = ANY($1)
+			GROUP BY band, slot_of_day, distance_tier, snr_tier
+		`, targets)
 		if err != nil {
 			return nil, nil, err
 		}
-		for rows.Next() {
-			var slot int
-			var total int64
-			if err := rows.Scan(&slot, &total); err != nil {
-				rows.Close()
-				return nil, nil, err
-			}
-			if slot < 0 || slot >= SlotsOfDay {
-				continue
-			}
-			targetTotals[slot] = total
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
+		targetIdx, err = scanBandSlotPairs(rows)
+		if err != nil {
 			return nil, nil, err
-		}
-	}
-
-	for slot := 0; slot < SlotsOfDay; slot++ {
-		if targetTotals[slot] > 0 {
-			rates[slot] = normalizeBaselineToSpotsPerMinute(float64(targetTotals[slot]), historyMinutes)
-			used[slot] = true
 		}
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT slot_of_day, SUM(count)::bigint
+		SELECT band, slot_of_day, distance_tier, snr_tier, SUM(count)::bigint
 		FROM dx_baseline_global
-		WHERE band = $1
-		GROUP BY slot_of_day
-	`, band)
+		GROUP BY band, slot_of_day, distance_tier, snr_tier
+	`)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var slot int
-		var total int64
-		if err := rows.Scan(&slot, &total); err != nil {
-			return nil, nil, err
-		}
-		if slot < 0 || slot >= SlotsOfDay {
-			continue
-		}
-		if used[slot] {
-			continue
-		}
-		if total > 0 {
-			rates[slot] = normalizeBaselineToSpotsPerMinute(float64(total), historyMinutes)
-		}
-	}
-	if err := rows.Err(); err != nil {
+	globalIdx, err := scanBandSlotPairs(rows)
+	if err != nil {
 		return nil, nil, err
 	}
-	return rates, used, nil
+	return targetIdx, globalIdx, nil
+}
+
+// scanBandSlotPairs drains rows into a map[bandSlotKey][]baselinePair.
+func scanBandSlotPairs(rows pgx.Rows) (map[bandSlotKey][]baselinePair, error) {
+	defer rows.Close()
+	idx := make(map[bandSlotKey][]baselinePair, 1024)
+	for rows.Next() {
+		var (
+			band string
+			slot int
+			p    baselinePair
+		)
+		if err := rows.Scan(&band, &slot, &p.DistanceTier, &p.SnrTier, &p.Count); err != nil {
+			return nil, err
+		}
+		k := bandSlotKey{Band: band, Slot: slot}
+		idx[k] = append(idx[k], p)
+	}
+	return idx, rows.Err()
+}
+
+// sumPairs returns the total count across pairs — the numerator for both
+// activity (spots/min after normalisation) and support.
+func sumPairs(pairs []baselinePair) int64 {
+	var sum int64
+	for _, p := range pairs {
+		sum += p.Count
+	}
+	return sum
+}
+
+// pairsForBandSlot returns the target pairs for (band, slot) when present
+// (used=true), otherwise the global pairs (used=false) — the exact target→global
+// fallback precedence of baselineActivityForBand/baselineSupportForBand/
+// baselineQuantilesForBand. A nil/empty target index yields global + used=false.
+func pairsForBandSlot(targetIdx, globalIdx map[bandSlotKey][]baselinePair, band string, slot int) ([]baselinePair, bool) {
+	if targetIdx != nil {
+		if pairs, ok := targetIdx[bandSlotKey{Band: band, Slot: slot}]; ok && len(pairs) > 0 {
+			return pairs, true
+		}
+	}
+	return globalIdx[bandSlotKey{Band: band, Slot: slot}], false
+}
+
+// quantilesFromPairs computes the weighted q25/q75 band-score quantiles from
+// per-(distance_tier, snr_tier) pairs. Lifted verbatim from the old
+// baselineQuantilesForBand so the collapsed path produces identical values.
+// Returns ok=false when there are no pairs or total support is below
+// dxMinBaselineQuantileSupport.
+func quantilesFromPairs(pairs []baselinePair) (q25, q75 float64, ok bool) {
+	if len(pairs) == 0 {
+		return 0, 0, false
+	}
+	maxCount := int64(0)
+	for _, p := range pairs {
+		if p.Count > maxCount {
+			maxCount = p.Count
+		}
+	}
+
+	type item struct {
+		score  float64
+		weight int64
+	}
+	items := make([]item, 0, len(pairs))
+	var totalWeight int64
+	for _, p := range pairs {
+		if p.Count <= 0 {
+			continue
+		}
+		distanceNorm := clamp01(float64(p.DistanceTier) / 4.0)
+		snrNorm := clamp01(float64(p.SnrTier) / 3.0)
+		activityNorm := 0.5
+		if maxCount > 0 {
+			activityNorm = clamp01(float64(p.Count) / float64(maxCount))
+		}
+		score := (0.45*distanceNorm + 0.35*activityNorm + 0.20*snrNorm) * 100.0
+		items = append(items, item{score: score, weight: p.Count})
+		totalWeight += p.Count
+	}
+	if len(items) == 0 || totalWeight < dxMinBaselineQuantileSupport {
+		return 0, 0, false
+	}
+
+	// Tiny list; insertion sort is fine and avoids extra imports.
+	for i := 1; i < len(items); i++ {
+		j := i
+		for j > 0 && items[j-1].score > items[j].score {
+			items[j-1], items[j] = items[j], items[j-1]
+			j--
+		}
+	}
+
+	q25Target := float64(totalWeight) * 0.25
+	q75Target := float64(totalWeight) * 0.75
+	q25 = items[0].score
+	q75 = items[len(items)-1].score
+	cum := int64(0)
+	for _, it := range items {
+		cum += it.weight
+		if float64(cum) >= q25Target {
+			q25 = it.score
+			break
+		}
+	}
+	cum = 0
+	for _, it := range items {
+		cum += it.weight
+		if float64(cum) >= q75Target {
+			q75 = it.score
+			break
+		}
+	}
+	return q25, q75, true
 }
 
 // baselineP90DistanceForBand returns the tier-weighted p90 path length for a
@@ -1015,110 +1072,6 @@ func (s *dxPostgresStore) baselineP90DistanceForBand(targets []string, band stri
 		}
 	}
 	return p90FromTierCounts(tiers), used, nil
-}
-
-func (s *dxPostgresStore) baselineSupportForBand(targets []string, band string, slot int) (int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	targetPairs, err := s.bandPairs(ctx, "dx_baseline_target", targets, band, slot)
-	if err != nil {
-		return 0, err
-	}
-	var support int64
-	for _, p := range targetPairs {
-		support += p.Count
-	}
-	if support > 0 {
-		return support, nil
-	}
-	globalPairs, err := s.bandPairs(ctx, "dx_baseline_global", nil, band, slot)
-	if err != nil {
-		return 0, err
-	}
-	for _, p := range globalPairs {
-		support += p.Count
-	}
-	return support, nil
-}
-
-func (s *dxPostgresStore) baselineQuantilesForBand(targets []string, band string, slot int) (float64, float64, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	pairs, err := s.bandPairs(ctx, "dx_baseline_target", targets, band, slot)
-	if err != nil {
-		return 0, 0, false, err
-	}
-	if len(pairs) == 0 {
-		pairs, err = s.bandPairs(ctx, "dx_baseline_global", nil, band, slot)
-		if err != nil {
-			return 0, 0, false, err
-		}
-	}
-	if len(pairs) == 0 {
-		return 0, 0, false, nil
-	}
-
-	maxCount := int64(0)
-	for _, p := range pairs {
-		if p.Count > maxCount {
-			maxCount = p.Count
-		}
-	}
-
-	type item struct {
-		score  float64
-		weight int64
-	}
-	items := make([]item, 0, len(pairs))
-	var totalWeight int64
-	for _, p := range pairs {
-		if p.Count <= 0 {
-			continue
-		}
-		distanceNorm := clamp01(float64(p.DistanceTier) / 4.0)
-		snrNorm := clamp01(float64(p.SnrTier) / 3.0)
-		activityNorm := 0.5
-		if maxCount > 0 {
-			activityNorm = clamp01(float64(p.Count) / float64(maxCount))
-		}
-		score := (0.45*distanceNorm + 0.35*activityNorm + 0.20*snrNorm) * 100.0
-		items = append(items, item{score: score, weight: p.Count})
-		totalWeight += p.Count
-	}
-	if len(items) == 0 || totalWeight < dxMinBaselineQuantileSupport {
-		return 0, 0, false, nil
-	}
-
-	// Tiny list; insertion sort is fine and avoids extra imports.
-	for i := 1; i < len(items); i++ {
-		j := i
-		for j > 0 && items[j-1].score > items[j].score {
-			items[j-1], items[j] = items[j], items[j-1]
-			j--
-		}
-	}
-
-	q25Target := float64(totalWeight) * 0.25
-	q75Target := float64(totalWeight) * 0.75
-	q25 := items[0].score
-	q75 := items[len(items)-1].score
-	cum := int64(0)
-	for _, it := range items {
-		cum += it.weight
-		if float64(cum) >= q25Target {
-			q25 = it.score
-			break
-		}
-	}
-	cum = 0
-	for _, it := range items {
-		cum += it.weight
-		if float64(cum) >= q75Target {
-			q75 = it.score
-			break
-		}
-	}
-	return q25, q75, true, nil
 }
 
 // activityByBinForTargets returns raw spots/min per (band, time-bin) over the
