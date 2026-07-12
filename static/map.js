@@ -73,9 +73,20 @@ export function initMap(initialCenter, initialZoom) {
         map = null;
     }
 
+    // zoomSnap: 0 disables Leaflet's wheel-zoom quantization. With a non-zero
+    // snap, ScrollWheelZoom._performZoom rounds each scroll batch's delta UP to
+    // the next snap multiple (Math.ceil(n/snap)*snap), so every batch jumps at
+    // least `snap` zoom levels — a series of discrete 0.25-level animated hops
+    // that reads as "stepped" zoom. With snap 0 the raw sigmoid-smoothed delta is
+    // used, giving small continuous fractional jumps (still animated via the
+    // CSS-transform pane zoom, so the per-frame marker-reposition cost is no
+    // higher than a normal animated zoom — no perf regression). wheelPxPerZoomLevel
+    // raised from the default 60 for finer per-batch granularity. zoomDelta stays
+    // 0.25 for the +/- buttons and keyboard.
     map = L.map('map', {
-        zoomSnap: 0.25,
+        zoomSnap: 0,
         zoomDelta: 0.25,
+        wheelPxPerZoomLevel: 100,
         zoomControl: false,
         crs: L.CRS.EPSG3857,
         worldCopyJump: true,
