@@ -1932,7 +1932,7 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
         // 4 px dots instead, so quiet single spots read as points, not blobs.
         const minDim = Math.min(width, height);
         const step = Math.max(8, Math.min(16, Math.round(minDim / 95)));
-        const radius = step * 4;
+        const radius = step * 3;
         const field = buildAzimuthDensityField(filteredSpots, width, height, step, radius);
         fillAzimuthContours(ctx, field);
         if (field) {
