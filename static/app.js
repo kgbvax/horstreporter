@@ -139,6 +139,10 @@ const captureConfig = parseCaptureConfig();
 if (captureConfig?.enabled) {
     window.__horstCaptureReady = false;
 }
+// Expose the parsed capture config so the Svelte UI bundle can seed its store
+// before mounting controls, preventing a race where Svelte defaults overwrite
+// URL-driven projection/style/target/etc.
+window.__horstCaptureConfig = captureConfig;
 
 const storedAzimuthZoomRaw = localStorage.getItem('azimuthZoom');
 const storedAzimuthHorizonKmRaw = localStorage.getItem('azimuthHorizonKm');
