@@ -139,6 +139,10 @@ const captureConfig = parseCaptureConfig();
 if (captureConfig?.enabled) {
     window.__horstCaptureReady = false;
 }
+// Expose the parsed capture config so the Svelte UI bundle can seed its store
+// before mounting controls, preventing a race where Svelte defaults overwrite
+// URL-driven projection/style/target/etc.
+window.__horstCaptureConfig = captureConfig;
 
 const storedAzimuthZoomRaw = localStorage.getItem('azimuthZoom');
 const storedAzimuthHorizonKmRaw = localStorage.getItem('azimuthHorizonKm');
@@ -636,9 +640,15 @@ function currentProjection() {
 
 function getRenderableMapSpots(spots) {
     const showDXClusterSpots = document.getElementById('show-dxcluster-spots')?.checked !== false;
-    if (showDXClusterSpots) return spots;
+    const showRbnSpots = document.getElementById('show-rbn-spots')?.checked !== false;
+    if (showDXClusterSpots && showRbnSpots) return spots;
 
-    return spots.filter((spot) => String(spot?.sourceType || '').toLowerCase() !== 'dxcluster');
+    return spots.filter((spot) => {
+        const src = String(spot?.sourceType || '').toLowerCase();
+        if (!showDXClusterSpots && src === 'dxcluster') return false;
+        if (!showRbnSpots && src === 'rbn') return false;
+        return true;
+    });
 }
 
 function getCurrentMaxSpotAgeSeconds() {
@@ -1177,6 +1187,7 @@ if (captureConfig?.enabled) {
     updateDxccLabelDensity(dxccLabelDensity);
     updateDxccLabelsEnabled(dxccLabelsEnabled);
     await updateDk3jfMode(dk3jfModeEnabled);
+    initRbnSpotsToggle();
 
     const initialProjection = captureConfig?.enabled ? captureConfig.projection : savedProjection;
     const projRadio = document.querySelector(`input[name="projection-select"][value="${initialProjection}"]`);
@@ -1402,6 +1413,35 @@ document.getElementById('dxcc-label-density')?.addEventListener('change', (e) =>
 
 document.getElementById('dk3jf-mode')?.addEventListener('change', async (e) => {
     await updateDk3jfMode(e.target.checked);
+});
+
+// --- RBN (Reverse Beacon Network) live-map toggle ----------------------------
+// Filters sourceType==='rbn' spots out of the live map (both projections, via
+// getRenderableMapSpots) when unchecked. Default: show. Persisted to localStorage
+// and the include_rbn URL param so the choice survives reload. RBN only reaches
+// the live map when QRZ resolves a locator, so this is a no-op until RBN is
+// enabled upstream (-rbn-enable) and produces locators.
+function initRbnSpotsToggle() {
+    const el = document.getElementById('show-rbn-spots');
+    if (!el) return;
+    const fromUrl = new URLSearchParams(location.search).get('include_rbn');
+    if (fromUrl === 'true' || fromUrl === '1') el.checked = true;
+    else if (fromUrl === 'false' || fromUrl === '0') el.checked = false;
+    else {
+        const stored = localStorage.getItem('rbnSpotsVisible');
+        if (stored === 'false') el.checked = false;
+    }
+}
+
+document.getElementById('show-rbn-spots')?.addEventListener('change', (e) => {
+    const visible = e.target.checked;
+    localStorage.setItem('rbnSpotsVisible', visible ? 'true' : 'false');
+    try {
+        const url = new URL(location.href);
+        url.searchParams.set('include_rbn', visible ? 'true' : 'false');
+        history.replaceState(null, '', url.toString());
+    } catch (_) { /* location not available */ }
+    scheduleRender();
 });
 
 // --- Band pill interactions (event-delegated on #band-container) ------------

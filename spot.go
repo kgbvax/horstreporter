@@ -18,8 +18,12 @@ type Spot struct {
 }
 
 func sourceTypeForMessage(m MQTTMessage) string {
-	mode := strings.ToUpper(strings.TrimSpace(m.MD))
-	if mode == "DXCLUSTER" {
+	if src := strings.ToLower(strings.TrimSpace(m.Source)); src != "" {
+		return src // explicit ingest tag ("mqtt"|"dxcluster"|"rbn"), incl. backfilled rows
+	}
+	// Legacy fallback for messages without an explicit Source (e.g. older cached
+	// rows): DX-cluster is the only ingest that historically marked itself via MD.
+	if strings.ToUpper(strings.TrimSpace(m.MD)) == "DXCLUSTER" {
 		return "dxcluster"
 	}
 	return "mqtt"

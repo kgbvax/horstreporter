@@ -14,6 +14,29 @@ const host = document.getElementById('svelte-root');
 let app = null;
 if (host) app = new App({ target: host });
 
+// If app.js was loaded with ?capture=1, it parsed the URL into a capture config
+// and exposed it here. Seed the Svelte store from those values BEFORE mounting
+// the control components so URL-driven projection/style/target/etc. are not
+// clobbered by store defaults or persisted localStorage state.
+const captureConfig = typeof window !== 'undefined' ? window.__horstCaptureConfig : null;
+if (captureConfig?.enabled) {
+    const cfg = captureConfig;
+    uiStore.update((s) => {
+        const next = { ...s };
+        if (cfg.target != null) next.target = String(cfg.target);
+        if (Number.isFinite(cfg.minutes) && cfg.minutes >= 1) next.minutes = Math.min(60, cfg.minutes);
+        if (cfg.minSnrMode === 'ssb' || cfg.minSnrMode === 'cw' || cfg.minSnrMode === 'none') next.minSnr = cfg.minSnrMode;
+        if (Number.isFinite(cfg.ssbMinDb)) next.ssbMinDb = cfg.ssbMinDb;
+        if (Number.isFinite(cfg.cwMinDb)) next.cwMinDb = cfg.cwMinDb;
+        if (cfg.projection === 'mercator' || cfg.projection === 'azimuthal') next.projection = cfg.projection;
+        if (cfg.style === 'grid-snr' || cfg.style === 'active-area') next.mapStyle = cfg.style;
+        if (typeof cfg.surroundings === 'boolean') next.surroundings = cfg.surroundings;
+        if (typeof cfg.countryColoring === 'boolean') next.countryColoring = cfg.countryColoring;
+        if (typeof cfg.includeDxcluster === 'boolean') next.showDxcluster = cfg.includeDxcluster;
+        return next;
+    });
+}
+
 // U2 slice: SNR threshold sliders mount into the controls form placeholder.
 const snrHost = document.getElementById('snr-sliders-root');
 if (snrHost) new SnrThresholds({ target: snrHost });
@@ -43,23 +66,26 @@ if (minSnrHost) new MinSnr({ target: minSnrHost });
 const styleHost = document.getElementById('style-group');
 if (styleHost) new MapStyle({ target: styleHost });
 
-// Seed projection from the legacy key so the radio reflects init, then mount.
-const savedProjection = localStorage.getItem('mapProjection');
-if (savedProjection === 'mercator' || savedProjection === 'azimuthal') {
-    uiStore.update((s) => ({ ...s, projection: savedProjection }));
+// Legacy localStorage seeding: only applied when there is no capture config so
+// normal reloads keep the user's last UI state, while capture URLs win.
+if (!captureConfig?.enabled) {
+    const savedProjection = localStorage.getItem('mapProjection');
+    if (savedProjection === 'mercator' || savedProjection === 'azimuthal') {
+        uiStore.update((s) => ({ ...s, projection: savedProjection }));
+    }
+    const savedSurroundings = localStorage.getItem('surroundings');
+    if (savedSurroundings !== null) {
+        uiStore.update((s) => ({ ...s, surroundings: savedSurroundings === 'true' }));
+    }
+    const savedCountry = localStorage.getItem('countryColoringEnabled');
+    if (savedCountry !== null) {
+        uiStore.update((s) => ({ ...s, countryColoring: savedCountry === 'true' }));
+    }
+    const savedTarget = localStorage.getItem('target');
+    if (savedTarget) uiStore.update((s) => ({ ...s, target: savedTarget }));
+    const savedDx = localStorage.getItem('showDXClusterSpots');
+    if (savedDx !== null) uiStore.update((s) => ({ ...s, showDxcluster: savedDx === 'true' }));
 }
-const savedSurroundings = localStorage.getItem('surroundings');
-if (savedSurroundings !== null) {
-    uiStore.update((s) => ({ ...s, surroundings: savedSurroundings === 'true' }));
-}
-const savedCountry = localStorage.getItem('countryColoringEnabled');
-if (savedCountry !== null) {
-    uiStore.update((s) => ({ ...s, countryColoring: savedCountry === 'true' }));
-}
-const savedTarget = localStorage.getItem('target');
-if (savedTarget) uiStore.update((s) => ({ ...s, target: savedTarget }));
-const savedDx = localStorage.getItem('showDXClusterSpots');
-if (savedDx !== null) uiStore.update((s) => ({ ...s, showDxcluster: savedDx === 'true' }));
 
 // External vanilla writers set the target via the store so the input stays in
 // sync; readers still read #target.value directly.

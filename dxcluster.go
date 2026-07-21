@@ -315,6 +315,7 @@ func handleDXClusterSpot(spot dxClusterSpot, resolver CallsignLocatorResolver, c
 		OpName:     dxName,
 		Country:    dxCountry,
 		CountryISO: dxCountryISO,
+		Source:     "dxcluster",
 	}
 
 	if dxBaseline != nil {

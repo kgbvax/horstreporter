@@ -1342,7 +1342,8 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 			spot_time, sender_callsign, sender_locator,
 			receiver_callsign, receiver_locator,
 			band, mode, signal_report_db,
-			COALESCE(frequency_khz, 0), COALESCE(comment, '')
+			COALESCE(frequency_khz, 0), COALESCE(comment, ''),
+			COALESCE(source_type, 'mqtt')
 		FROM dx_raw_spots
 		WHERE spot_time BETWEEN $1 AND $2
 		  AND ($3::bool OR LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster')
@@ -1358,7 +1359,10 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 		var m MQTTMessage
 		// F (frequency_khz) and CM (comment) restore the fields /api/dxspots needs;
 		// without them, spots restored after a restart score as freq 0 (unscorable).
-		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP, &m.F, &m.CM); err != nil {
+		// Source (from source_type) restores the ingest tag so sourceTypeForMessage
+		// tags backfilled RBN rows "rbn" (not "mqtt") and the frontend toggle works
+		// across a restart.
+		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP, &m.F, &m.CM, &m.Source); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

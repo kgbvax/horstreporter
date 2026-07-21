@@ -54,3 +54,6 @@ dist/
 
 test-results/
 playwright-report/
+
+# Vite/vitest transient build cache (node_modules is vendored, but this dir is generated)
+node_modules/.vite/

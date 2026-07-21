@@ -740,6 +740,15 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		if !matched {
 			continue
 		}
+		// Keep the FT8-calibrated conditions accumulator (spots_per_min, classifyMode,
+		// avgSnr, distances) pure from RBN CW/RTTY, whose dB is on a different SNR scale
+		// than PSKReporter FT8 SNR (docs/horstprop.md). FT8/FT4 (PSKReporter), "" (legacy)
+		// and "DXCLUSTER" (a source marker, not a mode — RP=0, already counted today) stay
+		// in; real non-FT8 modes (CW, RTTY, PSK*, SSB, … only produced by RBN) are skipped.
+		// RBN spots still reach the live stream (broadcastMsg) and the activity chart.
+		if isNonConditionsMode(m.MD) {
+			continue
+		}
 		if ev.snr < cwMinDb {
 			continue
 		}
@@ -1049,6 +1058,22 @@ func legacyConditionFromStatus(status string, score float64) string {
 	default:
 		return "Poor"
 	}
+}
+
+// isNonConditionsMode reports whether a spot's mode is a real over-the-air mode that the
+// FT8-calibrated conditions accumulator must exclude. RBN CW/RTTY dB is on a different SNR
+// scale than PSKReporter FT8 SNR (docs/horstprop.md), so feeding it to classifyMode / the
+// per-band snr and distance stats would corrupt them (strong CW would mislabel a band
+// "ssb"; +20 dB would create phantom high snr_tier rows). FT8/FT4 (PSKReporter), "" (legacy
+// / unset), and "DXCLUSTER" (a source marker, not a real mode — RP=0, already counted in
+// the baseline today) stay in; any other real mode (CW, RTTY, PSK*, SSB, AM, FM, DIGI, …)
+// is excluded. Only RBN produces those real non-FT8 modes today.
+func isNonConditionsMode(md string) bool {
+	switch strings.ToUpper(strings.TrimSpace(md)) {
+	case "", "FT8", "FT4", "DXCLUSTER":
+		return false
+	}
+	return true
 }
 
 func classifyMode(ssbCount, cwCount, total int) string {

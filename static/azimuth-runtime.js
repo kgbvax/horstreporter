@@ -8,12 +8,14 @@ const MAX_VISIBLE_C = Math.PI - 0.02;
 const DXCC_SHOW_ALL_ZOOM_THRESHOLD = 5.0;
 const AZIMUTH_SCALE_CLEARANCE_PX = 12;
 const GRAYLINE_RECOMPUTE_MIN_INTERVAL_MS = 320;
-// Active-area SNR field: value assigned to grid vertices with no nearby data,
-// and the "data presence" contour just above it that forms the smooth outer
-// boundary. NO_DATA sits far below any real SNR so the presence iso-line
-// interpolates a sub-cell falloff between data and empty space.
-const AZIMUTH_FIELD_NO_DATA = -100;
-const AZIMUTH_FIELD_PRESENCE = -40;
+// Active-area density field: the field is a Gaussian KDE of report count, so a
+// single spot peaks at density ~1.0 and a cluster peaks higher. Contour
+// thresholds therefore double as the min-count gate: a lone spot (peak < PRESENCE)
+// never paints a region — it is drawn as a dot instead — while real clusters grow
+// a region whose size and brightness scale with local report count.
+const AZIMUTH_DENSITY_PRESENCE = 1.5; // outer "activity" boundary; lone-spot gate
+const AZIMUTH_DENSITY_MID = 4;       // moderate cluster
+const AZIMUTH_DENSITY_CORE = 10;     // dense core
 
 const PALETTE_LIGHT = [
     '#FBEFF0', '#FBD3D1', '#FEE5DA', '#FFE2B7', '#FFFBD4', '#E8EDAD', '#E4F0DB',
@@ -526,46 +528,6 @@ function drawDxClusterSpots(ctx, width, height, filteredSpots) {
         ctx.fill();
     }
     ctx.globalAlpha = 1;
-}
-
-function computeConvexHullRing(coords) {
-    if (!Array.isArray(coords) || coords.length < 3) return [];
-
-    const normalized = coords
-        .map(c => [Number(c[0]), Number(c[1])])
-        .filter(c => Number.isFinite(c[0]) && Number.isFinite(c[1]));
-    if (normalized.length < 3) return [];
-
-    const unique = Array.from(new Set(normalized.map(c => `${c[0].toFixed(6)},${c[1].toFixed(6)}`)))
-        .map(s => s.split(',').map(Number));
-    if (unique.length < 3) return [];
-
-    unique.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
-
-    const cross = (o, a, b) => ((a[0] - o[0]) * (b[1] - o[1])) - ((a[1] - o[1]) * (b[0] - o[0]));
-
-    const lower = [];
-    for (const p of unique) {
-        while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
-            lower.pop();
-        }
-        lower.push(p);
-    }
-
-    const upper = [];
-    for (let i = unique.length - 1; i >= 0; i -= 1) {
-        const p = unique[i];
-        while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
-            upper.pop();
-        }
-        upper.push(p);
-    }
-
-    const hull = lower.slice(0, -1).concat(upper.slice(0, -1));
-    if (hull.length < 3) return [];
-
-    hull.push(hull[0]);
-    return hull;
 }
 
 export function selectProminentDxccLabels(featureCollection, center, options = {}) {
@@ -1547,179 +1509,21 @@ function drawAntennaOverlay(ctx, width, height) {
     ctx.restore();
 }
 
-function drawActiveAreaOverlay(ctx, width, height, filteredSpots, maxClusterDist) {
-    const hasTurf = typeof turf !== 'undefined';
-
-    if (!hasTurf) {
-        filteredSpots.forEach(spot => {
-            const c = projectToCanvas(spot.lat, spot.lng, width, height);
-            if (!c) return;
-            const color = bandColors[spot.band] || bandColors.all;
-            ctx.beginPath();
-            ctx.arc(c.x, c.y, 4.5, 0, Math.PI * 2);
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 2;
-            ctx.globalAlpha = 0.65;
-            ctx.stroke();
-            ctx.globalAlpha = 0.5;
-            ctx.fillStyle = color;
-            ctx.fill();
-        });
-        ctx.globalAlpha = 1;
-        return;
-    }
-
-    const pointsByBand = {};
-    const seenCoordsByBand = {};
-    const debugBands = [];
-
-    filteredSpots.forEach(spot => {
-        if (!pointsByBand[spot.band]) {
-            pointsByBand[spot.band] = [];
-            seenCoordsByBand[spot.band] = new Set();
-        }
-
-        const coordKey = `${spot.lng},${spot.lat}`;
-        if (seenCoordsByBand[spot.band].has(coordKey)) return;
-        seenCoordsByBand[spot.band].add(coordKey);
-        pointsByBand[spot.band].push(turf.point([spot.lng, spot.lat]));
-    });
-
-    Object.keys(pointsByBand).forEach(band => {
-        const pts = pointsByBand[band];
-        const color = bandColors[band] || bandColors.all;
-
-        const isolatedPts = [];
-        const hullRings = [];
-
-        const coords = pts.map(p => p.geometry.coordinates);
-        if (coords.length >= 3) {
-            let ring = [];
-
-            if (coords.length >= 6) {
-                const centroid = coords.reduce((acc, c) => {
-                    acc.lat += Number(c[1]);
-                    acc.lng += Number(c[0]);
-                    return acc;
-                }, { lat: 0, lng: 0 });
-                centroid.lat /= coords.length;
-                centroid.lng /= coords.length;
-
-                const ranked = coords
-                    .map(c => ({
-                        coord: c,
-                        dist: haversineKm(centroid.lat, centroid.lng, Number(c[1]), Number(c[0]))
-                    }))
-                    .sort((a, b) => a.dist - b.dist);
-
-                const keepCount = Math.max(6, Math.ceil(ranked.length * 0.75));
-                const coreCoords = ranked.slice(0, keepCount).map(r => r.coord);
-                ring = computeConvexHullRing(coreCoords);
-            }
-
-            if (ring.length < 4) {
-                ring = computeConvexHullRing(coords);
-            }
-
-            if (ring.length >= 4) {
-                hullRings.push(ring);
-                if (hasTurf) {
-                    try {
-                        const poly = turf.polygon([ring]);
-                        pts.forEach(p => {
-                            try {
-                                if (!turf.booleanPointInPolygon(p, poly)) isolatedPts.push(p);
-                            } catch (_) {
-                                isolatedPts.push(p);
-                            }
-                        });
-                    } catch (_) {
-                        pts.forEach(p => isolatedPts.push(p));
-                    }
-                } else {
-                    pts.forEach(p => isolatedPts.push(p));
-                }
-            } else {
-                pts.forEach(p => isolatedPts.push(p));
-            }
-        } else {
-            pts.forEach(p => isolatedPts.push(p));
-        }
-
-        hullRings.forEach(ring => {
-            ctx.beginPath();
-            let started = false;
-            let visibleCount = 0;
-            ring.forEach(([lng, lat]) => {
-        const p = projectToCanvas(lat, lng, width, height, { enforceHorizon: false });
-                if (!p) {
-                    started = false;
-                    return;
-                }
-                if (!started) {
-                    ctx.moveTo(p.x, p.y);
-                    started = true;
-                } else {
-                    ctx.lineTo(p.x, p.y);
-                }
-                visibleCount += 1;
-            });
-            if (visibleCount < 3) return;
-            ctx.closePath();
-            ctx.fillStyle = color;
-            ctx.globalAlpha = 0.34;
-            ctx.fill();
-            ctx.globalAlpha = 1;
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 1.8;
-            ctx.stroke();
-        });
-
-        isolatedPts.forEach(p => {
-            const [lng, lat] = p.geometry.coordinates;
-            const c = projectToCanvas(lat, lng, width, height);
-            if (!c) return;
-            ctx.beginPath();
-            ctx.arc(c.x, c.y, 4.5, 0, Math.PI * 2);
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 2;
-            ctx.globalAlpha = 0.65;
-            ctx.stroke();
-            ctx.globalAlpha = 0.5;
-            ctx.fillStyle = color;
-            ctx.fill();
-        });
-
-        debugBands.push({
-            band,
-            points: pts.length,
-            hullCount: hullRings.length,
-            isolated: isolatedPts.length
-        });
-    });
-
-    ctx.globalAlpha = 1;
-    if (typeof window !== 'undefined') {
-        window.__azimuthActiveAreaDebug = {
-            hasTurf,
-            debugBands,
-            maxClusterDist,
-            ts: Date.now()
-        };
-    }
-}
-
-// buildAzimuthSnrField interpolates a continuous SNR surface from the
-// projected spots using inverse-distance weighting (IDW). Spots are projected
-// into canvas space first, so the azimuthal projection's distortion is handled
-// implicitly. The field is sampled on a regular grid and masked to where data
-// actually supports an estimate: a vertex is only "valid" if at least one spot
-// lies within `radius` pixels of it. Returns null when there is nothing to draw.
-function buildAzimuthSnrField(filteredSpots, width, height, step, radius) {
+// buildAzimuthDensityField interpolates a continuous report-COUNT surface from
+// the projected spots — a Gaussian kernel-density estimate of activity, not
+// signal strength. Spots are projected into canvas space first, so the azimuthal
+// projection's distortion is handled implicitly. The field is sampled on a
+// regular grid; each vertex holds the Gaussian-weighted report count (density)
+// and the dominant band (for hue). Because a single spot peaks at density ~1.0,
+// contour thresholds above 1.0 double as a min-count gate — lone spots never
+// reach PRESENCE and are drawn as dots by the caller instead. Returns null when
+// there is nothing to draw; otherwise { cols, rows, step, x0, y0, density,
+// bandIdx, pts } where pts is the aggregated points for the lone-spot dot pass.
+function buildAzimuthDensityField(filteredSpots, width, height, step, radius) {
     // Reports from one grid square all project to the same pixel; aggregate
     // them into a single weighted point so the wider smoothing kernel stays
-    // cheap. Each aggregated point carries the mean SNR, a report count (used
-    // as a weight multiplier), and the dominant band at that location.
+    // cheap. Each aggregated point carries a report count (used as the density
+    // contribution) and the dominant band at that location.
     const agg = new Map();
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const spot of filteredSpots) {
@@ -1762,21 +1566,20 @@ function buildAzimuthSnrField(filteredSpots, width, height, step, radius) {
         arr.push(p);
     }
 
-    // Sample grid spans the data bounding box padded by one search radius so
-    // the estimate can fall off smoothly beyond the outermost spots. A Gaussian
-    // kernel blends neighbouring grid squares into continuous regions, and a
-    // small background prior pulls the estimate toward NO_DATA where reports
-    // are sparse — so the outer boundary tapers smoothly instead of cliff-edging
-    // at the search radius, and there are no blocky cell edges anywhere.
+    // Sample grid spans the data bounding box padded by one search radius so the
+    // estimate can fall off smoothly beyond the outermost spots. A Gaussian
+    // kernel blends neighbouring grid squares into continuous regions; the field
+    // value is the kernel-density estimate (Gaussian-weighted report count), so
+    // regions grow larger and brighter with more reports, and lone spots (peak
+    // density ~1.0) stay below the PRESENCE threshold and taper to nothing.
     const x0 = minX - radius, y0 = minY - radius;
     const cols = Math.max(2, Math.ceil((maxX + radius - x0) / step) + 1);
     const rows = Math.max(2, Math.ceil((maxY + radius - y0) / step) + 1);
-    const snr = new Float32Array(cols * rows);
+    const density = new Float32Array(cols * rows);
     const bandIdx = new Array(cols * rows);
     const r2 = radius * radius;
     const sigma = radius / 2.2;
     const twoSigma2 = 2 * sigma * sigma;
-    const PRIOR = 0.02;
 
     for (let j = 0; j < rows; j++) {
         const vy = y0 + j * step;
@@ -1784,7 +1587,7 @@ function buildAzimuthSnrField(filteredSpots, width, height, step, radius) {
         for (let i = 0; i < cols; i++) {
             const vx = x0 + i * step;
             const bx = Math.floor((vx - minX) / bucket);
-            let wsum = 0, vsum = 0;
+            let wsum = 0;
             let bestBand = 'all', bestBandW = -1;
             const bandW = {};
             for (let dby = -1; dby <= 1; dby++) {
@@ -1797,7 +1600,6 @@ function buildAzimuthSnrField(filteredSpots, width, height, step, radius) {
                         if (d2 > r2) continue;
                         const w = Math.exp(-d2 / twoSigma2) * p.n;
                         wsum += w;
-                        vsum += w * p.snr;
                         const bw = (bandW[p.band] || 0) + w;
                         bandW[p.band] = bw;
                         if (bw > bestBandW) { bestBandW = bw; bestBand = p.band; }
@@ -1805,13 +1607,11 @@ function buildAzimuthSnrField(filteredSpots, width, height, step, radius) {
                 }
             }
             const idx = j * cols + i;
-            // Regularised estimate: blends toward NO_DATA when total weight is
-            // small, giving a smooth taper at the edges.
-            snr[idx] = (vsum + AZIMUTH_FIELD_NO_DATA * PRIOR) / (wsum + PRIOR);
+            density[idx] = wsum;
             if (wsum > 0) bandIdx[idx] = bestBand;
         }
     }
-    return { cols, rows, step, x0, y0, snr, bandIdx };
+    return { cols, rows, step, x0, y0, density, bandIdx, pts };
 }
 
 // cellAbove returns the polygon (as {x,y} points) of the part of one grid cell
@@ -1832,19 +1632,19 @@ function cellAbove(threshold, cx, cy, cv) {
     return out;
 }
 
-// fillAzimuthContours renders the interpolated SNR field as stacked filled
-// contour zones. The lowest threshold is the data-presence contour that wraps
-// the field with a smooth outer boundary; the 0 dB and 10 dB breakpoints (the
-// same ones grid-SNR uses) are layered on top. Lower zones are painted first
-// (faint) so stronger signals read brighter, and every boundary is an
-// interpolated iso-line, so there are no blocky cell edges anywhere.
+// fillAzimuthContours renders the density field as stacked filled contour zones.
+// The lowest threshold (PRESENCE) is the outer "activity" boundary — it doubles
+// as the min-count gate, so lone spots (peak density ~1.0 < 1.5) never paint a
+// region and are drawn as dots by the caller. MID/CORE layer on top so denser
+// clusters read brighter. Every boundary is an interpolated iso-line, so there
+// are no blocky cell edges anywhere.
 function fillAzimuthContours(ctx, field) {
     if (!field) return;
-    const { cols, rows, step, x0, y0, snr, bandIdx } = field;
+    const { cols, rows, step, x0, y0, density, bandIdx } = field;
     const layers = [
-        { t: AZIMUTH_FIELD_PRESENCE, alpha: 0.22 },
-        { t: 0, alpha: 0.30 },
-        { t: 10, alpha: 0.40 }
+        { t: AZIMUTH_DENSITY_PRESENCE, alpha: 0.22 },
+        { t: AZIMUTH_DENSITY_MID, alpha: 0.34 },
+        { t: AZIMUTH_DENSITY_CORE, alpha: 0.48 }
     ];
     const ci = [0, 1, 1, 0];
     const cj = [0, 0, 1, 1];
@@ -1857,7 +1657,7 @@ function fillAzimuthContours(ctx, field) {
                 const i11 = (j + 1) * cols + i + 1;
                 const i01 = (j + 1) * cols + i;
 
-                const cv = [snr[i00], snr[i10], snr[i11], snr[i01]];
+                const cv = [density[i00], density[i10], density[i11], density[i01]];
                 const cx = [x0 + i * step, x0 + (i + 1) * step, x0 + (i + 1) * step, x0 + i * step];
                 const cy = [y0 + j * step, y0 + j * step, y0 + (j + 1) * step, y0 + (j + 1) * step];
                 const poly = cellAbove(layer.t, cx, cy, cv);
@@ -1923,13 +1723,30 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
     }
 
     if (style === 'active-area') {
-        // Interpolate a continuous SNR surface and render it as filled contour
-        // zones. Sample resolution and search radius scale with the canvas.
+        // Interpolate a continuous report-COUNT (density) surface and render it
+        // as filled contour zones. Sample resolution and search radius scale
+        // with the canvas. Spots whose local density stays below PRESENCE — i.e.
+        // lone or near-isolated reports that never grow a region — are drawn as
+        // 4 px dots instead, so quiet single spots read as points, not blobs.
         const minDim = Math.min(width, height);
         const step = Math.max(8, Math.min(16, Math.round(minDim / 95)));
-        const radius = step * 4;
-        const field = buildAzimuthSnrField(filteredSpots, width, height, step, radius);
+        const radius = step * 3;
+        const field = buildAzimuthDensityField(filteredSpots, width, height, step, radius);
         fillAzimuthContours(ctx, field);
+        if (field) {
+            const { cols, step: fs, x0, y0, density, pts } = field;
+            for (const p of pts) {
+                const gi = Math.round((p.x - x0) / fs);
+                const gj = Math.round((p.y - y0) / fs);
+                const d = (gi >= 0 && gj >= 0) ? density[gj * cols + gi] : 0;
+                if (d >= AZIMUTH_DENSITY_PRESENCE) continue; // inside a region — no dot
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+                ctx.fillStyle = bandColors[p.band] || bandColors.all;
+                ctx.globalAlpha = 0.8;
+                ctx.fill();
+            }
+        }
         state.hiddenGridSquaresCount = 0;
         drawDxClusterSpots(ctx, width, height, filteredSpots);
         ctx.globalAlpha = 1;

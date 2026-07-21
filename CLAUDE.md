@@ -13,7 +13,13 @@ go run . -dev -port 8080
 # the shell history / process args (flags -dxcluster-username/-password also work).
 DXCLUSTER_USERNAME=<yourcall> DXCLUSTER_PASSWORD=<password> \
   go run . -dev -port 8080 -dxcluster-enable -dxcluster-endpoint db0erf.de:7300
-# Optional: QRZ_USERNAME/QRZ_PASSWORD enable callsign→locator enrichment (dx_locator).
+# Optional: QRZ_USERNAME/QRZ_PASSWORD enable callsign→locator enrichment (dx_locator),
+# shared by DX-cluster and RBN ingests.
+# Optional RBN (Reverse Beacon Network) CW/RTTY telnet ingest — public relay, no password,
+# but it prompts for a callsign before streaming (set -rbn-callsign / RBN_CALLSIGN). Fills the
+# activity chart/live stream during CW/SSB contests when FT8 thins out. Minimal scope:
+# activity + live only, kept out of the FT8-SNR conditions baseline (rbn.go).
+#   go run . -dev -port 8080 -rbn-enable -rbn-callsign <yourcall>
 
 # Run local operator agent
 go run ./cmd/horstoperator-agent -listen 127.0.0.1:9955 -station-locator JO62qm
@@ -62,6 +68,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `dx_conditions.go` — DX baseline scoring engine
 - `dx_postgres.go` — Postgres persistence for raw spots and baseline
 - `dxcluster.go` — optional DX cluster TCP ingest
+- `rbn.go` — optional RBN (Reverse Beacon Network) CW/RTTY raw telnet ingest; `source_type='rbn'`, activity + live only (kept out of the FT8-SNR baseline)
 - `opmode.go` — operator mode endpoint wiring (browser calls local agent directly; backend never proxies)
 - `dxlens_mount.go` — mounts the `dxlens` sibling module at `/dxlens/`
 - `cmd/horstoperator-agent/` — standalone local agent bridging browser opmode to PSTrotator UDP; resolves Wavelog attributes for the Chase Queue and computes award "wanted" in-process via `internal/awards` (operator log stays local)
