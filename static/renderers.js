@@ -75,16 +75,19 @@ function renderDxClusterMarkers(dxClusterSpots) {
     if (!Array.isArray(dxClusterSpots) || dxClusterSpots.length === 0 || !state.heatLayer) return;
 
     // Item 4: single circleMarker per spot instead of two
+    // Subtle visual distinction: white border around the band-colored fill
+    // so DX Cluster spots are clearly identifiable as individual points in
+    // Grid-SNR mode, rather than looking like small grid rectangles.
     dxClusterSpots.forEach((spot) => {
         if (!Number.isFinite(spot.lat) || !Number.isFinite(spot.lng)) return;
         const color = bandColors[spot.band] || bandColors.all;
         const marker = L.circleMarker([spot.lat, spot.lng], {
-            color,
+            color: '#ffffff',
             fillColor: color,
-            radius: 4,
-            weight: 2.2,
-            opacity: 0.95,
-            fillOpacity: 0.55,
+            radius: 4.5,
+            weight: 1.5,
+            opacity: 0.9,
+            fillOpacity: 0.65,
             interactive: true,
             bubblingMouseEvents: false
         }).addTo(state.heatLayer);
