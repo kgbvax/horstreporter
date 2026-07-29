@@ -110,13 +110,27 @@ export function initMap(initialCenter, initialZoom) {
     // that reads as "stepped" zoom. With snap 0 the raw sigmoid-smoothed delta is
     // used, giving small continuous fractional jumps (still animated via the
     // CSS-transform pane zoom, so the per-frame marker-reposition cost is no
-    // higher than a normal animated zoom — no perf regression). wheelPxPerZoomLevel
-    // raised from the default 60 for finer per-batch granularity. zoomDelta stays
+    // higher than a normal animated zoom — no perf regression). zoomDelta stays
     // 0.25 for the +/- buttons and keyboard.
+    //
+    // wheelPxPerZoomLevel: back to Leaflet's default 60 (was raised to 100 in
+    // 4ac0e73 "for finer granularity" — that made each scroll cover ~40% less
+    // zoom, the slow feel the user noticed). 60 is ~1.6× faster per scroll.
+    // NOTE: Leaflet's _performZoom still applies a sigmoid
+    //   n = 4*log2(2/(1+e^(-|d|/(4*wppzl))))  capped at +4 levels/gesture,
+    // which is hardcoded in vendor/js/leaflet.js — config can't remove that
+    // non-linearity, only a custom wheel handler could.
+    //
+    // wheelDebounceTime: 25ms (Leaflet default 40). Batches wheel ticks into a
+    // zoomend; lower = snappier but more zoomends per gesture. Safe to lower
+    // now that the grid/country/label layers are canvas-rendered + the DXCC
+    // label rebuild is debounced (0b727f1) — each zoomend is much cheaper, so
+    // we can spend a few more of them to cut scroll latency.
     map = L.map('map', {
         zoomSnap: 0,
         zoomDelta: 0.25,
-        wheelPxPerZoomLevel: 100,
+        wheelPxPerZoomLevel: 60,
+        wheelDebounceTime: 25,
         zoomControl: false,
         crs: L.CRS.EPSG3857,
         worldCopyJump: true,
