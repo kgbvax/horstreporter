@@ -13,7 +13,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { mockMap } = vi.hoisted(() => ({
     mockMap: {
         removeLayer: vi.fn(),
-        fitBounds: vi.fn()
+        fitBounds: vi.fn(),
+        hasLayer: vi.fn(() => false)
     }
 }));
 
@@ -48,6 +49,7 @@ function installLeafletMock() {
             geoJsonCalls.push(fc);
             return { addTo: () => ({ __kind: 'geojson' }) };
         }),
+        canvas: () => ({ addTo: () => ({ __kind: 'canvas' }) }),
         circleMarker: () => ({ addTo: () => ({}), bindTooltip() { return this; }, on() { return this; } }),
         rectangle: () => ({ addTo: () => ({}) }),
         latLngBounds: () => ({ getCenter: () => ({ toBounds: () => ({}), extend: () => {} }) })

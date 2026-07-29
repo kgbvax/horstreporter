@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { mockMap } = vi.hoisted(() => ({
     mockMap: {
         removeLayer: vi.fn(),
-        fitBounds: vi.fn()
+        fitBounds: vi.fn(),
+        hasLayer: vi.fn(() => false)
     }
 }));
 
@@ -82,6 +83,9 @@ beforeEach(() => {
                 addTo: () => ({
                     __kind: 'geojson'
                 })
+            }),
+            canvas: () => ({
+                addTo: () => ({ __kind: 'canvas' })
             }),
         latLngBounds: () => ({
             getCenter: () => ({

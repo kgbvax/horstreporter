@@ -5,6 +5,28 @@ import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTi
 
 let lastRenderFingerprint = '';
 
+// Canvas renderer for the Mercator Grid-SNR / Active-Area non-interactive
+// polygon overlays. SVG re-projects every path on each zoomend; with many
+// grid squares (and zoomSnap:0 firing several fractional zoomends per net
+// zoom level) that is the dominant zoom-time cost. Canvas redraws all paths
+// in one batched paint instead. Grid squares and active-area polygons are
+// already interactive:false, so canvas (which can't do per-path mouse
+// events) is safe; DX-cluster circleMarkers keep the default SVG renderer so
+// their tooltips/hover are unaffected.
+//
+// Singleton, reused across heatLayer rebuilds: map.removeLayer(heatLayer)
+// removes the geoJSON paths from the renderer but leaves the renderer on
+// the map (no orphan canvas containers piling up per rebuild). Recreated
+// lazily if the Leaflet map itself was recreated (initMap calls map.remove()
+// on a projection switch), detected via hasLayer.
+let gridCanvasRenderer = null;
+function getGridCanvasRenderer() {
+    if (!gridCanvasRenderer || !map.hasLayer(gridCanvasRenderer)) {
+        gridCanvasRenderer = L.canvas();
+    }
+    return gridCanvasRenderer;
+}
+
 // Add a single isolated-spot circle marker to the heat layer (shared by the
 // clustered and non-clustered render paths so the style lives in one place).
 function addSpotMarker(p, color) {
@@ -378,6 +400,7 @@ function renderGridSnr(spots, maxMinutes, filterCtx) {
     // Item 2: single L.geoJSON call replaces N individual L.rectangle().addTo() calls
     if (gridFeatures.length) {
         L.geoJSON({ type: 'FeatureCollection', features: gridFeatures }, {
+            renderer: getGridCanvasRenderer(),
             style: f => ({
                 color: f.properties.color,
                 weight: 1,
@@ -475,6 +498,7 @@ function renderActiveArea(spots, maxMinutes, filterCtx) {
                             console.error("Error smoothing polygon", e);
                         }
                         L.geoJSON(finalShape, {
+                            renderer: getGridCanvasRenderer(),
                             style: { color: color, weight: 1, opacity: 0.9, fillColor: color, fillOpacity: 0.18 },
                             interactive: false
                         }).addTo(state.heatLayer);

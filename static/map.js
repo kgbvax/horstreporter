@@ -13,6 +13,36 @@ let worldGeoJsonData = null;
 let worldGeoJsonPromise = null;
 let currentCountryLayerTheme = null;
 let currentGraylineLayerKey = null;
+
+// Canvas renderer for the non-interactive country-fill layer (world.geojson,
+// ~242 polygons / ~99k points). SVG re-projects every one of those points on
+// each zoomend — the single heaviest per-zoom cost once zoomSnap:0 made
+// zoomend fire several times per net zoom level. Canvas redraws the whole
+// layer in one batched paint. The layer is interactive:false so canvas
+// (no per-path hit testing) is safe. Pane-scoped so the canvas container
+// lands in 'country-fill-pane' (z-index 350, under the grid overlay).
+// Singleton reused across theme/toggle rebuilds; recreated if the map is.
+let countryCanvasRenderer = null;
+function getCountryCanvasRenderer() {
+    if (!countryCanvasRenderer || !map.hasLayer(countryCanvasRenderer)) {
+        countryCanvasRenderer = L.canvas({ pane: 'country-fill-pane' });
+    }
+    return countryCanvasRenderer;
+}
+
+// Debounce the DXCC label rebuild across a zoom/pan gesture: moveend and
+// zoomend fire back-to-back and, with zoomSnap:0, several times per net
+// zoom level. Rebuilding once after the gesture settles (Leaflet keeps the
+// existing markers re-projected during the gesture) is both smoother and
+// avoids the remove+recreate of up to 2000 DOM markers per fractional step.
+let dxccLabelSyncTimer = null;
+function scheduleDxccLabelSync(delayMs = 120) {
+    if (dxccLabelSyncTimer) clearTimeout(dxccLabelSyncTimer);
+    dxccLabelSyncTimer = setTimeout(() => {
+        dxccLabelSyncTimer = null;
+        void syncMercatorDxccLabelLayer();
+    }, delayMs);
+}
 let currentDxccLabelLayerKey = null;
 let dxccSyncRevision = 0;
 const WEB_MERCATOR_MAX_LAT = 85.05112878;
@@ -120,12 +150,12 @@ export function initMap(initialCenter, initialZoom) {
     map.on('moveend', () => {
         const center = map.getCenter();
         localStorage.setItem('mapCenter', JSON.stringify([center.lat, center.lng]));
-        void syncMercatorDxccLabelLayer();
+        scheduleDxccLabelSync();
     });
 
     map.on('zoomend', () => {
         localStorage.setItem('mapZoom', map.getZoom());
-        void syncMercatorDxccLabelLayer();
+        scheduleDxccLabelSync();
     });
 
     // Re-derive the minimum zoom whenever the container is resized (window
@@ -288,6 +318,7 @@ export async function syncMercatorCountryLayer(options = {}) {
     const geoJson = await loadWorldGeoJson();
     currentCountryLayer = L.geoJSON(geoJson, {
         pane: 'country-fill-pane',
+        renderer: getCountryCanvasRenderer(),
         interactive: false,
         style: (feature) => ({
             color: theme === 'dark' ? '#2a3845' : '#58636d',
