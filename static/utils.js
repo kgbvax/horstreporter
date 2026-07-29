@@ -620,10 +620,10 @@ export function freqHzToBand(hz) {
 }
 
 export function getGridResolution() {
-    const target = document.getElementById('target')?.value.trim() || '';
-    if (/^[A-Za-z]{2}[0-9]{2}[A-Za-z]{2}/.test(target)) {
-        return 6;
-    }
+    // Grid mode always highlights at the 4-character Maidenhead square level,
+    // regardless of the target locator's precision. This keeps the Mercator Grid
+    // view readable and consistent; subsquare precision is not appropriate for
+    // the colored cell overlay.
     return 4;
 }
 

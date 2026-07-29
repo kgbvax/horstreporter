@@ -219,10 +219,10 @@ describe('utils.js', () => {
             document.body.innerHTML = '';
         });
 
-        it('getGridResolution returns 6 for valid 6-character locators, 4 otherwise', () => {
+        it('getGridResolution always returns 4 for the Maidenhead square overlay', () => {
             document.body.innerHTML = '<input id="target" value="FN31AB" />';
-            expect(getGridResolution()).toBe(6);
-            
+            expect(getGridResolution()).toBe(4);
+
             document.body.innerHTML = '<input id="target" value="W1AW" />';
             expect(getGridResolution()).toBe(4);
         });
