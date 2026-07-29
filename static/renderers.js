@@ -303,28 +303,33 @@ function renderGridSnr(spots, maxMinutes, filterCtx) {
     const res = getGridResolution();
     const aggregateTimer = startPerfTimer();
 
+    // Filter first, then aggregate: maxSnr/count/snrSum drive a square's
+    // intensity (opacity) and must reflect only the spots the user is
+    // actually allowed to see. Aggregating before the band+SNR filter
+    // previously let a band-filtered-out spot (e.g. a +25 dB 15m spot while
+    // soloing 20m) inflate a square's opacity, and let an RBN 0-40 dB CW-scale
+    // spot set intensity against an FT8-calibrated threshold. visibleCount
+    // and bands (which gate drawing and pick the color) were already
+    // post-filter, so only the intensity was wrong — but wrong intensity
+    // is what made a square read as "active" when its visible spots were weak.
     regularSpots.forEach(spot => {
-        let loc = spot.locator.substring(0, res);
-        if (loc.length < res) loc = spot.locator.substring(0, 4); // Fallback if data is sparse
-
-        if (loc.length >= 4) {
-            if (!squareData[loc]) {
-                squareData[loc] = { snrSum: 0, count: 0, maxSnr: -Infinity, visibleCount: 0, bands: {} };
-            }
-            squareData[loc].snrSum += spot.snr;
-            squareData[loc].count++;
-            squareData[loc].maxSnr = Math.max(squareData[loc].maxSnr, Number(spot.snr));
-        }
-
         if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
         if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
         if (!enabledBands.has(spot.band)) return;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return;
 
-        if (loc.length >= 4) {
-            squareData[loc].visibleCount++;
-            squareData[loc].bands[spot.band] = (squareData[loc].bands[spot.band] || 0) + 1;
+        let loc = spot.locator.substring(0, res);
+        if (loc.length < res) loc = spot.locator.substring(0, 4); // Fallback if data is sparse
+        if (loc.length < 4) return;
+
+        if (!squareData[loc]) {
+            squareData[loc] = { snrSum: 0, count: 0, maxSnr: -Infinity, visibleCount: 0, bands: {} };
         }
+        squareData[loc].snrSum += Number(spot.snr);
+        squareData[loc].count++;
+        squareData[loc].maxSnr = Math.max(squareData[loc].maxSnr, Number(spot.snr));
+        squareData[loc].visibleCount++;
+        squareData[loc].bands[spot.band] = (squareData[loc].bands[spot.band] || 0) + 1;
     });
     endPerfTimer('mercator.grid.aggregate_ms', aggregateTimer);
 

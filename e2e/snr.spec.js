@@ -10,14 +10,15 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('SNR sliders mount with original ids and default values', async ({ page }) => {
+    // Default mode is SSB, so only the SSB slider is mounted; the CW slider
+    // is unmounted (its value is kept in the store and reappears in CW mode).
     const ssb = page.locator('#ssb-min-db');
     const cw = page.locator('#cw-min-db');
     await expect(ssb).toHaveCount(1);
-    await expect(cw).toHaveCount(1);
+    await expect(cw).toHaveCount(0);
     await expect(ssb).toHaveValue('0');
-    await expect(cw).toHaveValue('-15');
     await expect(page.locator('#ssb-min-db-val')).toHaveText('0');
-    await expect(page.locator('#cw-min-db-val')).toHaveText('-15');
+    await expect(page.locator('#cw-min-db-val')).toHaveCount(0);
 });
 
 test('moving SSB slider updates label, persists, and triggers render', async ({ page }) => {
@@ -30,10 +31,40 @@ test('moving SSB slider updates label, persists, and triggers render', async ({ 
 });
 
 test('persisted SNR values rehydrate on reload', async ({ page }) => {
+    // The CW slider only exists in CW mode; switch there first so the slider
+    // is mounted before we drive it.
+    await page.locator('#snr-cw').dispatchEvent('click');
+    await expect(page.locator('#cw-min-db')).toHaveCount(1);
     await page.$eval('#cw-min-db', (el) => { el.value = '-3'; el.dispatchEvent(new Event('input', { bubbles: true })); });
     await page.reload();
+    await expect(page.locator('#snr-cw')).toBeChecked();
     await expect(page.locator('#cw-min-db')).toHaveValue('-3');
     await expect(page.locator('#cw-min-db-val')).toHaveText('-3');
+});
+
+test('only the active min-SNR mode slider is mounted', async ({ page }) => {
+    // SSB mode: SSB slider only.
+    await expect(page.locator('#snr-ssb')).toBeChecked();
+    await expect(page.locator('#ssb-min-db')).toHaveCount(1);
+    await expect(page.locator('#cw-min-db')).toHaveCount(0);
+    await expect(page.locator('text=No SNR filter')).toHaveCount(0);
+
+    // CW mode: CW slider only.
+    await page.locator('#snr-cw').dispatchEvent('click');
+    await expect(page.locator('#cw-min-db')).toHaveCount(1);
+    await expect(page.locator('#ssb-min-db')).toHaveCount(0);
+    await expect(page.locator('text=No SNR filter')).toHaveCount(0);
+
+    // All (none) mode: no sliders, "No SNR filter" hint instead.
+    await page.locator('#snr-none').dispatchEvent('click');
+    await expect(page.locator('#ssb-min-db')).toHaveCount(0);
+    await expect(page.locator('#cw-min-db')).toHaveCount(0);
+    await expect(page.locator('text=No SNR filter')).toHaveCount(1);
+
+    // Switching back to SSB re-mounts the SSB slider with its persisted value.
+    await page.locator('#snr-ssb').dispatchEvent('click');
+    await expect(page.locator('#ssb-min-db')).toHaveCount(1);
+    await expect(page.locator('#ssb-min-db')).toHaveValue('0');
 });
 
 test('minutes and cluster-distance sliders mount with default values and ids', async ({ page }) => {
