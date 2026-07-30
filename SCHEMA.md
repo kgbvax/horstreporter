@@ -146,6 +146,85 @@ Used for markers like:
 
 - `json_migrated_at`
 - `dxpulse_region_baseline_built_at`
+- `proplab_cell_buckets_built_at`
+
+---
+
+### `proplab_cell_buckets`
+
+Propagation Lab midpoint-cell buckets. Each row summarises one 15-minute bucket for a midpoint 4-character Maidenhead square, band, and source lane.
+
+| Column | Type | Null | Notes |
+|---|---|---|---|
+| `bucket_start` | `BIGINT` | NOT NULL | Unix seconds, 15-min aligned |
+| `band` | `TEXT` | NOT NULL | Normalised band token |
+| `cell4` | `TEXT` | NOT NULL | Midpoint 4-char Maidenhead square |
+| `region` | `TEXT` | NOT NULL | DXPulse region for the cell |
+| `lane` | `TEXT` | NOT NULL | Source lane: `ft8`, `rbn`, `dcx` |
+| `spot_count` | `INT` | NOT NULL | Total spots observed |
+| `link_count` | `INT` | NOT NULL | Distinct sender+receiver link count (dedup) |
+| `reporter_count` | `INT` | NOT NULL | Distinct callsigns as reporters/witnesses |
+| `snr_median` | `SMALLINT` | NOT NULL | Median SNR for this lane |
+| `snr_p10` | `SMALLINT` | NOT NULL | 10th-percentile SNR |
+| `dist_median_km` | `INT` | NOT NULL | Median path distance |
+| `dist_max_km` | `INT` | NOT NULL | Maximum path distance |
+
+Primary key: `(bucket_start, band, cell4, lane)`
+
+Indexes:
+
+- `idx_proplab_cell_band_bucket` on `(band, bucket_start)`
+- `idx_proplab_cell_region_band_bucket` on `(region, band, bucket_start)`
+- `idx_proplab_cell_bucket_time` on `(bucket_start)`
+
+---
+
+### `proplab_sw_series`
+
+Space-weather index time series polled by the Propagation Lab.
+
+| Column | Type | Null | Notes |
+|---|---|---|---|
+| `series` | `TEXT` | NOT NULL | Index name: `kp`, `sfi`, `xray_flux`, `aurora_gw` |
+| `obs_time` | `BIGINT` | NOT NULL | Unix seconds |
+| `value` | `DOUBLE PRECISION` | NOT NULL | Numeric value |
+
+Primary key: `(series, obs_time)`
+
+Index: `idx_proplab_sw_series_time` on `(series, obs_time DESC)`
+
+---
+
+### `proplab_drap_snapshots`
+
+D-RAP (D-Region Absorption Prediction) Highest-Affected-Frequency snapshots.
+
+| Column | Type | Null | Notes |
+|---|---|---|---|
+| `obs_time` | `BIGINT` | NOT NULL | Unix seconds |
+| `haf_grid` | `BYTEA` | NOT NULL | 36×24 grid of HAF in deci-MHz |
+
+Primary key: `obs_time`
+
+---
+
+### `proplab_events`
+
+Scheduled and live operating events that can explain demand-side spot spikes.
+
+| Column | Type | Null | Notes |
+|---|---|---|---|
+| `source` | `TEXT` | NOT NULL | `wa7bnm`, `ng3k`, `pota` |
+| `event_id` | `TEXT` | NOT NULL | Stable upstream identifier |
+| `title` | `TEXT` | NOT NULL | Human-readable event name |
+| `band_mask` | `TEXT` | NOT NULL | Band/mode hint, e.g. `80m-10m CW/SSB` |
+| `start_utc` | `BIGINT` | NOT NULL | Unix seconds |
+| `end_utc` | `BIGINT` | NOT NULL | Unix seconds |
+| `locator4` | `TEXT` | NOT NULL | 4-char square when known |
+
+Primary key: `(source, event_id)`
+
+Index: `idx_proplab_events_window` on `(end_utc, start_utc)`
 
 ## Automatic migration behavior
 

@@ -426,6 +426,9 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			v TEXT NOT NULL
 		);`,
 	}
+
+	stmts = append(stmts, proplabSchemaStmts()...)
+
 	for _, q := range stmts {
 		if _, err := s.pool.Exec(ctx, q); err != nil {
 			return err
