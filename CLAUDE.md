@@ -51,6 +51,12 @@ npm test
 # Frontend typecheck + tests
 npm run check
 
+# Optional Propagation Lab flags
+#   -proplab-disable              # turn off Ladder + Fusion engines entirely
+#   -proplab-cell-retention-days  # proplab PG retention (default 60; 0 disables)
+#   -proplab-sw-enable            # enable NOAA SWPC / D-RAP / OVATION ingest (placeholder)
+#   -proplab-events-enable        # enable contest/DXpedition/POTA calendar ingest (placeholder)
+
 # Mercator perf gate (catch draw/zoom regressions)
 npm run perf:gate:mercator
 ```
@@ -71,6 +77,11 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `rbn.go` — optional RBN (Reverse Beacon Network) CW/RTTY raw telnet ingest; `source_type='rbn'`, activity + live only (kept out of the FT8-SNR baseline)
 - `opmode.go` — operator mode endpoint wiring (browser calls local agent directly; backend never proxies)
 - `dxlens_mount.go` — mounts the `dxlens` sibling module at `/dxlens/`
+- `dx_proplab.go` — `ProplabService`: Ladder/Fusion orchestrator, ingest hooks, 60s bucket-persistence tick, retention pruning
+- `dx_proplab_store.go` — Postgres persistence for proplab cell buckets, space-weather series, D-RAP snapshots, and event calendar
+- `proplab_ladder.go` — Propagation Lab variant B: midpoint-cell MUF ladder, band-coherence, CUSUM onsets, terminator hints
+- `proplab_fusion.go` — Propagation Lab variant C: conditional-quantile baseline + event/SW fusion + `propagationPrior` seam
+- `proplab_server.go` — `/api/proplab/v1/*` HTTP handlers and short-lived verdict caches
 - `cmd/horstoperator-agent/` — standalone local agent bridging browser opmode to PSTrotator UDP; resolves Wavelog attributes for the Chase Queue and computes award "wanted" in-process via `internal/awards` (operator log stays local)
 - `cmd/horstprop/` — standalone HF link-quality scoring service (separate binary; consumes HorstReporter read-only over HTTP; see `docs/horstprop.md`)
 - `internal/awards/` — local award-progress engine embedded in the agent: slot index (DXCC/WAS/POTA) from the operator's Wavelog log + POTA hunted-parks CSV; `Manager` + `award`/`adif`/`refdata`/`source`/`store` (see `docs/horstawards.md`)
@@ -79,6 +90,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 
 **Frontend core files (`static/`):**
 - `app.js` — app boot, SSE stream lifecycle, projection/style gating
+- `proplab/index.html` + `proplab/proplab.js` — standalone Propagation Lab A/B/C testing page
 - `renderers.js` — Mercator map rendering modes
 - `azimuth-runtime.js` — Azimuthal (canvas) rendering
 - `map.js` — Leaflet map setup + overlays
@@ -95,6 +107,9 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 
 - `GET /api/stream` — SSE; params: `target`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `target`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed)
 - `GET /api/dx_conditions` — DX score/conditions per band; params: `target`, `minutes`, `surroundings`, `cw_min_db`
+- `GET /api/proplab/v1/params` — default parameters for variants B and C
+- `GET /api/proplab/v1/ladder` — variant B verdict; params: `target`, `surroundings`, plus any `proplabParamsB` field as query override
+- `GET /api/proplab/v1/fusion` — variant C verdict; params: any `proplabParamsC` field as query override
 - `GET /api/stats` — active connections, history size/minutes
 - `GET /api/capture_snapshot` — deterministic filtered spot snapshot for server-driven frame capture
 - `GET /dxlens/` — DXLens module UI (reads HorstReporter's in-memory baseline via adapter)

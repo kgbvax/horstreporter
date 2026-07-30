@@ -400,6 +400,9 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 	if st != nil {
 		_ = st.observe(m, band, hour, distTier, snrTier, targetTokens)
 	}
+	if proplabService != nil {
+		proplabService.Observe(m)
+	}
 }
 
 func (e *DxBaselineEngine) PersistRawSpot(m MQTTMessage, sourceType, spotter string, frequencyKHz *float64, comment string) {
@@ -415,6 +418,9 @@ func (e *DxBaselineEngine) PersistRawSpot(m MQTTMessage, sourceType, spotter str
 	defer cancel()
 	if err := st.insertRawSpot(ctx, m, band, sourceType, spotter, frequencyKHz, comment); err != nil {
 		logDebug("DX raw spot persistence failed (source=%s): %v", sourceType, err)
+	}
+	if proplabService != nil {
+		proplabService.Observe(m)
 	}
 }
 

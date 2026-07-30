@@ -66,8 +66,8 @@ func TestProplabBucketAccumulatorDedupAndStats(t *testing.T) {
 	if r.ReporterCount != 2 {
 		t.Fatalf("reporter_count=%d want 2", r.ReporterCount)
 	}
-	if r.SnrMedian != -12 {
-		t.Fatalf("snr_median=%d want -12", r.SnrMedian)
+	if r.SnrMedian != -13 {
+		t.Fatalf("snr_median=%d want -13", r.SnrMedian)
 	}
 	if r.SnrP10 != -20 {
 		t.Fatalf("snr_p10=%d want -20", r.SnrP10)

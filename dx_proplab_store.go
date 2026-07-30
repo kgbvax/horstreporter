@@ -157,18 +157,18 @@ func (s *dxPostgresStore) upsertProplabCellBuckets(ctx context.Context, rows []p
 
 // proplabCellQueryResult is one row returned by the cell-bucket queries.
 type proplabCellQueryResult struct {
-	BucketStart  int64
-	Band         string
-	Cell4        string
-	Region       string
-	Lane         string
-	SpotCount    int
-	LinkCount    int
+	BucketStart   int64
+	Band          string
+	Cell4         string
+	Region        string
+	Lane          string
+	SpotCount     int
+	LinkCount     int
 	ReporterCount int
-	SnrMedian    int
-	SnrP10       int
-	DistMedianKm int
-	DistMaxKm    int
+	SnrMedian     int
+	SnrP10        int
+	DistMedianKm  int
+	DistMaxKm     int
 }
 
 func scanProplabCellRow(rows pgx.Rows) (proplabCellQueryResult, error) {
@@ -226,6 +226,9 @@ func (s *dxPostgresStore) queryProplabCellBuckets(ctx context.Context, start, en
 func (s *dxPostgresStore) loadProplabCellBaseline(ctx context.Context, bands []string, regions []string, slot int, lookbackDays int, now int64) ([]proplabBaselineDayRow, error) {
 	if s == nil || len(bands) == 0 {
 		return nil, nil
+	}
+	if len(regions) == 0 {
+		regions = nil
 	}
 	if lookbackDays <= 0 {
 		lookbackDays = 45
@@ -562,13 +565,13 @@ type proplabBucketKey struct {
 }
 
 type proplabCellBucket struct {
-	links      map[string]struct{}
-	reporters  map[string]struct{}
-	snrs       []int
-	spotCount  int
-	sumDistKm  float64
-	maxDistKm  float64
-	region     string
+	links     map[string]struct{}
+	reporters map[string]struct{}
+	snrs      []int
+	spotCount int
+	sumDistKm float64
+	maxDistKm float64
+	region    string
 }
 
 func newProplabInMemoryAccumulator() *proplabBucketAccumulator {
@@ -675,4 +678,3 @@ func (a *proplabBucketAccumulator) closeBuckets(_ int64) []proplabCellRow {
 	}
 	return rows
 }
-
