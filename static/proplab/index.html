@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>horstreporter - Propagation Lab</title>
+    <link rel="stylesheet" href="../vendor/css/bootstrap.min.css">
+    <link rel="stylesheet" href="../style.css">
+    <style>
+        :root { --proplab-band-width: 6px; }
+        body { min-height: 100vh; }
+        .proplab-band-row { border-left: var(--proplab-band-width) solid #999; }
+        .proplab-state-open { color: var(--bs-success); font-weight: 600; }
+        .proplab-state-closed { color: var(--bs-secondary); }
+        .proplab-state-active { color: var(--bs-warning); }
+        .proplab-state-insufficient { color: var(--bs-info); }
+        .proplab-param { display: grid; grid-template-columns: 1fr 4rem 3rem; gap: .5rem; align-items: center; margin-bottom: .35rem; }
+        .proplab-param label { font-size: .8rem; margin: 0; }
+        .proplab-param input[type="number"] { font-size: .8rem; padding: .15rem .25rem; }
+        .proplab-param input[type="range"] { width: 100%; }
+        .proplab-section { scroll-margin-top: 1rem; }
+        .proplab-mono { font-family: var(--bs-font-monospace); font-size: .8rem; }
+    </style>
+</head>
+<body class="p-3">
+    <div class="container-fluid">
+        <header class="d-flex justify-content-between align-items-center mb-3">
+            <div>
+                <h1 class="h3 mb-0">Propagation Lab</h1>
+                <p class="small text-muted mb-0">A/B/C band and region experiments</p>
+            </div>
+            <a href="/" class="btn btn-outline-secondary btn-sm">Back to map</a>
+        </header>
+
+        <div class="card mb-3">
+            <div class="card-body">
+                <form id="proplab-form" class="row g-3 align-items-end">
+                    <div class="col-md-3 col-sm-6">
+                        <label for="target-input" class="form-label">Target (locator or callsign)</label>
+                        <input type="text" id="target-input" class="form-control form-control-sm" placeholder="e.g. JO62qm" value="">
+                    </div>
+                    <div class="col-md-2 col-sm-6">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="surroundings-check">
+                            <label class="form-check-label" for="surroundings-check">Surroundings</label>
+                        </div>
+                    </div>
+                    <div class="col-md-2 col-sm-6">
+                        <label for="refresh-select" class="form-label">Auto refresh</label>
+                        <select id="refresh-select" class="form-select form-select-sm">
+                            <option value="0">Off</option>
+                            <option value="15000" selected>15 s</option>
+                            <option value="30000">30 s</option>
+                            <option value="60000">60 s</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3 col-sm-6">
+                        <button type="submit" class="btn btn-primary btn-sm w-100">Run all three</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="row g-3">
+            <!-- A: Baseline -->
+            <section class="col-xl-4 col-lg-6 proplab-section" id="section-a">
+                <div class="card h-100">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <strong>A: Baseline</strong>
+                        <span class="badge text-bg-light">/api/dx_conditions</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="small text-muted">Current production engine. Uses band/distance/SNR buckets and the live spot stream.</p>
+                        <div id="result-a" class="small">Click "Run all three" to load.</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- B: Ladder -->
+            <section class="col-xl-4 col-lg-6 proplab-section" id="section-b">
+                <div class="card h-100">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <strong>B: Ladder</strong>
+                        <span class="badge text-bg-light">empirical propagation</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="small text-muted">Midpoint-cell MUF ladder, coherence, CUSUM onsets, terminator hints.</p>
+                        <div id="params-b" class="mb-3"></div>
+                        <div id="result-b" class="small">Click "Run all three" to load.</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- C: Fusion -->
+            <section class="col-xl-4 col-lg-6 proplab-section" id="section-c">
+                <div class="card h-100">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <strong>C: Fusion</strong>
+                        <span class="badge text-bg-light">quantiles + events + space weather</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="small text-muted">Conditional-quantile baseline fused with event/SW priors.</p>
+                        <div id="params-c" class="mb-3"></div>
+                        <div id="result-c" class="small">Click "Run all three" to load.</div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script type="module" src="proplab.js"></script>
+</body>
+</html>
