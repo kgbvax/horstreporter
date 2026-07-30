@@ -296,10 +296,10 @@ func main() {
 
 	proplabService = newProplabService(dxBaseline, *proplabDisableFlag, *proplabCellRetentionDaysFlag)
 	if !*proplabDisableFlag {
-		proplabBackfillMinutes := liveHistoryRetentionMinutes
-		if proplabBackfillMinutes <= 0 {
-			proplabBackfillMinutes = defaultLiveHistoryRetentionMinutes
-		}
+		// Seed the ladder with only the most recent 15 minutes of live history so
+		// the first /proplab/ page load has some data without duplicating the full
+		// startup spot cache into the ladder engine.
+		proplabBackfillMinutes := 15
 		if cached, err := dxBaseline.LoadRecentSpotCache(proplabBackfillMinutes, time.Now().Unix(), *dxClusterEnable); err != nil {
 			logInfo("Proplab startup spot-cache backfill failed (last %d minutes): %v", proplabBackfillMinutes, err)
 		} else if len(cached) > 0 {

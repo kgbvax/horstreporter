@@ -64,11 +64,12 @@ func newProplabService(baseline *DxBaselineEngine, disabled bool, retentionDays 
 	}
 
 	if !disabled && s.store != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		if err := s.store.ensureProplabCellBuckets(ctx); err != nil {
-			logInfo("Proplab cell-bucket backfill failed: %v", err)
-		}
+		// Historical backfill from dx_raw_spots is intentionally disabled by
+		// default. On a busy server 48 h of raw spots can be 10M+ rows and the
+		// in-memory dedup/aggregation blows past available RAM before the HTTP
+		// listener comes up. Live ingest populates the buckets within minutes;
+		// a smaller on-demand backfill can be added later if needed.
+		logInfo("Proplab historical backfill skipped; live ingest will populate cell buckets")
 	}
 
 	return s
