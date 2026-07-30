@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, latLngToLocator, locatorToBounds, getMinSnrMode, getSelectedBand, getEnabledBands, formatNumber } from './utils.js';
+import { getGridResolution, latLngToLocator, locatorToBounds, initialBearingDeg, getMinSnrMode, getSelectedBand, getEnabledBands, formatNumber } from './utils.js';
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -224,6 +224,24 @@ export function attachUITooltipEvents() {
         tooltip.style.top = (e.originalEvent.pageY + 15) + 'px';
     }
 
+    // Great-circle bearing from the target square (station) to the hovered
+    // square center, e.g. " 302°". Empty when the target isn't a valid
+    // locator (the field also accepts callsigns) or hovers the target itself.
+    function hoverSquareAzimuthText(hoverLocator) {
+        const target = document.getElementById('target')?.value?.trim()?.toUpperCase() || '';
+        const locatorRe = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/;
+        if (!locatorRe.test(target) || !locatorRe.test(hoverLocator)) return '';
+        if (target === hoverLocator) return '';
+        const targetBounds = locatorToBounds(target);
+        const hoverBounds = locatorToBounds(hoverLocator);
+        if (!targetBounds || !hoverBounds) return '';
+        const center = (b) => [(b[0][0] + b[1][0]) / 2, (b[0][1] + b[1][1]) / 2];
+        const [tLat, tLng] = center(targetBounds);
+        const [hLat, hLng] = center(hoverBounds);
+        const bearing = Math.round(initialBearingDeg(tLat, tLng, hLat, hLng)) % 360;
+        return ` ${bearing}°`;
+    }
+
     function renderDetails(locator, data) {
         const count = Number(data?.count || 0);
         if (count <= 0) {
@@ -250,7 +268,7 @@ export function attachUITooltipEvents() {
                 `</span>`;
         }
 
-        tooltip.innerHTML = `<strong>${escapeHtml(locator)}</strong><br>` +
+        tooltip.innerHTML = `<strong>${escapeHtml(locator)}${escapeHtml(hoverSquareAzimuthText(locator))}</strong><br>` +
             `Min: ${min}dB<br>` +
             `Max: ${max}dB<br>` +
             `Avg: ${Math.round(avg)}dB<br>` +
