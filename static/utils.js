@@ -656,20 +656,6 @@ export function gridSnrOpacity(scoreDb) {
     return Math.min(0.75, 0.45 + 0.015 * s);
 }
 
-// REMOVE-WITH-GATE-EXPERIMENT: opt-in experiment (Jul 2026) — also use the
-// grading score to decide whether a square is drawn at all: squares whose
-// top-quartile mean stays below GRID_SCORE_GATE_DB are hidden, so dim
-// outlier-lit/weak squares disappear instead of just rendering faintly.
-export const GRID_SCORE_GATE_DB = 0;
-export function getGridScoreGateEnabled() {
-    const toggle = document.getElementById('grid-score-gate');
-    if (toggle) return toggle.checked;
-    const saved = (typeof localStorage !== 'undefined' && localStorage)
-        ? localStorage.getItem('gridScoreGate')
-        : null;
-    return saved === 'true';
-}
-
 export function normalizeDxPulseTarget(target) {
     const value = String(target || '').trim().toUpperCase();
     if (!/^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(value)) {

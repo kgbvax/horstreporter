@@ -17,8 +17,7 @@ export function initUI() {
 }
 
 // Grid-SNR brightness legend: shows the opacity-ramp panel below the style
-// selector only while the Grid style is active. Also wires the experimental
-// score gate (REMOVE-WITH-GATE-EXPERIMENT), persisted to localStorage.
+// selector only while the Grid style is active.
 export function initGridSnrLegend() {
     const panel = document.getElementById('grid-snr-legend');
     if (!panel || panel.dataset.legendWired === 'true') return;
@@ -35,22 +34,10 @@ export function initGridSnrLegend() {
         if (e.target && e.target.name === 'style-select') syncLegend();
     });
 
-    // One-time cleanup: the A/B highlight-model pref is gone (reachability
-    // won); drop the stale key.
+    // One-time cleanup: retired grading prefs (A/B highlight model +
+    // score-gate experiments, Jul 2026); drop the stale keys.
     try { localStorage.removeItem('gridHighlightModel'); } catch (_) { /* private mode */ }
-
-    // REMOVE-WITH-GATE-EXPERIMENT
-    const gateToggle = document.getElementById('grid-score-gate');
-    if (gateToggle) {
-        const saved = (typeof localStorage !== 'undefined' && localStorage)
-            ? localStorage.getItem('gridScoreGate')
-            : null;
-        gateToggle.checked = saved === 'true';
-        gateToggle.addEventListener('change', () => {
-            try { localStorage.setItem('gridScoreGate', gateToggle.checked ? 'true' : 'false'); } catch (_) { /* private mode */ }
-            if (typeof window.__horstScheduleRender === 'function') window.__horstScheduleRender();
-        });
-    }
+    try { localStorage.removeItem('gridScoreGate'); } catch (_) { /* private mode */ }
 
     syncLegend();
 }

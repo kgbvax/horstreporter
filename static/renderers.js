@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, getGridScoreGateEnabled, GRID_SCORE_GATE_DB, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, hexToRgba, pillTextColor } from './utils.js';
+import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, hexToRgba, pillTextColor } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTimer } from './perf.js';
 
 let lastRenderFingerprint = '';
@@ -323,7 +323,6 @@ function renderGridSnr(spots, maxMinutes, filterCtx) {
     const { regularSpots, dxClusterSpots } = splitSpotSources(spots);
     const squareData = {};
     const res = getGridResolution();
-    const scoreGate = getGridScoreGateEnabled(); // REMOVE-WITH-GATE-EXPERIMENT
     const aggregateTimer = startPerfTimer();
 
     // Filter first, then aggregate: the snrs list (which drives a square's
@@ -367,11 +366,7 @@ function renderGridSnr(spots, maxMinutes, filterCtx) {
         // Brightness = mean of the strongest quarter of reports, mapped
         // through a continuous ramp. One lucky decode in a sea of weak
         // spots no longer lights up the square.
-        const score = topQuartileMean(squareData[loc].snrs);
-        // REMOVE-WITH-GATE-EXPERIMENT: score-gated drawing — hide squares the
-        // score already marks as weak instead of drawing them faintly.
-        if (scoreGate && score < GRID_SCORE_GATE_DB) continue;
-        const fillOpacity = gridSnrOpacity(score);
+        const fillOpacity = gridSnrOpacity(topQuartileMean(squareData[loc].snrs));
 
         let dominantBand = 'all';
         let maxCount = 0;

@@ -45,12 +45,6 @@
                  SNR of their strongest quarter of reports on a continuous
                  opacity ramp. Shown only while the Grid style is active. -->
             <div id="grid-snr-legend" class="grid-snr-legend" hidden>
-                <!-- REMOVE-WITH-GATE-EXPERIMENT: opt-in score gate. -->
-                <div class="form-check form-switch mb-1">
-                    <input class="form-check-input" type="checkbox" role="switch" id="grid-score-gate"
-                           title="Experiment: only draw squares whose mean SNR of the strongest 25% of reports reaches 0 dB. Dim/weak squares disappear instead of rendering faintly.">
-                    <label class="form-check-label" for="grid-score-gate" title="Experiment: only draw squares whose mean SNR of the strongest 25% of reports reaches 0 dB. Dim/weak squares disappear instead of rendering faintly.">Only squares &ge; 0 dB (beta)</label>
-                </div>
                 <div class="grid-legend-body"
                      title="A grid square's brightness is the mean SNR of its strongest 25% of recent reports, so one lucky decode no longer lights up a square.">
                     <div class="grid-legend-ramp" aria-hidden="true"></div>

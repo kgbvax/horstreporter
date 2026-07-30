@@ -24,7 +24,7 @@ import { state } from '../static/state.js';
 import { updateMapVisualization } from '../static/renderers.js';
 
 let geoJsonCalls;
-function setupDom({ minSnr = 'ssb', ssbMinDb = 0, cwMinDb = -15, focusBand = '', enabled = ['20m', '15m'], scoreGate = false } = {}) {
+function setupDom({ minSnr = 'ssb', ssbMinDb = 0, cwMinDb = -15, focusBand = '', enabled = ['20m', '15m'] } = {}) {
     const enabledHtml = enabled.map(b => `<input type="checkbox" class="band-enable" value="${b}" checked />`).join('');
     document.body.innerHTML = `
         <input id="target" value="JO32" />
@@ -38,7 +38,6 @@ function setupDom({ minSnr = 'ssb', ssbMinDb = 0, cwMinDb = -15, focusBand = '',
         <input type="radio" name="min-snr" value="ssb" ${minSnr === 'ssb' ? 'checked' : ''} />
         <input type="radio" name="style-select" value="grid-snr" checked />
         <input type="radio" name="style-select" value="active-area" />
-        <input id="grid-score-gate" type="checkbox" ${scoreGate ? 'checked' : ''} />
     `;
 }
 
@@ -224,43 +223,5 @@ describe('renderGridSnr grading', () => {
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
         expect(feats[0].fillOpacity).toBeCloseTo(0.30, 2);
-    });
-});
-
-// REMOVE-WITH-GATE-EXPERIMENT: score gate — squares whose top-quartile mean
-// stays below 0 dB are not drawn at all when the experiment is enabled.
-describe('renderGridSnr score gate (experiment)', () => {
-    it('gate off (default): weak squares are drawn faintly', () => {
-        setupDom({ minSnr: 'none' });
-        const spots = [spot('JO32', -5, '20m')];
-        updateMapVisualization(spots, 15);
-        expect(drawFeatures()).toHaveLength(1);
-    });
-
-    it('gate on: a weak square is not drawn', () => {
-        setupDom({ minSnr: 'none', scoreGate: true });
-        const spots = [spot('JO32', -5, '20m')];
-        updateMapVisualization(spots, 15);
-        expect(drawFeatures()).toEqual([]);
-    });
-
-    it('gate on: square kept dim by one outlier among weak spots is not drawn', () => {
-        setupDom({ minSnr: 'none', scoreGate: true });
-        const spots = [
-            spot('JO32', 12, '20m'),
-            ...Array.from({ length: 20 }, () => spot('JO32', -8, '20m'))
-        ];
-        updateMapVisualization(spots, 15);
-        // score ~= -4.67 dB < 0 -> hidden even though a +12 decode exists.
-        expect(drawFeatures()).toEqual([]);
-    });
-
-    it('gate on: corroborated strong squares are still drawn', () => {
-        setupDom({ minSnr: 'none', scoreGate: true });
-        const spots = [10, 11, 12, 13, 14, 15].map((s) => spot('JO32', s, '20m'));
-        updateMapVisualization(spots, 15);
-        const feats = drawFeatures();
-        expect(feats).toHaveLength(1);
-        expect(feats[0].fillOpacity).toBeGreaterThan(0.6);
     });
 });

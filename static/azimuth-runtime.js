@@ -1,4 +1,4 @@
-import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, getGridScoreGateEnabled, GRID_SCORE_GATE_DB, gridSnrOpacity, topQuartileMean, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
+import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, gridSnrOpacity, topQuartileMean, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
 
 import { radialLine, strokeCircle } from './canvas-draw.js';
 
@@ -1685,7 +1685,6 @@ function fillAzimuthContours(ctx, field) {
 function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClusterDist) {
     if (style === 'grid-snr') {
         const squares = gridSquares || collectGridSquares(filteredSpots, getGridResolution());
-        const scoreGate = getGridScoreGateEnabled(); // REMOVE-WITH-GATE-EXPERIMENT
         let hiddenSquares = 0;
         for (const loc of Object.keys(squares)) {
             const corners = getProjectedGridCellCorners(loc, width, height);
@@ -1706,10 +1705,7 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
             ctx.fillStyle = bandColors[dominantBand] || bandColors.all;
             // Brightness = mean of the strongest quarter of (filter-passing)
             // reports on the continuous ramp; matches the Mercator renderer.
-            const score = topQuartileMean(entry.snrs);
-            // REMOVE-WITH-GATE-EXPERIMENT: score-gated drawing — hide weak squares.
-            if (scoreGate && score < GRID_SCORE_GATE_DB) continue;
-            ctx.globalAlpha = gridSnrOpacity(score);
+            ctx.globalAlpha = gridSnrOpacity(topQuartileMean(entry.snrs));
 
             ctx.beginPath();
             ctx.moveTo(corners[0].x, corners[0].y);
