@@ -479,6 +479,10 @@ func (s *dxPostgresStore) pruneProplabTable(table, timeCol string, cutoff int64)
 // dx_raw_spots when the table is empty but raw spots exist. This keeps a
 // freshly-upgraded backend from being blind for the first 15 minutes. It is
 // guarded by a dx_meta marker so it only runs once per deployment.
+//
+// To avoid OOM on busy deployments, rows are processed in time-ordered batches
+// (proplabBackfillBatchSeconds) and each batch is flushed to Postgres before
+// the next batch is read.
 func (s *dxPostgresStore) ensureProplabCellBuckets(ctx context.Context) error {
 	var exists bool
 	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM proplab_cell_buckets LIMIT 1)`).Scan(&exists); err != nil {
@@ -495,47 +499,74 @@ func (s *dxPostgresStore) ensureProplabCellBuckets(ctx context.Context) error {
 		return nil
 	}
 	logInfo("Proplab cell-bucket backfill starting from existing raw spots")
-	cutoff := time.Now().Unix() - 48*60*60
+	now := time.Now().Unix()
+	cutoff := now - 48*60*60
 
-	rows, err := s.pool.Query(ctx, `
-		SELECT spot_time, band, sender_locator, receiver_locator, sender_callsign, receiver_callsign,
-		       signal_report_db, source_type
-		FROM dx_raw_spots
-		WHERE spot_time >= $1
-		ORDER BY spot_time ASC
-	`, cutoff)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	accum := newProplabInMemoryAccumulator()
 	processed := int64(0)
-	for rows.Next() {
-		var m proplabBackfillSpot
-		if err := rows.Scan(&m.SpotTime, &m.Band, &m.SenderLoc, &m.ReceiverLoc,
-			&m.SenderCall, &m.ReceiverCall, &m.SNR, &m.SourceType); err != nil {
+	bucketsFlushed := 0
+	for batchStart := cutoff; batchStart < now; batchStart += proplabBackfillBatchSeconds {
+		batchEnd := batchStart + proplabBackfillBatchSeconds
+		if batchEnd > now {
+			batchEnd = now
+		}
+		batchRows, err := s.loadRawSpotsBatch(ctx, batchStart, batchEnd)
+		if err != nil {
 			return err
 		}
-		accum.observe(m)
-		processed++
+		if len(batchRows) == 0 {
+			continue
+		}
+		accum := newProplabInMemoryAccumulator()
+		for _, m := range batchRows {
+			accum.observe(m)
+			processed++
+		}
+		cellRows := accum.closeBuckets(0)
+		if len(cellRows) > 0 {
+			if err := s.upsertProplabCellBuckets(ctx, cellRows); err != nil {
+				return err
+			}
+			bucketsFlushed += len(cellRows)
+		}
+		logInfo("Proplab backfill batch %d-%d: %d spots, %d buckets flushed", batchStart, batchEnd, len(batchRows), len(cellRows))
 	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	cellRows := accum.closeBuckets(0)
-	if err := s.upsertProplabCellBuckets(ctx, cellRows); err != nil {
-		return err
-	}
+
 	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO dx_meta (k,v) VALUES ('proplab_cell_buckets_built_at',$1)
 		ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v
 	`, fmt.Sprintf("%d", time.Now().Unix())); err != nil {
 		return err
 	}
-	logInfo("Proplab cell-bucket backfill finished (%d raw spots processed, %d buckets)", processed, len(cellRows))
+	logInfo("Proplab cell-bucket backfill finished (%d raw spots processed, %d buckets flushed)", processed, bucketsFlushed)
 	return nil
 }
+
+func (s *dxPostgresStore) loadRawSpotsBatch(ctx context.Context, start, end int64) ([]proplabBackfillSpot, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT spot_time, band, sender_locator, receiver_locator, sender_callsign, receiver_callsign,
+		       signal_report_db, source_type
+		FROM dx_raw_spots
+		WHERE spot_time >= $1 AND spot_time < $2
+		ORDER BY spot_time ASC
+	`, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []proplabBackfillSpot
+	for rows.Next() {
+		var m proplabBackfillSpot
+		if err := rows.Scan(&m.SpotTime, &m.Band, &m.SenderLoc, &m.ReceiverLoc,
+			&m.SenderCall, &m.ReceiverCall, &m.SNR, &m.SourceType); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+const proplabBackfillBatchSeconds = 2 * 60 * 60 // 2-hour batches
 
 type proplabBackfillSpot struct {
 	SpotTime     int64
