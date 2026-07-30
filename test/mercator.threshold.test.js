@@ -24,7 +24,7 @@ import { state } from '../static/state.js';
 import { updateMapVisualization } from '../static/renderers.js';
 
 let geoJsonCalls;
-function setupDom({ minSnr = 'ssb', ssbMinDb = 0, cwMinDb = -15, focusBand = '', enabled = ['20m', '15m'] } = {}) {
+function setupDom({ minSnr = 'ssb', ssbMinDb = 0, cwMinDb = -15, focusBand = '', enabled = ['20m', '15m'], highlightModel = 'classic' } = {}) {
     const enabledHtml = enabled.map(b => `<input type="checkbox" class="band-enable" value="${b}" checked />`).join('');
     document.body.innerHTML = `
         <input id="target" value="JO32" />
@@ -38,6 +38,8 @@ function setupDom({ minSnr = 'ssb', ssbMinDb = 0, cwMinDb = -15, focusBand = '',
         <input type="radio" name="min-snr" value="ssb" ${minSnr === 'ssb' ? 'checked' : ''} />
         <input type="radio" name="style-select" value="grid-snr" checked />
         <input type="radio" name="style-select" value="active-area" />
+        <input type="radio" name="grid-highlight-model" value="classic" ${highlightModel === 'classic' ? 'checked' : ''} />
+        <input type="radio" name="grid-highlight-model" value="reachability" ${highlightModel === 'reachability' ? 'checked' : ''} />
     `;
 }
 
@@ -68,6 +70,7 @@ function spot(locator, snr, band, sourceType = '') {
 
 beforeEach(() => {
     globalThis.__HORST_PERF_TEST__ = true;
+    if (typeof localStorage !== 'undefined' && localStorage) localStorage.clear();
     setupDom();
     installLeafletMock();
     mockMap.removeLayer.mockReset();
@@ -164,5 +167,65 @@ describe('renderGridSnr intensity reflects only filter-passing spots', () => {
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
         expect(feats[0].color).toBe('#008000');
+    });
+});
+
+// Reachability model (top-quartile mean -> continuous opacity ramp). The core
+// fix: one lucky strong decode among many weak reports must NOT light up the
+// square; corroborated strong paths should.
+describe('renderGridSnr reachability model', () => {
+    it('does not highlight a square on a single strong outlier among weak spots', () => {
+        setupDom({ minSnr: 'none', highlightModel: 'reachability' });
+        const spots = [
+            spot('JO32', 12, '20m'),
+            ...Array.from({ length: 20 }, () => spot('JO32', -8, '20m'))
+        ];
+        updateMapVisualization(spots, 15);
+        const feats = drawFeatures();
+        expect(feats).toHaveLength(1);
+        // top quartile = best 6 -> mean(12, -8 x5) ~= -4.67 dB -> ramp ~0.31,
+        // far below the classic HIGH tier the +12 outlier would have forced.
+        expect(feats[0].fillOpacity).toBeLessThan(0.35);
+    });
+
+    it('reads bright when strong reports are corroborated', () => {
+        setupDom({ minSnr: 'none', highlightModel: 'reachability' });
+        const spots = [10, 11, 12, 13, 14, 15].map((s) => spot('JO32', s, '20m'));
+        updateMapVisualization(spots, 15);
+        const feats = drawFeatures();
+        expect(feats).toHaveLength(1);
+        // top quartile = best 2 -> mean 14.5 -> ramp ~0.67.
+        expect(feats[0].fillOpacity).toBeGreaterThan(0.6);
+    });
+
+    it('still gives a lone strong spot visual credit', () => {
+        setupDom({ minSnr: 'none', highlightModel: 'reachability' });
+        const spots = [spot('JO32', 12, '20m')];
+        updateMapVisualization(spots, 15);
+        const feats = drawFeatures();
+        expect(feats).toHaveLength(1);
+        // mean of 1 = 12 dB -> 0.45 + 0.015*12 = 0.63.
+        expect(feats[0].fillOpacity).toBeCloseTo(0.63, 2);
+    });
+
+    it('subdues a lone weak spot on the ramp', () => {
+        setupDom({ minSnr: 'none', highlightModel: 'reachability' });
+        const spots = [spot('JO32', -5, '20m')];
+        updateMapVisualization(spots, 15);
+        const feats = drawFeatures();
+        expect(feats).toHaveLength(1);
+        // -5 dB -> 0.45 - 0.15 = 0.30.
+        expect(feats[0].fillOpacity).toBeCloseTo(0.30, 2);
+    });
+
+    it('keeps the filter-first contract: filtered-out spots never feed the score', () => {
+        // Solo 20m; a strong 15m spot is band-filtered out and must not lift
+        // the weak passing 20m spot's square.
+        setupDom({ minSnr: 'none', focusBand: '20m', highlightModel: 'reachability' });
+        const spots = [spot('JO32', -5, '20m'), spot('JO32', 25, '15m')];
+        updateMapVisualization(spots, 15);
+        const feats = drawFeatures();
+        expect(feats).toHaveLength(1);
+        expect(feats[0].fillOpacity).toBeCloseTo(0.30, 2);
     });
 });

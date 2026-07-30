@@ -41,6 +41,29 @@
             <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
                 <div class="btn-group w-100" role="group" id="style-group"></div>
             </div>
+            <!-- REMOVE-WITH-CLASSIC-MODEL: A/B switch + legend for Grid style
+                 grading. 'classic' (max SNR -> 3 tiers) is the default while
+                 'reachability' (top-quartile mean -> continuous ramp) is being
+                 evaluated; delete this whole block when the experiment ends. -->
+            <div id="grid-snr-legend" class="grid-snr-legend" hidden>
+                <div class="btn-group w-100 mb-1" role="group" id="grid-highlight-model-group" title="How a grid square's brightness is graded. Max: brightest single report sets the square. Reachability: mean of the strongest quarter of reports, so one lucky decode no longer lights up a square.">
+                    <input type="radio" class="btn-check" name="grid-highlight-model" id="ghm-classic" value="classic" autocomplete="off" checked />
+                    <label class="btn btn-outline-secondary btn-sm" for="ghm-classic">Max</label>
+                    <input type="radio" class="btn-check" name="grid-highlight-model" id="ghm-reachability" value="reachability" autocomplete="off" />
+                    <label class="btn btn-outline-secondary btn-sm" for="ghm-reachability">Reachability (beta)</label>
+                </div>
+                <div id="grid-legend-classic" class="grid-legend-body">
+                    <div class="grid-legend-row"><span class="grid-legend-swatch" style="--swatch-opacity:0.22;"></span><span>&lt; 0 dB</span></div>
+                    <div class="grid-legend-row"><span class="grid-legend-swatch" style="--swatch-opacity:0.45;"></span><span>0 to 9 dB</span></div>
+                    <div class="grid-legend-row"><span class="grid-legend-swatch" style="--swatch-opacity:0.72;"></span><span>&ge; 10 dB</span></div>
+                    <div class="grid-legend-caption">brightness = square's best single report (max SNR)</div>
+                </div>
+                <div id="grid-legend-reachability" class="grid-legend-body" hidden>
+                    <div class="grid-legend-ramp" aria-hidden="true"></div>
+                    <div class="grid-legend-ticks" aria-hidden="true"><span>-10</span><span>0</span><span>+10</span><span>+20 dB</span></div>
+                    <div class="grid-legend-caption">brighter = mean SNR of the strongest 25% of recent reports</div>
+                </div>
+            </div>
             <div class="form-sections d-flex flex-column gap-2">
             <div id="band-container" class="w-100 bg-transparent mb-2" style="font-size: 0.9rem;" data-focus-band="">
                 <div class="row g-2 mb-2">

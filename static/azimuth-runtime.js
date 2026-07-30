@@ -1,4 +1,4 @@
-import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
+import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, getGridHighlightModel, gridSnrOpacity, gridSnrOpacityClassic, topQuartileMean, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
 
 import { radialLine, strokeCircle } from './canvas-draw.js';
 
@@ -483,10 +483,10 @@ function collectGridSquares(spots, resolution, visibleSpots = spots) {
         let loc = (spot.locator || '').substring(0, resolution);
         if (loc.length < resolution) loc = (spot.locator || '').substring(0, 4);
         if (loc.length < 4) return;
-        if (!squareData[loc]) squareData[loc] = { snrSum: 0, count: 0, maxSnr: -Infinity, visibleCount: 0, bands: {} };
+        if (!squareData[loc]) squareData[loc] = { snrSum: 0, count: 0, maxSnr: -Infinity, visibleCount: 0, bands: {}, snrs: [] };
         squareData[loc].snrSum += spot.snr;
         squareData[loc].count += 1;
-        squareData[loc].maxSnr = Math.max(squareData[loc].maxSnr, Number(spot.snr));
+        squareData[loc].maxSnr = Math.max(squareData[loc].maxSnr, Number(spot.snr)); // REMOVE-WITH-CLASSIC-MODEL (pre-589d9a8 semantics: unfiltered spots)
     });
 
     visibleSpots.forEach(spot => {
@@ -496,6 +496,9 @@ function collectGridSquares(spots, resolution, visibleSpots = spots) {
         if (loc.length < 4 || !squareData[loc]) return;
         squareData[loc].visibleCount += 1;
         squareData[loc].bands[spot.band] = (squareData[loc].bands[spot.band] || 0) + 1;
+        // Reachability model: only filter-passing spots feed the square score
+        // (matches the Mercator filter-first contract, commit 589d9a8).
+        squareData[loc].snrs.push(Number(spot.snr));
     });
 
     Object.keys(squareData).forEach((loc) => {
@@ -1694,9 +1697,6 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
             }
 
             const entry = squares[loc];
-            const maxSnr = Number.isFinite(entry.maxSnr)
-                ? entry.maxSnr
-                : (entry.snrSum / Math.max(1, entry.count));
             let dominantBand = 'all';
             let maxCount = 0;
             for (const band of Object.keys(entry.bands)) {
@@ -1706,7 +1706,15 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
                 }
             }
             ctx.fillStyle = bandColors[dominantBand] || bandColors.all;
-            ctx.globalAlpha = maxSnr >= 10 ? 0.72 : maxSnr >= 0 ? 0.45 : 0.22;
+            if (getGridHighlightModel() === 'reachability') {
+                ctx.globalAlpha = gridSnrOpacity(topQuartileMean(entry.snrs));
+            } else {
+                // REMOVE-WITH-CLASSIC-MODEL: classic 3-tier ternary on max SNR.
+                const maxSnr = Number.isFinite(entry.maxSnr)
+                    ? entry.maxSnr
+                    : (entry.snrSum / Math.max(1, entry.count));
+                ctx.globalAlpha = gridSnrOpacityClassic(maxSnr);
+            }
 
             ctx.beginPath();
             ctx.moveTo(corners[0].x, corners[0].y);
