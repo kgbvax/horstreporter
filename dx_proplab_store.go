@@ -621,6 +621,18 @@ func (a *proplabBucketAccumulator) observe(m proplabBackfillSpot) {
 	}
 }
 
+func intMedian(in []int) int {
+	sort.Ints(in)
+	n := len(in)
+	if n == 0 {
+		return 0
+	}
+	if n%2 == 1 {
+		return in[n/2]
+	}
+	return (in[n/2-1] + in[n/2]) / 2
+}
+
 func proplabLaneForSourceType(t string) string {
 	switch t {
 	case "rbn":
@@ -653,7 +665,7 @@ func (a *proplabBucketAccumulator) closeBuckets(_ int64) []proplabCellRow {
 		}
 		if len(b.snrs) > 0 {
 			sort.Ints(b.snrs)
-			r.SnrMedian = b.snrs[len(b.snrs)/2]
+			r.SnrMedian = intMedian(b.snrs)
 			r.SnrP10 = int(percentileInt(b.snrs, 0.10))
 		}
 		if b.spotCount > 0 {
