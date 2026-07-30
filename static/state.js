@@ -1,6 +1,7 @@
 export const state = {
     liveSpots: [],
     heatLayer: null,
+    dxClusterLayer: null,
     targetLayer: null,
     eventSource: null,
     renderInterval: null,

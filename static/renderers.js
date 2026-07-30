@@ -93,8 +93,38 @@ function splitSpotSources(spots) {
     return { regularSpots, dxClusterSpots };
 }
 
+// DX cluster markers live in their own layer (state.dxClusterLayer), NOT in
+// the heatLayer. The heatLayer is torn down and rebuilt on every render, and
+// a rebuilt marker's bound tooltip closes and re-opens — hovering a cluster
+// marker during an active FT8 period made the tooltip flicker with no
+// pointer movement. This layer only rebuilds when the DX cluster spot set
+// itself changes.
+let dxClusterMarkerFingerprint = '';
+
+export function clearDxClusterMarkers() {
+    dxClusterMarkerFingerprint = '';
+    if (state.dxClusterLayer && map) {
+        map.removeLayer(state.dxClusterLayer);
+    }
+    state.dxClusterLayer = null;
+}
+
+function syncDxClusterMarkers(spots) {
+    const { dxClusterSpots } = splitSpotSources(spots);
+    const fingerprint = dxClusterSpots
+        .map((s) => `${s.locator}|${s.band}|${s.sender}|${s.receiver}|${s.reporterLocator}|${s.lat}|${s.lng}`)
+        .join(';');
+    if (fingerprint === dxClusterMarkerFingerprint && state.dxClusterLayer) return;
+    clearDxClusterMarkers();
+    dxClusterMarkerFingerprint = fingerprint;
+    if (dxClusterSpots.length === 0) return;
+    state.dxClusterLayer = L.layerGroup().addTo(map);
+    incrementPerfCounter('mercator.layers.added', 1);
+    renderDxClusterMarkers(dxClusterSpots);
+}
+
 function renderDxClusterMarkers(dxClusterSpots) {
-    if (!Array.isArray(dxClusterSpots) || dxClusterSpots.length === 0 || !state.heatLayer) return;
+    if (!Array.isArray(dxClusterSpots) || dxClusterSpots.length === 0 || !state.dxClusterLayer) return;
 
     // Item 4: single circleMarker per spot instead of two
     // Subtle visual distinction: white border around the band-colored fill
@@ -112,7 +142,7 @@ function renderDxClusterMarkers(dxClusterSpots) {
             fillOpacity: 0.65,
             interactive: true,
             bubblingMouseEvents: false
-        }).addTo(state.heatLayer);
+        }).addTo(state.dxClusterLayer);
 
         marker.bindTooltip(buildDxClusterHoverHtml(spot), {
             direction: 'top',
@@ -176,6 +206,10 @@ export function updateMapVisualization(spots, maxMinutes) {
         updateBandLabels(spots, filterCtx, activeBands);
         endPerfTimer('mercator.band_labels.total_ms', bandLabelTimer);
     }
+
+    // DX cluster markers: persistent layer, rebuilt only when the cluster
+    // spot set changes — hovering must not flicker on every heatLayer rebuild.
+    syncDxClusterMarkers(spots);
 
     if (document.getElementById('auto-zoom')?.checked) {
         const now = Date.now();
@@ -320,7 +354,7 @@ function renderGridSnr(spots, maxMinutes, filterCtx) {
 
     // Item 3: use passed filterCtx instead of re-reading DOM
     const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands } = filterCtx;
-    const { regularSpots, dxClusterSpots } = splitSpotSources(spots);
+    const { regularSpots } = splitSpotSources(spots);
     const squareData = {};
     const res = getGridResolution();
     const aggregateTimer = startPerfTimer();
@@ -408,7 +442,8 @@ function renderGridSnr(spots, maxMinutes, filterCtx) {
         }).addTo(state.heatLayer);
     }
 
-    renderDxClusterMarkers(dxClusterSpots);
+    // DX cluster markers are managed separately (syncDxClusterMarkers) so
+    // heatLayer rebuilds don't churn their tooltips.
 
     endPerfTimer('mercator.grid.draw_ms', drawTimer);
     endPerfTimer('mercator.grid.total_ms', timer);
@@ -423,7 +458,7 @@ function renderActiveArea(spots, maxMinutes, filterCtx) {
 
     // Item 3: use passed filterCtx instead of re-reading DOM
     const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands } = filterCtx;
-    const { regularSpots, dxClusterSpots } = splitSpotSources(spots);
+    const { regularSpots } = splitSpotSources(spots);
     let maxClusterDist = parseInt(document.getElementById('cluster-distance')?.value, 10);
     if (isNaN(maxClusterDist) || maxClusterDist < 100) maxClusterDist = 500;
 
@@ -518,7 +553,8 @@ function renderActiveArea(spots, maxMinutes, filterCtx) {
         }
     }
 
-    renderDxClusterMarkers(dxClusterSpots);
+    // DX cluster markers are managed separately (syncDxClusterMarkers) so
+    // heatLayer rebuilds don't churn their tooltips.
 
     endPerfTimer('mercator.active_area.cluster_draw_ms', clusterTimer);
     endPerfTimer('mercator.active_area.total_ms', timer);

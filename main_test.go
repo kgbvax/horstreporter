@@ -1360,6 +1360,19 @@ func TestServerHelperFunctions(t *testing.T) {
 		}
 	})
 
+	t.Run("toStreamSpot includes callsigns only for dxcluster spots", func(t *testing.T) {
+		// The DX cluster marker tooltip needs the DX/spotter callsigns; regular
+		// spots stay trimmed (senders are not needed by any client-side render).
+		dxc := toStreamSpot(Spot{SourceType: "dxcluster", Sender: "DL1ABC", Receiver: "JA1XYZ"})
+		if dxc.Sender != "DL1ABC" || dxc.Receiver != "JA1XYZ" {
+			t.Fatalf("expected dxcluster callsigns on the wire, got %+v", dxc)
+		}
+		regular := toStreamSpot(Spot{Sender: "DL1ABC", Receiver: "JA1XYZ"})
+		if regular.Sender != "" || regular.Receiver != "" {
+			t.Fatalf("expected regular spot to stay trimmed, got %+v", regular)
+		}
+	})
+
 	t.Run("noCache adds cache busting headers", func(t *testing.T) {
 		h := noCache(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)

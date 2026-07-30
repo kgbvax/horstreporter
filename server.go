@@ -41,6 +41,8 @@ type streamSpot struct {
 	ReporterLocator string  `json:"reporterLocator,omitempty"`
 	SourceType      string  `json:"sourceType,omitempty"`
 	Band            string  `json:"band"`
+	Sender          string  `json:"sender,omitempty"`
+	Receiver        string  `json:"receiver,omitempty"`
 }
 
 type squareDetailReport struct {
@@ -260,7 +262,7 @@ func resolveTargetQuery(r *http.Request) (string, bool) {
 }
 
 func toStreamSpot(spot Spot) streamSpot {
-	return streamSpot{
+	s := streamSpot{
 		Lat:             spot.Lat,
 		Lng:             spot.Lng,
 		SNR:             spot.SNR,
@@ -270,6 +272,13 @@ func toStreamSpot(spot Spot) streamSpot {
 		SourceType:      spot.SourceType,
 		Band:            spot.Band,
 	}
+	// Only DX cluster spots need callsigns on the wire (hover tooltip on the
+	// cluster markers); regular spots stay trimmed.
+	if spot.SourceType == "dxcluster" {
+		s.Sender = spot.Sender
+		s.Receiver = spot.Receiver
+	}
+	return s
 }
 
 func parseIntDefault(raw string, fallback int) int {

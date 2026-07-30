@@ -6,7 +6,7 @@ import { initUI, attachUITooltipEvents, initGridSnrLegend } from './ui.js';
 import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
 import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initHorstKevin } from './horst-kevin.js';
-import { updateMapVisualization, updateBandLabels } from './renderers.js';
+import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
@@ -1618,6 +1618,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
             map.removeLayer(state.heatLayer);
             state.heatLayer = null;
         }
+        clearDxClusterMarkers();
         if (state.targetLayer) {
             map.removeLayer(state.targetLayer);
             state.targetLayer = null;
@@ -1652,6 +1653,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         map.removeLayer(state.heatLayer);
         state.heatLayer = null;
     }
+    clearDxClusterMarkers();
 
     if (state.targetLayer) {
         map.removeLayer(state.targetLayer);
