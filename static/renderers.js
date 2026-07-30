@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, getGridHighlightModel, gridSnrOpacity, gridSnrOpacityClassic, topQuartileMean, bandColors, locatorToBounds, hexToRgba, pillTextColor } from './utils.js';
+import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, getGridScoreGateEnabled, GRID_SCORE_GATE_DB, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, hexToRgba, pillTextColor } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTimer } from './perf.js';
 
 let lastRenderFingerprint = '';
@@ -323,19 +323,18 @@ function renderGridSnr(spots, maxMinutes, filterCtx) {
     const { regularSpots, dxClusterSpots } = splitSpotSources(spots);
     const squareData = {};
     const res = getGridResolution();
-    const highlightModel = getGridHighlightModel();
+    const scoreGate = getGridScoreGateEnabled(); // REMOVE-WITH-GATE-EXPERIMENT
     const aggregateTimer = startPerfTimer();
 
-    // Filter first, then aggregate: the highlight model's inputs (maxSnr for
-    // 'classic', the snrs list for 'reachability') must reflect only the spots
-    // the user is actually allowed to see. Aggregating before the band+SNR
-    // filter previously let a band-filtered-out spot (e.g. a +25 dB 15m spot
-    // while soloing 20m) inflate a square's opacity, and let an RBN 0-40 dB
-    // CW-scale spot set intensity against an FT8-calibrated threshold.
-    // visibleCount and bands (which gate drawing and pick the color) were
-    // already post-filter, so only the intensity was wrong — but wrong
-    // intensity is what made a square read as "active" when its visible
-    // spots were weak.
+    // Filter first, then aggregate: the snrs list (which drives a square's
+    // brightness via topQuartileMean) must reflect only the spots the user is
+    // actually allowed to see. Aggregating before the band+SNR filter
+    // previously let a band-filtered-out spot (e.g. a +25 dB 15m spot while
+    // soloing 20m) inflate a square's opacity, and let an RBN 0-40 dB CW-scale
+    // spot set intensity against an FT8-calibrated threshold. visibleCount
+    // and bands (which gate drawing and pick the color) were already
+    // post-filter, so only the intensity was wrong — but wrong intensity
+    // is what made a square read as "active" when its visible spots were weak.
     regularSpots.forEach(spot => {
         if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
         if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
@@ -347,14 +346,12 @@ function renderGridSnr(spots, maxMinutes, filterCtx) {
         if (loc.length < 4) return;
 
         if (!squareData[loc]) {
-            squareData[loc] = { snrSum: 0, count: 0, maxSnr: -Infinity, visibleCount: 0, bands: {}, snrs: [] };
+            squareData[loc] = { count: 0, visibleCount: 0, bands: {}, snrs: [] };
         }
-        squareData[loc].snrSum += Number(spot.snr);
         squareData[loc].count++;
-        squareData[loc].maxSnr = Math.max(squareData[loc].maxSnr, Number(spot.snr)); // REMOVE-WITH-CLASSIC-MODEL
         squareData[loc].visibleCount++;
         squareData[loc].bands[spot.band] = (squareData[loc].bands[spot.band] || 0) + 1;
-        if (highlightModel === 'reachability') squareData[loc].snrs.push(Number(spot.snr));
+        squareData[loc].snrs.push(Number(spot.snr));
     });
     endPerfTimer('mercator.grid.aggregate_ms', aggregateTimer);
 
@@ -367,19 +364,14 @@ function renderGridSnr(spots, maxMinutes, filterCtx) {
     for (let loc in squareData) {
         if (squareData[loc].visibleCount <= 0 || squareData[loc].count <= 0) continue;
 
-        let fillOpacity;
-        if (highlightModel === 'reachability') {
-            // Robust model: mean of the strongest quarter of reports, mapped
-            // through a continuous ramp. One lucky decode in a sea of weak
-            // spots no longer lights up the square.
-            fillOpacity = gridSnrOpacity(topQuartileMean(squareData[loc].snrs));
-        } else {
-            // REMOVE-WITH-CLASSIC-MODEL: classic 3-tier grading on max SNR.
-            const maxSnr = Number.isFinite(squareData[loc].maxSnr)
-                ? squareData[loc].maxSnr
-                : (squareData[loc].snrSum / squareData[loc].count);
-            fillOpacity = gridSnrOpacityClassic(maxSnr);
-        }
+        // Brightness = mean of the strongest quarter of reports, mapped
+        // through a continuous ramp. One lucky decode in a sea of weak
+        // spots no longer lights up the square.
+        const score = topQuartileMean(squareData[loc].snrs);
+        // REMOVE-WITH-GATE-EXPERIMENT: score-gated drawing — hide squares the
+        // score already marks as weak instead of drawing them faintly.
+        if (scoreGate && score < GRID_SCORE_GATE_DB) continue;
+        const fillOpacity = gridSnrOpacity(score);
 
         let dominantBand = 'all';
         let maxCount = 0;

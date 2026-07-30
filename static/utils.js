@@ -627,31 +627,15 @@ export function getGridResolution() {
     return 4;
 }
 
-// Grid-square highlight models (Grid-SNR view grading). A/B switch: 'classic'
-// (max SNR -> 3 opacity tiers, today's behavior) vs 'reachability'
-// (top-quartile mean SNR -> continuous opacity ramp). The classic path is
-// REMOVE-WITH-CLASSIC-MODEL: delete it once the experiment is decided.
-export function getGridHighlightModel() {
-    const checkedRadio = document.querySelector('input[name="grid-highlight-model"]:checked');
-    if (checkedRadio) return checkedRadio.value === 'reachability' ? 'reachability' : 'classic';
-    const saved = (typeof localStorage !== 'undefined' && localStorage)
-        ? localStorage.getItem('gridHighlightModel')
-        : null;
-    return saved === 'reachability' ? 'reachability' : 'classic';
-}
-
-// REMOVE-WITH-CLASSIC-MODEL: classic 3-tier grading keyed on the square's max
-// SNR. One strong outlier in a sea of weak spots paints the square "high".
-export function gridSnrOpacityClassic(maxSnrDb) {
-    if (maxSnrDb >= 10) return 0.72; // High intensity (>= 10 dB)
-    if (maxSnrDb >= 0) return 0.45; // Medium intensity (0 - 9 dB)
-    return 0.22; // Low intensity (< 0 dB)
-}
-
+// Grid-square highlight grading (Grid-SNR view). A square's brightness is
+// driven by topQuartileMean() of its filtered spot SNRs mapped through the
+// gridSnrOpacity() ramp — a robust reachability signal: a single lucky decode
+// among many weak ones can no longer light up a square (the old max-SNR
+// 3-tier grading was removed after the A/B experiment, Jul 2026).
+//
 // Robust square score: mean of the strongest quarter of (filtered) reports
-// (k = ceil(n/4)). A single lucky decode among many weak ones can no longer
-// light up the square; tiny squares (n <= 4) fall back to their best spot,
-// which keeps sparse-but-strong squares visible.
+// (k = ceil(n/4)). Tiny squares (n <= 4) fall back to their best spot, which
+// keeps sparse-but-strong squares visible.
 export function topQuartileMean(snrs) {
     if (!snrs || snrs.length === 0) return NaN;
     const sorted = [...snrs].map(Number).filter(Number.isFinite).sort((a, b) => b - a);
@@ -670,6 +654,20 @@ export function gridSnrOpacity(scoreDb) {
     if (!Number.isFinite(s)) return 0.10;
     if (s < 0) return Math.max(0.10, 0.45 + 0.03 * s);
     return Math.min(0.75, 0.45 + 0.015 * s);
+}
+
+// REMOVE-WITH-GATE-EXPERIMENT: opt-in experiment (Jul 2026) — also use the
+// grading score to decide whether a square is drawn at all: squares whose
+// top-quartile mean stays below GRID_SCORE_GATE_DB are hidden, so dim
+// outlier-lit/weak squares disappear instead of just rendering faintly.
+export const GRID_SCORE_GATE_DB = 0;
+export function getGridScoreGateEnabled() {
+    const toggle = document.getElementById('grid-score-gate');
+    if (toggle) return toggle.checked;
+    const saved = (typeof localStorage !== 'undefined' && localStorage)
+        ? localStorage.getItem('gridScoreGate')
+        : null;
+    return saved === 'true';
 }
 
 export function normalizeDxPulseTarget(target) {

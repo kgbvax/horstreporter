@@ -1,26 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-    getGridHighlightModel,
     gridSnrOpacity,
-    gridSnrOpacityClassic,
     topQuartileMean
 } from '../static/utils.js';
-
-// jsdom in this repo provides no localStorage; stub a minimal one for the
-// pref-fallback tests.
-function stubLocalStorage() {
-    const store = new Map();
-    vi.stubGlobal('localStorage', {
-        getItem: (k) => (store.has(k) ? store.get(k) : null),
-        setItem: (k, v) => { store.set(k, String(v)); },
-        removeItem: (k) => { store.delete(k); },
-        clear: () => store.clear()
-    });
-}
-
-afterEach(() => {
-    vi.unstubAllGlobals();
-});
 
 describe('topQuartileMean', () => {
     it('uses the single best spot for tiny squares (k = ceil(n/4))', () => {
@@ -71,39 +53,5 @@ describe('gridSnrOpacity', () => {
 
     it('maps non-finite scores to the floor', () => {
         expect(gridSnrOpacity(NaN)).toBeCloseTo(0.10, 5);
-    });
-});
-
-// REMOVE-WITH-CLASSIC-MODEL
-describe('gridSnrOpacityClassic', () => {
-    it('keeps the legacy 3-tier contract', () => {
-        expect(gridSnrOpacityClassic(-1)).toBeCloseTo(0.22, 5);
-        expect(gridSnrOpacityClassic(0)).toBeCloseTo(0.45, 5);
-        expect(gridSnrOpacityClassic(9)).toBeCloseTo(0.45, 5);
-        expect(gridSnrOpacityClassic(10)).toBeCloseTo(0.72, 5);
-    });
-});
-
-describe('getGridHighlightModel', () => {
-    it('defaults to classic with no radio and no saved pref', () => {
-        stubLocalStorage();
-        document.body.innerHTML = '';
-        expect(getGridHighlightModel()).toBe('classic');
-    });
-
-    it('prefers the checked radio over localStorage', () => {
-        stubLocalStorage();
-        localStorage.setItem('gridHighlightModel', 'classic');
-        document.body.innerHTML = '<input type="radio" name="grid-highlight-model" value="reachability" checked />';
-        expect(getGridHighlightModel()).toBe('reachability');
-    });
-
-    it('falls back to the localStorage pref when no radio exists', () => {
-        stubLocalStorage();
-        document.body.innerHTML = '';
-        localStorage.setItem('gridHighlightModel', 'reachability');
-        expect(getGridHighlightModel()).toBe('reachability');
-        localStorage.setItem('gridHighlightModel', 'classic');
-        expect(getGridHighlightModel()).toBe('classic');
     });
 });

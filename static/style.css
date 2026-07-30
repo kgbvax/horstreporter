@@ -1152,44 +1152,14 @@ body[data-theme="dark"] .band-pill .band-nodata-tag {
     opacity: 0.35;
 }
 
-/* REMOVE-WITH-CLASSIC-MODEL: Grid-SNR legend + highlight-model A/B switch.
-   The classic legend body and the model toggle go away when the classic
-   max-SNR grading is removed; the reachability ramp body may then stay. */
+/* Grid-SNR brightness legend (opacity ramp under the style selector).
+   Checkerboard behind the translucent gradient so the ramp reads as alpha. */
 #grid-snr-legend {
     font-size: 0.78rem;
     color: var(--status-color);
 }
 .grid-legend-body {
     padding: 4px 2px 0;
-}
-.grid-legend-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    line-height: 1.5;
-}
-.grid-legend-swatch {
-    position: relative;
-    display: inline-block;
-    width: 1.1em;
-    height: 1.1em;
-    flex: none;
-    border: 1px solid var(--border-color);
-    border-radius: 2px;
-    /* checkerboard behind the translucent fill so opacity is visible */
-    background-image:
-        linear-gradient(45deg, var(--border-color) 25%, transparent 25%, transparent 75%, var(--border-color) 75%),
-        linear-gradient(45deg, var(--border-color) 25%, transparent 25%, transparent 75%, var(--border-color) 75%);
-    background-color: var(--bg-color);
-    background-size: 6px 6px;
-    background-position: 0 0, 3px 3px;
-}
-.grid-legend-swatch::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: var(--text-color);
-    opacity: var(--swatch-opacity, 0.45);
 }
 .grid-legend-ramp {
     position: relative;

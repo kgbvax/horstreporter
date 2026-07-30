@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, latLngToLocator, locatorToBounds, getMinSnrMode, getSelectedBand, getEnabledBands, getGridHighlightModel, formatNumber } from './utils.js';
+import { getGridResolution, latLngToLocator, locatorToBounds, getMinSnrMode, getSelectedBand, getEnabledBands, formatNumber } from './utils.js';
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -16,44 +16,41 @@ export function initUI() {
     initAutoLocateCoachmark();
 }
 
-// REMOVE-WITH-CLASSIC-MODEL: A/B switch for grid-square highlight grading.
-// Wires the 'grid-highlight-model' radios (persisted to localStorage) and the
-// per-model legend bodies below the style selector. Visible only while the
-// Grid style is active. Deleting the classic model removes this whole panel.
-export function initGridHighlightModel() {
+// Grid-SNR brightness legend: shows the opacity-ramp panel below the style
+// selector only while the Grid style is active. Also wires the experimental
+// score gate (REMOVE-WITH-GATE-EXPERIMENT), persisted to localStorage.
+export function initGridSnrLegend() {
     const panel = document.getElementById('grid-snr-legend');
-    if (!panel || panel.dataset.highlightWired === 'true') return;
-    panel.dataset.highlightWired = 'true';
-
-    const classicBody = document.getElementById('grid-legend-classic');
-    const reachabilityBody = document.getElementById('grid-legend-reachability');
-    const radios = panel.querySelectorAll('input[name="grid-highlight-model"]');
-
-    const saved = (typeof localStorage !== 'undefined' && localStorage)
-        ? localStorage.getItem('gridHighlightModel')
-        : null;
-    const initial = saved === 'reachability' ? 'reachability' : 'classic';
-    radios.forEach((r) => { r.checked = (r.value === initial); });
+    if (!panel || panel.dataset.legendWired === 'true') return;
+    panel.dataset.legendWired = 'true';
 
     const syncLegend = () => {
-        const model = getGridHighlightModel();
-        if (classicBody) classicBody.hidden = model !== 'classic';
-        if (reachabilityBody) reachabilityBody.hidden = model !== 'reachability';
         const style = document.querySelector('input[name="style-select"]:checked')?.value;
         panel.hidden = style !== 'grid-snr';
     };
-
-    radios.forEach((r) => r.addEventListener('change', () => {
-        try { localStorage.setItem('gridHighlightModel', r.value); } catch (_) { /* private mode */ }
-        syncLegend();
-        if (typeof window.__horstScheduleRender === 'function') window.__horstScheduleRender();
-    }));
 
     // The style radios are rendered later by the Svelte control bundle, so
     // listen via delegation instead of binding to them directly.
     document.addEventListener('change', (e) => {
         if (e.target && e.target.name === 'style-select') syncLegend();
     });
+
+    // One-time cleanup: the A/B highlight-model pref is gone (reachability
+    // won); drop the stale key.
+    try { localStorage.removeItem('gridHighlightModel'); } catch (_) { /* private mode */ }
+
+    // REMOVE-WITH-GATE-EXPERIMENT
+    const gateToggle = document.getElementById('grid-score-gate');
+    if (gateToggle) {
+        const saved = (typeof localStorage !== 'undefined' && localStorage)
+            ? localStorage.getItem('gridScoreGate')
+            : null;
+        gateToggle.checked = saved === 'true';
+        gateToggle.addEventListener('change', () => {
+            try { localStorage.setItem('gridScoreGate', gateToggle.checked ? 'true' : 'false'); } catch (_) { /* private mode */ }
+            if (typeof window.__horstScheduleRender === 'function') window.__horstScheduleRender();
+        });
+    }
 
     syncLegend();
 }

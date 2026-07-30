@@ -24,7 +24,7 @@ import { state } from '../static/state.js';
 import { updateMapVisualization } from '../static/renderers.js';
 
 let geoJsonCalls;
-function setupDom({ minSnr = 'ssb', ssbMinDb = 0, cwMinDb = -15, focusBand = '', enabled = ['20m', '15m'], highlightModel = 'classic' } = {}) {
+function setupDom({ minSnr = 'ssb', ssbMinDb = 0, cwMinDb = -15, focusBand = '', enabled = ['20m', '15m'], scoreGate = false } = {}) {
     const enabledHtml = enabled.map(b => `<input type="checkbox" class="band-enable" value="${b}" checked />`).join('');
     document.body.innerHTML = `
         <input id="target" value="JO32" />
@@ -38,8 +38,7 @@ function setupDom({ minSnr = 'ssb', ssbMinDb = 0, cwMinDb = -15, focusBand = '',
         <input type="radio" name="min-snr" value="ssb" ${minSnr === 'ssb' ? 'checked' : ''} />
         <input type="radio" name="style-select" value="grid-snr" checked />
         <input type="radio" name="style-select" value="active-area" />
-        <input type="radio" name="grid-highlight-model" value="classic" ${highlightModel === 'classic' ? 'checked' : ''} />
-        <input type="radio" name="grid-highlight-model" value="reachability" ${highlightModel === 'reachability' ? 'checked' : ''} />
+        <input id="grid-score-gate" type="checkbox" ${scoreGate ? 'checked' : ''} />
     `;
 }
 
@@ -105,8 +104,8 @@ describe('renderGridSnr threshold gate', () => {
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
         expect(feats[0].color).toBe('#008000');
-        // maxSnr < 0 -> low intensity (the only honest signal that the spot is weak).
-        expect(feats[0].fillOpacity).toBeCloseTo(0.22);
+        // -5 dB -> ramp 0.45 - 0.03*5 = 0.30 (low-ish but honest: the spot is weak).
+        expect(feats[0].fillOpacity).toBeCloseTo(0.30, 2);
     });
 
     it('in CW mode filters by the CW threshold, not the (dead) SSB slider', () => {
@@ -132,27 +131,26 @@ describe('renderGridSnr intensity reflects only filter-passing spots', () => {
     it('does not let a band-filtered-out spot inflate a soloed-band square', () => {
         // Solo 20m. The square has a weak passing 20m spot (+1 dB) and a strong
         // 15m spot (+25 dB) that is filtered out by the band filter. The square
-        // must render at MEDIUM intensity (0.45, from the +1 dB 20m spot), not
-        // HIGH (0.72 from the hidden +25 dB 15m spot).
+        // must grade from the +1 dB 20m spot alone (ramp 0.465), not from the
+        // hidden +25 dB 15m spot (which would score near the ramp cap).
         setupDom({ minSnr: 'ssb', ssbMinDb: 0, focusBand: '20m' });
         const spots = [spot('JO32', 1, '20m'), spot('JO32', 25, '15m')];
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
         expect(feats[0].color).toBe('#008000');
-        expect(feats[0].fillOpacity).toBeCloseTo(0.45);
+        expect(feats[0].fillOpacity).toBeCloseTo(0.465, 3);
     });
 
     it('does not let a sub-threshold spot inflate intensity', () => {
-        // SSB threshold 0. Passing 20m spot at +2 dB; a sub-threshold 20m spot
-        // at +30 dB is impossible by definition (sub-threshold means < 0), so
-        // instead verify a passing +12 dB spot yields HIGH intensity on its own.
+        // SSB threshold 0. The -9 dB spot is filtered out; the square grades
+        // from the +12 dB spot alone: ramp 0.45 + 0.015*12 = 0.63.
         setupDom({ minSnr: 'ssb', ssbMinDb: 0 });
         const spots = [spot('JO32', 12, '20m'), spot('JO32', -9, '20m')];
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
-        expect(feats[0].fillOpacity).toBeCloseTo(0.72);
+        expect(feats[0].fillOpacity).toBeCloseTo(0.63, 2);
     });
 
     it('colors by the dominant band among passing spots only', () => {
@@ -170,12 +168,12 @@ describe('renderGridSnr intensity reflects only filter-passing spots', () => {
     });
 });
 
-// Reachability model (top-quartile mean -> continuous opacity ramp). The core
-// fix: one lucky strong decode among many weak reports must NOT light up the
-// square; corroborated strong paths should.
-describe('renderGridSnr reachability model', () => {
+// Grading model (top-quartile mean -> continuous opacity ramp). The core
+// property: one lucky strong decode among many weak reports must NOT light
+// up the square; corroborated strong paths should.
+describe('renderGridSnr grading', () => {
     it('does not highlight a square on a single strong outlier among weak spots', () => {
-        setupDom({ minSnr: 'none', highlightModel: 'reachability' });
+        setupDom({ minSnr: 'none' });
         const spots = [
             spot('JO32', 12, '20m'),
             ...Array.from({ length: 20 }, () => spot('JO32', -8, '20m'))
@@ -183,13 +181,12 @@ describe('renderGridSnr reachability model', () => {
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
-        // top quartile = best 6 -> mean(12, -8 x5) ~= -4.67 dB -> ramp ~0.31,
-        // far below the classic HIGH tier the +12 outlier would have forced.
+        // top quartile = best 6 -> mean(12, -8 x5) ~= -4.67 dB -> ramp ~0.31.
         expect(feats[0].fillOpacity).toBeLessThan(0.35);
     });
 
     it('reads bright when strong reports are corroborated', () => {
-        setupDom({ minSnr: 'none', highlightModel: 'reachability' });
+        setupDom({ minSnr: 'none' });
         const spots = [10, 11, 12, 13, 14, 15].map((s) => spot('JO32', s, '20m'));
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
@@ -199,7 +196,7 @@ describe('renderGridSnr reachability model', () => {
     });
 
     it('still gives a lone strong spot visual credit', () => {
-        setupDom({ minSnr: 'none', highlightModel: 'reachability' });
+        setupDom({ minSnr: 'none' });
         const spots = [spot('JO32', 12, '20m')];
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
@@ -209,7 +206,7 @@ describe('renderGridSnr reachability model', () => {
     });
 
     it('subdues a lone weak spot on the ramp', () => {
-        setupDom({ minSnr: 'none', highlightModel: 'reachability' });
+        setupDom({ minSnr: 'none' });
         const spots = [spot('JO32', -5, '20m')];
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
@@ -221,11 +218,49 @@ describe('renderGridSnr reachability model', () => {
     it('keeps the filter-first contract: filtered-out spots never feed the score', () => {
         // Solo 20m; a strong 15m spot is band-filtered out and must not lift
         // the weak passing 20m spot's square.
-        setupDom({ minSnr: 'none', focusBand: '20m', highlightModel: 'reachability' });
+        setupDom({ minSnr: 'none', focusBand: '20m' });
         const spots = [spot('JO32', -5, '20m'), spot('JO32', 25, '15m')];
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
         expect(feats[0].fillOpacity).toBeCloseTo(0.30, 2);
+    });
+});
+
+// REMOVE-WITH-GATE-EXPERIMENT: score gate — squares whose top-quartile mean
+// stays below 0 dB are not drawn at all when the experiment is enabled.
+describe('renderGridSnr score gate (experiment)', () => {
+    it('gate off (default): weak squares are drawn faintly', () => {
+        setupDom({ minSnr: 'none' });
+        const spots = [spot('JO32', -5, '20m')];
+        updateMapVisualization(spots, 15);
+        expect(drawFeatures()).toHaveLength(1);
+    });
+
+    it('gate on: a weak square is not drawn', () => {
+        setupDom({ minSnr: 'none', scoreGate: true });
+        const spots = [spot('JO32', -5, '20m')];
+        updateMapVisualization(spots, 15);
+        expect(drawFeatures()).toEqual([]);
+    });
+
+    it('gate on: square kept dim by one outlier among weak spots is not drawn', () => {
+        setupDom({ minSnr: 'none', scoreGate: true });
+        const spots = [
+            spot('JO32', 12, '20m'),
+            ...Array.from({ length: 20 }, () => spot('JO32', -8, '20m'))
+        ];
+        updateMapVisualization(spots, 15);
+        // score ~= -4.67 dB < 0 -> hidden even though a +12 decode exists.
+        expect(drawFeatures()).toEqual([]);
+    });
+
+    it('gate on: corroborated strong squares are still drawn', () => {
+        setupDom({ minSnr: 'none', scoreGate: true });
+        const spots = [10, 11, 12, 13, 14, 15].map((s) => spot('JO32', s, '20m'));
+        updateMapVisualization(spots, 15);
+        const feats = drawFeatures();
+        expect(feats).toHaveLength(1);
+        expect(feats[0].fillOpacity).toBeGreaterThan(0.6);
     });
 });
