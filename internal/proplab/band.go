@@ -47,4 +47,36 @@ func BandLowerEdgeMHz(band string) float64 {
 	return BandMHz[strings.ToLower(strings.TrimSpace(band))]
 }
 
+// bandRangesKHz defines the inclusive lower/upper frequency limits for each
+// canonical band. Used by BandForFrequencyKHz.
+var bandRangesKHz = []struct {
+	low, high float64
+	band      string
+}{
+	{1800, 2000, "160m"},
+	{3500, 4000, "80m"},
+	{5300, 5700, "60m"},
+	{7000, 7300, "40m"},
+	{10100, 10150, "30m"},
+	{14000, 14350, "20m"},
+	{18068, 18168, "17m"},
+	{21000, 21450, "15m"},
+	{24890, 24990, "12m"},
+	{28000, 29700, "10m"},
+	{50000, 54000, "6m"},
+	{70000, 71000, "4m"},
+	{144000, 148000, "2m"},
+}
+
+// BandForFrequencyKHz maps a frequency in kHz to a canonical band, or "" if
+// it falls outside known ranges.
+func BandForFrequencyKHz(kHz float64) string {
+	for _, r := range bandRangesKHz {
+		if kHz >= r.low && kHz <= r.high {
+			return r.band
+		}
+	}
+	return ""
+}
+
 // UTC slot of day helpers are in time.go.

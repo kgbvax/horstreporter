@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"horstreporter/internal/proplab"
 )
 
 // eventcal.go polls free contest/DXpedition/POTA calendars for the Propagation
@@ -18,11 +22,12 @@ import (
 // Feeds (all public, no API key):
 //   - WA7BNM contest calendar RSS
 //   - NG3K ADXO DXpedition list (HTML scrape, robust to minor format changes)
-//   - POTA activations API (placeholder; requires park-reference plumbing later)
+//   - POTA activator spots API (live spots, mapped to short event windows)
 
 const (
 	eventcalContestRSS = "https://www.contestcalendar.com/fcccalendars/weeklycontest.rss"
 	eventcalDxpedRSS   = "https://www.ng3k.com/Misc/adxo.xml"
+	eventcalPotaURL    = "https://api.pota.app/spot/activator"
 )
 
 var (
@@ -64,6 +69,7 @@ func (s *eventcalService) start() {
 	}{
 		{"contest-rss", 60 * time.Minute, s.fetchContests},
 		{"dxped-rss", 60 * time.Minute, s.fetchDxpeds},
+		{"pota", 5 * time.Minute, s.fetchPota},
 	}
 
 	for _, f := range feeds {
@@ -91,6 +97,7 @@ func (s *eventcalService) start() {
 func (s *eventcalService) fetchAll() {
 	s.fetchContests()
 	s.fetchDxpeds()
+	s.fetchPota()
 }
 
 func (s *eventcalService) fetchContests() {
@@ -167,6 +174,82 @@ func (s *eventcalService) fetchDxpeds() {
 	if err := s.store.upsertProplabEvents(ctx, rows); err != nil {
 		logInfo("Event calendar DXped store failed: %v", err)
 	}
+}
+
+// potaSpot is a single activator spot from the public POTA API.
+type potaSpot struct {
+	SpotID       int     `json:"spotId"`
+	Activator    string  `json:"activator"`
+	Reference    string  `json:"reference"`
+	Frequency    float64 `json:"frequency"` // kHz
+	Mode         string  `json:"mode"`
+	Grid4        string  `json:"grid4"`
+	SpotTime     string  `json:"spotTime"`  // local ISO8601, e.g. "2026-07-31T19:26:08"
+	Expire       int     `json:"expire"`    // seconds remaining, if provided
+	LocationDesc string  `json:"locationDesc"`
+}
+
+func (s *eventcalService) fetchPota() {
+	body, err := httpGet(s.client, eventcalPotaURL)
+	if err != nil {
+		logInfo("Event calendar POTA fetch failed: %v", err)
+		return
+	}
+	var spots []potaSpot
+	if err := json.Unmarshal(body, &spots); err != nil {
+		logInfo("Event calendar POTA parse failed: %v", err)
+		return
+	}
+	now := time.Now().Unix()
+	rows := make([]proplabEventRow, 0, len(spots))
+	for _, sp := range spots {
+		band := proplab.BandForFrequencyKHz(sp.Frequency)
+		if band == "" {
+			continue
+		}
+		start, _ := parsePotaSpotTime(sp.SpotTime)
+		if start == 0 {
+			start = now
+		}
+		// Treat the spot as active for its reported expire time or 30 minutes,
+		// whichever is longer, so a flurry of spots keeps the event visible.
+		end := start + 30*60
+		if sp.Expire > 0 && int64(sp.Expire) > 30*60 {
+			end = start + int64(sp.Expire)
+		}
+		if end < now {
+			continue
+		}
+		rows = append(rows, proplabEventRow{
+			Source:   "pota",
+			EventID:  sp.Reference + "/" + sp.Activator + "/" + strconv.Itoa(sp.SpotID),
+			Title:    sp.Activator + " @ " + sp.Reference,
+			BandMask: band,
+			StartUTC: start,
+			EndUTC:   end,
+			Locator4: strings.ToUpper(strings.TrimSpace(sp.Grid4)),
+		})
+	}
+	if len(rows) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.store.upsertProplabEvents(ctx, rows); err != nil {
+		logInfo("Event calendar POTA store failed: %v", err)
+	}
+}
+
+func parsePotaSpotTime(s string) (int64, bool) {
+	for _, layout := range []string{
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, strings.TrimSpace(s)); err == nil {
+			return t.Unix(), true
+		}
+	}
+	return 0, false
 }
 
 // rssFeed is a minimal RSS 2.0 envelope.
