@@ -136,6 +136,9 @@ type FusionVerdict struct {
 	Prior        PropagationPrior    `json:"-"`
 	DataThin     bool                `json:"data_thin"`
 	SWAvailable  bool                `json:"sw_available"`
+	HasDrap      bool                `json:"has_drap"`
+	DrapAgeMin   int                 `json:"drap_age_min"`
+	DrapHAF      map[string]float64  `json:"drap_haf,omitempty"`
 	EventsActive int                 `json:"events_active"`
 }
 
@@ -171,6 +174,9 @@ func (e *FusionEngine) Verdict(live []FusionBandCount, baselineRows []BaselineDa
 		Params:       params,
 		Prior:        prior,
 		SWAvailable:  sw.Available,
+		HasDrap:      sw.HasDrap,
+		DrapAgeMin:   sw.DrapAgeMin,
+		DrapHAF:      sw.DrapHAF,
 		EventsActive: len(events),
 		Bands:        []FusionBandVerdict{},
 	}

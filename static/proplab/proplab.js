@@ -227,9 +227,12 @@ function renderFusion(data) {
         out.innerHTML = `<div class="alert alert-danger">${escapeHtml(data.error)}</div>`;
         return;
     }
+    const drap = data.has_drap
+        ? `D-RAP ${data.drap_age_min >= 0 ? data.drap_age_min + ' min' : 'fresh'}`
+        : 'D-RAP off';
     const header = `
         <div class="d-flex justify-content-between mb-2 proplab-mono">
-            <span>SW: <strong>${data.sw_available ? 'available' : 'off'}</strong></span>
+            <span>SW: <strong>${data.sw_available ? 'available' : 'off'}</strong> | ${drap}</span>
             <span class="text-muted">${data.data_thin ? 'thin' : 'ok'} | events: ${data.events_active || 0}</span>
         </div>`;
     const rows = (data.bands || []).map(b => `
