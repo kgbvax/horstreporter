@@ -535,7 +535,7 @@ func (e *LadderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*la
 
 		st := e.cusum[cbk]
 		if st == nil {
-			st = &cusumState{}
+			st = &cusumState{LastZeroIdx: bucketIdx}
 			e.cusum[cbk] = st
 		}
 		drift := params.CusumDrift * exp
