@@ -23,14 +23,14 @@ import (
 //   - F10.7 cm solar flux (observed)
 //   - GOES X-ray flux + class
 //   - OVATION auroral power (hemispheric estimate)
-//   - D-RAP highest-affected-frequency grid (placeholder; full grid parsing is
-//     left for a later pass because the ASCII grid format is large and finicky)
+//   - D-RAP highest-affected-frequency grid
 
 const (
 	swKpURL      = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index-1-minute.json"
 	swF107URL    = "https://services.swpc.noaa.gov/products/10cm-flux-30-day.json"
 	swXrayURL    = "https://services.swpc.noaa.gov/products/goes-xray-flux-1-minute.json"
 	swOvationURL = "https://services.swpc.noaa.gov/products/ovation/aurora/latest.json"
+	swDrapURL    = "https://services.swpc.noaa.gov/text/drap_global_frequencies.txt"
 )
 
 type swIngestService struct {
@@ -70,6 +70,7 @@ func (s *swIngestService) start() {
 		{"f10.7", 15 * time.Minute, s.fetchF107},
 		{"xray", 1 * time.Minute, s.fetchXray},
 		{"ovation", 5 * time.Minute, s.fetchOvation},
+		{"drap", 15 * time.Minute, s.fetchDrap},
 	}
 
 	for _, f := range feeds {
@@ -99,6 +100,7 @@ func (s *swIngestService) fetchAll() {
 	s.fetchF107()
 	s.fetchXray()
 	s.fetchOvation()
+	s.fetchDrap()
 }
 
 func (s *swIngestService) snapshot() proplab.FusionSWSnapshot {
@@ -229,6 +231,36 @@ func (s *swIngestService) fetchOvation() {
 	s.sw.AuroraGW = gw
 	s.sw.Available = true
 	s.sw.FetchedAt = ts
+	s.mu.Unlock()
+}
+
+func (s *swIngestService) fetchDrap() {
+	body, err := httpGet(s.client, swDrapURL)
+	if err != nil {
+		logInfo("SW D-RAP fetch failed: %v", err)
+		return
+	}
+	grid, err := proplab.ParseDRAPText(body)
+	if err != nil {
+		logInfo("SW D-RAP parse failed: %v", err)
+		return
+	}
+	if grid.ValidAt == 0 {
+		grid.ValidAt = time.Now().Unix()
+	}
+	row := proplabDRAPRow{ObsTime: grid.ValidAt, Text: body}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.store.upsertProplabDRAP(ctx, row); err != nil {
+		logInfo("SW D-RAP store failed: %v", err)
+		return
+	}
+	s.mu.Lock()
+	s.sw.DrapHAF = grid.RegionHAFMap()
+	s.sw.HasDrap = true
+	s.sw.DrapAgeMin = 0
+	s.sw.Available = true
+	s.sw.FetchedAt = grid.ValidAt
 	s.mu.Unlock()
 }
 

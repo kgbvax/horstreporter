@@ -296,6 +296,25 @@ func loadSW(ctx context.Context, pool *pgxpool.Pool, now int64) proplab.FusionSW
 			sw.FetchedAt = obs
 		}
 	}
+
+	var drapText []byte
+	var drapObs int64
+	if err := pool.QueryRow(ctx, `
+		SELECT obs_time, haf_grid
+		FROM proplab_drap_snapshots
+		WHERE obs_time <= $1
+		ORDER BY obs_time DESC
+		LIMIT 1
+	`, now).Scan(&drapObs, &drapText); err == nil {
+		if grid, err := proplab.ParseDRAPText(drapText); err == nil {
+			sw.DrapHAF = grid.RegionHAFMap()
+			sw.HasDrap = true
+			sw.DrapAgeMin = int((now - grid.ValidAt) / 60)
+			if grid.ValidAt > sw.FetchedAt {
+				sw.FetchedAt = grid.ValidAt
+			}
+		}
+	}
 	return sw
 }
 

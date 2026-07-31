@@ -34,14 +34,12 @@ type proplabSWRow struct {
 	Value   float64
 }
 
-// proplabDRAPRow is a snapshot of the global D-RAP HAF grid. The grid is stored
-// as a compact byte array: 36 latitude rows × 24 longitude columns, HAF in
-// deci-MHz (0..255, where 255 means "no HAF / above 25.5 MHz or no data").
-const proplabDRAPGridSize = 36 * 24
-
+// proplabDRAPRow is a raw NOAA SWPC D-RAP text snapshot. The text is the
+// original plain-text grid so the parser can re-derive lat/lon/value semantics
+// even if the upstream format changes slightly.
 type proplabDRAPRow struct {
 	ObsTime int64
-	Grid    []byte // length == proplabDRAPGridSize
+	Text    []byte
 }
 
 // proplabEventRow is a scheduled or live operating event that can explain
@@ -288,36 +286,34 @@ func (s *dxPostgresStore) latestProplabSW(ctx context.Context) (map[string]propl
 	return out, rows.Err()
 }
 
-// upsertProplabDRAP stores a D-RAP HAF grid snapshot.
+// upsertProplabDRAP stores a D-RAP text snapshot.
 func (s *dxPostgresStore) upsertProplabDRAP(ctx context.Context, r proplabDRAPRow) error {
-	if s == nil || len(r.Grid) == 0 {
+	if s == nil || len(r.Text) == 0 {
 		return nil
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO proplab_drap_snapshots (obs_time, haf_grid)
 		VALUES ($1,$2)
 		ON CONFLICT (obs_time) DO UPDATE SET haf_grid = EXCLUDED.haf_grid
-	`, r.ObsTime, r.Grid)
+	`, r.ObsTime, r.Text)
 	return err
 }
 
-// latestProplabDRAP returns the most recent D-RAP grid, or nil if none.
+// latestProplabDRAP returns the most recent D-RAP text snapshot, or nil if none.
 func (s *dxPostgresStore) latestProplabDRAP(ctx context.Context) (*proplabDRAPRow, error) {
 	if s == nil {
 		return nil, nil
 	}
 	var r proplabDRAPRow
-	var grid []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT obs_time, haf_grid
 		FROM proplab_drap_snapshots
 		ORDER BY obs_time DESC
 		LIMIT 1
-	`).Scan(&r.ObsTime, &grid)
+	`).Scan(&r.ObsTime, &r.Text)
 	if err != nil {
 		return nil, err
 	}
-	r.Grid = grid
 	return &r, nil
 }
 

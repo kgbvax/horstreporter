@@ -271,6 +271,7 @@ func (s *ProplabService) loadContext() {
 		return
 	}
 
+	now := time.Now().Unix()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -279,16 +280,21 @@ func (s *ProplabService) loadContext() {
 		logInfo("Proplab SW load failed: %v", err)
 	}
 
-	activeRows, err := s.store.activeProplabEvents(ctx, time.Now().Unix(), 24*60*60)
+	latestDRAP, err := s.store.latestProplabDRAP(ctx)
+	if err != nil {
+		logInfo("Proplab D-RAP load failed: %v", err)
+	}
+
+	activeRows, err := s.store.activeProplabEvents(ctx, now, 24*60*60)
 	if err != nil {
 		logInfo("Proplab events load failed: %v", err)
 	}
 
 	s.mu.Lock()
-	s.sw = buildFusionSW(latestSW)
+	s.sw = buildFusionSW(latestSW, latestDRAP, now)
 	s.events = make([]proplab.FusionEvent, 0, len(activeRows))
 	for _, r := range activeRows {
-		endsIn := int((r.EndUTC - time.Now().Unix()) / 60)
+		endsIn := int((r.EndUTC - now) / 60)
 		if endsIn < 0 {
 			endsIn = 0
 		}
@@ -304,7 +310,7 @@ func (s *ProplabService) loadContext() {
 	s.mu.Unlock()
 }
 
-func buildFusionSW(latest map[string]proplabSWRow) proplab.FusionSWSnapshot {
+func buildFusionSW(latest map[string]proplabSWRow, latestDRAP *proplabDRAPRow, now int64) proplab.FusionSWSnapshot {
 	if len(latest) == 0 {
 		return proplab.FusionSWSnapshot{}
 	}
@@ -323,6 +329,16 @@ func buildFusionSW(latest map[string]proplabSWRow) proplab.FusionSWSnapshot {
 		}
 		if r.ObsTime > sw.FetchedAt {
 			sw.FetchedAt = r.ObsTime
+		}
+	}
+	if latestDRAP != nil {
+		if grid, err := proplab.ParseDRAPText(latestDRAP.Text); err == nil {
+			sw.DrapHAF = grid.RegionHAFMap()
+			sw.HasDrap = true
+			sw.DrapAgeMin = int((now - grid.ValidAt) / 60)
+			if grid.ValidAt > sw.FetchedAt {
+				sw.FetchedAt = grid.ValidAt
+			}
 		}
 	}
 	return sw
