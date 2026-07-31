@@ -1,4 +1,4 @@
-package main
+package proplab
 
 import (
 	"math"
@@ -10,8 +10,8 @@ import (
 // proplab_fusion.go implements the Propagation Lab "Fusion" variant (C).
 // It layers robust conditional-quantile statistics over the same midpoint-cell
 // buckets used by the Ladder engine, then fuses in three external signals:
-//   1. Space-weather indices (Kp, F10.7, GOES X-ray, D-RAP absorption, OVATION
-//      auroral power) to type WHY a band is closed.
+//   1. Space-weather indices (Kp, F10.7, GOES X-ray flux, D-RAP absorption,
+//      OVATION auroral power) to type WHY a band is closed.
 //   2. An event calendar (contests, DXpeditions, POTA activations) to explain
 //      demand-side spikes instead of mistaking them for propagation openings.
 //   3. A propagation-prior seam (currently a no-op; dvoacap/VOACAP can be
@@ -21,11 +21,11 @@ import (
 // physics model may say a band is closed, but if enough distinct links with
 // good SNR are observed, the verdict is open anyway.
 
-// propagationPrior is the phase-2 seam for external prediction inputs.
+// PropagationPrior is the phase-2 seam for external prediction inputs.
 // Implementations can return a probability [0,1] that a band is open from the
 // target locator at a given UTC slot. A false second return means no prediction
 // is available and the engine should rely purely on observations.
-type propagationPrior interface {
+type PropagationPrior interface {
 	MUFProbability(band string, targetLat, targetLng float64, slot int) (float64, bool)
 }
 
@@ -35,8 +35,8 @@ func (noopPropagationPrior) MUFProbability(string, float64, float64, int) (float
 	return 0, false
 }
 
-// proplabParamsC holds tunable parameters for variant C.
-type proplabParamsC struct {
+// FusionParams holds tunable parameters for variant C.
+type FusionParams struct {
 	LookbackDays     int     `json:"lookback_days"`
 	QuantileLo       float64 `json:"quantile_lo"`
 	QuantileHi       float64 `json:"quantile_hi"`
@@ -50,8 +50,9 @@ type proplabParamsC struct {
 	XrayMinClass     string  `json:"xray_min_class"`
 }
 
-func defaultProplabParamsC() proplabParamsC {
-	return proplabParamsC{
+// DefaultFusionParams returns the factory defaults for variant C.
+func DefaultFusionParams() FusionParams {
+	return FusionParams{
 		LookbackDays:     45,
 		QuantileLo:       0.25,
 		QuantileHi:       0.75,
@@ -66,8 +67,8 @@ func defaultProplabParamsC() proplabParamsC {
 	}
 }
 
-// fusionBandCount is the live-window observation for one band-region cell.
-type fusionBandCount struct {
+// FusionBandCount is the live-window observation for one band-region cell.
+type FusionBandCount struct {
 	Band          string
 	Region        string
 	SpotCount     int
@@ -76,34 +77,34 @@ type fusionBandCount struct {
 	DistMaxKm     int
 }
 
-// fusionSWSnapshot is the latest space-weather state.
-type fusionSWSnapshot struct {
-	Kp          float64
-	SFI         float64
-	XrayClass   string // e.g. "M5.2" or "C1.0" or ""
-	AuroraGW    float64 // hemispheric power in GW
-	DrapHAF     map[string]float64
-	DrapAgeMin  int
-	Available   bool
-	HasDrap     bool
-	FetchedAt   int64
+// FusionSWSnapshot is the latest space-weather state.
+type FusionSWSnapshot struct {
+	Kp         float64
+	SFI        float64
+	XrayClass  string  // e.g. "M5.2" or "C1.0" or ""
+	AuroraGW   float64 // hemispheric power in GW
+	DrapHAF    map[string]float64
+	DrapAgeMin int
+	Available  bool
+	HasDrap    bool
+	FetchedAt  int64
 }
 
-// fusionEvent is an active demand-side event.
-type fusionEvent struct {
-	Source   string
-	Title    string
-	BandMask string
-	Locator4 string
-	Region   string
+// FusionEvent is an active demand-side event.
+type FusionEvent struct {
+	Source    string
+	Title     string
+	BandMask  string
+	Locator4  string
+	Region    string
 	EndsInMin int
 }
 
-// fusionBandVerdict is one band's classification from variant C.
-type fusionBandVerdict struct {
+// FusionBandVerdict is one band's classification from variant C.
+type FusionBandVerdict struct {
 	Band           string
 	Region         string
-	State          string // see proplabVerdictState constants
+	State          string // see VerdictState constants
 	Label          string
 	Reason         string
 	Confidence     float64
@@ -115,60 +116,61 @@ type fusionBandVerdict struct {
 	ExplainedBy    []string
 }
 
-// proplabVerdictState values are shared across variants where applicable.
+// VerdictState values are shared across variants where applicable.
 const (
-	proplabStateOpenConfirmed    = "open_confirmed"
-	proplabStateOpenUnconfirmed  = "open_unconfirmed"
-	proplabStateClosedButActive  = "closed_but_active"
-	proplabStateClosedWithCause  = "closed_with_cause"
-	proplabStateClosed           = "closed"
-	proplabStateInsufficientData = "insufficient_data"
+	StateOpenConfirmed    = "open_confirmed"
+	StateOpenUnconfirmed  = "open_unconfirmed"
+	StateClosedButActive  = "closed_but_active"
+	StateClosedWithCause  = "closed_with_cause"
+	StateClosed           = "closed"
+	StateInsufficientData = "insufficient_data"
 )
 
-// fusionVerdict is the full variant-C result for a target.
-type fusionVerdict struct {
-	GeneratedAt   int64
-	Params        proplabParamsC
-	Bands         []fusionBandVerdict
-	Prior         propagationPrior
-	DataThin      bool
-	SWAvailable   bool
-	EventsActive  int
+// FusionVerdict is the full variant-C result for a target.
+type FusionVerdict struct {
+	GeneratedAt  int64
+	Params       FusionParams
+	Bands        []FusionBandVerdict
+	Prior        PropagationPrior
+	DataThin     bool
+	SWAvailable  bool
+	EventsActive int
 }
 
-// fusionEngine holds optional caches; the core computation is stateless per
+// FusionEngine holds optional caches; the core computation is stateless per
 // request so it is easy to test and replay.
-type fusionEngine struct {
-	prior propagationPrior
+type FusionEngine struct {
+	prior PropagationPrior
 }
 
-func newFusionEngine() *fusionEngine {
-	return &fusionEngine{prior: noopPropagationPrior{}}
+// NewFusionEngine creates a fresh Fusion engine.
+func NewFusionEngine() *FusionEngine {
+	return &FusionEngine{prior: noopPropagationPrior{}}
 }
 
-func (e *fusionEngine) SetPrior(p propagationPrior) {
+// SetPrior replaces the engine's propagation prior.
+func (e *FusionEngine) SetPrior(p PropagationPrior) {
 	if p == nil {
 		p = noopPropagationPrior{}
 	}
-	_e := *e
-	_e.prior = p
+	e.prior = p
 }
 
 // Verdict evaluates variant C for the supplied live counts and context.
 // baselineRows are the historical daily counts per (band, region, slot);
 // events are currently-active demand-side events; sw is the latest space
 // weather; prior may be nil.
-func (e *fusionEngine) Verdict(live []fusionBandCount, baselineRows []proplabBaselineDayRow, events []fusionEvent, sw fusionSWSnapshot, prior propagationPrior, params proplabParamsC, now int64) fusionVerdict {
+func (e *FusionEngine) Verdict(live []FusionBandCount, baselineRows []BaselineDayRow, events []FusionEvent, sw FusionSWSnapshot, prior PropagationPrior, params FusionParams, now int64) FusionVerdict {
 	if prior == nil {
 		prior = e.prior
 	}
-	resp := fusionVerdict{
+	resp := FusionVerdict{
 		GeneratedAt:  now,
 		Params:       params,
 		Prior:        prior,
 		SWAvailable:  sw.Available,
 		EventsActive: len(events),
-		Bands:        []fusionBandVerdict{},
+		Bands:        []FusionBandVerdict{},
 	}
 
 	if len(live) == 0 {
@@ -178,7 +180,7 @@ func (e *fusionEngine) Verdict(live []fusionBandCount, baselineRows []proplabBas
 
 	// Group baseline rows by (band, region, slot).
 	baselineMap := groupBaselineRows(baselineRows)
-	slot := utcSlotOfDay(now)
+	slot := UTCSlotOfDay(now)
 
 	for _, cur := range live {
 		v := e.classify(cur, baselineMap, events, sw, prior, params, slot)
@@ -187,8 +189,8 @@ func (e *fusionEngine) Verdict(live []fusionBandCount, baselineRows []proplabBas
 	return resp
 }
 
-func (e *fusionEngine) classify(cur fusionBandCount, baselineMap map[string][]proplabBaselineDayRow, events []fusionEvent, sw fusionSWSnapshot, prior propagationPrior, params proplabParamsC, slot int) fusionBandVerdict {
-	v := fusionBandVerdict{Band: cur.Band, Region: cur.Region}
+func (e *FusionEngine) classify(cur FusionBandCount, baselineMap map[string][]BaselineDayRow, events []FusionEvent, sw FusionSWSnapshot, prior PropagationPrior, params FusionParams, slot int) FusionBandVerdict {
+	v := FusionBandVerdict{Band: cur.Band, Region: cur.Region}
 	key := fusionBaselineKey(cur.Band, cur.Region, slot)
 	rows := baselineMap[key]
 
@@ -197,7 +199,7 @@ func (e *fusionEngine) classify(cur fusionBandCount, baselineMap map[string][]pr
 	v.LinksPerMinute = float64(cur.LinkCount) / windowMin
 
 	if len(rows) == 0 {
-		v.State = proplabStateInsufficientData
+		v.State = StateInsufficientData
 		v.Label = "insufficient data"
 		v.Reason = "no historical baseline for this band/region/slot yet"
 		v.Confidence = 0.0
@@ -228,31 +230,31 @@ func (e *fusionEngine) classify(cur fusionBandCount, baselineMap map[string][]pr
 	// wins when no known event matches.
 	switch {
 	case v.LinksPerMinute >= baselinePerMin && len(explainedBy) > 0:
-		v.State = proplabStateClosedButActive
+		v.State = StateClosedButActive
 		v.Label = "active (explained)"
 		v.Reason = "link rate elevated but matched to known event(s)"
 		v.Confidence = 0.6
 		v.ExplainedBy = explainedBy
 	case v.LinksPerMinute >= params.OpenRatio*baselinePerMin:
 		if witnessOK {
-			v.State = proplabStateOpenConfirmed
+			v.State = StateOpenConfirmed
 			v.Label = "open"
 			v.Reason = "links well above seasonal baseline; witnesses adequate"
 			v.Confidence = 0.85
 		} else {
-			v.State = proplabStateOpenUnconfirmed
+			v.State = StateOpenUnconfirmed
 			v.Label = "open?"
 			v.Reason = "links high but reporter density too low to confirm"
 			v.Confidence = 0.45
 		}
 	case v.LinksPerMinute <= params.ClosedRatio*baselinePerMin:
-		v.State = proplabStateClosedWithCause
+		v.State = StateClosedWithCause
 		v.Label = "closed"
 		v.ClosureType = e.closureCause(cur, sw, priorProb, priorOK, params)
 		v.Reason = causeReason(v.ClosureType, sw.Available)
 		v.Confidence = 0.6
 	default:
-		v.State = proplabStateClosed
+		v.State = StateClosed
 		v.Label = "closed"
 		v.Reason = "activity within normal range"
 		v.Confidence = 0.5
@@ -261,20 +263,20 @@ func (e *fusionEngine) classify(cur fusionBandCount, baselineMap map[string][]pr
 	// If the prior disagrees strongly with the observation, note it but live
 	// data wins. (A band the model says is closed but that shows real links is
 	// still open — this is the DXRadar rule.)
-	if priorOK && v.State == proplabStateOpenConfirmed && priorProb < 0.2 {
+	if priorOK && v.State == StateOpenConfirmed && priorProb < 0.2 {
 		v.Reason += " (observation overrides low prior)"
 	}
 
 	return v
 }
 
-func (e *fusionEngine) closureCause(cur fusionBandCount, sw fusionSWSnapshot, priorProb float64, priorOK bool, params proplabParamsC) string {
+func (e *FusionEngine) closureCause(cur FusionBandCount, sw FusionSWSnapshot, priorProb float64, priorOK bool, params FusionParams) string {
 	if !sw.Available {
 		return ""
 	}
 	// Absorption-limited: D-RAP says the band is affected, or strong X-ray on
 	// a sunlit path, or Kp is elevated.
-	bandLower := bandLowerEdgeMHz(cur.Band)
+	bandLower := BandLowerEdgeMHz(cur.Band)
 	if sw.HasDrap && sw.DrapHAF != nil {
 		if haf, ok := sw.DrapHAF[cur.Region]; ok && haf > 0 && bandLower <= haf {
 			return "absorption_limited"
@@ -325,7 +327,7 @@ func causeReason(cause string, swAvailable bool) string {
 // weightedBaselineStats computes quantiles from daily counts, downweighting
 // days that were themselves anomalous or overlapped a known event. This is the
 // Farrington-style guardband: contest weekends don't inflate the baseline.
-func weightedBaselineStats(rows []proplabBaselineDayRow, params proplabParamsC) (p25, p50, p75, mad float64) {
+func weightedBaselineStats(rows []BaselineDayRow, params FusionParams) (p25, p50, p75, mad float64) {
 	if len(rows) == 0 {
 		return 0, 0, 0, 0
 	}
@@ -395,8 +397,8 @@ func weightedQuantile(values, weights []float64, p float64) float64 {
 	return pairs[n-1].v
 }
 
-func groupBaselineRows(rows []proplabBaselineDayRow) map[string][]proplabBaselineDayRow {
-	out := make(map[string][]proplabBaselineDayRow)
+func groupBaselineRows(rows []BaselineDayRow) map[string][]BaselineDayRow {
+	out := make(map[string][]BaselineDayRow)
 	for _, r := range rows {
 		key := fusionBaselineKey(r.Band, r.Region, r.Slot)
 		out[key] = append(out[key], r)
@@ -408,7 +410,7 @@ func fusionBaselineKey(band, region string, slot int) string {
 	return band + "|" + region + "|" + strconv.Itoa(slot)
 }
 
-func eventExplanations(band, region string, events []fusionEvent) []string {
+func eventExplanations(band, region string, events []FusionEvent) []string {
 	var out []string
 	for _, e := range events {
 		if e.BandMask != "" && !eventBandMatches(e.BandMask, band) {
@@ -437,23 +439,14 @@ func eventBandMatches(mask, band string) bool {
 		if len(parts) != 2 {
 			continue
 		}
-		lo := bandLowerEdgeMHz(strings.TrimSpace(parts[0]))
-		hi := bandLowerEdgeMHz(strings.TrimSpace(parts[1]))
-		b := bandLowerEdgeMHz(band)
+		lo := BandLowerEdgeMHz(strings.TrimSpace(parts[0]))
+		hi := BandLowerEdgeMHz(strings.TrimSpace(parts[1]))
+		b := BandLowerEdgeMHz(band)
 		if lo > 0 && hi > 0 && b > 0 && b >= lo && b <= hi {
 			return true
 		}
 	}
 	return false
-}
-
-func bandLowerEdgeMHz(band string) float64 {
-	m := map[string]float64{
-		"160m": 1.8, "80m": 3.5, "60m": 5.3, "40m": 7.0, "30m": 10.1,
-		"20m": 14.0, "17m": 18.1, "15m": 21.0, "12m": 24.9, "10m": 28.0,
-		"6m": 50.0, "4m": 70.0, "2m": 144.0,
-	}
-	return m[strings.ToLower(strings.TrimSpace(band))]
 }
 
 func xrayMagnitude(class string) float64 {

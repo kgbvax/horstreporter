@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"horstreporter/internal/proplab"
 )
 
 func TestProplabLaneForSourceType(t *testing.T) {
@@ -18,9 +20,9 @@ func TestProplabLaneForSourceType(t *testing.T) {
 		{"MQTT", "ft8"}, // source_type is usually lower-case; accept default
 	}
 	for _, c := range cases {
-		got := proplabLaneForSourceType(c.in)
+		got := proplab.LaneForSourceType(c.in)
 		if got != c.want {
-			t.Fatalf("proplabLaneForSourceType(%q)=%q want %q", c.in, got, c.want)
+			t.Fatalf("proplab.LaneForSourceType(%q)=%q want %q", c.in, got, c.want)
 		}
 	}
 }
@@ -34,9 +36,9 @@ func TestProplabBucketAccumulatorDedupAndStats(t *testing.T) {
 			SpotTime:     base,
 			Band:         "20m",
 			SenderLoc:    "JO62QM",
-			ReceiverLoc:  "FN31AB",
+			ReceiverLoc:  "JO42QM",
 			SenderCall:   "DL1A",
-			ReceiverCall: "W1AW",
+			ReceiverCall: "DL1B",
 			SNR:          -15 + i*3, // -15, -12, -9
 			SourceType:   "mqtt",
 		})
@@ -46,9 +48,9 @@ func TestProplabBucketAccumulatorDedupAndStats(t *testing.T) {
 		SpotTime:     base,
 		Band:         "20m",
 		SenderLoc:    "JO62QM",
-		ReceiverLoc:  "FN31AB",
+		ReceiverLoc:  "JO42QM",
 		SenderCall:   "DL1A",
-		ReceiverCall: "W1AW",
+		ReceiverCall: "DL1B",
 		SNR:          -20,
 		SourceType:   "mqtt",
 	})

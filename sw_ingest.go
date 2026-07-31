@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"horstreporter/internal/proplab"
 )
 
 // sw_ingest.go polls free NOAA SWPC feeds for the Propagation Lab Fusion engine.
@@ -38,7 +40,7 @@ type swIngestService struct {
 	wg     sync.WaitGroup
 	client *http.Client
 
-	sw fusionSWSnapshot
+	sw proplab.FusionSWSnapshot
 }
 
 func startProplabSWIngest() {
@@ -99,7 +101,7 @@ func (s *swIngestService) fetchAll() {
 	s.fetchOvation()
 }
 
-func (s *swIngestService) snapshot() fusionSWSnapshot {
+func (s *swIngestService) snapshot() proplab.FusionSWSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.sw

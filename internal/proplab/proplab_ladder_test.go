@@ -1,12 +1,13 @@
-package main
+package proplab
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
 
-func newTestSpot(t int64, band, senderCall, receiverCall, senderLoc, receiverLoc string, snr int) MQTTMessage {
-	return MQTTMessage{
+func newTestSpot(t int64, band, senderCall, receiverCall, senderLoc, receiverLoc string, snr int) Spot {
+	return Spot{
 		T:  t,
 		B:  band,
 		SC: senderCall,
@@ -18,9 +19,9 @@ func newTestSpot(t int64, band, senderCall, receiverCall, senderLoc, receiverLoc
 }
 
 func TestLadderObserveAndCloseBuckets(t *testing.T) {
-	eng := newLadderEngine()
+	eng := NewLadderEngine()
 	now := time.Now().Unix()
-	bucket := alignBucketStart(now)
+	bucket := AlignBucketStart(now)
 	eng.Observe(newTestSpot(now, "20m", "DL1A", "W1AW", "JO62QM", "FN31AB", -10))
 	eng.Observe(newTestSpot(now, "20m", "DL1B", "W2AW", "JO62QM", "FN31AB", -12))
 	eng.Observe(newTestSpot(now, "20m", "DL1C", "W3AW", "JO62QM", "FN31AB", -11))
@@ -38,17 +39,17 @@ func TestLadderObserveAndCloseBuckets(t *testing.T) {
 }
 
 func TestLadderVerdictOpenCoherentRun(t *testing.T) {
-	eng := newLadderEngine()
+	eng := NewLadderEngine()
 	now := time.Now().Unix()
 	// Build a coherent 20m+17m+15m opening toward FN31 from JO62.
 	for _, band := range []string{"20m", "17m", "15m"} {
 		for i := 0; i < 3; i++ {
-			eng.Observe(newTestSpot(now, band, "DL"+band+itoa(i), "W"+band+itoa(i), "JO62QM", "FN31AB", -10+i))
+			eng.Observe(newTestSpot(now, band, "DL"+band+strconv.Itoa(i), "W"+band+strconv.Itoa(i), "JO62QM", "FN31AB", -10+i))
 		}
 	}
 	// Lone 10m spot should not be coherent.
 	for i := 0; i < 3; i++ {
-		eng.Observe(newTestSpot(now, "10m", "DL10M"+itoa(i), "W10M"+itoa(i), "JO62QM", "FN31AB", -5+i))
+		eng.Observe(newTestSpot(now, "10m", "DL10M"+strconv.Itoa(i), "W10M"+strconv.Itoa(i), "JO62QM", "FN31AB", -5+i))
 	}
 
 	expected := map[cellBandKey]float64{}
@@ -58,7 +59,7 @@ func TestLadderVerdictOpenCoherentRun(t *testing.T) {
 		"15m": {"NA": true},
 		"10m": {"NA": true},
 	}
-	params := defaultProplabParamsB()
+	params := DefaultLadderParams()
 	v := eng.Verdict("JO62QM", false, nil, reachable, expected, params, now)
 
 	states := make(map[string]string)
@@ -79,17 +80,17 @@ func TestLadderVerdictOpenCoherentRun(t *testing.T) {
 }
 
 func TestLadderVerdictEsLane(t *testing.T) {
-	eng := newLadderEngine()
+	eng := NewLadderEngine()
 	now := time.Now().Unix()
 	// 6m spots at 1500 km (single-hop Es geometry) between EU squares.
 	for i := 0; i < 3; i++ {
-		eng.Observe(newTestSpot(now, "6m", "DL"+itoa(i), "G"+itoa(i), "JO62QM", "JO01", 0))
+		eng.Observe(newTestSpot(now, "6m", "DL"+strconv.Itoa(i), "G"+strconv.Itoa(i), "JO62QM", "JO01", 0))
 	}
 	expected := map[cellBandKey]float64{}
 	reachable := map[string]map[string]bool{"6m": {"EU": true}}
-	params := defaultProplabParamsB()
+	params := DefaultLadderParams()
 	v := eng.Verdict("JO62QM", false, nil, reachable, expected, params, now)
-	var sixm ladderBandVerdict
+	var sixm LadderBandVerdict
 	for _, b := range v.Bands {
 		if b.Band == "6m" {
 			sixm = b
@@ -104,13 +105,13 @@ func TestLadderVerdictEsLane(t *testing.T) {
 }
 
 func TestLadderVerdictNoTargetFallsBackGlobal(t *testing.T) {
-	eng := newLadderEngine()
+	eng := NewLadderEngine()
 	now := time.Now().Unix()
 	for i := 0; i < 3; i++ {
-		eng.Observe(newTestSpot(now, "20m", "A"+itoa(i), "B"+itoa(i), "JO62QM", "FN31AB", -10+i))
-		eng.Observe(newTestSpot(now, "17m", "C"+itoa(i), "D"+itoa(i), "JO62QM", "FN31AB", -8+i))
+		eng.Observe(newTestSpot(now, "20m", "A"+strconv.Itoa(i), "B"+strconv.Itoa(i), "JO62QM", "FN31AB", -10+i))
+		eng.Observe(newTestSpot(now, "17m", "C"+strconv.Itoa(i), "D"+strconv.Itoa(i), "JO62QM", "FN31AB", -8+i))
 	}
-	v := eng.Verdict("", false, nil, nil, nil, defaultProplabParamsB(), now)
+	v := eng.Verdict("", false, nil, nil, nil, DefaultLadderParams(), now)
 	found20, found17 := false, false
 	for _, b := range v.Bands {
 		if b.Band == "20m" {
@@ -129,9 +130,9 @@ func TestLadderVerdictNoTargetFallsBackGlobal(t *testing.T) {
 }
 
 func TestLadderVerdictDataThin(t *testing.T) {
-	eng := newLadderEngine()
+	eng := NewLadderEngine()
 	now := time.Now().Unix()
-	v := eng.Verdict("JO62QM", false, nil, nil, nil, defaultProplabParamsB(), now)
+	v := eng.Verdict("JO62QM", false, nil, nil, nil, DefaultLadderParams(), now)
 	if !v.DataThin {
 		t.Fatal("expected DataThin when no observations")
 	}
@@ -156,13 +157,13 @@ func TestEmpiricalMUFMHz(t *testing.T) {
 }
 
 func TestAlignBucketStart(t *testing.T) {
-	if alignBucketStart(0) != 0 {
-		t.Fatalf("alignBucketStart(0)=%d want 0", alignBucketStart(0))
+	if AlignBucketStart(0) != 0 {
+		t.Fatalf("AlignBucketStart(0)=%d want 0", AlignBucketStart(0))
 	}
-	if alignBucketStart(900) != 900 {
-		t.Fatalf("alignBucketStart(900)=%d want 900", alignBucketStart(900))
+	if AlignBucketStart(900) != 900 {
+		t.Fatalf("AlignBucketStart(900)=%d want 900", AlignBucketStart(900))
 	}
-	if alignBucketStart(901) != 900 {
-		t.Fatalf("alignBucketStart(901)=%d want 900", alignBucketStart(901))
+	if AlignBucketStart(901) != 900 {
+		t.Fatalf("AlignBucketStart(901)=%d want 900", AlignBucketStart(901))
 	}
 }

@@ -1,4 +1,4 @@
-package main
+package proplab
 
 import (
 	"math"
@@ -18,10 +18,10 @@ import (
 // order 40m→30m→20m→17m→15m→12m→10m is propagation-coherent; a lone open band
 // surrounded by quiet neighbours is more likely an operator-activity spike.
 
-// proplabParamsB holds the tunable parameters for variant B. Defaults are set
+// LadderParams holds the tunable parameters for variant B. Defaults are set
 // so the engine is usable immediately; the Propagation Lab UI exposes each
 // as a slider and sends overrides as query parameters.
-type proplabParamsB struct {
+type LadderParams struct {
 	MinLinks             int     `json:"min_links"`
 	SnrFloorFT8dB        int     `json:"snr_floor_ft8"`
 	SnrFloorRBNdB        int     `json:"snr_floor_rbn"`
@@ -38,8 +38,9 @@ type proplabParamsB struct {
 	TermDegPerHour       float64 `json:"term_deg_per_hour"`
 }
 
-func defaultProplabParamsB() proplabParamsB {
-	return proplabParamsB{
+// DefaultLadderParams returns the factory defaults for variant B.
+func DefaultLadderParams() LadderParams {
+	return LadderParams{
 		MinLinks:             2,
 		SnrFloorFT8dB:        -18,
 		SnrFloorRBNdB:        12,
@@ -57,7 +58,7 @@ func defaultProplabParamsB() proplabParamsB {
 	}
 }
 
-func (p proplabParamsB) snrFloor(lane string) int {
+func (p LadderParams) snrFloor(lane string) int {
 	switch lane {
 	case "rbn":
 		return p.SnrFloorRBNdB
@@ -68,14 +69,14 @@ func (p proplabParamsB) snrFloor(lane string) int {
 
 // ladderCellBucket is the in-memory accumulator for one cell×band×lane×bucket.
 type ladderCellBucket struct {
-	links      map[string]struct{}
-	reporters  map[string]struct{}
-	snrs       []int
-	spotCount  int
-	sumDistKm  float64
-	maxDistKm  float64
-	region     string
-	closed     bool
+	links     map[string]struct{}
+	reporters map[string]struct{}
+	snrs      []int
+	spotCount int
+	sumDistKm float64
+	maxDistKm float64
+	region    string
+	closed    bool
 }
 
 // ladderBucketKey indexes the in-memory accumulator map.
@@ -101,19 +102,19 @@ type cusumState struct {
 	LastAlarmIdx int
 }
 
-// ladderEngine is the in-memory working set for variant B. It is not safe for
+// LadderEngine is the in-memory working set for variant B. It is not safe for
 // concurrent use except via Observe (which locks); callers should hold the lock
 // while closing buckets or computing verdicts.
-type ladderEngine struct {
+type LadderEngine struct {
 	mu      sync.Mutex
 	buckets map[ladderBucketKey]*ladderCellBucket
 	cusum   map[cellBandKey]*cusumState
 	ewma    map[cellBandKey]float64 // expected presence, 0..1
-	nextIdx int
 }
 
-func newLadderEngine() *ladderEngine {
-	return &ladderEngine{
+// NewLadderEngine creates a fresh Ladder engine.
+func NewLadderEngine() *LadderEngine {
+	return &LadderEngine{
 		buckets: make(map[ladderBucketKey]*ladderCellBucket),
 		cusum:   make(map[cellBandKey]*cusumState),
 		ewma:    make(map[cellBandKey]float64),
@@ -122,21 +123,21 @@ func newLadderEngine() *ladderEngine {
 
 // Observe ingests one spot into the current in-memory bucket. It is safe for
 // concurrent callers (the MQTT/RBN/DX-cluster ingest paths).
-func (e *ladderEngine) Observe(m MQTTMessage) {
-	band := normalizeBand(m.B)
-	if !bandInScope(band) {
+func (e *LadderEngine) Observe(m Spot) {
+	band := NormalizeBand(m.B)
+	if !BandInScope(band) {
 		return
 	}
-	cell, ok := midpointCell(m.SL, m.RL)
+	cell, ok := MidpointCell(m.SL, m.RL)
 	if !ok {
 		return
 	}
-	lane := proplabLaneForSourceType(sourceTypeForMessage(m))
-	bucketStart := alignBucketStart(m.T)
+	lane := LaneForSourceType(SourceTypeForMessage(m))
+	bucketStart := AlignBucketStart(m.T)
 
-	lat1, lon1 := locatorToLatLng(strings.ToUpper(strings.TrimSpace(m.SL)))
-	lat2, lon2 := locatorToLatLng(strings.ToUpper(strings.TrimSpace(m.RL)))
-	dist := haversineKm(lat1, lon1, lat2, lon2)
+	lat1, lon1 := LocatorToLatLng(strings.ToUpper(strings.TrimSpace(m.SL)))
+	lat2, lon2 := LocatorToLatLng(strings.ToUpper(strings.TrimSpace(m.RL)))
+	dist := HaversineKm(lat1, lon1, lat2, lon2)
 
 	sc := strings.ToUpper(strings.TrimSpace(m.SC))
 	rc := strings.ToUpper(strings.TrimSpace(m.RC))
@@ -150,7 +151,7 @@ func (e *ladderEngine) Observe(m MQTTMessage) {
 		b = &ladderCellBucket{
 			links:     make(map[string]struct{}),
 			reporters: make(map[string]struct{}),
-			region:    string(dxPulseRegionForLocator(cell)),
+			region:    RegionFromLocator(cell),
 		}
 		e.buckets[key] = b
 	}
@@ -168,20 +169,20 @@ func (e *ladderEngine) Observe(m MQTTMessage) {
 }
 
 // CloseBuckets finalises buckets whose start is before or at cutoff, returns
-// them as proplabCellRow values, and removes them from memory. The engine
-// keeps at most the current and previous bucket live so recent-window verdicts
-// can still read them.
-func (e *ladderEngine) CloseBuckets(cutoff int64) []proplabCellRow {
+// them as CellRow values, and removes them from memory. The engine keeps at
+// most the current and previous bucket live so recent-window verdicts can
+// still read them.
+func (e *LadderEngine) CloseBuckets(cutoff int64) []CellRow {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	rows := make([]proplabCellRow, 0, len(e.buckets))
+	rows := make([]CellRow, 0, len(e.buckets))
 	for k, b := range e.buckets {
 		if k.BucketStart > cutoff {
 			continue
 		}
 		b.closed = true
-		r := proplabCellRow{
+		r := CellRow{
 			BucketStart:   k.BucketStart,
 			Band:          k.Band,
 			Cell4:         k.Cell4,
@@ -193,9 +194,8 @@ func (e *ladderEngine) CloseBuckets(cutoff int64) []proplabCellRow {
 			DistMaxKm:     int(b.maxDistKm),
 		}
 		if len(b.snrs) > 0 {
-			sort.Ints(b.snrs)
-			r.SnrMedian = intMedian(b.snrs)
-			r.SnrP10 = int(percentileInt(b.snrs, 0.10))
+			r.SnrMedian = IntMedian(b.snrs)
+			r.SnrP10 = int(PercentileInt(b.snrs, 0.10))
 		}
 		if b.spotCount > 0 {
 			r.DistMedianKm = int(b.sumDistKm / float64(b.spotCount))
@@ -206,8 +206,8 @@ func (e *ladderEngine) CloseBuckets(cutoff int64) []proplabCellRow {
 	return rows
 }
 
-// ladderBandVerdict is one band's classification from variant B.
-type ladderBandVerdict struct {
+// LadderBandVerdict is one band's classification from variant B.
+type LadderBandVerdict struct {
 	Band           string
 	State          string // "open", "rising", "activity_spike", "closed", "unconfirmed"
 	Reason         string
@@ -220,27 +220,27 @@ type ladderBandVerdict struct {
 	ForecastHints  []string // human-readable strings (e.g. terminator ETA)
 }
 
-// ladderVerdict is the full variant-B result for a target/personalization.
-type ladderVerdict struct {
-	GeneratedAt   int64
-	Params        proplabParamsB
-	Bands         []ladderBandVerdict
-	OpenRuns      [][]string
-	EmpiricalMUF  float64 // highest open ladder-F band as MHz, 0 if none
-	DataThin      bool
+// LadderVerdict is the full variant-B result for a target/personalization.
+type LadderVerdict struct {
+	GeneratedAt  int64
+	Params       LadderParams
+	Bands        []LadderBandVerdict
+	OpenRuns     [][]string
+	EmpiricalMUF float64 // highest open ladder-F band as MHz, 0 if none
+	DataThin     bool
 }
 
 // Verdict evaluates the current window and returns per-band recommendations.
 // expected is a map of (cell,band) -> expected fractional presence in a bucket
 // (0..1) used by the CUSUM/change-point detector. reachable is a map of
 // band -> set of regions the target historically reaches, used to scope the
-// verdict to bands/regions relevant to the operator. If reachable is empty the
-// engine falls back to all observed cells.
-func (e *ladderEngine) Verdict(target string, surroundings bool, history []MQTTMessage, reachable map[string]map[string]bool, expected map[cellBandKey]float64, params proplabParamsB, now int64) ladderVerdict {
-	resp := ladderVerdict{
+// verdict to bands/regions relevant to the operator. If reachable is empty
+// the engine falls back to all observed cells.
+func (e *LadderEngine) Verdict(target string, surroundings bool, history []Spot, reachable map[string]map[string]bool, expected map[cellBandKey]float64, params LadderParams, now int64) LadderVerdict {
+	resp := LadderVerdict{
 		GeneratedAt: now,
 		Params:      params,
-		Bands:       []ladderBandVerdict{},
+		Bands:       []LadderBandVerdict{},
 	}
 
 	e.mu.Lock()
@@ -249,7 +249,7 @@ func (e *ladderEngine) Verdict(target string, surroundings bool, history []MQTTM
 	// Build a working copy of all cell-band-lane observations from both closed
 	// (persisted) memory and the live ingest window. We only keep buckets in
 	// the last two 15-minute windows for MUF/onset evaluation.
-	windowStart := alignBucketStart(now - 30*60)
+	windowStart := AlignBucketStart(now - 30*60)
 	live := e.collectLiveBuckets(windowStart)
 
 	// Seed expected-presence EWMA if absent.
@@ -295,8 +295,8 @@ func (e *ladderEngine) Verdict(target string, surroundings bool, history []MQTTM
 	resp.EmpiricalMUF = empiricalMUFMHz(openBands)
 
 	// Evaluate each in-scope band.
-	for _, band := range sortedBands(bandsInScope) {
-		v := ladderBandVerdict{Band: band}
+	for _, band := range sortedBands(BandsInScope) {
+		v := LadderBandVerdict{Band: band}
 		bandCells := bandCells(relevantCells, band, live)
 		if len(bandCells) == 0 {
 			v.State = "closed"
@@ -351,7 +351,7 @@ func (e *ladderEngine) Verdict(target string, surroundings bool, history []MQTTM
 		onsetAge := e.minOnsetAge(bandCells, live, expected, params, now)
 		if onsetAge >= 0 {
 			v.OnsetMinAgo = onsetAge
-			v.Reason += "; opening detected ~" + itoa(onsetAge) + " min ago"
+			v.Reason += "; opening detected ~" + strconv.Itoa(onsetAge) + " min ago"
 		}
 		if isLadderLowBand(band) {
 			hints := e.terminatorHints(bandCells, relevantCells, params, now)
@@ -369,14 +369,14 @@ func (e *ladderEngine) Verdict(target string, surroundings bool, history []MQTTM
 // live window (up to two 15-minute buckets). For MUF/witness decisions we merge
 // all lanes but keep the strongest median SNR and the sum of distinct links.
 type ladderBandAggregate struct {
-	lane        string
-	spotCount   int
-	linkCount   int
+	lane          string
+	spotCount     int
+	linkCount     int
 	reporterCount int
-	snrMedian   int
-	snrP10      int
-	distMedian  float64
-	distMax     float64
+	snrMedian     int
+	snrP10        int
+	distMedian    float64
+	distMax       float64
 }
 
 // collectLiveBuckets merges the in-memory buckets for the requested window
@@ -384,7 +384,7 @@ type ladderBandAggregate struct {
 // link/reporter counts and the best (highest) median SNR among lanes that meet
 // the source-type SNR floor. Distance median is the unweighted median across
 // all lanes.
-func (e *ladderEngine) collectLiveBuckets(windowStart int64) map[cellBandKey]*ladderBandAggregate {
+func (e *LadderEngine) collectLiveBuckets(windowStart int64) map[cellBandKey]*ladderBandAggregate {
 	out := make(map[cellBandKey]*ladderBandAggregate)
 	for k, b := range e.buckets {
 		if k.BucketStart < windowStart {
@@ -404,7 +404,7 @@ func (e *ladderEngine) collectLiveBuckets(windowStart int64) map[cellBandKey]*la
 		}
 		// Use median SNR of the lane with the most links if it has data.
 		if len(b.snrs) > 0 {
-			med := intMedian(b.snrs)
+			med := IntMedian(b.snrs)
 			if med > agg.snrMedian {
 				agg.snrMedian = med
 			}
@@ -423,13 +423,13 @@ func (e *ladderEngine) collectLiveBuckets(windowStart int64) map[cellBandKey]*la
 // verdict. It is the union of:
 //   - cells crossed by the live-window paths involving the target's locator;
 //   - cells in regions the target historically reaches for each band.
-func (e *ladderEngine) relevantCells(target string, surroundings bool, history []MQTTMessage, live map[cellBandKey]*ladderBandAggregate, reachable map[string]map[string]bool) []cellBandKey {
+func (e *LadderEngine) relevantCells(target string, surroundings bool, history []Spot, live map[cellBandKey]*ladderBandAggregate, reachable map[string]map[string]bool) []cellBandKey {
 	target = strings.ToUpper(strings.TrimSpace(target))
 	var targets []string
-	if isLocator(target) {
+	if IsLocator(target) {
 		targets = []string{target[:4]}
 		if surroundings {
-			targets = append(targets, getSurroundingSquares(target[:4])...)
+			targets = append(targets, GetSurroundingSquares(target[:4])...)
 		}
 	}
 
@@ -446,25 +446,25 @@ func (e *ladderEngine) relevantCells(target string, surroundings bool, history [
 	// Live paths involving the target.
 	if len(targets) > 0 {
 		for _, m := range history {
-			band := normalizeBand(m.B)
-			if !bandInScope(band) {
+			band := NormalizeBand(m.B)
+			if !BandInScope(band) {
 				continue
 			}
 			if !locatorMatchesTargets(m.SL, targets) && !locatorMatchesTargets(m.RL, targets) {
 				continue
 			}
-			cell, ok := midpointCell(m.SL, m.RL)
+			cell, ok := MidpointCell(m.SL, m.RL)
 			if !ok {
 				continue
 			}
-			region := string(dxPulseRegionForLocator(cell))
+			region := RegionFromLocator(cell)
 			add(cellBandKey{Cell4: cell, Region: region, Band: band})
 		}
 	}
 
 	// Historical reachability.
 	for band, regions := range reachable {
-		if !bandInScope(band) {
+		if !BandInScope(band) {
 			continue
 		}
 		for region := range regions {
@@ -513,8 +513,8 @@ func bandCells(cells []cellBandKey, band string, live map[cellBandKey]*ladderBan
 
 // minOnsetAge scans the requested cell-band keys, runs the CUSUM update for the
 // current bucket, and returns the youngest onset age in minutes, or -1 if none.
-func (e *ladderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*ladderBandAggregate, expected map[cellBandKey]float64, params proplabParamsB, now int64) int {
-	bucketIdx := int(now / proplabBucketSeconds)
+func (e *LadderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*ladderBandAggregate, expected map[cellBandKey]float64, params LadderParams, now int64) int {
+	bucketIdx := int(now / BucketSeconds)
 	minAge := -1
 	for _, cbk := range cells {
 		agg := live[cbk]
@@ -546,7 +546,7 @@ func (e *ladderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*la
 		}
 		if st.S >= params.CusumThreshold*exp && st.LastZeroIdx < bucketIdx {
 			ageBuckets := bucketIdx - st.LastZeroIdx
-			ageMin := ageBuckets * proplabBucketSeconds / 60
+			ageMin := ageBuckets * BucketSeconds / 60
 			if minAge == -1 || ageMin < minAge {
 				minAge = ageMin
 			}
@@ -557,15 +557,14 @@ func (e *ladderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*la
 
 // terminatorHints scans for low-band onsets in cells east of any relevant cell
 // and returns human-readable ETA strings.
-func (e *ladderEngine) terminatorHints(relevantCells, allCells []cellBandKey, params proplabParamsB, now int64) []string {
+func (e *LadderEngine) terminatorHints(relevantCells, allCells []cellBandKey, params LadderParams, now int64) []string {
 	if len(relevantCells) == 0 {
 		return nil
 	}
 	// Longitude of relevant cells (midpoints of the squares).
 	var targetLons []float64
 	for _, cbk := range relevantCells {
-		lat, lon := locatorToLatLng(cbk.Cell4)
-		_ = lat
+		_, lon := LocatorToLatLng(cbk.Cell4)
 		targetLons = append(targetLons, lon)
 	}
 	var hints []string
@@ -577,8 +576,7 @@ func (e *ladderEngine) terminatorHints(relevantCells, allCells []cellBandKey, pa
 		if st == nil || st.S < params.CusumThreshold*0.5 {
 			continue
 		}
-		lat, lon := locatorToLatLng(cbk.Cell4)
-		_ = lat
+		_, lon := LocatorToLatLng(cbk.Cell4)
 		for _, tl := range targetLons {
 			delta := normalizeLon(lon - tl)
 			if delta >= params.TermMinEastDeg && delta <= params.TermMaxEastDeg {
@@ -591,10 +589,6 @@ func (e *ladderEngine) terminatorHints(relevantCells, allCells []cellBandKey, pa
 		return hints[:2]
 	}
 	return hints
-}
-
-func alignBucketStart(t int64) int64 {
-	return (t / proplabBucketSeconds) * proplabBucketSeconds
 }
 
 func empiricalMUFMHz(open map[string]bool) float64 {
@@ -625,4 +619,78 @@ func sortedBands(set map[string]struct{}) []string {
 
 func formatFloat1(v float64) string {
 	return strconv.FormatFloat(v, 'f', 1, 64)
+}
+
+// RegionCounts returns per-(band,region) aggregates from the in-memory buckets
+// whose start is at or after windowStart. It is used by the Fusion engine to
+// turn the Ladder's cell-lane buckets into the band-region live counts the
+// quantile baseline expects.
+func (e *LadderEngine) RegionCounts(windowStart int64) []FusionBandCount {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	type agg struct {
+		spotCount int
+		links     map[string]struct{}
+		reporters map[string]struct{}
+		distMax   int
+	}
+
+	counts := make(map[string]*agg)
+	for k, b := range e.buckets {
+		if k.BucketStart < windowStart {
+			continue
+		}
+		key := k.Band + "|" + b.region
+		a := counts[key]
+		if a == nil {
+			a = &agg{
+				links:     make(map[string]struct{}),
+				reporters: make(map[string]struct{}),
+			}
+			counts[key] = a
+		}
+		a.spotCount += b.spotCount
+		for link := range b.links {
+			a.links[link] = struct{}{}
+		}
+		for rep := range b.reporters {
+			a.reporters[rep] = struct{}{}
+		}
+		d := int(b.maxDistKm)
+		if d > a.distMax {
+			a.distMax = d
+		}
+	}
+
+	out := make([]FusionBandCount, 0, len(counts))
+	for key, a := range counts {
+		parts := strings.SplitN(key, "|", 2)
+		out = append(out, FusionBandCount{
+			Band:          parts[0],
+			Region:        parts[1],
+			SpotCount:     a.spotCount,
+			LinkCount:     len(a.links),
+			ReporterCount: len(a.reporters),
+			DistMaxKm:     a.distMax,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Band != out[j].Band {
+			return bandOrder(out[i].Band) < bandOrder(out[j].Band)
+		}
+		return out[i].Region < out[j].Region
+	})
+	return out
+}
+
+// bandOrder returns the canonical position of a band in the scope ordering.
+func bandOrder(band string) int {
+	order := []string{"160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m"}
+	for i, b := range order {
+		if b == band {
+			return i
+		}
+	}
+	return 999
 }

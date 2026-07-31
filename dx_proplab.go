@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"horstreporter/internal/proplab"
 )
 
 // dx_proplab.go wires the Propagation Lab (Ladder + Fusion engines) into the
@@ -23,17 +25,17 @@ var proplabService *ProplabService
 // context, and answers verdict requests for the UI.
 type ProplabService struct {
 	mu            sync.RWMutex
-	ladder        *ladderEngine
-	fusion        *fusionEngine
+	ladder        *proplab.LadderEngine
+	fusion        *proplab.FusionEngine
 	store         *dxPostgresStore
 	disabled      bool
 	retentionDays int
 
-	paramsB proplabParamsB
-	paramsC proplabParamsC
+	paramsB proplab.LadderParams
+	paramsC proplab.FusionParams
 
-	sw     fusionSWSnapshot
-	events []fusionEvent
+	sw     proplab.FusionSWSnapshot
+	events []proplab.FusionEvent
 
 	dedup             map[string]int64
 	lastPrune         time.Time
@@ -48,12 +50,12 @@ type ProplabService struct {
 // engine because the propagation lab shares the same Postgres connection.
 func newProplabService(baseline *DxBaselineEngine, disabled bool, retentionDays int) *ProplabService {
 	s := &ProplabService{
-		ladder:            newLadderEngine(),
-		fusion:            newFusionEngine(),
+		ladder:            proplab.NewLadderEngine(),
+		fusion:            proplab.NewFusionEngine(),
 		disabled:          disabled,
 		retentionDays:     retentionDays,
-		paramsB:           defaultProplabParamsB(),
-		paramsC:           defaultProplabParamsC(),
+		paramsB:           proplab.DefaultLadderParams(),
+		paramsC:           proplab.DefaultFusionParams(),
 		dedup:             make(map[string]int64),
 		stopCh:            make(chan struct{}),
 		recomputeInterval: 60 * time.Second,
@@ -111,10 +113,11 @@ func (s *ProplabService) Observe(m MQTTMessage) {
 		return
 	}
 
-	lane := proplabLaneForSourceType(sourceTypeForMessage(m))
+	spot := toProplabSpot(m)
+	lane := proplab.LaneForSourceType(proplab.SourceTypeForMessage(spot))
 	sc := strings.ToUpper(strings.TrimSpace(m.SC))
 	rc := strings.ToUpper(strings.TrimSpace(m.RC))
-	bucketStart := alignBucketStart(m.T)
+	bucketStart := proplab.AlignBucketStart(m.T)
 
 	// Dedup within a short window. The same DX-cluster spot is observed both via
 	// DxBaselineEngine.Observe and PersistRawSpot; this key prevents double
@@ -130,7 +133,7 @@ func (s *ProplabService) Observe(m MQTTMessage) {
 	s.dedup[key] = now
 	s.mu.Unlock()
 
-	s.ladder.Observe(m)
+	s.ladder.Observe(spot)
 }
 
 // Backfill feeds a batch of recovered spots into the Ladder engine at startup.
@@ -141,26 +144,26 @@ func (s *ProplabService) Backfill(spots []MQTTMessage) {
 		return
 	}
 	for _, m := range spots {
-		s.ladder.Observe(m)
+		s.ladder.Observe(toProplabSpot(m))
 	}
 }
 
 // LadderVerdict returns the variant-B result for the supplied target and
 // surroundings. A nil params pointer uses the service default.
-func (s *ProplabService) LadderVerdict(target string, surroundings bool, params *proplabParamsB) ladderVerdict {
+func (s *ProplabService) LadderVerdict(target string, surroundings bool, params *proplab.LadderParams) proplab.LadderVerdict {
 	p := s.paramsB
 	if params != nil {
 		p = *params
 	}
 	now := time.Now().Unix()
-	history := s.recentHistoryCopy()
+	history := toProplabSpots(s.recentHistoryCopy())
 	return s.ladder.Verdict(target, surroundings, history, nil, nil, p, now)
 }
 
 // FusionVerdict returns the variant-C result. A nil params pointer uses the
 // service default. Live counts are taken from the Ladder engine's in-memory
 // window; historical baseline and event/SW context are refreshed from Postgres.
-func (s *ProplabService) FusionVerdict(params *proplabParamsC) fusionVerdict {
+func (s *ProplabService) FusionVerdict(params *proplab.FusionParams) proplab.FusionVerdict {
 	p := s.paramsC
 	if params != nil {
 		p = *params
@@ -172,10 +175,10 @@ func (s *ProplabService) FusionVerdict(params *proplabParamsC) fusionVerdict {
 	events := s.events
 	s.mu.RUnlock()
 
-	windowStart := alignBucketStart(now - 20*60)
+	windowStart := proplab.AlignBucketStart(now - 20*60)
 	live := s.ladder.RegionCounts(windowStart)
 
-	var baselineRows []proplabBaselineDayRow
+	var baselineRows []proplab.BaselineDayRow
 	if len(live) > 0 && s.store != nil {
 		bands, regions := liveBandsRegions(live)
 		slot := utcSlotOfDay(now)
@@ -192,7 +195,7 @@ func (s *ProplabService) FusionVerdict(params *proplabParamsC) fusionVerdict {
 }
 
 // SetParamsB replaces the default Ladder parameters.
-func (s *ProplabService) SetParamsB(p proplabParamsB) {
+func (s *ProplabService) SetParamsB(p proplab.LadderParams) {
 	if s == nil {
 		return
 	}
@@ -202,7 +205,7 @@ func (s *ProplabService) SetParamsB(p proplabParamsB) {
 }
 
 // SetParamsC replaces the default Fusion parameters.
-func (s *ProplabService) SetParamsC(p proplabParamsC) {
+func (s *ProplabService) SetParamsC(p proplab.FusionParams) {
 	if s == nil {
 		return
 	}
@@ -231,7 +234,7 @@ func (s *ProplabService) loop() {
 
 func (s *ProplabService) recompute() {
 	now := time.Now().Unix()
-	cutoff := alignBucketStart(now - proplabBucketSeconds)
+	cutoff := proplab.AlignBucketStart(now - proplab.BucketSeconds)
 	rows := s.ladder.CloseBuckets(cutoff)
 	if len(rows) > 0 && s.store != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -262,7 +265,7 @@ func (s *ProplabService) recompute() {
 func (s *ProplabService) loadContext() {
 	if s.store == nil {
 		s.mu.Lock()
-		s.sw = fusionSWSnapshot{}
+		s.sw = proplab.FusionSWSnapshot{}
 		s.events = nil
 		s.mu.Unlock()
 		return
@@ -283,29 +286,29 @@ func (s *ProplabService) loadContext() {
 
 	s.mu.Lock()
 	s.sw = buildFusionSW(latestSW)
-	s.events = make([]fusionEvent, 0, len(activeRows))
+	s.events = make([]proplab.FusionEvent, 0, len(activeRows))
 	for _, r := range activeRows {
 		endsIn := int((r.EndUTC - time.Now().Unix()) / 60)
 		if endsIn < 0 {
 			endsIn = 0
 		}
-		s.events = append(s.events, fusionEvent{
+		s.events = append(s.events, proplab.FusionEvent{
 			Source:    r.Source,
 			Title:     r.Title,
 			BandMask:  r.BandMask,
 			Locator4:  r.Locator4,
-			Region:    string(dxPulseRegionForLocator(r.Locator4)),
+			Region:    proplab.RegionFromLocator(r.Locator4),
 			EndsInMin: endsIn,
 		})
 	}
 	s.mu.Unlock()
 }
 
-func buildFusionSW(latest map[string]proplabSWRow) fusionSWSnapshot {
+func buildFusionSW(latest map[string]proplabSWRow) proplab.FusionSWSnapshot {
 	if len(latest) == 0 {
-		return fusionSWSnapshot{}
+		return proplab.FusionSWSnapshot{}
 	}
-	sw := fusionSWSnapshot{Available: true}
+	sw := proplab.FusionSWSnapshot{Available: true}
 	for series, r := range latest {
 		switch series {
 		case "kp":
@@ -344,7 +347,29 @@ func (s *ProplabService) recentHistoryCopy() []MQTTMessage {
 	return out
 }
 
-func liveBandsRegions(live []fusionBandCount) (bands, regions []string) {
+func toProplabSpot(m MQTTMessage) proplab.Spot {
+	return proplab.Spot{
+		RP:     m.RP,
+		T:      m.T,
+		SC:     m.SC,
+		SL:     m.SL,
+		RC:     m.RC,
+		RL:     m.RL,
+		B:      m.B,
+		MD:     m.MD,
+		Source: sourceTypeForMessage(m),
+	}
+}
+
+func toProplabSpots(in []MQTTMessage) []proplab.Spot {
+	out := make([]proplab.Spot, len(in))
+	for i, m := range in {
+		out[i] = toProplabSpot(m)
+	}
+	return out
+}
+
+func liveBandsRegions(live []proplab.FusionBandCount) (bands, regions []string) {
 	bandSet := make(map[string]struct{})
 	regionSet := make(map[string]struct{})
 	for _, c := range live {
@@ -362,77 +387,4 @@ func liveBandsRegions(live []fusionBandCount) (bands, regions []string) {
 	sort.Strings(bands)
 	sort.Strings(regions)
 	return bands, regions
-}
-
-// RegionCounts returns per-(band,region) aggregates from the in-memory buckets
-// whose start is at or after windowStart. It is used by the Fusion engine to
-// turn the Ladder's cell-lane buckets into the band-region live counts the
-// quantile baseline expects.
-func (e *ladderEngine) RegionCounts(windowStart int64) []fusionBandCount {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	type agg struct {
-		spotCount int
-		links     map[string]struct{}
-		reporters map[string]struct{}
-		distMax   int
-	}
-
-	counts := make(map[string]*agg)
-	for k, b := range e.buckets {
-		if k.BucketStart < windowStart {
-			continue
-		}
-		key := k.Band + "|" + b.region
-		a := counts[key]
-		if a == nil {
-			a = &agg{
-				links:     make(map[string]struct{}),
-				reporters: make(map[string]struct{}),
-			}
-			counts[key] = a
-		}
-		a.spotCount += b.spotCount
-		for link := range b.links {
-			a.links[link] = struct{}{}
-		}
-		for rep := range b.reporters {
-			a.reporters[rep] = struct{}{}
-		}
-		d := int(b.maxDistKm)
-		if d > a.distMax {
-			a.distMax = d
-		}
-	}
-
-	out := make([]fusionBandCount, 0, len(counts))
-	for key, a := range counts {
-		parts := strings.SplitN(key, "|", 2)
-		out = append(out, fusionBandCount{
-			Band:          parts[0],
-			Region:        parts[1],
-			SpotCount:     a.spotCount,
-			LinkCount:     len(a.links),
-			ReporterCount: len(a.reporters),
-			DistMaxKm:     a.distMax,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Band != out[j].Band {
-			return bandOrder(out[i].Band) < bandOrder(out[j].Band)
-		}
-		return out[i].Region < out[j].Region
-	})
-	return out
-}
-
-func bandOrder(band string) int {
-	order := []string{"160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m"}
-	for i, b := range order {
-		if b == band {
-			return i
-		}
-	}
-	return 999
 }

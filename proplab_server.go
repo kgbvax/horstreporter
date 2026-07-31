@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"horstreporter/internal/proplab"
 )
 
 // proplab_server.go exposes the Propagation Lab engines over HTTP so the
@@ -87,11 +89,11 @@ func proplabParamsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := struct {
-		B proplabParamsB `json:"b"`
-		C proplabParamsC `json:"c"`
+		B proplab.LadderParams `json:"b"`
+		C proplab.FusionParams `json:"c"`
 	}{
-		B: defaultProplabParamsB(),
-		C: defaultProplabParamsC(),
+		B: proplab.DefaultLadderParams(),
+		C: proplab.DefaultFusionParams(),
 	}
 	writeJSON(w, resp)
 }
@@ -142,7 +144,7 @@ func proplabFusionHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, verdict)
 }
 
-func proplabLadderCacheKey(target string, surroundings bool, p proplabParamsB) string {
+func proplabLadderCacheKey(target string, surroundings bool, p proplab.LadderParams) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "%s|%v|", target, surroundings)
 	b, _ := json.Marshal(p)
@@ -150,13 +152,13 @@ func proplabLadderCacheKey(target string, surroundings bool, p proplabParamsB) s
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func proplabFusionCacheKey(p proplabParamsC) string {
+func proplabFusionCacheKey(p proplab.FusionParams) string {
 	b, _ := json.Marshal(p)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
 
-func parseLadderParamsFromQuery(r *http.Request, defaults proplabParamsB) proplabParamsB {
+func parseLadderParamsFromQuery(r *http.Request, defaults proplab.LadderParams) proplab.LadderParams {
 	q := r.URL.Query()
 	p := defaults
 	p.MinLinks = parseIntDefault(q.Get("min_links"), p.MinLinks)
@@ -176,7 +178,7 @@ func parseLadderParamsFromQuery(r *http.Request, defaults proplabParamsB) propla
 	return p
 }
 
-func parseFusionParamsFromQuery(r *http.Request, defaults proplabParamsC) proplabParamsC {
+func parseFusionParamsFromQuery(r *http.Request, defaults proplab.FusionParams) proplab.FusionParams {
 	q := r.URL.Query()
 	p := defaults
 	p.LookbackDays = parseIntDefault(q.Get("lookback_days"), p.LookbackDays)

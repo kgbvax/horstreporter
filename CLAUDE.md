@@ -57,6 +57,9 @@ npm run check
 #   -proplab-sw-enable            # enable NOAA SWPC / D-RAP / OVATION ingest (placeholder)
 #   -proplab-events-enable        # enable contest/DXpedition/POTA calendar ingest (placeholder)
 
+# Replay historical spots through the proplab engines (uses DATABASE_URL env or -db flag)
+go run ./cmd/proplab-backtest -target JO62qm -duration 24h
+
 # Mercator perf gate (catch draw/zoom regressions)
 npm run perf:gate:mercator
 ```
@@ -79,11 +82,16 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `dxlens_mount.go` — mounts the `dxlens` sibling module at `/dxlens/`
 - `dx_proplab.go` — `ProplabService`: Ladder/Fusion orchestrator, ingest hooks, 60s bucket-persistence tick, retention pruning
 - `dx_proplab_store.go` — Postgres persistence for proplab cell buckets, space-weather series, D-RAP snapshots, and event calendar
-- `proplab_ladder.go` — Propagation Lab variant B: midpoint-cell MUF ladder, band-coherence, CUSUM onsets, terminator hints
-- `proplab_fusion.go` — Propagation Lab variant C: conditional-quantile baseline + event/SW fusion + `propagationPrior` seam
+- `internal/proplab/` — shared Propagation Lab engine package consumed by the backend and `cmd/proplab-backtest`
+  - `proplab_ladder.go` — variant B: midpoint-cell MUF ladder, band-coherence, CUSUM onsets, terminator hints
+  - `proplab_fusion.go` — variant C: conditional-quantile baseline + event/SW fusion + `PropagationPrior` seam
+  - `geo.go`, `band.go`, `time.go`, `spot.go`, `region.go`, `stats.go` — self-contained helpers so the package has no dependency on `package main`
 - `proplab_server.go` — `/api/proplab/v1/*` HTTP handlers and short-lived verdict caches
+- `sw_ingest.go` — optional NOAA SWPC / D-RAP / OVATION polling for Fusion
+- `eventcal.go` — optional contest / DXpedition / POTA calendar ingest for Fusion
 - `cmd/horstoperator-agent/` — standalone local agent bridging browser opmode to PSTrotator UDP; resolves Wavelog attributes for the Chase Queue and computes award "wanted" in-process via `internal/awards` (operator log stays local)
 - `cmd/horstprop/` — standalone HF link-quality scoring service (separate binary; consumes HorstReporter read-only over HTTP; see `docs/horstprop.md`)
+- `cmd/proplab-backtest/` — standalone replay harness: reads `dx_raw_spots` from Postgres and emits per-timestamp Ladder + Fusion verdicts (JSON/CSV)
 - `internal/awards/` — local award-progress engine embedded in the agent: slot index (DXCC/WAS/POTA) from the operator's Wavelog log + POTA hunted-parks CSV; `Manager` + `award`/`adif`/`refdata`/`source`/`store` (see `docs/horstawards.md`)
 - `internal/propcontract/` — score contract types shared between the backend and `cmd/horstprop`
 - `internal/awardcontract/` — award `WantedSpot`/`WantedResult` types shared between the agent and `internal/awards`

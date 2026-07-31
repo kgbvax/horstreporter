@@ -1,19 +1,8 @@
-package main
+package proplab
 
-import (
-	"math"
-	"strings"
-)
-
-// dx_midpoint.go contains the geometry and propagation-mode heuristics for the
-// Propagation Lab "Ladder" variant (variant B). It treats each spot as evidence
-// about the ionosphere at the great-circle midpoint of the path, bins that
-// midpoint into a 4-character Maidenhead square, and classifies Es vs F-layer
-// paths from skip-distance signatures.
-//
-// The 4-char square is the natural "cell" for this layer: it is the resolution
-// used by locatorSquareXY/squareXYToLocator (2 degrees longitude by 1 degree
-// latitude), already used everywhere for surroundings and region aggregation.
+// dx_midpoint.go contains the propagation-mode heuristics for the Propagation
+// Lab "Ladder" variant (variant B). Geometry helpers live in geo.go so the
+// package is self-contained and can be consumed by cmd/proplab-backtest.
 
 // ladderFLane is the canonical daytime F-layer MUF-ladder ordering. Bands open
 // and close in this order as the MUF rises and falls (40m first/last, 10m
@@ -79,108 +68,11 @@ func ladderAdjacent(a, b string) bool {
 	return absInt(ia-ib) == 1
 }
 
-// greatCircleMidpoint returns the geographic midpoint of the great-circle path
-// between two lat/lon pairs. It converts each point to a 3-D unit vector,
-// averages the vectors, and renormalises back to lat/lon. This is antimeridian
-// safe and works near the poles.
-func greatCircleMidpoint(lat1, lon1, lat2, lon2 float64) (lat, lon float64) {
-	toRad := math.Pi / 180.0
-	phi1 := lat1 * toRad
-	phi2 := lat2 * toRad
-	deltaLambda := (lon2 - lon1) * toRad
-
-	// 3-D Cartesian unit vectors.
-	x1 := math.Cos(phi1) * math.Cos(lon1*toRad)
-	y1 := math.Cos(phi1) * math.Sin(lon1*toRad)
-	z1 := math.Sin(phi1)
-
-	x2 := math.Cos(phi2) * math.Cos(lon2*toRad)
-	y2 := math.Cos(phi2) * math.Sin(lon2*toRad)
-	z2 := math.Sin(phi2)
-
-	x := x1 + x2
-	y := y1 + y2
-	z := z1 + z2
-
-	r := math.Sqrt(x*x + y*y + z*z)
-	if r == 0 {
-		// Antipodal inputs collapse to the origin; any antipodal point is a
-		// valid midpoint. Return the arithmetic mean as a stable fallback.
-		return (lat1 + lat2) / 2, normalizeLon((lon1 + lon2) / 2)
-	}
-	x /= r
-	y /= r
-	z /= r
-
-	lat = math.Asin(z) * (180.0 / math.Pi)
-	lon = math.Atan2(y, x) * (180.0 / math.Pi)
-	lon = normalizeLon(lon)
-
-	// If the longitudinal difference between the inputs is large, the
-	// Cartesian mean can settle on the shorter great-circle side, which is the
-	// desired midpoint. Guard against a 180-degree flip by preferring the lon
-	// that minimises the sum of great-circle distances.
-	if math.Abs(deltaLambda) > math.Pi {
-		altLon := normalizeLon(lon + 180)
-		if haversineKm(lat, altLon, lat1, lon1)+haversineKm(lat, altLon, lat2, lon2) <
-			haversineKm(lat, lon, lat1, lon1)+haversineKm(lat, lon, lat2, lon2) {
-			lon = altLon
-		}
-	}
-
-	return lat, lon
-}
-
-func normalizeLon(lon float64) float64 {
-	for lon < -180 {
-		lon += 360
-	}
-	for lon >= 180 {
-		lon -= 360
-	}
-	return lon
-}
-
-// latLngToLocator4 converts a latitude/longitude pair to a 4-character
-// Maidenhead square (the resolution used for midpoint cells). It returns the
-// lower-left square that contains the point, which matches the convention used
-// by locatorToLatLng for 4-character locators (it adds +1 degree lon and +0.5
-// degree lat to return the square centre).
-func latLngToLocator4(lat, lon float64) (string, bool) {
-	if lat < -90 || lat > 90 || lon < -180 || lon >= 180 {
-		return "", false
-	}
-	x := int(math.Floor((lon + 180) / 2))
-	y := int(math.Floor((lat + 90) / 1))
+func absInt(x int) int {
 	if x < 0 {
-		x = 0
+		return -x
 	}
-	if x >= 180 {
-		x = 179
-	}
-	if y < 0 {
-		y = 0
-	}
-	if y >= 180 {
-		y = 179
-	}
-	return squareXYToLocator(x, y), true
-}
-
-// midpointCell returns the 4-character Maidenhead square at the great-circle
-// midpoint between two locators. The cell approximates the ionospheric
-// reflection region for that path. Requires both locators to be valid and at
-// least 4 characters long.
-func midpointCell(senderLoc, receiverLoc string) (string, bool) {
-	senderLoc = strings.ToUpper(strings.TrimSpace(senderLoc))
-	receiverLoc = strings.ToUpper(strings.TrimSpace(receiverLoc))
-	if !isLocator(senderLoc) || !isLocator(receiverLoc) || len(senderLoc) < 4 || len(receiverLoc) < 4 {
-		return "", false
-	}
-	lat1, lon1 := locatorToLatLng(senderLoc)
-	lat2, lon2 := locatorToLatLng(receiverLoc)
-	mLat, mLon := greatCircleMidpoint(lat1, lon1, lat2, lon2)
-	return latLngToLocator4(mLat, mLon)
+	return x
 }
 
 // esSkipClassify decides whether a spot on an Es-lane band matches a classic

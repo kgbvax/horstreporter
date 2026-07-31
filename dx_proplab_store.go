@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"horstreporter/internal/proplab"
 )
 
 // dx_proplab_store.go contains the Postgres persistence for the Propagation
@@ -21,21 +23,9 @@ import (
 //   - proplab_drap_snapshots : D-RAP Highest-Affected-Frequency grids
 //   - proplab_events         : contest/DXpedition/POTA active windows
 
-// proplabCellRow is a closed 15-minute bucket ready for upsert.
-type proplabCellRow struct {
-	BucketStart   int64
-	Band          string
-	Cell4         string
-	Region        string
-	Lane          string // "ft8", "rbn", "dcx"
-	SpotCount     int
-	LinkCount     int
-	ReporterCount int
-	SnrMedian     int
-	SnrP10        int
-	DistMedianKm  int
-	DistMaxKm     int
-}
+// proplab.Spot, proplab.CellRow and proplab.BaselineDayRow are the engine-side
+// data contracts; they are reused here so the persistence layer stays aligned
+// with the Ladder/Fusion classifiers.
 
 // proplabSWRow is one observation of a space-weather index.
 type proplabSWRow struct {
@@ -122,7 +112,7 @@ func proplabSchemaStmts() []string {
 	}
 }
 
-func (s *dxPostgresStore) upsertProplabCellBuckets(ctx context.Context, rows []proplabCellRow) error {
+func (s *dxPostgresStore) upsertProplabCellBuckets(ctx context.Context, rows []proplab.CellRow) error {
 	if s == nil || len(rows) == 0 {
 		return nil
 	}
@@ -155,24 +145,8 @@ func (s *dxPostgresStore) upsertProplabCellBuckets(ctx context.Context, rows []p
 	return br.Close()
 }
 
-// proplabCellQueryResult is one row returned by the cell-bucket queries.
-type proplabCellQueryResult struct {
-	BucketStart   int64
-	Band          string
-	Cell4         string
-	Region        string
-	Lane          string
-	SpotCount     int
-	LinkCount     int
-	ReporterCount int
-	SnrMedian     int
-	SnrP10        int
-	DistMedianKm  int
-	DistMaxKm     int
-}
-
-func scanProplabCellRow(rows pgx.Rows) (proplabCellQueryResult, error) {
-	var r proplabCellQueryResult
+func scanProplabCellRow(rows pgx.Rows) (proplab.CellRow, error) {
+	var r proplab.CellRow
 	err := rows.Scan(&r.BucketStart, &r.Band, &r.Cell4, &r.Region, &r.Lane,
 		&r.SpotCount, &r.LinkCount, &r.ReporterCount,
 		&r.SnrMedian, &r.SnrP10, &r.DistMedianKm, &r.DistMaxKm)
@@ -181,7 +155,7 @@ func scanProplabCellRow(rows pgx.Rows) (proplabCellQueryResult, error) {
 
 // queryProplabCellBuckets returns cell buckets within a time window, optionally
 // filtered by band and/or lane. Cells are returned newest-first within a bucket.
-func (s *dxPostgresStore) queryProplabCellBuckets(ctx context.Context, start, end int64, band, lane string, limit int) ([]proplabCellQueryResult, error) {
+func (s *dxPostgresStore) queryProplabCellBuckets(ctx context.Context, start, end int64, band, lane string, limit int) ([]proplab.CellRow, error) {
 	if s == nil {
 		return nil, nil
 	}
@@ -208,7 +182,7 @@ func (s *dxPostgresStore) queryProplabCellBuckets(ctx context.Context, start, en
 		return nil, err
 	}
 	defer rows.Close()
-	var out []proplabCellQueryResult
+	var out []proplab.CellRow
 	for rows.Next() {
 		r, err := scanProplabCellRow(rows)
 		if err != nil {
@@ -223,7 +197,7 @@ func (s *dxPostgresStore) queryProplabCellBuckets(ctx context.Context, start, en
 // over the requested lookback window. This is the raw material for Fusion's
 // conditional-quantile baseline with guardband. The region column makes the
 // aggregation a direct GROUP BY.
-func (s *dxPostgresStore) loadProplabCellBaseline(ctx context.Context, bands []string, regions []string, slot int, lookbackDays int, now int64) ([]proplabBaselineDayRow, error) {
+func (s *dxPostgresStore) loadProplabCellBaseline(ctx context.Context, bands []string, regions []string, slot int, lookbackDays int, now int64) ([]proplab.BaselineDayRow, error) {
 	if s == nil || len(bands) == 0 {
 		return nil, nil
 	}
@@ -255,25 +229,15 @@ func (s *dxPostgresStore) loadProplabCellBaseline(ctx context.Context, bands []s
 		return nil, err
 	}
 	defer rows.Close()
-	var out []proplabBaselineDayRow
+	var out []proplab.BaselineDayRow
 	for rows.Next() {
-		var r proplabBaselineDayRow
+		var r proplab.BaselineDayRow
 		if err := rows.Scan(&r.Band, &r.Region, &r.Slot, &r.DayIndex, &r.LinkCount, &r.SpotCount, &r.DistMaxKm); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
-}
-
-type proplabBaselineDayRow struct {
-	Band      string
-	Region    string
-	Slot      int
-	DayIndex  int64
-	LinkCount int64
-	SpotCount int64
-	DistMaxKm int
 }
 
 // upsertProplabSW inserts or replaces a single space-weather observation.
@@ -619,11 +583,11 @@ func (a *proplabBucketAccumulator) observe(m proplabBackfillSpot) {
 	if band == "" || !bandInScope(band) {
 		return
 	}
-	cell, ok := midpointCell(m.SenderLoc, m.ReceiverLoc)
+	cell, ok := proplab.MidpointCell(m.SenderLoc, m.ReceiverLoc)
 	if !ok {
 		return
 	}
-	lane := proplabLaneForSourceType(m.SourceType)
+	lane := proplab.LaneForSourceType(m.SourceType)
 	bucketStart := (m.SpotTime / proplabBucketSeconds) * proplabBucketSeconds
 
 	lat1, lon1 := locatorToLatLng(m.SenderLoc)
@@ -639,7 +603,7 @@ func (a *proplabBucketAccumulator) observe(m proplabBackfillSpot) {
 		b = &proplabCellBucket{
 			links:     make(map[string]struct{}),
 			reporters: make(map[string]struct{}),
-			region:    string(dxPulseRegionForLocator(cell)),
+			region:    proplab.RegionFromLocator(cell),
 		}
 		a.buckets[key] = b
 	}
@@ -656,38 +620,15 @@ func (a *proplabBucketAccumulator) observe(m proplabBackfillSpot) {
 	}
 }
 
-func intMedian(in []int) int {
-	sort.Ints(in)
-	n := len(in)
-	if n == 0 {
-		return 0
-	}
-	if n%2 == 1 {
-		return in[n/2]
-	}
-	return (in[n/2-1] + in[n/2]) / 2
-}
-
-func proplabLaneForSourceType(t string) string {
-	switch t {
-	case "rbn":
-		return "rbn"
-	case "dxcluster":
-		return "dcx"
-	default:
-		return "ft8"
-	}
-}
-
-func (a *proplabBucketAccumulator) closeBuckets(_ int64) []proplabCellRow {
+func (a *proplabBucketAccumulator) closeBuckets(_ int64) []proplab.CellRow {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	rows := make([]proplabCellRow, 0, len(a.buckets))
+	rows := make([]proplab.CellRow, 0, len(a.buckets))
 	for k, b := range a.buckets {
 		if b.spotCount == 0 {
 			continue
 		}
-		r := proplabCellRow{
+		r := proplab.CellRow{
 			BucketStart:   k.BucketStart,
 			Band:          k.Band,
 			Cell4:         k.Cell4,
@@ -700,8 +641,8 @@ func (a *proplabBucketAccumulator) closeBuckets(_ int64) []proplabCellRow {
 		}
 		if len(b.snrs) > 0 {
 			sort.Ints(b.snrs)
-			r.SnrMedian = intMedian(b.snrs)
-			r.SnrP10 = int(percentileInt(b.snrs, 0.10))
+			r.SnrMedian = proplab.IntMedian(b.snrs)
+			r.SnrP10 = int(proplab.PercentileInt(b.snrs, 0.10))
 		}
 		if b.spotCount > 0 {
 			r.DistMedianKm = int(b.sumDistKm / float64(b.spotCount))

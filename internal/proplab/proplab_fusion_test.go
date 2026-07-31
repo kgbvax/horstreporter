@@ -1,4 +1,4 @@
-package main
+package proplab
 
 import (
 	"testing"
@@ -61,65 +61,65 @@ func TestEventBandMatches(t *testing.T) {
 }
 
 func TestFusionOpenConfirmed(t *testing.T) {
-	eng := newFusionEngine()
+	eng := NewFusionEngine()
 	now := time.Now().Unix()
-	slot := utcSlotOfDay(now)
-	live := []fusionBandCount{{
+	slot := UTCSlotOfDay(now)
+	live := []FusionBandCount{{
 		Band: "20m", Region: "NA", SpotCount: 120, LinkCount: 40, ReporterCount: 30,
 	}}
 	// Baseline: 45 days of ~10 links/day.
-	rows := make([]proplabBaselineDayRow, 0, 45)
+	rows := make([]BaselineDayRow, 0, 45)
 	for i := 0; i < 45; i++ {
-		rows = append(rows, proplabBaselineDayRow{Band: "20m", Region: "NA", Slot: slot, DayIndex: int64(i), LinkCount: 10, SpotCount: 20})
+		rows = append(rows, BaselineDayRow{Band: "20m", Region: "NA", Slot: slot, DayIndex: int64(i), LinkCount: 10, SpotCount: 20})
 	}
-	sw := fusionSWSnapshot{Available: true, Kp: 2, SFI: 120}
-	v := eng.Verdict(live, rows, nil, sw, nil, defaultProplabParamsC(), now)
+	sw := FusionSWSnapshot{Available: true, Kp: 2, SFI: 120}
+	v := eng.Verdict(live, rows, nil, sw, nil, DefaultFusionParams(), now)
 	if len(v.Bands) != 1 {
 		t.Fatalf("expected 1 band verdict, got %d", len(v.Bands))
 	}
 	b := v.Bands[0]
-	if b.State != proplabStateOpenConfirmed {
+	if b.State != StateOpenConfirmed {
 		t.Fatalf("expected open_confirmed, got %s (%s)", b.State, b.Reason)
 	}
 }
 
 func TestFusionGuardbandDownweightsOutlier(t *testing.T) {
-	eng := newFusionEngine()
+	eng := NewFusionEngine()
 	now := time.Now().Unix()
-	slot := utcSlotOfDay(now)
-	live := []fusionBandCount{{Band: "20m", Region: "NA", SpotCount: 30, LinkCount: 10, ReporterCount: 8}}
-	rows := make([]proplabBaselineDayRow, 0, 45)
+	slot := UTCSlotOfDay(now)
+	live := []FusionBandCount{{Band: "20m", Region: "NA", SpotCount: 30, LinkCount: 10, ReporterCount: 8}}
+	rows := make([]BaselineDayRow, 0, 45)
 	for i := 0; i < 44; i++ {
-		rows = append(rows, proplabBaselineDayRow{Band: "20m", Region: "NA", Slot: slot, DayIndex: int64(i), LinkCount: 5})
+		rows = append(rows, BaselineDayRow{Band: "20m", Region: "NA", Slot: slot, DayIndex: int64(i), LinkCount: 5})
 	}
 	// One contest weekend outlier.
-	rows = append(rows, proplabBaselineDayRow{Band: "20m", Region: "NA", Slot: slot, DayIndex: 44, LinkCount: 500})
-	params := defaultProplabParamsC()
-	v := eng.Verdict(live, rows, nil, fusionSWSnapshot{Available: true, Kp: 2, SFI: 120}, nil, params, now)
+	rows = append(rows, BaselineDayRow{Band: "20m", Region: "NA", Slot: slot, DayIndex: 44, LinkCount: 500})
+	params := DefaultFusionParams()
+	v := eng.Verdict(live, rows, nil, FusionSWSnapshot{Available: true, Kp: 2, SFI: 120}, nil, params, now)
 	b := v.Bands[0]
 	// Without guardband p50 would be 5; with outlier downweighted p50 stays ~5,
 	// so 10 links should be ~2x baseline, open_confirmed.
-	if b.State != proplabStateOpenConfirmed {
+	if b.State != StateOpenConfirmed {
 		t.Fatalf("expected open_confirmed with guardband, got %s (p50=%.1f)", b.State, b.BaselineP50)
 	}
 }
 
 func TestFusionExplainedByEvent(t *testing.T) {
-	eng := newFusionEngine()
+	eng := NewFusionEngine()
 	now := time.Now().Unix()
-	slot := utcSlotOfDay(now)
-	live := []fusionBandCount{{Band: "20m", Region: "NA", SpotCount: 60, LinkCount: 20, ReporterCount: 15}}
-	rows := make([]proplabBaselineDayRow, 0, 45)
+	slot := UTCSlotOfDay(now)
+	live := []FusionBandCount{{Band: "20m", Region: "NA", SpotCount: 60, LinkCount: 20, ReporterCount: 15}}
+	rows := make([]BaselineDayRow, 0, 45)
 	for i := 0; i < 45; i++ {
-		rows = append(rows, proplabBaselineDayRow{Band: "20m", Region: "NA", Slot: slot, DayIndex: int64(i), LinkCount: 10})
+		rows = append(rows, BaselineDayRow{Band: "20m", Region: "NA", Slot: slot, DayIndex: int64(i), LinkCount: 10})
 	}
-	events := []fusionEvent{{
+	events := []FusionEvent{{
 		Source: "wa7bnm", Title: "CQ WW CW", BandMask: "80m-10m", Region: "NA", EndsInMin: 120,
 	}}
-	v := eng.Verdict(live, rows, events, fusionSWSnapshot{Available: true, Kp: 2, SFI: 120}, nil, defaultProplabParamsC(), now)
+	v := eng.Verdict(live, rows, events, FusionSWSnapshot{Available: true, Kp: 2, SFI: 120}, nil, DefaultFusionParams(), now)
 	b := v.Bands[0]
 	// Activity is ~2x baseline but explained by contest.
-	if b.State != proplabStateClosedButActive {
+	if b.State != StateClosedButActive {
 		t.Fatalf("expected closed_but_active, got %s", b.State)
 	}
 	if len(b.ExplainedBy) == 0 || b.ExplainedBy[0] != "CQ WW CW" {
@@ -128,18 +128,18 @@ func TestFusionExplainedByEvent(t *testing.T) {
 }
 
 func TestFusionClosedAbsorption(t *testing.T) {
-	eng := newFusionEngine()
+	eng := NewFusionEngine()
 	now := time.Now().Unix()
-	slot := utcSlotOfDay(now)
-	live := []fusionBandCount{{Band: "20m", Region: "NA", SpotCount: 0, LinkCount: 0, ReporterCount: 0}}
-	rows := make([]proplabBaselineDayRow, 0, 45)
+	slot := UTCSlotOfDay(now)
+	live := []FusionBandCount{{Band: "20m", Region: "NA", SpotCount: 0, LinkCount: 0, ReporterCount: 0}}
+	rows := make([]BaselineDayRow, 0, 45)
 	for i := 0; i < 45; i++ {
-		rows = append(rows, proplabBaselineDayRow{Band: "20m", Region: "NA", Slot: slot, DayIndex: int64(i), LinkCount: 10})
+		rows = append(rows, BaselineDayRow{Band: "20m", Region: "NA", Slot: slot, DayIndex: int64(i), LinkCount: 10})
 	}
-	sw := fusionSWSnapshot{Available: true, Kp: 6, SFI: 120, HasDrap: true, DrapHAF: map[string]float64{"NA": 15.0}}
-	v := eng.Verdict(live, rows, nil, sw, nil, defaultProplabParamsC(), now)
+	sw := FusionSWSnapshot{Available: true, Kp: 6, SFI: 120, HasDrap: true, DrapHAF: map[string]float64{"NA": 15.0}}
+	v := eng.Verdict(live, rows, nil, sw, nil, DefaultFusionParams(), now)
 	b := v.Bands[0]
-	if b.State != proplabStateClosedWithCause {
+	if b.State != StateClosedWithCause {
 		t.Fatalf("expected closed_with_cause, got %s", b.State)
 	}
 	if b.ClosureType != "absorption_limited" {
@@ -148,11 +148,11 @@ func TestFusionClosedAbsorption(t *testing.T) {
 }
 
 func TestFusionInsufficientData(t *testing.T) {
-	eng := newFusionEngine()
+	eng := NewFusionEngine()
 	now := time.Now().Unix()
-	live := []fusionBandCount{{Band: "20m", Region: "NA", SpotCount: 5, LinkCount: 2, ReporterCount: 2}}
-	v := eng.Verdict(live, nil, nil, fusionSWSnapshot{}, nil, defaultProplabParamsC(), now)
-	if v.Bands[0].State != proplabStateInsufficientData {
+	live := []FusionBandCount{{Band: "20m", Region: "NA", SpotCount: 5, LinkCount: 2, ReporterCount: 2}}
+	v := eng.Verdict(live, nil, nil, FusionSWSnapshot{}, nil, DefaultFusionParams(), now)
+	if v.Bands[0].State != StateInsufficientData {
 		t.Fatalf("expected insufficient_data, got %s", v.Bands[0].State)
 	}
 }
