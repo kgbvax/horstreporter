@@ -50,6 +50,8 @@ type FusionParams struct {
 	XrayMinClass     string  `json:"xray_min_class"`
 }
 
+// FusionBandCount is the live-window observation for one band-region cell.
+
 // DefaultFusionParams returns the factory defaults for variant C.
 func DefaultFusionParams() FusionParams {
 	return FusionParams{
@@ -79,41 +81,41 @@ type FusionBandCount struct {
 
 // FusionSWSnapshot is the latest space-weather state.
 type FusionSWSnapshot struct {
-	Kp         float64
-	SFI        float64
-	XrayClass  string  // e.g. "M5.2" or "C1.0" or ""
-	AuroraGW   float64 // hemispheric power in GW
-	DrapHAF    map[string]float64
-	DrapAgeMin int
-	Available  bool
-	HasDrap    bool
-	FetchedAt  int64
+	Kp         float64            `json:"kp"`
+	SFI        float64            `json:"sfi"`
+	XrayClass  string             `json:"xray_class"` // e.g. "M5.2" or "C1.0" or ""
+	AuroraGW   float64            `json:"aurora_gw"`  // hemispheric power in GW
+	DrapHAF    map[string]float64 `json:"drap_haf"`
+	DrapAgeMin int                `json:"drap_age_min"`
+	Available  bool               `json:"available"`
+	HasDrap    bool               `json:"has_drap"`
+	FetchedAt  int64              `json:"fetched_at"`
 }
 
 // FusionEvent is an active demand-side event.
 type FusionEvent struct {
-	Source    string
-	Title     string
-	BandMask  string
-	Locator4  string
-	Region    string
-	EndsInMin int
+	Source    string `json:"source"`
+	Title     string `json:"title"`
+	BandMask  string `json:"band_mask"`
+	Locator4  string `json:"locator4"`
+	Region    string `json:"region"`
+	EndsInMin int    `json:"ends_in_min"`
 }
 
 // FusionBandVerdict is one band's classification from variant C.
 type FusionBandVerdict struct {
-	Band           string
-	Region         string
-	State          string // see VerdictState constants
-	Label          string
-	Reason         string
-	Confidence     float64
-	SpotsPerMinute float64
-	LinksPerMinute float64
-	BaselineP50    float64
-	ActivityRatio  float64
-	ClosureType    string // muf_limited | absorption_limited | auroral | ""
-	ExplainedBy    []string
+	Band           string   `json:"band"`
+	Region         string   `json:"region"`
+	State          string   `json:"state"` // see VerdictState constants
+	Label          string   `json:"label"`
+	Reason         string   `json:"reason"`
+	Confidence     float64  `json:"confidence"`
+	SpotsPerMinute float64  `json:"spots_per_minute"`
+	LinksPerMinute float64  `json:"links_per_minute"`
+	BaselineP50    float64  `json:"baseline_p50"`
+	ActivityRatio  float64  `json:"activity_ratio"`
+	ClosureType    string   `json:"closure_type"` // muf_limited | absorption_limited | auroral | ""
+	ExplainedBy    []string `json:"explained_by"`
 }
 
 // VerdictState values are shared across variants where applicable.
@@ -128,13 +130,13 @@ const (
 
 // FusionVerdict is the full variant-C result for a target.
 type FusionVerdict struct {
-	GeneratedAt  int64
-	Params       FusionParams
-	Bands        []FusionBandVerdict
-	Prior        PropagationPrior
-	DataThin     bool
-	SWAvailable  bool
-	EventsActive int
+	GeneratedAt  int64               `json:"generated_at"`
+	Params       FusionParams        `json:"params"`
+	Bands        []FusionBandVerdict `json:"bands"`
+	Prior        PropagationPrior    `json:"-"`
+	DataThin     bool                `json:"data_thin"`
+	SWAvailable  bool                `json:"sw_available"`
+	EventsActive int                 `json:"events_active"`
 }
 
 // FusionEngine holds optional caches; the core computation is stateless per

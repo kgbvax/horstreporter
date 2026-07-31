@@ -208,26 +208,26 @@ func (e *LadderEngine) CloseBuckets(cutoff int64) []CellRow {
 
 // LadderBandVerdict is one band's classification from variant B.
 type LadderBandVerdict struct {
-	Band           string
-	State          string // "open", "rising", "activity_spike", "closed", "unconfirmed"
-	Reason         string
-	Confidence     float64
-	SpotsPerMinute float64
-	LinksPerMinute float64
-	MufCells       []string // midpoint cells that declare this band open
-	EsCells        []string // cells classified as sporadic-E on Es-lane bands
-	OnsetMinAgo    int      // -1 if no onset detected
-	ForecastHints  []string // human-readable strings (e.g. terminator ETA)
+	Band           string   `json:"band"`
+	State          string   `json:"state"` // "open", "rising", "activity_spike", "closed", "unconfirmed"
+	Reason         string   `json:"reason"`
+	Confidence     float64  `json:"confidence"`
+	SpotsPerMinute float64  `json:"spots_per_minute"`
+	LinksPerMinute float64  `json:"links_per_minute"`
+	MufCells       []string `json:"muf_cells"`      // midpoint cells that declare this band open
+	EsCells        []string `json:"es_cells"`       // cells classified as sporadic-E on Es-lane bands
+	OnsetMinAgo    int      `json:"onset_min_ago"`  // -1 if no onset detected
+	ForecastHints  []string `json:"forecast_hints"` // human-readable strings (e.g. terminator ETA)
 }
 
 // LadderVerdict is the full variant-B result for a target/personalization.
 type LadderVerdict struct {
-	GeneratedAt  int64
-	Params       LadderParams
-	Bands        []LadderBandVerdict
-	OpenRuns     [][]string
-	EmpiricalMUF float64 // highest open ladder-F band as MHz, 0 if none
-	DataThin     bool
+	GeneratedAt  int64               `json:"generated_at"`
+	Params       LadderParams        `json:"params"`
+	Bands        []LadderBandVerdict `json:"bands"`
+	OpenRuns     [][]string          `json:"open_runs"`
+	EmpiricalMUF float64             `json:"empirical_muf"` // highest open ladder-F band as MHz, 0 if none
+	DataThin     bool                `json:"data_thin"`
 }
 
 // Verdict evaluates the current window and returns per-band recommendations.
