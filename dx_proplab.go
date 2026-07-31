@@ -310,11 +310,12 @@ func buildFusionSW(latest map[string]proplabSWRow) fusionSWSnapshot {
 		switch series {
 		case "kp":
 			sw.Kp = r.Value
-		case "sfi":
+		case "F10.7":
 			sw.SFI = r.Value
 		case "xray":
-			// Stored as a numeric proxy; real parsing deferred to ingest layer.
-		case "aurora":
+			// Stored as raw W/m^2 flux; convert back to class string.
+			sw.XrayClass = xrayClassFromFlux(r.Value)
+		case "ovation":
 			sw.AuroraGW = r.Value
 		}
 		if r.ObsTime > sw.FetchedAt {
@@ -434,17 +435,4 @@ func bandOrder(band string) int {
 		}
 	}
 	return 999
-}
-
-// startProplabSWIngest is a placeholder for the NOAA SWPC / D-RAP / OVATION
-// ingest scheduled as a follow-up task. Logging it keeps the startup path
-// explicit and grep-friendly.
-func startProplabSWIngest() {
-	logInfo("Proplab space-weather ingest not yet implemented")
-}
-
-// startProplabEventIngest is a placeholder for the contest/DXpedition/POTA
-// calendar ingest scheduled as a follow-up task.
-func startProplabEventIngest() {
-	logInfo("Proplab event-calendar ingest not yet implemented")
 }
