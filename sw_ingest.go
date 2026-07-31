@@ -235,7 +235,7 @@ func (s *swIngestService) fetchOvation() {
 }
 
 func (s *swIngestService) fetchDrap() {
-	body, err := httpGet(s.client, swDrapURL)
+	body, err := drapTextGet(s.client, swDrapURL)
 	if err != nil {
 		logInfo("SW D-RAP fetch failed: %v", err)
 		return
@@ -262,6 +262,25 @@ func (s *swIngestService) fetchDrap() {
 	s.sw.Available = true
 	s.sw.FetchedAt = grid.ValidAt
 	s.mu.Unlock()
+}
+
+// drapTextGet fetches a plain-text D-RAP grid with the correct Accept header.
+func drapTextGet(client *http.Client, url string) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "text/plain")
+	req.Header.Set("User-Agent", "horstreporter-proplab/1.0")
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", res.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(res.Body, 1<<20))
 }
 
 // fetchSWPCJsonSeries parses the NOAA SWPC JSON table format: first row is a
