@@ -206,6 +206,12 @@ func parseDRAPDataRow(line string) (float64, []float64, bool) {
 	}
 	vals := make([]float64, 0, len(fields)-start)
 	for _, f := range fields[start:] {
+		// Live grids occasionally contain "NA" or other non-numeric markers.
+		f = strings.TrimSpace(f)
+		if f == "" || strings.EqualFold(f, "NA") {
+			vals = append(vals, drapMissing)
+			continue
+		}
 		if v, err := strconv.ParseFloat(f, 64); err == nil {
 			vals = append(vals, v)
 		} else {

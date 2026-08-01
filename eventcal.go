@@ -178,15 +178,15 @@ func (s *eventcalService) fetchDxpeds() {
 
 // potaSpot is a single activator spot from the public POTA API.
 type potaSpot struct {
-	SpotID       int     `json:"spotId"`
-	Activator    string  `json:"activator"`
-	Reference    string  `json:"reference"`
-	Frequency    float64 `json:"frequency"` // kHz
-	Mode         string  `json:"mode"`
-	Grid4        string  `json:"grid4"`
-	SpotTime     string  `json:"spotTime"`  // local ISO8601, e.g. "2026-07-31T19:26:08"
-	Expire       int     `json:"expire"`    // seconds remaining, if provided
-	LocationDesc string  `json:"locationDesc"`
+	SpotID       int         `json:"spotId"`
+	Activator    string      `json:"activator"`
+	Reference    string      `json:"reference"`
+	Frequency    json.Number `json:"frequency"` // kHz; served as string by the API
+	Mode         string      `json:"mode"`
+	Grid4        string      `json:"grid4"`
+	SpotTime     string      `json:"spotTime"`  // local ISO8601, e.g. "2026-07-31T19:26:08"
+	Expire       int         `json:"expire"`    // seconds remaining, if provided
+	LocationDesc string      `json:"locationDesc"`
 }
 
 func (s *eventcalService) fetchPota() {
@@ -203,7 +203,11 @@ func (s *eventcalService) fetchPota() {
 	now := time.Now().Unix()
 	rows := make([]proplabEventRow, 0, len(spots))
 	for _, sp := range spots {
-		band := proplab.BandForFrequencyKHz(sp.Frequency)
+		freqKHz, err := strconv.ParseFloat(sp.Frequency.String(), 64)
+		if err != nil {
+			continue
+		}
+		band := proplab.BandForFrequencyKHz(freqKHz)
 		if band == "" {
 			continue
 		}
