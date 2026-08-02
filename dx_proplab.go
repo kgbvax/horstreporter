@@ -38,6 +38,7 @@ type ProplabService struct {
 	events []proplab.FusionEvent
 
 	dedup             map[string]int64
+	destAcc           map[destBucketKey]*destBucketAgg
 	lastPrune         time.Time
 	stopCh            chan struct{}
 	wg                sync.WaitGroup
@@ -134,6 +135,7 @@ func (s *ProplabService) Observe(m MQTTMessage) {
 	s.mu.Unlock()
 
 	s.ladder.Observe(spot)
+	s.observeDest(m, band)
 }
 
 // Backfill feeds a batch of recovered spots into the Ladder engine at startup.
@@ -242,6 +244,16 @@ func (s *ProplabService) recompute() {
 		cancel()
 		if err != nil {
 			logInfo("Proplab bucket persistence failed (rows=%d): %v", len(rows), err)
+		}
+	}
+
+	destRows := s.closeDestBuckets(cutoff)
+	if len(destRows) > 0 && s.store != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := s.store.upsertProplabDestBuckets(ctx, destRows)
+		cancel()
+		if err != nil {
+			logInfo("Proplab dest bucket persistence failed (rows=%d): %v", len(destRows), err)
 		}
 	}
 

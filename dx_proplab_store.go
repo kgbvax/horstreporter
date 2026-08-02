@@ -19,6 +19,7 @@ import (
 //
 // Tables created by this file:
 //   - proplab_cell_buckets    : midpoint-cell × band × 15-min buckets
+//   - proplab_dest_buckets    : near-end field × destination-region × band buckets
 //   - proplab_sw_series      : space-weather index time series
 //   - proplab_drap_snapshots : D-RAP Highest-Affected-Frequency grids
 //   - proplab_events         : contest/DXpedition/POTA active windows
@@ -81,6 +82,26 @@ func proplabSchemaStmts() []string {
 		`CREATE INDEX IF NOT EXISTS idx_proplab_cell_bucket_time
 			ON proplab_cell_buckets (bucket_start);`,
 
+		`CREATE TABLE IF NOT EXISTS proplab_dest_buckets (
+			bucket_start   BIGINT NOT NULL,
+			band           TEXT   NOT NULL,
+			scope2         TEXT   NOT NULL,
+			dx_region      TEXT   NOT NULL,
+			spot_count     INT    NOT NULL DEFAULT 0,
+			link_count     INT    NOT NULL DEFAULT 0,
+			reporter_count INT    NOT NULL DEFAULT 0,
+			snr_median     SMALLINT NOT NULL DEFAULT 0,
+			dist_median_km INT    NOT NULL DEFAULT 0,
+			dist_max_km    INT    NOT NULL DEFAULT 0,
+			PRIMARY KEY (bucket_start, band, scope2, dx_region)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_proplab_dest_scope_band_bucket
+			ON proplab_dest_buckets (scope2, band, bucket_start);`,
+		`CREATE INDEX IF NOT EXISTS idx_proplab_dest_region_band_bucket
+			ON proplab_dest_buckets (dx_region, band, bucket_start);`,
+		`CREATE INDEX IF NOT EXISTS idx_proplab_dest_bucket_time
+			ON proplab_dest_buckets (bucket_start);`,
+
 		`CREATE TABLE IF NOT EXISTS proplab_sw_series (
 			series   TEXT NOT NULL,
 			obs_time BIGINT NOT NULL,
@@ -132,6 +153,41 @@ func (s *dxPostgresStore) upsertProplabCellBuckets(ctx context.Context, rows []p
 				dist_max_km    = GREATEST(proplab_cell_buckets.dist_max_km, EXCLUDED.dist_max_km)
 		`, r.BucketStart, r.Band, r.Cell4, r.Region, r.Lane,
 			r.SpotCount, r.LinkCount, r.ReporterCount, r.SnrMedian, r.SnrP10, r.DistMedianKm, r.DistMaxKm)
+	}
+	br := s.pool.SendBatch(ctx, batch)
+	defer func() { _ = br.Close() }()
+	for range rows {
+		if _, err := br.Exec(); err != nil {
+			return err
+		}
+	}
+	return br.Close()
+}
+
+// upsertProplabDestBuckets persists closed destination buckets additively, like
+// the cell buckets: counts accumulate on conflict, medians are replaced by the
+// newest flush, dist_max takes the greatest.
+func (s *dxPostgresStore) upsertProplabDestBuckets(ctx context.Context, rows []proplab.DestRow) error {
+	if s == nil || len(rows) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for _, r := range rows {
+		batch.Queue(`
+			INSERT INTO proplab_dest_buckets
+			(bucket_start, band, scope2, dx_region, spot_count, link_count, reporter_count,
+			 snr_median, dist_median_km, dist_max_km)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			ON CONFLICT (bucket_start, band, scope2, dx_region)
+			DO UPDATE SET
+				spot_count     = proplab_dest_buckets.spot_count + EXCLUDED.spot_count,
+				link_count     = proplab_dest_buckets.link_count + EXCLUDED.link_count,
+				reporter_count = proplab_dest_buckets.reporter_count + EXCLUDED.reporter_count,
+				snr_median     = EXCLUDED.snr_median,
+				dist_median_km = EXCLUDED.dist_median_km,
+				dist_max_km    = GREATEST(proplab_dest_buckets.dist_max_km, EXCLUDED.dist_max_km)
+		`, r.BucketStart, r.Band, r.Scope2, r.Region,
+			r.SpotCount, r.LinkCount, r.ReporterCount, r.SnrMedian, r.DistMedianKm, r.DistMaxKm)
 	}
 	br := s.pool.SendBatch(ctx, batch)
 	defer func() { _ = br.Close() }()
@@ -385,6 +441,7 @@ func (s *dxPostgresStore) pruneProplabOlderThan(cutoff int64) (int64, error) {
 	}
 	tables := []string{
 		"proplab_cell_buckets",
+		"proplab_dest_buckets",
 		"proplab_sw_series",
 		"proplab_drap_snapshots",
 		"proplab_events",
@@ -394,7 +451,7 @@ func (s *dxPostgresStore) pruneProplabOlderThan(cutoff int64) (int64, error) {
 	for _, table := range tables {
 		var col string
 		switch table {
-		case "proplab_cell_buckets", "proplab_sw_series", "proplab_drap_snapshots":
+		case "proplab_cell_buckets", "proplab_dest_buckets", "proplab_sw_series", "proplab_drap_snapshots":
 			col = "bucket_start"
 			if table == "proplab_sw_series" {
 				col = "obs_time"
