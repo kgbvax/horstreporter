@@ -207,13 +207,19 @@ function normalizeB(data) {
     const byBand = {};
     (data.bands || []).forEach(b => {
         const s = String(b.state || '').toLowerCase();
+        const rate = b.links_per_minute || 0;
         let state, label;
-        if (s === 'open' || s === 'rising') { state = 'open'; label = s === 'rising' ? 'rising' : 'open'; }
+        // Threshold B's "open" the same way the proplab-backtest defines ground truth:
+        // a band is actually open only when links_per_minute >= 2.0.
+        if (s === 'open' || s === 'rising') {
+            if (rate >= 2.0) { state = 'open'; label = s === 'rising' ? 'rising' : 'open'; }
+            else { state = 'maybe'; label = 'weak'; }
+        }
         else if (s === 'activity_spike') { state = 'maybe'; label = 'spike'; }
         else if (s === 'unconfirmed') { state = 'maybe'; label = 'unconfirmed'; }
         else { state = 'closed'; label = b.state || 'closed'; }
         const conf = normConf(b.confidence);
-        const lines = [`B ladder: ${b.state || '-'} (${b.reason || 'no reason'})`, `conf ${fmt(conf != null ? conf * 100 : null)} · ${fmt(b.links_per_minute)} links/m`];
+        const lines = [`B ladder: ${b.state || '-'} (${b.reason || 'no reason'})`, `conf ${fmt(conf != null ? conf * 100 : null)} · ${fmt(b.links_per_minute)} links/m (threshold 2.0 links/m)`];
         if (b.onset_min_ago >= 0) lines.push(`onset ${b.onset_min_ago} min ago`);
         if (b.forecast_hints?.length) lines.push(`hints: ${b.forecast_hints.join('; ')}`);
         const mufRegions = regionCountsFromCells(b.muf_cells);
