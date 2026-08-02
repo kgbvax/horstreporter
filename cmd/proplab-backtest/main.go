@@ -29,6 +29,10 @@ func main() {
 		lookbackDays = flag.Int("fusion-lookback-days", 45, "Fusion baseline lookback window in days")
 		emit         = flag.String("emit", "json", "Output format: json (line-delimited), csv, or none")
 		metricsOnly  = flag.Bool("metrics-only", false, "Print only the final scoring metrics summary")
+
+		destBackfillDays = flag.Int("dest-backfill-days", 0, "Backfill proplab_dest_buckets from dx_raw_spots for the last N days (2h batches), then exit")
+		destEval         = flag.Bool("dest-eval", false, "Replay the reachability composer over destination buckets; print calibration metrics. -target scopes the replay (empty = global).")
+		destHoldout      = flag.Float64("dest-holdout", 0, "Reporter callsign holdout fraction for reach calibration (e.g. 0.25); holdout callsigns are excluded from the live window but not from ground truth")
 	)
 	flag.Parse()
 
@@ -59,6 +63,23 @@ func main() {
 	if err := pool.Ping(ctx); err != nil {
 		log.Fatalf("db ping: %v", err)
 	}
+
+	if *destBackfillDays > 0 {
+		if err := runDestBackfill(ctx, pool, *destBackfillDays, endTS); err != nil {
+			log.Fatalf("dest backfill: %v", err)
+		}
+		fmt.Println("dest backfill complete")
+		return
+	}
+
+	var destRep *destReplay
+	var reachK *reachKeeper
+	if *destEval {
+		scopeList, scopeMap := destScopesForTarget(*target, *surroundings)
+		destRep = newDestReplay(*destHoldout)
+		reachK = newReachKeeper(scopeList, scopeMap)
+	}
+	ladderVal := newLadderValKeeper()
 
 	ladder := proplab.NewLadderEngine()
 	fusion := proplab.NewFusionEngine()
@@ -123,6 +144,9 @@ func main() {
 		}
 
 		ladder.Observe(spot)
+		if destRep != nil {
+			destRep.observe(spot, raw.SpotTime)
+		}
 		history = append(history, spot)
 		cutoff := raw.SpotTime - historyWindow
 		if i := sort.Search(len(history), func(i int) bool { return history[i].T >= cutoff }); i > 0 {
@@ -137,6 +161,12 @@ func main() {
 			}
 
 			scoreKeeper.observeStep(nowEval, lv, fv)
+			ladderVal.observeStep(nowEval, lv)
+			if reachK != nil {
+				if err := reachK.observeStep(ctx, pool, destRep, lv, *target, *surroundings, nowEval, endTS); err != nil {
+					log.Fatalf("reach eval at %d: %v", nowEval, err)
+				}
+			}
 			if !*metricsOnly {
 				emitStep(*emit, nowEval, lv, fv)
 			}
@@ -162,6 +192,12 @@ func main() {
 			log.Fatalf("final eval: %v", err)
 		}
 		scoreKeeper.observeStep(nowEval, lv, fv)
+		ladderVal.observeStep(nowEval, lv)
+		if reachK != nil {
+			if err := reachK.observeStep(ctx, pool, destRep, lv, *target, *surroundings, nowEval, endTS); err != nil {
+				log.Fatalf("final reach eval: %v", err)
+			}
+		}
 		if !*metricsOnly {
 			emitStep(*emit, nowEval, lv, fv)
 		}
@@ -174,6 +210,20 @@ func main() {
 	}
 	// Always append a metrics summary to stderr so it doesn't contaminate CSV/JSON output on stdout.
 	printMetricsText(metrics)
+
+	// Ladder validation + reach calibration go to stderr as JSON blocks.
+	fmt.Fprintln(os.Stderr, "\n=== ladder validation (model B evidence) ===")
+	printJSONTo(os.Stderr, ladderVal.metrics())
+	if reachK != nil {
+		fmt.Fprintln(os.Stderr, "\n=== reach calibration ===")
+		printJSONTo(os.Stderr, reachK.metrics())
+	}
+}
+
+func printJSONTo(w *os.File, v any) {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(v)
 }
 
 // evalAt runs one Ladder + Fusion evaluation at a given timestamp.
