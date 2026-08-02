@@ -217,6 +217,7 @@ type LadderBandVerdict struct {
 	MufCells       []string `json:"muf_cells"`      // midpoint cells that declare this band open
 	EsCells        []string `json:"es_cells"`       // cells classified as sporadic-E on Es-lane bands
 	OnsetMinAgo    int      `json:"onset_min_ago"`  // -1 if no onset detected
+	OnsetRegion    string   `json:"onset_region,omitempty"` // midpoint region of the youngest CUSUM alarm cell
 	ForecastHints  []string `json:"forecast_hints"` // human-readable strings (e.g. terminator ETA)
 }
 
@@ -348,9 +349,10 @@ func (e *LadderEngine) Verdict(target string, surroundings bool, history []Spot,
 		}
 
 		// Onset detection and forecast hints.
-		onsetAge := e.minOnsetAge(bandCells, live, expected, params, now)
+		onsetAge, onsetRegion := e.minOnsetAge(bandCells, live, expected, params, now)
 		if onsetAge >= 0 {
 			v.OnsetMinAgo = onsetAge
+			v.OnsetRegion = onsetRegion
 			v.Reason += "; opening detected ~" + strconv.Itoa(onsetAge) + " min ago"
 		}
 		if isLadderLowBand(band) {
@@ -512,10 +514,12 @@ func bandCells(cells []cellBandKey, band string, live map[cellBandKey]*ladderBan
 }
 
 // minOnsetAge scans the requested cell-band keys, runs the CUSUM update for the
-// current bucket, and returns the youngest onset age in minutes, or -1 if none.
-func (e *LadderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*ladderBandAggregate, expected map[cellBandKey]float64, params LadderParams, now int64) int {
+// current bucket, and returns the youngest onset age in minutes (or -1 if none)
+// plus the midpoint region of the alarm cell for context ("", if none).
+func (e *LadderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*ladderBandAggregate, expected map[cellBandKey]float64, params LadderParams, now int64) (int, string) {
 	bucketIdx := int(now / BucketSeconds)
 	minAge := -1
+	minRegion := ""
 	for _, cbk := range cells {
 		agg := live[cbk]
 		if agg == nil {
@@ -549,10 +553,11 @@ func (e *LadderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*la
 			ageMin := ageBuckets * BucketSeconds / 60
 			if minAge == -1 || ageMin < minAge {
 				minAge = ageMin
+				minRegion = cbk.Region
 			}
 		}
 	}
-	return minAge
+	return minAge, minRegion
 }
 
 // terminatorHints scans for low-band onsets in cells east of any relevant cell

@@ -294,6 +294,182 @@ func (s *dxPostgresStore) loadProplabCellBaseline(ctx context.Context, bands []s
 	return out, rows.Err()
 }
 
+// --- Destination bucket queries (reachability product view) -----------------
+
+// destBucketSlotSQL is the 30-min UTC slot expression for the dest table. Keep
+// in sync with the cell-baseline slot expression above; both are pinned to
+// proplab.UTCSlotOfDay by TestSQLSlotOfDayMatchesUTCSlotOfDay.
+const destBucketSlotSQL = "(((bucket_start / 900) % 96) / 2)"
+
+// loadDestBaseline returns per-day aggregation per (band, dx_region, slot) over
+// the lookback window, restricted to one 30-min UTC slot. scopes selects the
+// near-end fields; nil scopes means global (no scope filter). This is the raw
+// material for the destination quantile baseline (same shape as the cell
+// baseline, so the composer can reuse the fusion quantile helpers).
+func (s *dxPostgresStore) loadDestBaseline(ctx context.Context, scopes, bands, regions []string, slot, lookbackDays int, now int64) ([]proplab.BaselineDayRow, error) {
+	return s.queryDestBaseline(ctx, scopes, bands, regions, &slot, lookbackDays, now)
+}
+
+// loadDestSlotProfile is loadDestBaseline without the slot filter — all 48
+// slots — for the scheduled-openings derivation.
+func (s *dxPostgresStore) loadDestSlotProfile(ctx context.Context, scopes, bands, regions []string, lookbackDays int, now int64) ([]proplab.BaselineDayRow, error) {
+	return s.queryDestBaseline(ctx, scopes, bands, regions, nil, lookbackDays, now)
+}
+
+func (s *dxPostgresStore) queryDestBaseline(ctx context.Context, scopes, bands, regions []string, slot *int, lookbackDays int, now int64) ([]proplab.BaselineDayRow, error) {
+	if s == nil || len(bands) == 0 {
+		return nil, nil
+	}
+	if len(scopes) == 0 {
+		scopes = nil
+	}
+	if len(regions) == 0 {
+		regions = nil
+	}
+	if lookbackDays <= 0 {
+		lookbackDays = 45
+	}
+	if now <= 0 {
+		now = time.Now().Unix()
+	}
+	start := now - int64(lookbackDays*24*60*60)
+	slotFilter := ""
+	args := []any{start, bands, regions, scopes}
+	if slot != nil {
+		slotFilter = "AND " + destBucketSlotSQL + " = $5"
+		args = append(args, *slot)
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT band, dx_region,
+		       `+destBucketSlotSQL+` AS slot_of_day,
+		       (bucket_start / 86400) AS day_index,
+		       SUM(link_count)::bigint AS link_count,
+		       SUM(spot_count)::bigint AS spot_count,
+		       MAX(dist_max_km)::int AS dist_max_km
+		FROM proplab_dest_buckets
+		WHERE bucket_start >= $1
+		  AND band = ANY($2)
+		  AND ($3::text[] IS NULL OR dx_region = ANY($3))
+		  AND ($4::text[] IS NULL OR scope2 = ANY($4))
+		  `+slotFilter+`
+		GROUP BY band, dx_region, `+destBucketSlotSQL+`, (bucket_start / 86400)
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []proplab.BaselineDayRow
+	for rows.Next() {
+		var r proplab.BaselineDayRow
+		if err := rows.Scan(&r.Band, &r.Region, &r.Slot, &r.DayIndex, &r.LinkCount, &r.SpotCount, &r.DistMaxKm); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// loadDestLive aggregates closed buckets over the trailing windowMinutes into
+// per-(band, dx_region) totals. The still-open bucket is NOT included; the
+// service merges its in-memory partials separately (destLiveSnapshot).
+// Link/reporter counts are sums over scope fields (distinctness within each
+// field only): exact for a single-field scope, approximate for the global view
+// — documented behavior of the coarse v1 scope model.
+func (s *dxPostgresStore) loadDestLive(ctx context.Context, scopes, bands, regions []string, windowMinutes int, now int64) ([]proplab.DestRow, error) {
+	if s == nil || len(bands) == 0 {
+		return nil, nil
+	}
+	if len(scopes) == 0 {
+		scopes = nil
+	}
+	if len(regions) == 0 {
+		regions = nil
+	}
+	if windowMinutes <= 0 {
+		windowMinutes = 30
+	}
+	// Closed buckets only, mirroring the persistence query's alignment.
+	end := (now / proplab.BucketSeconds) * proplab.BucketSeconds
+	start := end - int64(windowMinutes*60)
+	rows, err := s.pool.Query(ctx, `
+		SELECT band, dx_region,
+		       SUM(spot_count)::int, SUM(link_count)::int, SUM(reporter_count)::int,
+		       CASE WHEN SUM(link_count) > 0
+		            THEN (SUM(snr_median::int * link_count) / SUM(link_count))::int ELSE 0 END,
+		       CASE WHEN SUM(link_count) > 0
+		            THEN (SUM(dist_median_km * link_count) / SUM(link_count))::int ELSE 0 END,
+		       MAX(dist_max_km)::int
+		FROM proplab_dest_buckets
+		WHERE bucket_start >= $1 AND bucket_start < $2
+		  AND band = ANY($3)
+		  AND ($4::text[] IS NULL OR dx_region = ANY($4))
+		  AND ($5::text[] IS NULL OR scope2 = ANY($5))
+		GROUP BY band, dx_region
+	`, start, end, bands, regions, scopes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []proplab.DestRow
+	for rows.Next() {
+		var r proplab.DestRow
+		if err := rows.Scan(&r.Band, &r.Region, &r.SpotCount, &r.LinkCount, &r.ReporterCount,
+			&r.SnrMedian, &r.DistMedianKm, &r.DistMaxKm); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// loadDestPersistence counts, per (band, dx_region), how many closed buckets in
+// the window carried at least minLinks links. The fraction active/total is the
+// persistence/stability signal: steady-open vs flapping.
+func (s *dxPostgresStore) loadDestPersistence(ctx context.Context, scopes, bands, regions []string, windowMinutes, minLinks int, now int64) (map[[2]string][2]int, error) {
+	out := make(map[[2]string][2]int)
+	if s == nil || len(bands) == 0 {
+		return out, nil
+	}
+	if len(scopes) == 0 {
+		scopes = nil
+	}
+	if len(regions) == 0 {
+		regions = nil
+	}
+	if windowMinutes <= 0 {
+		windowMinutes = 120
+	}
+	if minLinks <= 0 {
+		minLinks = 2
+	}
+	end := (now / proplab.BucketSeconds) * proplab.BucketSeconds
+	start := end - int64(windowMinutes*60)
+	rows, err := s.pool.Query(ctx, `
+		SELECT band, dx_region,
+		       COUNT(*) FILTER (WHERE link_count >= $5)::int AS active,
+		       COUNT(*)::int AS total
+		FROM proplab_dest_buckets
+		WHERE bucket_start >= $1 AND bucket_start < $2
+		  AND band = ANY($3)
+		  AND ($4::text[] IS NULL OR dx_region = ANY($4))
+		  AND ($6::text[] IS NULL OR scope2 = ANY($6))
+		GROUP BY band, dx_region
+	`, start, end, bands, regions, minLinks, scopes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var band, region string
+		var active, total int
+		if err := rows.Scan(&band, &region, &active, &total); err != nil {
+			return nil, err
+		}
+		out[[2]string{band, region}] = [2]int{active, total}
+	}
+	return out, rows.Err()
+}
+
 // upsertProplabSW inserts or replaces a single space-weather observation.
 func (s *dxPostgresStore) upsertProplabSW(ctx context.Context, rows []proplabSWRow) error {
 	if s == nil || len(rows) == 0 {
