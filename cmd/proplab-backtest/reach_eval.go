@@ -271,7 +271,7 @@ func loadDestForwardTruth(ctx context.Context, pool *pgxpool.Pool, scopes []stri
 		SELECT band, dx_region, SUM(link_count)::int
 		FROM proplab_dest_buckets
 		WHERE bucket_start >= $1 AND bucket_start < $2
-		  AND ($3::text[] IS NULL OR scope2 = ANY($3))
+		  AND (cardinality(coalesce($3::text[], '{}'::text[])) = 0 OR scope2 = ANY($3))
 		GROUP BY band, dx_region
 	`, (now/60)*60, (now/60)*60+3600, scopes)
 	if err != nil {

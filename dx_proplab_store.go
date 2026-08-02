@@ -299,6 +299,11 @@ func (s *dxPostgresStore) loadProplabCellBaseline(ctx context.Context, bands []s
 // destBucketSlotSQL is the 30-min UTC slot expression for the dest table. Keep
 // in sync with the cell-baseline slot expression above; both are pinned to
 // proplab.UTCSlotOfDay by TestSQLSlotOfDayMatchesUTCSlotOfDay.
+//
+// Array-filter idiom: `cardinality(coalesce($n::text[], '{}'::text[])) = 0 OR
+// col = ANY($n)` treats both SQL NULL and the EMPTY ARRAY as "no filter".
+// Required because pgx encodes a nil Go slice as '{}' (empty array), NOT NULL —
+// the plain `($n::text[] IS NULL OR ...)` idiom silently filters out every row.
 const destBucketSlotSQL = "(((bucket_start / 900) % 96) / 2)"
 
 // loadDestBaseline returns per-day aggregation per (band, dx_region, slot) over
@@ -349,8 +354,8 @@ func (s *dxPostgresStore) queryDestBaseline(ctx context.Context, scopes, bands, 
 		FROM proplab_dest_buckets
 		WHERE bucket_start >= $1
 		  AND band = ANY($2)
-		  AND ($3::text[] IS NULL OR dx_region = ANY($3))
-		  AND ($4::text[] IS NULL OR scope2 = ANY($4))
+		  AND (cardinality(coalesce($3::text[], '{}'::text[])) = 0 OR dx_region = ANY($3))
+		  AND (cardinality(coalesce($4::text[], '{}'::text[])) = 0 OR scope2 = ANY($4))
 		  `+slotFilter+`
 		GROUP BY band, dx_region, `+destBucketSlotSQL+`, (bucket_start / 86400)
 	`, args...)
@@ -402,8 +407,8 @@ func (s *dxPostgresStore) loadDestLive(ctx context.Context, scopes, bands, regio
 		FROM proplab_dest_buckets
 		WHERE bucket_start >= $1 AND bucket_start < $2
 		  AND band = ANY($3)
-		  AND ($4::text[] IS NULL OR dx_region = ANY($4))
-		  AND ($5::text[] IS NULL OR scope2 = ANY($5))
+		  AND (cardinality(coalesce($4::text[], '{}'::text[])) = 0 OR dx_region = ANY($4))
+		  AND (cardinality(coalesce($5::text[], '{}'::text[])) = 0 OR scope2 = ANY($5))
 		GROUP BY band, dx_region
 	`, start, end, bands, regions, scopes)
 	if err != nil {
@@ -451,8 +456,8 @@ func (s *dxPostgresStore) loadDestPersistence(ctx context.Context, scopes, bands
 		FROM proplab_dest_buckets
 		WHERE bucket_start >= $1 AND bucket_start < $2
 		  AND band = ANY($3)
-		  AND ($4::text[] IS NULL OR dx_region = ANY($4))
-		  AND ($6::text[] IS NULL OR scope2 = ANY($6))
+		  AND (cardinality(coalesce($4::text[], '{}'::text[])) = 0 OR dx_region = ANY($4))
+		  AND (cardinality(coalesce($6::text[], '{}'::text[])) = 0 OR scope2 = ANY($6))
 		GROUP BY band, dx_region
 	`, start, end, bands, regions, minLinks, scopes)
 	if err != nil {
