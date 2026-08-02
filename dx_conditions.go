@@ -129,6 +129,7 @@ type dxBandCondition struct {
 	BaselineSlotUsedByTarget []bool         `json:"baseline_slot_used_by_target,omitempty"`
 	DominantDirection        string         `json:"dominant_direction"`
 	AzimuthSectors           map[string]int `json:"azimuth_sectors,omitempty"`
+	RegionCounts             map[string]int `json:"region_counts,omitempty"`
 	Trend                    string         `json:"trend"`
 	TrendDelta               float64        `json:"trend_delta"`
 	Sparkline                []float64      `json:"sparkline"`
@@ -179,6 +180,7 @@ type bandAccumulator struct {
 	ssbCount      int
 	cwCount       int
 	directionBins map[string]int
+	regionBins    map[string]int
 }
 
 type matchedBandEvent struct {
@@ -771,6 +773,7 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 				uniqueRx:      make(map[string]struct{}),
 				uniqueRemote:  make(map[string]struct{}),
 				directionBins: make(map[string]int),
+				regionBins:    make(map[string]int),
 				peakSnr:       -999,
 			}
 			bandAcc[ev.band] = acc
@@ -801,6 +804,9 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		}
 		if ev.direction != "" {
 			acc.directionBins[ev.direction]++
+		}
+		if r := dxPulseRegionForLocator(ev.remote4); r != "" && r != dxPulseRegionUnknown {
+			acc.regionBins[string(r)]++
 		}
 	}
 
@@ -940,6 +946,7 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 			BaselineSlotUsedByTarget: baselineSlotUsedByTarget,
 			DominantDirection:        direction,
 			AzimuthSectors:           acc.directionBins,
+			RegionCounts:             acc.regionBins,
 			Trend:                    trend,
 			TrendDelta:               trendDelta,
 			Sparkline:                historicalBandSeries,
