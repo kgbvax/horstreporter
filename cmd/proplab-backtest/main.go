@@ -30,7 +30,8 @@ func main() {
 		emit         = flag.String("emit", "json", "Output format: json (line-delimited), csv, or none")
 		metricsOnly  = flag.Bool("metrics-only", false, "Print only the final scoring metrics summary")
 
-		destBackfillDays = flag.Int("dest-backfill-days", 0, "Backfill proplab_dest_buckets from dx_raw_spots for the last N days (2h batches), then exit")
+		destBackfillDays  = flag.Int("dest-backfill-days", 0, "Backfill proplab_dest_buckets from dx_raw_spots for the last N days (2h batches), then exit")
+		destBackfillStart = flag.String("dest-backfill-start", "", "Backfill start override (RFC3339 or Unix); with -dest-backfill-days, continues a partial run without double-counting")
 		destEval         = flag.Bool("dest-eval", false, "Replay the reachability composer over destination buckets; print calibration metrics. -target scopes the replay (empty = global).")
 		destHoldout      = flag.Float64("dest-holdout", 0, "Reporter callsign holdout fraction for reach calibration (e.g. 0.25); holdout callsigns are excluded from the live window but not from ground truth")
 	)
@@ -65,7 +66,11 @@ func main() {
 	}
 
 	if *destBackfillDays > 0 {
-		if err := runDestBackfill(ctx, pool, *destBackfillDays, endTS); err != nil {
+		startFrom := endTS - int64(*destBackfillDays)*86400
+		if *destBackfillStart != "" {
+			startFrom = parseTimeArg(*destBackfillStart, startFrom)
+		}
+		if err := runDestBackfill(ctx, pool, startFrom, endTS); err != nil {
 			log.Fatalf("dest backfill: %v", err)
 		}
 		fmt.Println("dest backfill complete")

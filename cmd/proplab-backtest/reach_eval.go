@@ -297,8 +297,7 @@ func loadDestForwardTruth(ctx context.Context, pool *pgxpool.Pool, scopes []stri
 // grouped rows hit the DB. Idempotent-safe via additive ON CONFLICT — but
 // running it twice over the same window double-counts (no distinct-set
 // merge possible), so it's meant for one-shot bootstrap.
-func runDestBackfill(ctx context.Context, pool *pgxpool.Pool, days int, endTS int64) error {
-	start := endTS - int64(days)*86400
+func runDestBackfill(ctx context.Context, pool *pgxpool.Pool, start, endTS int64) error {
 	batch := int64(2 * 3600)
 	for t := start; t < endTS; t += batch {
 		end := t + batch
