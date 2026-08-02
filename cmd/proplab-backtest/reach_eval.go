@@ -73,7 +73,7 @@ func (d *destReplay) holdoutCall(call string) bool {
 func (d *destReplay) observe(spot proplab.Spot, now int64) {
 	sl := strings.ToUpper(strings.TrimSpace(spot.SL))
 	rl := strings.ToUpper(strings.TrimSpace(spot.RL))
-	if len(sl) < 4 || len(rl) < 4 {
+	if !proplab.IsLocator(sl) || !proplab.IsLocator(rl) {
 		return
 	}
 	sc := strings.ToUpper(strings.TrimSpace(spot.SC))
@@ -364,7 +364,7 @@ func destBackfillBatch(ctx context.Context, pool *pgxpool.Pool, start, end int64
 		sl = strings.ToUpper(strings.TrimSpace(sl))
 		rl = strings.ToUpper(strings.TrimSpace(rl))
 		band = proplab.NormalizeBand(band)
-		if len(sl) < 4 || len(rl) < 4 || !proplab.BandInScope(band) {
+		if !proplab.IsLocator(sl) || !proplab.IsLocator(rl) || !proplab.BandInScope(band) {
 			continue
 		}
 		regionS := proplab.RegionFromLocator(sl[:4])

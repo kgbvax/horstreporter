@@ -77,6 +77,16 @@ func HaversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
 		math.Cos(lat1*toRad)*math.Cos(lat2*toRad)*
 			math.Sin(dLon/2)*math.Sin(dLon/2)
+	// Clamp into [0,1]: sqrt(1-a) goes NaN when a>1, which happens with
+	// out-of-range inputs (e.g. malformed locators) and slight float overflow
+	// on antipodal pairs. Callers int()-convert the result, so NaN must be
+	// impossible.
+	if a < 0 {
+		a = 0
+	}
+	if a > 1 {
+		a = 1
+	}
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return r * c
 }
