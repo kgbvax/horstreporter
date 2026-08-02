@@ -318,6 +318,7 @@ func (s *dxPostgresStore) loadDestBaseline(ctx context.Context, scopes, bands, r
 // loadDestSlotProfile is loadDestBaseline without the slot filter — all 48
 // slots — for the scheduled-openings derivation.
 func (s *dxPostgresStore) loadDestSlotProfile(ctx context.Context, scopes, bands, regions []string, lookbackDays int, now int64) ([]proplab.BaselineDayRow, error) {
+	logInfo("dest slot profile args: bands=%d scopes=%v regions=%v lookback=%d now=%d", len(bands), scopes, regions, lookbackDays, now)
 	return s.queryDestBaseline(ctx, scopes, bands, regions, nil, lookbackDays, now)
 }
 
