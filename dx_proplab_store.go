@@ -211,7 +211,7 @@ func (s *dxPostgresStore) loadProplabCellBaseline(ctx context.Context, bands []s
 	start := now - int64(lookbackDays*24*60*60)
 	rows, err := s.pool.Query(ctx, `
 		SELECT band, region,
-		       ((bucket_start / 900) % 48) AS slot_of_day,
+		       (((bucket_start / 900) % 96) / 2) AS slot_of_day,
 		       (bucket_start / 86400) AS day_index,
 		       SUM(link_count)::bigint AS link_count,
 		       SUM(spot_count)::bigint AS spot_count,
@@ -220,8 +220,8 @@ func (s *dxPostgresStore) loadProplabCellBaseline(ctx context.Context, bands []s
 		WHERE bucket_start >= $1
 		  AND band = ANY($2)
 		  AND ($3::text[] IS NULL OR region = ANY($3))
-		  AND ((bucket_start / 900) % 48) = $4
-		GROUP BY band, region, ((bucket_start / 900) % 48), (bucket_start / 86400)
+		  AND (((bucket_start / 900) % 96) / 2) = $4
+		GROUP BY band, region, (((bucket_start / 900) % 96) / 2), (bucket_start / 86400)
 	`, start, bands, regions, slot)
 	if err != nil {
 		return nil, err
