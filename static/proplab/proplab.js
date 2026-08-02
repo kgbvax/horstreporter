@@ -4,6 +4,7 @@ const API = {
     params: '/api/proplab/v1/params',
     ladder: '/api/proplab/v1/ladder',
     fusion: '/api/proplab/v1/fusion',
+    reach: '/api/proplab/v1/reachability',
     baseline: '/api/dx_conditions'
 };
 
@@ -42,6 +43,9 @@ let defaults = { b: {}, c: {} };
 let refreshTimer = null;
 
 const CANON_BANDS = ['160m','80m','60m','40m','30m','20m','17m','15m','12m','10m','6m','4m','2m'];
+const REACH_REGIONS = ['EU','NA','SA','AF','AS','JA','OC','VK','KH6','CAR','AN'];
+const REACH_LADDER_BANDS = ['40m','30m','20m','17m','15m','12m','10m','6m'];
+const REACH_QTH_KEY = 'reach_qth';
 const HISTORY_MAX = 80;
 const HISTORY_TICKS_SHOWN = 40;
 const FUSION_PRECEDENCE = ['open_confirmed','open_unconfirmed','closed_but_active','closed_with_cause','closed','insufficient_data'];
@@ -49,6 +53,8 @@ const FUSION_PRECEDENCE = ['open_confirmed','open_unconfirmed','closed_but_activ
 let lastNorm = null;
 let history = [];
 let expandedBand = null;
+let lastReach = null;
+let selectedRegion = null;
 
 function el(id) { return document.getElementById(id); }
 
@@ -320,12 +326,14 @@ async function runAll() {
     const baselineUrl = `${API.baseline}?${targetQ.toString()}`;
     const ladderUrl = `${API.ladder}?${ladderQ.toString()}`;
     const fusionUrl = `${API.fusion}?${fusionQ.toString()}`;
+    const reachUrl = `${API.reach}?${targetQ.toString()}`;
 
     try {
-        const [baseline, ladder, fusion] = await Promise.all([
+        const [baseline, ladder, fusion, reach] = await Promise.all([
             getJson(baselineUrl).catch(e => ({ error: e.message })),
             getJson(ladderUrl).catch(e => ({ error: e.message })),
-            getJson(fusionUrl).catch(e => ({ error: e.message }))
+            getJson(fusionUrl).catch(e => ({ error: e.message })),
+            getJson(reachUrl).catch(e => ({ error: e.message }))
         ]);
         const nA = normalizeA(baseline);
         const nB = normalizeB(ladder);
@@ -333,6 +341,7 @@ async function runAll() {
         lastNorm = [nA, nB, nC];
         pushHistory(nA, nB, nC);
         renderCompare(nA, nB, nC);
+        renderReach(reach);
         renderBaseline(baseline);
         renderLadder(ladder);
         renderFusion(fusion);
@@ -626,6 +635,190 @@ function renderFusion(data) {
         </div>`;
 }
 
+// --- Reachability product view ------------------------------------------------
+
+function reachCellMap(data) {
+    const map = {};
+    (data.cells || []).forEach(c => { map[`${c.band}|${c.region}`] = c; });
+    return map;
+}
+
+function reachSchedulesSoon(data, minutes) {
+    const set = new Set();
+    (data.schedule || []).forEach(s => {
+        if (s.minutes_to_open <= minutes) set.add(`${s.band}|${s.region}`);
+    });
+    return set;
+}
+
+function reachIndexBg(idx) {
+    const alpha = 0.08 + 0.6 * (idx / 100);
+    return `hsl(152 70% 45% / ${alpha.toFixed(3)})`;
+}
+
+function renderReach(data) {
+    if (data.error) {
+        lastReach = null;
+        el('reach-flags').textContent = '';
+        el('reach-surges').textContent = 'No unusual openings detected.';
+        el('reach-muf').textContent = '';
+        el('reach-heatmap').innerHTML = `<div class="alert alert-danger small mb-0" style="grid-column:1/-1">${escapeHtml(data.error)}</div>`;
+        el('reach-region').innerHTML = '';
+        el('reach-schedule').innerHTML = '';
+        return;
+    }
+    lastReach = data;
+    renderReachFlags(data);
+    renderReachSurges(data);
+    renderReachMuf(data);
+    renderReachHeatmap(data);
+    renderReachRegion(data);
+    renderReachSchedule(data);
+}
+
+function renderReachFlags(data) {
+    const parts = [];
+    parts.push(data.qth
+        ? `QTH ${escapeHtml(data.qth)}${data.surroundings ? ' + surroundings' : ''}`
+        : 'global view — set your QTH');
+    if (data.data_thin) parts.push('<span class="badge text-bg-light">thin data</span>');
+    if (data.schedule_unavailable) parts.push('<span class="badge text-bg-light">schedule unavailable</span>');
+    if (data.has_drap) parts.push(`<span class="badge text-bg-light">D-RAP ${data.drap_age_min} min</span>`);
+    if (!data.sw_available) parts.push('<span class="badge text-bg-light">SW off</span>');
+    if (data.events_active > 0) parts.push(`<span class="badge text-bg-light">${data.events_active} event${data.events_active === 1 ? '' : 's'}</span>`);
+    el('reach-flags').innerHTML = parts.join(' · ');
+}
+
+function renderReachSurges(data) {
+    const out = el('reach-surges');
+    const surges = data.surges || [];
+    if (!surges.length) {
+        out.innerHTML = '<span class="text-muted">No unusual openings detected.</span>';
+        return;
+    }
+    const now = Date.now() / 1000;
+    out.innerHTML = surges.map(sg => {
+        const ageMin = Math.max(0, Math.round((now - sg.first_seen) / 60));
+        const kindLabel = { onset: 'onset', activity_jump: 'jump', new_region: 'new' }[sg.kind] || sg.kind;
+        const txt = `${sg.band}${sg.region ? ' · ' + sg.region : ''} · ${kindLabel} · ${ageMin} min ago`;
+        return `<span class="rl-surge rl-surge-${escapeHtml(sg.kind)}" title="${escapeHtml(sg.detail || '')}">${escapeHtml(txt)}</span>`;
+    }).join('');
+}
+
+function renderReachMuf(data) {
+    const muf = data.muf || {};
+    if (!muf.empirical_mhz && !muf.next_rung_band) { el('reach-muf').textContent = ''; return; }
+    const open = new Set((muf.open_runs || []).flat());
+    const dots = REACH_LADDER_BANDS.map(b => {
+        const isOpen = open.has(b) || (muf.next_rung_open && b === muf.next_rung_band);
+        const color = bandColors[b] || '#999';
+        const style = isOpen
+            ? `background:${color}; border-color:${color}`
+            : (b === muf.next_rung_band ? `border-color:${color}; border-width:2px` : '');
+        return `<span class="rl-muf-dot" style="${style}" title="${b}${isOpen ? ' (open)' : ''}"></span>`;
+    }).join('');
+    const next = muf.next_rung_band
+        ? ` · next rung <strong>${escapeHtml(muf.next_rung_band)}</strong> (${muf.next_rung_mhz} MHz): ${muf.next_rung_open ? 'open' : 'closed'}`
+        : '';
+    el('reach-muf').innerHTML =
+        `${dots} <span class="ms-2">Path MUF (midpoint): <strong>${muf.empirical_mhz ? muf.empirical_mhz.toFixed(1) + ' MHz' : 'n/a'}</strong>${next}</span>`;
+}
+
+function renderReachHeatmap(data) {
+    const map = reachCellMap(data);
+    const soon = reachSchedulesSoon(data, 120);
+    const rows = [];
+    rows.push(`<div class="rl-row"><div class="rl-head"></div>${REACH_REGIONS.map(r => `<div class="rl-head">${escapeHtml(r)}</div>`).join('')}</div>`);
+
+    CANON_BANDS.forEach(band => {
+        rows.push(`<div class="rl-row"><div class="rl-band" style="${bandStyle(band)}">${band}</div>`);
+        REACH_REGIONS.forEach(region => {
+            const key = `${band}|${region}`;
+            const cell = map[key];
+            if (!cell) {
+                const ring = soon.has(key) ? ' rl-scheduled' : '';
+                const schedTitle = soon.has(key) ? `${band} · ${region}\nnot observed — usual opening within 2 h` : `${band} · ${region}\nno data`;
+                rows.push(`<div class="rl-cell rl-nodata${ring}" title="${escapeHtml(schedTitle)}"></div>`);
+                return;
+            }
+            const classes = ['rl-cell'];
+            let bg = '';
+            let text = '';
+            if (cell.index == null) {
+                classes.push('rl-nodata');
+            } else {
+                bg = `background-color:${reachIndexBg(cell.index)};`;
+                text = String(cell.index);
+                if (cell.cell_data_thin) classes.push('rl-thin');
+            }
+            if (soon.has(key)) classes.push('rl-scheduled');
+            if (selectedRegion === region) classes.push('rl-selected');
+            const title = [
+                `${band} · ${region} (destination)`,
+                cell.index != null ? `index ${cell.index}${cell.capped ? ' (capped)' : ''}` : 'observed, no witnesses',
+                `${fmt(cell.links_per_min)} links/m vs ${fmt(cell.baseline_p50)} baseline (${fmt(cell.activity_ratio)}x)`,
+                `witnesses ${cell.witnesses} · persistence ${Math.round((cell.persistence || 0) * 100)}%`,
+                cell.closure_cause ? `cause: ${cell.closure_cause}` : null,
+                (cell.explained_by || []).length ? `event: ${cell.explained_by.join('; ')}` : null
+            ].filter(Boolean).join('\n');
+            rows.push(`<div class="${classes.join(' ')}" style="${bg}" data-band="${escapeHtml(band)}" data-region="${escapeHtml(region)}" title="${escapeHtml(title)}">${escapeHtml(text)}</div>`);
+        });
+        rows.push('</div>');
+    });
+
+    const grid = el('reach-heatmap');
+    grid.innerHTML = rows.join('');
+    grid.querySelectorAll('.rl-cell[data-region]').forEach(c => {
+        c.addEventListener('click', () => {
+            const region = c.dataset.region;
+            selectedRegion = selectedRegion === region ? null : region;
+            renderReachHeatmap(lastReach);
+            renderReachRegion(lastReach);
+        });
+    });
+}
+
+function renderReachRegion(data) {
+    const out = el('reach-region');
+    if (!selectedRegion) { out.innerHTML = ''; return; }
+    const cells = (data.cells || []).filter(c => c.region === selectedRegion)
+        .sort((a, b) => (b.index ?? -1) - (a.index ?? -1));
+    const sched = (data.schedule || []).filter(s => s.region === selectedRegion);
+    const best = cells.find(c => c.index != null);
+
+    const rows = cells.map(c => `
+        <tr class="proplab-band-row" style="${bandStyle(c.band)}">
+            <td>${escapeHtml(c.band)}</td>
+            <td class="text-end proplab-mono"><strong>${c.index ?? '-'}</strong></td>
+            <td class="text-end proplab-mono">${fmt(c.links_per_min)}</td>
+            <td class="text-end proplab-mono">${fmt(c.activity_ratio)}</td>
+            <td class="text-end proplab-mono">${c.witnesses}</td>
+            <td class="text-end proplab-mono">${Math.round((c.persistence || 0) * 100)}%</td>
+            <td class="small text-muted">${escapeHtml(c.closure_cause || (c.cell_data_thin ? 'thin' : ''))}</td>
+        </tr>`).join('');
+
+    const schedRows = sched.map(s => `
+        <div class="small text-muted">${escapeHtml(s.band)} usually open ${escapeHtml(s.open_utc)}&ndash;${escapeHtml(s.close_utc)} UTC · in ${s.minutes_to_open} min · ${Math.round(s.presence * 100)}% of days</div>`).join('');
+
+    out.innerHTML = `
+        <div class="d-flex justify-content-between align-items-center mb-1">
+            <strong>${escapeHtml(selectedRegion)}</strong>
+            <span class="small text-muted">${best ? `best band: ${escapeHtml(best.band)} (index ${best.index})` : 'no live cells'}</span>
+        </div>
+        ${cells.length ? `<div class="table-responsive"><table class="table table-sm">
+            <thead><tr><th>band</th><th class="text-end">index</th><th class="text-end">links/m</th><th class="text-end">ratio</th><th class="text-end">wit</th><th class="text-end">persist</th><th>note</th></tr></thead>
+            <tbody>${rows}</tbody></table></div>` : ''}
+        ${schedRows}`;
+}
+
+function renderReachSchedule(data) {
+    const out = el('reach-schedule');
+    const sched = data.schedule || [];
+    if (!sched.length) { out.innerHTML = ''; return; }
+    out.innerHTML = `<div class="small mb-1"><strong>Upcoming openings</strong></div>` + sched.slice(0, 12).map(s => `
+        <div class="small text-muted">${escapeHtml(s.band)} &middot; ${escapeHtml(s.region)} &middot; usually open ${escapeHtml(s.open_utc)}&ndash;${escapeHtml(s.close_utc)} UTC &middot; in ${s.minutes_to_open} min &middot; ${Math.round(s.presence * 100)}% of days</div>`).join('');
+}
+
 function fmt(v) {
     if (v === undefined || v === null) return '-';
     if (typeof v === 'number') {
@@ -659,11 +852,19 @@ async function init() {
     buildParamControls('params-b', B_PARAMS, defaults.b || {}, 'b');
     buildParamControls('params-c', C_PARAMS, defaults.c || {}, 'c');
 
+    // QTH persistence for the reachability view (operator convenience).
+    const savedQth = localStorage.getItem(REACH_QTH_KEY);
+    if (savedQth && !el('target-input').value) el('target-input').value = savedQth;
+
     el('proplab-form').addEventListener('submit', (e) => {
         e.preventDefault();
         history = [];
         expandedBand = null;
         lastNorm = null;
+        selectedRegion = null;
+        const qth = el('target-input').value.trim();
+        if (qth) localStorage.setItem(REACH_QTH_KEY, qth);
+        else localStorage.removeItem(REACH_QTH_KEY);
         runAll();
     });
     el('refresh-select').addEventListener('change', setupRefresh);
