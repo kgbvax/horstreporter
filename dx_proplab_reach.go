@@ -207,6 +207,7 @@ func (s *ProplabService) destSlotProfile(scopeKey string, scopes, bands []string
 	}
 	s.destProfiles[scopeKey] = &destProfileEntry{rows: rows, at: time.Now()}
 	s.mu.Unlock()
+	logInfo("Proplab dest slot profile loaded: scope=%q rows=%d", scopeKey, len(rows))
 	return rows
 }
 
