@@ -34,14 +34,16 @@ func ParseDRAPText(text []byte) (*DRAPGrid, error) {
 	var headerDone bool
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
+		// NOAA sometimes prefixes the "Frequency ..." marker with a comment
+		// character; detect the marker before treating the line as a comment.
+		if strings.HasPrefix(line, "Frequency") || strings.HasPrefix(strings.TrimPrefix(line, "# "), "Frequency") {
+			headerDone = true
+			continue
+		}
 		if line == "" || strings.HasPrefix(line, "#") {
 			if strings.Contains(line, "Product Valid At") {
 				g.ValidAt = parseDRAPValidAt(line)
 			}
-			continue
-		}
-		if strings.HasPrefix(line, "Frequency") {
-			headerDone = true
 			continue
 		}
 		if !headerDone {
