@@ -27,7 +27,8 @@ func main() {
 		surroundings = flag.Bool("surroundings", false, "Include the 8 surrounding grid squares in the target scope")
 		stepMin      = flag.Int("step-minutes", 15, "Evaluation interval in minutes")
 		lookbackDays = flag.Int("fusion-lookback-days", 45, "Fusion baseline lookback window in days")
-		emit         = flag.String("emit", "json", "Output format: json (line-delimited) or csv")
+		emit         = flag.String("emit", "json", "Output format: json (line-delimited), csv, or none")
+		metricsOnly  = flag.Bool("metrics-only", false, "Print only the final scoring metrics summary")
 	)
 	flag.Parse()
 
@@ -75,6 +76,9 @@ func main() {
 	var history []proplab.Spot
 	historyWindow := int64(30 * 60)
 
+	// Scoring accumulator for the whole replay window.
+	scoreKeeper := newScoreKeeper()
+
 	rows, err := pool.Query(ctx, `
 		SELECT spot_time, band, sender_locator, receiver_locator,
 		       sender_callsign, receiver_callsign, signal_report_db, source_type
@@ -87,7 +91,9 @@ func main() {
 	}
 	defer rows.Close()
 
-	printHeader(*emit)
+	if !*metricsOnly {
+		printHeader(*emit)
+	}
 
 	for rows.Next() {
 		var raw struct {
@@ -125,22 +131,15 @@ func main() {
 
 		for raw.SpotTime >= nextEval {
 			nowEval := nextEval
-			cutoff := proplab.AlignBucketStart(nowEval - proplab.BucketSeconds)
-			_ = ladder.CloseBuckets(cutoff)
-
-			lv := ladder.Verdict(*target, *surroundings, history, nil, nil, ladderParams, nowEval)
-			live := ladder.RegionCounts(proplab.AlignBucketStart(nowEval - 20*60))
-			var baseline []proplab.BaselineDayRow
-			if len(live) > 0 {
-				bands, regions := liveBandsRegions(live)
-				slot := proplab.UTCSlotOfDay(nowEval)
-				baseline, _ = loadCellBaseline(ctx, pool, bands, regions, slot, fusionParams.LookbackDays, nowEval)
+			lv, fv, err := evalAt(ctx, pool, ladder, fusion, *target, *surroundings, fusionParams, ladderParams, nowEval)
+			if err != nil {
+				log.Fatalf("eval at %d: %v", nowEval, err)
 			}
-			sw := loadSW(ctx, pool, nowEval)
-			events := loadEvents(ctx, pool, nowEval)
-			fv := fusion.Verdict(live, baseline, events, sw, nil, fusionParams, nowEval)
 
-			emitStep(*emit, nowEval, lv, fv)
+			scoreKeeper.observeStep(nowEval, lv, fv)
+			if !*metricsOnly {
+				emitStep(*emit, nowEval, lv, fv)
+			}
 
 			nextEval += stepSec
 			if nextEval > endTS {
@@ -158,21 +157,43 @@ func main() {
 	// Final evaluation at endTS if no spot landed exactly there.
 	if nextEval == endTS {
 		nowEval := endTS
-		cutoff := proplab.AlignBucketStart(nowEval - proplab.BucketSeconds)
-		_ = ladder.CloseBuckets(cutoff)
-		lv := ladder.Verdict(*target, *surroundings, history, nil, nil, ladderParams, nowEval)
-		live := ladder.RegionCounts(proplab.AlignBucketStart(nowEval - 20*60))
-		var baseline []proplab.BaselineDayRow
-		if len(live) > 0 {
-			bands, regions := liveBandsRegions(live)
-			slot := proplab.UTCSlotOfDay(nowEval)
-			baseline, _ = loadCellBaseline(ctx, pool, bands, regions, slot, fusionParams.LookbackDays, nowEval)
+		lv, fv, err := evalAt(ctx, pool, ladder, fusion, *target, *surroundings, fusionParams, ladderParams, nowEval)
+		if err != nil {
+			log.Fatalf("final eval: %v", err)
 		}
-		sw := loadSW(ctx, pool, nowEval)
-		events := loadEvents(ctx, pool, nowEval)
-		fv := fusion.Verdict(live, baseline, events, sw, nil, fusionParams, nowEval)
-		emitStep(*emit, nowEval, lv, fv)
+		scoreKeeper.observeStep(nowEval, lv, fv)
+		if !*metricsOnly {
+			emitStep(*emit, nowEval, lv, fv)
+		}
 	}
+
+	metrics := scoreKeeper.metrics()
+	if *metricsOnly {
+		printMetricsJSON(metrics)
+		return
+	}
+	// Always append a metrics summary to stderr so it doesn't contaminate CSV/JSON output on stdout.
+	printMetricsText(metrics)
+}
+
+// evalAt runs one Ladder + Fusion evaluation at a given timestamp.
+func evalAt(ctx context.Context, pool *pgxpool.Pool, ladder *proplab.LadderEngine, fusion *proplab.FusionEngine,
+	target string, surroundings bool, fusionParams proplab.FusionParams, ladderParams proplab.LadderParams, nowEval int64) (proplab.LadderVerdict, proplab.FusionVerdict, error) {
+	cutoff := proplab.AlignBucketStart(nowEval - proplab.BucketSeconds)
+	_ = ladder.CloseBuckets(cutoff)
+
+	lv := ladder.Verdict(target, surroundings, nil, nil, nil, ladderParams, nowEval)
+	live := ladder.RegionCounts(proplab.AlignBucketStart(nowEval - 20*60))
+	var baseline []proplab.BaselineDayRow
+	if len(live) > 0 {
+		bands, regions := liveBandsRegions(live)
+		slot := proplab.UTCSlotOfDay(nowEval)
+		baseline, _ = loadCellBaseline(ctx, pool, bands, regions, slot, fusionParams.LookbackDays, nowEval)
+	}
+	sw := loadSW(ctx, pool, nowEval)
+	events := loadEvents(ctx, pool, nowEval)
+	fv := fusion.Verdict(live, baseline, events, sw, nil, fusionParams, nowEval)
+	return lv, fv, nil
 }
 
 func parseTimeArg(s string, fallback int64) int64 {
@@ -364,6 +385,199 @@ func loadEvents(ctx context.Context, pool *pgxpool.Pool, now int64) []proplab.Fu
 	return out
 }
 
+// scoreKeeper tracks per-band ground-truth openings and how early each engine
+// declared them open, plus false-positive counts.
+type scoreKeeper struct {
+	bandState map[string]*bandScoreState
+}
+
+type bandScoreState struct {
+	firstGroundOpen      int64 // first evaluation ts where band was actually open
+	groundOpenAt         map[int64]bool
+	ladderFirstOpen      int64
+	fusionFirstOpen      int64
+	ladderFalsePositives int
+	fusionFalsePositives int
+	ladderOpenSteps      int
+	fusionOpenSteps      int
+	steps                int
+}
+
+// We treat a band as "actually open" when it shows ≥2 distinct links per minute
+// in the Ladder live window. This is a simple reference threshold derived from
+// the same observations the engines use, so it is not an independent label.
+const groundTruthLinksPerMinute = 2.0
+
+func newScoreKeeper() *scoreKeeper {
+	return &scoreKeeper{bandState: make(map[string]*bandScoreState)}
+}
+
+func (k *scoreKeeper) state(band string) *bandScoreState {
+	s := k.bandState[band]
+	if s == nil {
+		s = &bandScoreState{groundOpenAt: make(map[int64]bool)}
+		k.bandState[band] = s
+	}
+	return s
+}
+
+func (k *scoreKeeper) observeStep(ts int64, lv proplab.LadderVerdict, fv proplab.FusionVerdict) {
+	ladderOpen := bandStateMap(lv.Bands, func(b proplab.LadderBandVerdict) bool {
+		return b.State == "open" || b.State == "rising"
+	})
+	fusionOpen := bandStateMap(fv.Bands, func(b proplab.FusionBandVerdict) bool {
+		return b.State == proplab.StateOpenConfirmed || b.State == proplab.StateOpenUnconfirmed
+	})
+	groundOpen := bandStateMap(lv.Bands, func(b proplab.LadderBandVerdict) bool {
+		return b.LinksPerMinute >= groundTruthLinksPerMinute
+	})
+
+	for band, isOpen := range groundOpen {
+		s := k.state(band)
+		s.steps++
+		if isOpen {
+			s.groundOpenAt[ts] = true
+			if s.firstGroundOpen == 0 {
+				s.firstGroundOpen = ts
+			}
+		}
+	}
+	// Also count steps for bands seen by engines even if ground truth absent this step.
+	for band := range ladderOpen {
+		s := k.state(band)
+		if s.steps == 0 {
+			s.steps++
+		}
+		if ladderOpen[band] {
+			s.ladderOpenSteps++
+			if s.ladderFirstOpen == 0 || (s.firstGroundOpen > 0 && ts < s.ladderFirstOpen) {
+				s.ladderFirstOpen = ts
+			}
+			if s.firstGroundOpen == 0 || ts < s.firstGroundOpen {
+				s.ladderFalsePositives++
+			}
+		}
+	}
+	for band := range fusionOpen {
+		s := k.state(band)
+		if s.steps == 0 {
+			s.steps++
+		}
+		if fusionOpen[band] {
+			s.fusionOpenSteps++
+			if s.fusionFirstOpen == 0 || (s.firstGroundOpen > 0 && ts < s.fusionFirstOpen) {
+				s.fusionFirstOpen = ts
+			}
+			if s.firstGroundOpen == 0 || ts < s.firstGroundOpen {
+				s.fusionFalsePositives++
+			}
+		}
+	}
+}
+
+func bandStateMap[T any](bands []T, openFn func(T) bool) map[string]bool {
+	out := make(map[string]bool)
+	for _, b := range bands {
+		var band string
+		switch v := any(b).(type) {
+		case proplab.LadderBandVerdict:
+			band = v.Band
+		case proplab.FusionBandVerdict:
+			band = v.Band
+		}
+		if band == "" {
+			continue
+		}
+		out[band] = openFn(b)
+	}
+	return out
+}
+
+// metrics aggregates the tracked state into recall / precision / lead-time numbers.
+func (k *scoreKeeper) metrics() map[string]any {
+	bandMetrics := make(map[string]any)
+	var ladderRecallSum, fusionRecallSum float64
+	var ladderRecallBands, fusionRecallBands int
+	var ladderFPRSum, fusionFPRSum float64
+	var ladderPrecBands, fusionPrecBands int
+	var ladderLeadSum, fusionLeadSum int64
+	var ladderLeadCount, fusionLeadCount int
+
+	for band, s := range k.bandState {
+		if s.steps == 0 {
+			continue
+		}
+		openSteps := len(s.groundOpenAt)
+		bm := map[string]any{
+			"steps":                s.steps,
+			"ground_open_steps":    openSteps,
+			"ladder_open_steps":    s.ladderOpenSteps,
+			"fusion_open_steps":    s.fusionOpenSteps,
+			"ladder_false_positives": s.ladderFalsePositives,
+			"fusion_false_positives": s.fusionFalsePositives,
+		}
+		if openSteps > 0 {
+			ladderRecall := float64(s.ladderOpenSteps) / float64(openSteps)
+			fusionRecall := float64(s.fusionOpenSteps) / float64(openSteps)
+			bm["ladder_recall"] = ladderRecall
+			bm["fusion_recall"] = fusionRecall
+			ladderRecallSum += ladderRecall
+			fusionRecallSum += fusionRecall
+			ladderRecallBands++
+			fusionRecallBands++
+		}
+		if s.ladderOpenSteps+s.ladderFalsePositives > 0 {
+			prec := float64(s.ladderOpenSteps) / float64(s.ladderOpenSteps+s.ladderFalsePositives)
+			bm["ladder_precision"] = prec
+			ladderFPRSum += prec
+			ladderPrecBands++
+		}
+		if s.fusionOpenSteps+s.fusionFalsePositives > 0 {
+			prec := float64(s.fusionOpenSteps) / float64(s.fusionOpenSteps+s.fusionFalsePositives)
+			bm["fusion_precision"] = prec
+			fusionFPRSum += prec
+			fusionPrecBands++
+		}
+		if s.firstGroundOpen > 0 && s.ladderFirstOpen > 0 {
+			lead := (s.firstGroundOpen - s.ladderFirstOpen) / 60
+			bm["ladder_lead_min"] = lead
+			ladderLeadSum += lead
+			ladderLeadCount++
+		}
+		if s.firstGroundOpen > 0 && s.fusionFirstOpen > 0 {
+			lead := (s.firstGroundOpen - s.fusionFirstOpen) / 60
+			bm["fusion_lead_min"] = lead
+			fusionLeadSum += lead
+			fusionLeadCount++
+		}
+		bandMetrics[band] = bm
+	}
+
+	out := map[string]any{
+		"bands":     bandMetrics,
+		"evaluated": len(k.bandState),
+	}
+	if ladderRecallBands > 0 {
+		out["mean_ladder_recall"] = ladderRecallSum / float64(ladderRecallBands)
+	}
+	if fusionRecallBands > 0 {
+		out["mean_fusion_recall"] = fusionRecallSum / float64(fusionRecallBands)
+	}
+	if ladderPrecBands > 0 {
+		out["mean_ladder_precision"] = ladderFPRSum / float64(ladderPrecBands)
+	}
+	if fusionPrecBands > 0 {
+		out["mean_fusion_precision"] = fusionFPRSum / float64(fusionPrecBands)
+	}
+	if ladderLeadCount > 0 {
+		out["median_ladder_lead_min"] = ladderLeadSum / int64(ladderLeadCount)
+	}
+	if fusionLeadCount > 0 {
+		out["median_fusion_lead_min"] = fusionLeadSum / int64(fusionLeadCount)
+	}
+	return out
+}
+
 func printHeader(format string) {
 	if format == "csv" {
 		fmt.Println("ts,slot,band,ladder_state,ladder_confidence,ladder_muf,fusion_state,fusion_confidence,fusion_closure")
@@ -383,6 +597,9 @@ func emitStep(format string, ts int64, lv proplab.LadderVerdict, fv proplab.Fusi
 				ts, slot, b.Band, b.State, b.Confidence, lv.EmpiricalMUF,
 				fb.State, fb.Confidence, fb.ClosureType)
 		}
+		return
+	}
+	if format == "none" {
 		return
 	}
 
@@ -414,4 +631,31 @@ func emitStep(format string, ts int64, lv proplab.LadderVerdict, fv proplab.Fusi
 		"fusion":       fusionMap,
 	})
 	fmt.Println(string(line))
+}
+
+func printMetricsJSON(metrics map[string]any) {
+	b, _ := json.Marshal(metrics)
+	fmt.Println(string(b))
+}
+
+func printMetricsText(metrics map[string]any) {
+	fmt.Fprintln(os.Stderr, "# proplab-backtest metrics")
+	for k, v := range metrics {
+		if k == "bands" {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "%s: %v\n", k, v)
+	}
+	bands, _ := metrics["bands"].(map[string]any)
+	if len(bands) > 0 {
+		fmt.Fprintln(os.Stderr, "bands:")
+		keys := make([]string, 0, len(bands))
+		for b := range bands {
+			keys = append(keys, b)
+		}
+		sort.Strings(keys)
+		for _, b := range keys {
+			fmt.Fprintf(os.Stderr, "  %s: %v\n", b, bands[b])
+		}
+	}
 }
