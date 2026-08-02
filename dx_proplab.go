@@ -39,6 +39,9 @@ type ProplabService struct {
 
 	dedup             map[string]int64
 	destAcc           map[destBucketKey]*destBucketAgg
+	reachPrev         map[string]*proplab.ReachVerdict
+	reachSurges       map[string]map[string]proplab.ReachSurge
+	destProfiles      map[string]*destProfileEntry
 	lastPrune         time.Time
 	stopCh            chan struct{}
 	wg                sync.WaitGroup

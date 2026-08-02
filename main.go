@@ -428,6 +428,7 @@ func main() {
 	appMux.HandleFunc("/api/proplab/v1/params", proplabParamsHandler)
 	appMux.HandleFunc("/api/proplab/v1/ladder", proplabLadderHandler)
 	appMux.HandleFunc("/api/proplab/v1/fusion", proplabFusionHandler)
+	appMux.HandleFunc("/api/proplab/v1/reachability", proplabReachHandler)
 
 	// Reverse-proxy /horstprop/* to the local horstprop scoring service so the
 	// Chase Queue reaches it same-origin (horstprop itself stays bound to

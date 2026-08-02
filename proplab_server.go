@@ -25,6 +25,7 @@ const proplabCacheTTL = 5 * time.Second
 var (
 	proplabLadderCache = newProplabCache(proplabCacheTTL)
 	proplabFusionCache = newProplabCache(proplabCacheTTL)
+	proplabReachCache  = newProplabCache(proplabCacheTTL)
 )
 
 func init() {
@@ -34,6 +35,7 @@ func init() {
 		for range time.Tick(1 * time.Minute) {
 			proplabLadderCache.cleanup()
 			proplabFusionCache.cleanup()
+			proplabReachCache.cleanup()
 		}
 	}()
 }
@@ -142,6 +144,39 @@ func proplabFusionHandler(w http.ResponseWriter, r *http.Request) {
 	verdict := proplabService.FusionVerdict(&params)
 	proplabFusionCache.set(cacheKey, verdict)
 	writeJSON(w, verdict)
+}
+
+// proplabReachHandler serves the composed reachability product verdict.
+// Note: the UI labels the target input "QTH" — resolveTargetQuery is shared
+// with the rest of the app (target=/callsign=/locator=), so no rename here.
+// An empty target is VALID: it yields the global (unscoped) view.
+// No param overrides by design — fixed service defaults so the index means the
+// same thing for every operator; tuning happens in proplab-backtest.
+func proplabReachHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if proplabService == nil || proplabService.disabled {
+		http.Error(w, "Propagation Lab disabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	target, surroundings := resolveTargetQuery(r)
+	cacheKey := proplabReachCacheKey(target, surroundings)
+	if cached, ok := proplabReachCache.get(cacheKey); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	verdict := proplabService.ReachVerdict(target, surroundings)
+	proplabReachCache.set(cacheKey, verdict)
+	writeJSON(w, verdict)
+}
+
+func proplabReachCacheKey(target string, surroundings bool) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%v", target, surroundings)))
+	return hex.EncodeToString(sum[:])
 }
 
 func proplabLadderCacheKey(target string, surroundings bool, p proplab.LadderParams) string {
