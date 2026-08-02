@@ -65,6 +65,16 @@ func TestObserveDestSymmetric(t *testing.T) {
 	}
 }
 
+// TestDestBands pins the canonical band list: an earlier "clever" slice
+// construction (order[:0:cap] then append) yielded len 0 at runtime, silently
+// neutering every dest SQL with len(bands)==0 guards.
+func TestDestBands(t *testing.T) {
+	b := destBands()
+	if len(b) != 13 || b[0] != "160m" || b[12] != "2m" {
+		t.Errorf("destBands() = %v, want 13 canonical bands", b)
+	}
+}
+
 func TestDestScopesForQTH(t *testing.T) {
 	if got := destScopesForQTH("", false); got != nil {
 		t.Errorf("empty QTH = %v, want nil (global)", got)

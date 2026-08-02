@@ -29,9 +29,7 @@ const destProfileMaxAge = 6 * time.Hour
 
 // destBands returns the 13 canonical bands in low-to-high order.
 func destBands() []string {
-	order := []string{"160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m"}
-	out := order[:0:len(order)]
-	return append([]string(nil), out...)
+	return []string{"160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m"}
 }
 
 // destScopeKey normalizes a scope set for map keys and the HTTP cache.
