@@ -102,6 +102,35 @@ func TestComposeReachIndexFactors(t *testing.T) {
 		t.Errorf("thin index = %v, want 35 (50×0.7)", c.Index)
 	}
 
+	// Scale-grounding: huge ratio against a whisper-thin baseline still cannot
+	// inflate — the absolute live rate gates the score (calibration fix).
+	v = ComposeReach(ReachInputs{
+		Now: now, LiveMinutes: 30,
+		Live:        mkLive("10m", "AN", 15, 4),       // lpm 0.5
+		Baseline:    baselineRows("10m", "AN", 40, 1), // p50 1 link/day → ratio ~700
+		Persistence: map[[2]string][2]int{{"10m", "AN"}: {4, 4}},
+		SlotProfile: []BaselineDayRow{},
+	})
+	c = v.Cells[0]
+	if c.ActivityRatio < 100 {
+		t.Errorf("grounding fixture ratio = %v, want huge", c.ActivityRatio)
+	}
+	if c.Index == nil || *c.Index != 0 {
+		t.Errorf("thin-baseline inflated cell index = %v, want 0 (lpm 0.5 gates)", c.Index)
+	}
+	// Sanity: same cell at open-anchor absolute rate scores ~50 regardless of
+	// how extreme the ratio is.
+	v = ComposeReach(ReachInputs{
+		Now: now, LiveMinutes: 30,
+		Live:        mkLive("10m", "AN", 60, 4), // lpm 2.0
+		Baseline:    baselineRows("10m", "AN", 40, 1),
+		Persistence: map[[2]string][2]int{{"10m", "AN"}: {4, 4}},
+		SlotProfile: []BaselineDayRow{},
+	})
+	if c = v.Cells[0]; c.Index == nil || *c.Index != 50 {
+		t.Errorf("open-anchor grounded index = %v, want 50", c.Index)
+	}
+
 	// Kp 6 -> absorption cap 15 even at huge activity.
 	v = ComposeReach(ReachInputs{
 		Now: now, LiveMinutes: 30,
@@ -183,7 +212,7 @@ func TestDeriveSchedule(t *testing.T) {
 		}
 		sparse = append(sparse, BaselineDayRow{Band: "15m", Region: "JA", Slot: 10, DayIndex: int64(21000 + d), LinkCount: links})
 	}
-	if got := deriveSchedule(sparse, nil, (1700000000+86400)); len(got) != 0 {
+	if got := deriveSchedule(sparse, nil, (1700000000 + 86400)); len(got) != 0 {
 		t.Errorf("sparse presence produced %d entries, want 0", len(got))
 	}
 }

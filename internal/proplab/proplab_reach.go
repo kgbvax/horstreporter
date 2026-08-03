@@ -24,6 +24,14 @@ import (
 //	r = 8.0  -> activity ≈ 83
 //	r ≥ 16   -> activity 100
 //
+// The same anchored curve is applied to the ABSOLUTE live rate (lpm 2 -> 50),
+// and the raw activity score is the min of the two. Calibration (2026-08-03,
+// 168h replay) showed pure-ratio scoring is scale-blind: pair baselines are
+// often ≈0.1 lpm, so 0.3 lpm live scored r≥3 → index 50+ yet predicted
+// forward lpm≥2 only 0.6% of the time. The ratio answers "is this unusually
+// active", the absolute rate answers "is anything actually happening" — the
+// index must honor both.
+//
 // Without a baseline the live rate itself goes through the same curve
 // (lpm 2 -> 50, matching the ladder "open" intuition), flagged cell_data_thin
 // and damped ×0.7. The raw activity score is multiplied by witness,
@@ -78,11 +86,11 @@ type ReachCell struct {
 // ReachMUF is the empirical MUF headroom readout (path-midpoint physics from
 // the Ladder engine; destinations use their own semantics).
 type ReachMUF struct {
-	EmpiricalMHz float64   `json:"empirical_mhz"`
+	EmpiricalMHz float64    `json:"empirical_mhz"`
 	OpenRuns     [][]string `json:"open_runs"`
-	NextRungBand string    `json:"next_rung_band"`
-	NextRungMHz  float64   `json:"next_rung_mhz"`
-	NextRungOpen bool      `json:"next_rung_open"`
+	NextRungBand string     `json:"next_rung_band"`
+	NextRungMHz  float64    `json:"next_rung_mhz"`
+	NextRungOpen bool       `json:"next_rung_open"`
 }
 
 // ReachSurge is a self-contained "something new is happening" marker, shaped so
@@ -109,19 +117,19 @@ type ReachScheduleEntry struct {
 
 // ReachVerdict is the composed product payload.
 type ReachVerdict struct {
-	GeneratedAt         int64               `json:"generated_at"`
-	QTH                 string              `json:"qth"`
-	Surroundings        bool                `json:"surroundings"`
-	IndexScale          string              `json:"index_scale"`
-	DataThin            bool                `json:"data_thin"`
-	ScheduleUnavailable bool                `json:"schedule_unavailable"`
-	SWAvailable         bool                `json:"sw_available"`
-	HasDrap             bool                `json:"has_drap"`
-	DrapAgeMin          int                 `json:"drap_age_min"`
-	EventsActive        int                 `json:"events_active"`
-	MUF                 ReachMUF            `json:"muf"`
-	Cells               []ReachCell         `json:"cells"`
-	Surges              []ReachSurge        `json:"surges"`
+	GeneratedAt         int64                `json:"generated_at"`
+	QTH                 string               `json:"qth"`
+	Surroundings        bool                 `json:"surroundings"`
+	IndexScale          string               `json:"index_scale"`
+	DataThin            bool                 `json:"data_thin"`
+	ScheduleUnavailable bool                 `json:"schedule_unavailable"`
+	SWAvailable         bool                 `json:"sw_available"`
+	HasDrap             bool                 `json:"has_drap"`
+	DrapAgeMin          int                  `json:"drap_age_min"`
+	EventsActive        int                  `json:"events_active"`
+	MUF                 ReachMUF             `json:"muf"`
+	Cells               []ReachCell          `json:"cells"`
+	Surges              []ReachSurge         `json:"surges"`
 	Schedule            []ReachScheduleEntry `json:"schedule"`
 
 	// Ratios/Indices feed DetectSurges' tick-over-tick diff; not serialized.
@@ -247,7 +255,10 @@ func ComposeReach(in ReachInputs) ReachVerdict {
 			ratio = lpm
 			thin = true
 		}
-		a := reachActivityScore(ratio)
+		// Ground the ratio in the absolute rate: an elevated ratio against a
+		// whisper-thin baseline must not inflate the index (calibration
+		// finding 2026-08-03). Identity for thin cells (ratio == lpm).
+		a := math.Min(reachActivityScore(ratio), reachActivityScore(lpm))
 		wf, hasIndex := reachWitnessFactor(row.ReporterCount)
 
 		pers := 0.0

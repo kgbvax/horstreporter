@@ -18,6 +18,7 @@ const B_PARAMS = [
     { key: 'coherence_min_bands', label: 'Coherence min bands', min: 1, max: 7, step: 1 },
     { key: 'cusum_drift', label: 'CUSUM drift', min: 0, max: 2, step: 0.1 },
     { key: 'cusum_threshold', label: 'CUSUM threshold', min: 0, max: 10, step: 0.5 },
+    { key: 'cusum_min_bucket_links', label: 'CUSUM min links/bucket', min: 1, max: 10, step: 1 },
     { key: 'ewma_alpha', label: 'EWMA alpha', min: 0, max: 1, step: 0.05 },
     { key: 'expected_lookback_days', label: 'Lookback days', min: 1, max: 90, step: 1 },
     { key: 'term_min_east_deg', label: 'Term min east deg', min: 0, max: 90, step: 1 },

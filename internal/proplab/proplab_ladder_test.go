@@ -167,3 +167,58 @@ func TestAlignBucketStart(t *testing.T) {
 		t.Fatalf("AlignBucketStart(901)=%d want 900", AlignBucketStart(901))
 	}
 }
+
+// TestCusumOnsetLatchAndGate pins the 2026-08-03 calibration fixes: sparse
+// singleton-link buckets drain the CUSUM statistic instead of raising it, and
+// an alarm stops being reported once its threshold crossing is stale (the
+// latch) — otherwise busy cells stay alarmed forever.
+func TestCusumOnsetLatchAndGate(t *testing.T) {
+	params := DefaultLadderParams()
+	cbk := cellBandKey{Cell4: "JO62", Region: "EU", Band: "20m"}
+	baseBucket := int64(600000)
+
+	step := func(e *LadderEngine, k int64, links int) (int, string) {
+		now := (baseBucket+k)*BucketSeconds + 100
+		live := map[cellBandKey]*ladderBandAggregate{cbk: {linkCount: links}}
+		return e.minOnsetAge([]cellBandKey{cbk}, live, nil, params, now)
+	}
+
+	// Gate: ten consecutive 1-link buckets must never alarm.
+	e := NewLadderEngine()
+	for k := int64(0); k < 10; k++ {
+		if age, _ := step(e, k, 1); age >= 0 {
+			t.Fatalf("sparse bucket %d alarmed (age %d), want none", k, age)
+		}
+	}
+
+	// Build-up: 6-link buckets trip the alarm from the second bucket on.
+	e = NewLadderEngine()
+	if age, _ := step(e, 0, 6); age >= 0 {
+		t.Fatalf("first build-up bucket alarmed (age %d), want none", age)
+	}
+	age, region := step(e, 1, 6)
+	if age < 0 {
+		t.Fatalf("second build-up bucket: no onset detected")
+	}
+	if region != "EU" {
+		t.Errorf("onset region = %q, want EU", region)
+	}
+	if age != 15 {
+		t.Errorf("onset age = %d min, want 15 (one bucket since zero crossing)", age)
+	}
+
+	// Latch: keep the same busy pattern past the freshness window; the alarm
+	// must stop reporting even though S remains above threshold.
+	seen := false
+	for k := int64(2); k < 30; k++ {
+		if a, _ := step(e, k, 6); a >= 0 {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatalf("fresh onsets never reported during build-up")
+	}
+	if age, _ := step(e, 40, 6); age >= 0 {
+		t.Errorf("stale alarm still reported (age %d), want none past freshness window", age)
+	}
+}

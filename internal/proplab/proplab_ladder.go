@@ -22,15 +22,22 @@ import (
 // so the engine is usable immediately; the Propagation Lab UI exposes each
 // as a slider and sends overrides as query parameters.
 type LadderParams struct {
-	MinLinks             int     `json:"min_links"`
-	SnrFloorFT8dB        int     `json:"snr_floor_ft8"`
-	SnrFloorRBNdB        int     `json:"snr_floor_rbn"`
-	WitnessMin           int     `json:"witness_min"`
-	EsMinKm              int     `json:"es_min_km"`
-	EsMaxKm              int     `json:"es_max_km"`
-	CoherenceMinBands    int     `json:"coherence_min_bands"`
-	CusumDrift           float64 `json:"cusum_drift"`
-	CusumThreshold       float64 `json:"cusum_threshold"`
+	MinLinks          int     `json:"min_links"`
+	SnrFloorFT8dB     int     `json:"snr_floor_ft8"`
+	SnrFloorRBNdB     int     `json:"snr_floor_rbn"`
+	WitnessMin        int     `json:"witness_min"`
+	EsMinKm           int     `json:"es_min_km"`
+	EsMaxKm           int     `json:"es_max_km"`
+	CoherenceMinBands int     `json:"coherence_min_bands"`
+	CusumDrift        float64 `json:"cusum_drift"`
+	CusumThreshold    float64 `json:"cusum_threshold"`
+	// CusumMinBucketLinks gates the CUSUM accumulator: buckets with fewer
+	// observed links contribute 0 (they DRAIN the statistic instead of raising
+	// it). Without this gate (2026-08-03 calibration: ~39 false alarms per
+	// band per week, 20m ~290) a single sporadic link in a quiet cell pinned
+	// the statistic above threshold permanently — obs climbs to 1 while the
+	// drift is only CusumDrift*exp, so S could never return to 0.
+	CusumMinBucketLinks  int     `json:"cusum_min_bucket_links"`
 	EwmaAlpha            float64 `json:"ewma_alpha"`
 	ExpectedLookbackDays int     `json:"expected_lookback_days"`
 	TermMinEastDeg       float64 `json:"term_min_east_deg"`
@@ -50,6 +57,7 @@ func DefaultLadderParams() LadderParams {
 		CoherenceMinBands:    2,
 		CusumDrift:           0.5,
 		CusumThreshold:       4.0,
+		CusumMinBucketLinks:  2,
 		EwmaAlpha:            0.35,
 		ExpectedLookbackDays: 21,
 		TermMinEastDeg:       15.0,
@@ -94,13 +102,22 @@ type cellBandKey struct {
 	Band   string
 }
 
-// cusumState tracks the one-sided CUSUM statistic and the bucket index of the
-// last zero crossing so we can estimate onset age.
+// cusumState tracks the one-sided CUSUM statistic, the bucket index of the
+// last zero crossing (onset age estimate), and the bucket where the statistic
+// first crossed the alarm threshold since that reset. CrossIdx is the alarm
+// LATCH: an onset is only reported while the crossing is fresh — once S pins
+// above threshold for a busy cell it would otherwise "detect an opening"
+// forever (calibration 2026-08-03: permanently-alarmed cells produced a false
+// alarm every 4h truth window on nearly every band).
 type cusumState struct {
-	S            float64
-	LastZeroIdx  int
-	LastAlarmIdx int
+	S           float64
+	LastZeroIdx int
+	CrossIdx    int // -1 = below threshold since last zero crossing
 }
+
+// maxOnsetReportBuckets bounds how long after its threshold crossing an onset
+// stays reportable. Matches the backtest's 4h onset truth window.
+const maxOnsetReportBuckets = 16
 
 // LadderEngine is the in-memory working set for variant B. It is not safe for
 // concurrent use except via Observe (which locks); callers should hold the lock
@@ -214,11 +231,11 @@ type LadderBandVerdict struct {
 	Confidence     float64  `json:"confidence"`
 	SpotsPerMinute float64  `json:"spots_per_minute"`
 	LinksPerMinute float64  `json:"links_per_minute"`
-	MufCells       []string `json:"muf_cells"`      // midpoint cells that declare this band open
-	EsCells        []string `json:"es_cells"`       // cells classified as sporadic-E on Es-lane bands
-	OnsetMinAgo    int      `json:"onset_min_ago"`  // -1 if no onset detected
+	MufCells       []string `json:"muf_cells"`              // midpoint cells that declare this band open
+	EsCells        []string `json:"es_cells"`               // cells classified as sporadic-E on Es-lane bands
+	OnsetMinAgo    int      `json:"onset_min_ago"`          // -1 if no onset detected
 	OnsetRegion    string   `json:"onset_region,omitempty"` // midpoint region of the youngest CUSUM alarm cell
-	ForecastHints  []string `json:"forecast_hints"` // human-readable strings (e.g. terminator ETA)
+	ForecastHints  []string `json:"forecast_hints"`         // human-readable strings (e.g. terminator ETA)
 }
 
 // LadderVerdict is the full variant-B result for a target/personalization.
@@ -539,16 +556,27 @@ func (e *LadderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*la
 
 		st := e.cusum[cbk]
 		if st == nil {
-			st = &cusumState{LastZeroIdx: bucketIdx}
+			st = &cusumState{LastZeroIdx: bucketIdx, CrossIdx: -1}
 			e.cusum[cbk] = st
 		}
+		// Sparse buckets (fewer links than the gate) drain the statistic;
+		// sporadic singleton links must not accumulate toward an alarm.
+		cObs := obs
+		if agg.linkCount < params.CusumMinBucketLinks {
+			cObs = 0
+		}
 		drift := params.CusumDrift * exp
-		st.S += obs - drift
+		st.S += cObs - drift
 		if st.S < 0 {
 			st.S = 0
 			st.LastZeroIdx = bucketIdx
+			st.CrossIdx = -1
 		}
-		if st.S >= params.CusumThreshold*exp && st.LastZeroIdx < bucketIdx {
+		if st.S >= params.CusumThreshold*exp && st.CrossIdx < 0 {
+			st.CrossIdx = bucketIdx
+		}
+		if st.S >= params.CusumThreshold*exp && st.CrossIdx >= 0 &&
+			bucketIdx-st.CrossIdx <= maxOnsetReportBuckets && st.LastZeroIdx < bucketIdx {
 			ageBuckets := bucketIdx - st.LastZeroIdx
 			ageMin := ageBuckets * BucketSeconds / 60
 			if minAge == -1 || ageMin < minAge {
