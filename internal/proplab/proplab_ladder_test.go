@@ -169,18 +169,24 @@ func TestAlignBucketStart(t *testing.T) {
 }
 
 // TestCusumOnsetLatchAndGate pins the 2026-08-03 calibration fixes: sparse
-// singleton-link buckets drain the CUSUM statistic instead of raising it, and
-// an alarm stops being reported once its threshold crossing is stale (the
-// latch) — otherwise busy cells stay alarmed forever.
+// singleton-link buckets drain the CUSUM statistic instead of raising it, an
+// alarm stops being reported once its threshold crossing is stale (the latch),
+// and an onset needs >=2 distinct cells with fresh crossings (single-cell
+// noise produced 507 false alarms vs 10 confirmed in round-2 calibration).
 func TestCusumOnsetLatchAndGate(t *testing.T) {
 	params := DefaultLadderParams()
-	cbk := cellBandKey{Cell4: "JO62", Region: "EU", Band: "20m"}
+	cbk1 := cellBandKey{Cell4: "JO62", Region: "EU", Band: "20m"}
+	cbk2 := cellBandKey{Cell4: "JN58", Region: "EU", Band: "20m"}
+	cells := []cellBandKey{cbk1, cbk2}
 	baseBucket := int64(600000)
 
 	step := func(e *LadderEngine, k int64, links int) (int, string) {
 		now := (baseBucket+k)*BucketSeconds + 100
-		live := map[cellBandKey]*ladderBandAggregate{cbk: {linkCount: links}}
-		return e.minOnsetAge([]cellBandKey{cbk}, live, nil, params, now)
+		live := map[cellBandKey]*ladderBandAggregate{
+			cbk1: {linkCount: links},
+			cbk2: {linkCount: links},
+		}
+		return e.minOnsetAge(cells, live, nil, params, now)
 	}
 
 	// Gate: ten consecutive 1-link buckets must never alarm.
@@ -188,6 +194,19 @@ func TestCusumOnsetLatchAndGate(t *testing.T) {
 	for k := int64(0); k < 10; k++ {
 		if age, _ := step(e, k, 1); age >= 0 {
 			t.Fatalf("sparse bucket %d alarmed (age %d), want none", k, age)
+		}
+	}
+
+	// Coherence: a single alarmed cell must never suffice.
+	e = NewLadderEngine()
+	for k := int64(0); k < 6; k++ {
+		now := (baseBucket+k)*BucketSeconds + 100
+		live := map[cellBandKey]*ladderBandAggregate{
+			cbk1: {linkCount: 6},
+			cbk2: {linkCount: 1}, // cbk2 stays gated-quiet
+		}
+		if age, _ := e.minOnsetAge(cells, live, nil, params, now); age >= 0 {
+			t.Fatalf("single-cell build-up alarmed at bucket %d (age %d), want none", k, age)
 		}
 	}
 

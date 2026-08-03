@@ -530,13 +530,22 @@ func bandCells(cells []cellBandKey, band string, live map[cellBandKey]*ladderBan
 	return out
 }
 
+// onsetCoherenceMinCells is the number of DISTINCT band cells that must have
+// fresh CUSUM crossings before an onset is reported. 2026-08-03 calibration
+// round 2: single-cell crossings produced 507 false alarms vs 10 confirmed —
+// a real opening trips several midpoint paths at once, a noisy cell trips one.
+const onsetCoherenceMinCells = 2
+
 // minOnsetAge scans the requested cell-band keys, runs the CUSUM update for the
-// current bucket, and returns the youngest onset age in minutes (or -1 if none)
-// plus the midpoint region of the alarm cell for context ("", if none).
+// current bucket per cell, and returns the youngest onset age in minutes (or
+// -1 if none) plus the midpoint region of the youngest alarmed cell — but only
+// when at least onsetCoherenceMinCells distinct cells hold a fresh alarm
+// (multi-cell coherence: openings are area phenomena, not single-cell noise).
 func (e *LadderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*ladderBandAggregate, expected map[cellBandKey]float64, params LadderParams, now int64) (int, string) {
 	bucketIdx := int(now / BucketSeconds)
 	minAge := -1
 	minRegion := ""
+	freshCells := 0
 	for _, cbk := range cells {
 		agg := live[cbk]
 		if agg == nil {
@@ -577,6 +586,7 @@ func (e *LadderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*la
 		}
 		if st.S >= params.CusumThreshold*exp && st.CrossIdx >= 0 &&
 			bucketIdx-st.CrossIdx <= maxOnsetReportBuckets && st.LastZeroIdx < bucketIdx {
+			freshCells++
 			ageBuckets := bucketIdx - st.LastZeroIdx
 			ageMin := ageBuckets * BucketSeconds / 60
 			if minAge == -1 || ageMin < minAge {
@@ -584,6 +594,9 @@ func (e *LadderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*la
 				minRegion = cbk.Region
 			}
 		}
+	}
+	if freshCells < onsetCoherenceMinCells {
+		return -1, ""
 	}
 	return minAge, minRegion
 }
