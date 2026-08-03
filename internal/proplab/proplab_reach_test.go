@@ -272,7 +272,9 @@ func TestDetectSurges(t *testing.T) {
 		t.Errorf("first tick surges = %+v, want none", s)
 	}
 
-	// Activity jump from a quiet previous ratio.
+	// Activity jump from a quiet previous ratio — with sufficient absolute
+	// rate (the floor rejects thin-baseline ratio spikes).
+	cur.Cells[0].LinksPerMin = 3.0
 	prev := &ReachVerdict{Ratios: map[[2]string]float64{{"10m", "SA"}: 1.0}, Indices: map[[2]string]int{}}
 	s := DetectSurges(prev, cur, nil, now)
 	if len(s) != 1 || s[0].Kind != "activity_jump" {
@@ -280,6 +282,13 @@ func TestDetectSurges(t *testing.T) {
 	}
 	if s[0].Strength < 60 || s[0].Strength > 100 {
 		t.Errorf("jump strength = %d, want 60..100", s[0].Strength)
+	}
+
+	// Same ratio spike below the absolute floor: no surge.
+	thin := cur
+	thin.Cells = []ReachCell{{Band: "10m", Region: "SA", Index: &one, ActivityRatio: 5.0, LinksPerMin: 0.5}}
+	if s := DetectSurges(prev, thin, nil, now); len(s) != 0 {
+		t.Errorf("thin-absolute jump surges = %+v, want none (floor)", s)
 	}
 
 	// No jump when previous ratio was already high.

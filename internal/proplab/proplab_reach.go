@@ -64,8 +64,13 @@ const (
 	ReachScheduleMinActiveDays = 3    // the slot must have opened on >= N distinct days
 
 	// Surge heuristics — first-guess thresholds, tuned via proplab-backtest.
-	SurgeTTLMinutes           = 240
-	surgeJumpRatio            = 4.0
+	SurgeTTLMinutes = 240
+	surgeJumpRatio  = 4.0
+	// surgeJumpAbsMin floors the ABSOLUTE rate for an activity_jump: a ratio
+	// spike against a whisper-thin baseline (0.05 lpm over a 0.01 lpm
+	// baseline is a 5x "jump") is not an operational surge — calibration
+	// round 1-3 scored ratio-only jumps at ~10% forward truth.
+	surgeJumpAbsMin           = 1.0
 	surgeNewRegionIndexMin    = 60
 	surgeNewRegionPrevMax     = 20
 	surgeNewRegionPresenceMax = 0.25
@@ -356,7 +361,8 @@ func DetectSurges(prev *ReachVerdict, cur ReachVerdict, slotProfile []BaselineDa
 		prevRatio, prevOK := prev.Ratios[key]
 		prevIdx, idxOK := prev.Indices[key]
 
-		if c.ActivityRatio >= surgeJumpRatio && (!prevOK || prevRatio < reachOpenRatio) {
+		if c.ActivityRatio >= surgeJumpRatio && c.LinksPerMin >= surgeJumpAbsMin &&
+			(!prevOK || prevRatio < reachOpenRatio) {
 			strength := int(math.Min(100, math.Round(50+12*math.Log2(c.ActivityRatio))))
 			out = append(out, ReachSurge{
 				Kind:      "activity_jump",
