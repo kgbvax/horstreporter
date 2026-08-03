@@ -37,19 +37,21 @@ type ProplabService struct {
 	sw     proplab.FusionSWSnapshot
 	events []proplab.FusionEvent
 
-	dedup             map[string]int64
-	destAcc           map[destBucketKey]*destBucketAgg
-	reachPrev         map[string]*proplab.ReachVerdict
-	reachSurges       map[string]map[string]proplab.ReachSurge
-	destProfiles      map[string]*destProfileEntry
-	cellExpected      map[proplab.CellExpectedKey]float64
-	cellExpectedLB    int
-	cellExpectedAt    time.Time
-	lastPrune         time.Time
-	stopCh            chan struct{}
-	wg                sync.WaitGroup
-	started           bool
-	recomputeInterval time.Duration
+	dedup               map[string]int64
+	destAcc             map[destBucketKey]*destBucketAgg
+	reachPrev           map[string]*proplab.ReachVerdict
+	reachSurges         map[string]map[string]proplab.ReachSurge
+	destProfiles        map[string]*destProfileEntry
+	cellExpected        map[proplab.CellExpectedKey]float64
+	cellExpectedLB      int
+	cellExpectedAt      time.Time
+	cellExpectedLoading bool
+	cellExpectedFailAt  time.Time
+	lastPrune           time.Time
+	stopCh              chan struct{}
+	wg                  sync.WaitGroup
+	started             bool
+	recomputeInterval   time.Duration
 }
 
 // cellExpectedMaxAge is the cache TTL for the CUSUM expected-activity
@@ -173,10 +175,9 @@ func (s *ProplabService) LadderVerdict(target string, surroundings bool, params 
 }
 
 // cellExpectedFor returns the cached CUSUM expected-activity baseline for the
-// params' lookback, refreshing it at most every cellExpectedMaxAge. Nil on
-// load failure — the engine degrades to its EWMA fallback, never to an error.
-// (Lab param overrides of ExpectedLookbackDays miss the cache on purpose:
-// they re-load on their own lookback.)
+// params' lookback. The load scans the whole cell-bucket table (~30-60s), so
+// it runs ASYNC: verdicts get the stale/nil map (engine degrades to its EWMA
+// fallback) until the background refresh lands. Never blocks a verdict.
 func (s *ProplabService) cellExpectedFor(p proplab.LadderParams) map[proplab.CellExpectedKey]float64 {
 	if s.store == nil {
 		return nil
@@ -187,18 +188,35 @@ func (s *ProplabService) cellExpectedFor(p proplab.LadderParams) map[proplab.Cel
 	if cached != nil && lb == p.ExpectedLookbackDays && time.Since(at) < cellExpectedMaxAge {
 		return cached
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	rows, err := s.store.loadProplabCellExpected(ctx, p.ExpectedLookbackDays, time.Now().Unix())
-	cancel()
-	if err != nil {
-		logInfo("Proplab cell expected baseline load failed: %v", err)
-		return cached // serve stale rather than nothing
+	s.mu.RLock()
+	failedAt := s.cellExpectedFailAt
+	s.mu.RUnlock()
+	if cached == nil && time.Since(failedAt) < 10*time.Minute {
+		return nil // recent failed load: don't rescan per verdict
 	}
 	s.mu.Lock()
-	s.cellExpected, s.cellExpectedLB, s.cellExpectedAt = rows, p.ExpectedLookbackDays, time.Now()
+	if s.cellExpectedLoading {
+		s.mu.Unlock()
+		return cached
+	}
+	s.cellExpectedLoading = true
 	s.mu.Unlock()
-	logInfo("Proplab cell expected baseline loaded: cells=%d lookback=%dd", len(rows), p.ExpectedLookbackDays)
-	return rows
+	go func(cached map[proplab.CellExpectedKey]float64) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		rows, err := s.store.loadProplabCellExpected(ctx, p.ExpectedLookbackDays, time.Now().Unix())
+		cancel()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.cellExpectedLoading = false
+		if err != nil {
+			logInfo("Proplab cell expected baseline load failed: %v", err)
+			s.cellExpectedFailAt = time.Now() // back off rather than hammering the scan
+			return
+		}
+		s.cellExpected, s.cellExpectedLB, s.cellExpectedAt = rows, p.ExpectedLookbackDays, time.Now()
+		logInfo("Proplab cell expected baseline loaded: cells=%d lookback=%dd", len(rows), p.ExpectedLookbackDays)
+	}(cached)
+	return cached
 }
 
 // FusionVerdict returns the variant-C result. A nil params pointer uses the
