@@ -284,9 +284,11 @@ func TestDetectSurges(t *testing.T) {
 		t.Errorf("jump strength = %d, want 60..100", s[0].Strength)
 	}
 
-	// Same ratio spike below the absolute floor: no surge.
+	// Same ratio spike below the absolute floor: no surge. (Index kept below
+	// the new_region threshold so only the jump rule can fire.)
+	thirty := 30
 	thin := cur
-	thin.Cells = []ReachCell{{Band: "10m", Region: "SA", Index: &one, ActivityRatio: 5.0, LinksPerMin: 0.5}}
+	thin.Cells = []ReachCell{{Band: "10m", Region: "SA", Index: &thirty, ActivityRatio: 5.0, LinksPerMin: 0.5}}
 	if s := DetectSurges(prev, thin, nil, now); len(s) != 0 {
 		t.Errorf("thin-absolute jump surges = %+v, want none (floor)", s)
 	}
