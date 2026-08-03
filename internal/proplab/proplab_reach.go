@@ -55,8 +55,13 @@ const (
 	reachWitnessFull = 3 // ladders WitnessMin: full witness weight
 
 	// Scheduled-opening gates (per 30-min UTC slot over the lookback window).
-	ReachSchedulePresenceMin = 0.35 // fraction of days with activity in the slot
-	ReachScheduleMedianMin   = 1.0  // median links/day in the slot
+	// Presence is measured against the days the PAIR had any activity at all,
+	// not the days with rows in that specific slot — the latter makes one
+	// stray artifact day read as "usual opening 100% of days" (live 2026-08-03:
+	// a single bogus 160m-NA daytime link claimed a daily 09:30 opening).
+	ReachSchedulePresenceMin   = 0.35 // fraction of pair-active days with activity in the slot
+	ReachScheduleMedianMin     = 1.0  // median links/day in the slot
+	ReachScheduleMinActiveDays = 3    // the slot must have opened on >= N distinct days
 
 	// Surge heuristics — first-guess thresholds, tuned via proplab-backtest.
 	SurgeTTLMinutes           = 240
@@ -379,21 +384,25 @@ func DetectSurges(prev *ReachVerdict, cur ReachVerdict, slotProfile []BaselineDa
 	return out
 }
 
-// slotPresence is the fraction of days with any activity for the pair in slot.
+// slotPresence is the fraction of the pair's ACTIVE days with activity in
+// slot — the denominator is the pair's distinct days with any data, not the
+// days with rows in this slot (see ReachSchedulePresenceMin comment).
 func slotPresence(profile []BaselineDayRow, key [2]string, slot int) float64 {
-	days, active := 0, 0
+	days := make(map[int64]bool)
+	active := 0
 	for _, r := range profile {
-		if r.Band == key[0] && r.Region == key[1] && r.Slot == slot {
-			days++
-			if r.LinkCount > 0 {
-				active++
-			}
+		if r.Band != key[0] || r.Region != key[1] {
+			continue
+		}
+		days[r.DayIndex] = true
+		if r.Slot == slot && r.LinkCount > 0 {
+			active++
 		}
 	}
-	if days == 0 {
+	if len(days) == 0 {
 		return 0
 	}
-	return float64(active) / float64(days)
+	return float64(active) / float64(len(days))
 }
 
 // deriveSchedule finds usual opening windows per (band, region) from the
@@ -404,9 +413,10 @@ func slotPresence(profile []BaselineDayRow, key [2]string, slot int) float64 {
 func deriveSchedule(profile []BaselineDayRow, liveOpen map[[2]string]bool, now int64) []ReachScheduleEntry {
 	params := DefaultFusionParams()
 	type pairKey = [2]string
-	// usable[pair][slot] and presence[pair][slot]
+	// usable[pair][slot] and presence[pair][slot]; pairDays counts the distinct
+	// days the pair had ANY activity (the presence denominator).
 	rowsByPairSlot := make(map[pairKey]map[int][]BaselineDayRow)
-	presence := make(map[pairKey]map[int]float64)
+	pairDays := make(map[pairKey]map[int64]bool)
 	for _, r := range profile {
 		pk := pairKey{r.Band, r.Region}
 		m := rowsByPairSlot[pk]
@@ -415,22 +425,31 @@ func deriveSchedule(profile []BaselineDayRow, liveOpen map[[2]string]bool, now i
 			rowsByPairSlot[pk] = m
 		}
 		m[r.Slot] = append(m[r.Slot], r)
+		if pairDays[pk] == nil {
+			pairDays[pk] = make(map[int64]bool)
+		}
+		pairDays[pk][r.DayIndex] = true
 	}
+	presence := make(map[pairKey]map[int]float64)
+	activeDays := make(map[pairKey]map[int]int)
 	for pk, slots := range rowsByPairSlot {
+		denom := len(pairDays[pk])
 		pm := make(map[int]float64)
+		am := make(map[int]int)
 		for sl, rows := range slots {
-			days, active := 0, 0
+			active := 0
 			for _, r := range rows {
-				days++
 				if r.LinkCount > 0 {
 					active++
 				}
 			}
-			if days > 0 {
-				pm[sl] = float64(active) / float64(days)
+			if denom > 0 {
+				pm[sl] = float64(active) / float64(denom)
 			}
+			am[sl] = active
 		}
 		presence[pk] = pm
+		activeDays[pk] = am
 	}
 
 	nowSlot := UTCSlotOfDay(now)
@@ -441,6 +460,9 @@ func deriveSchedule(profile []BaselineDayRow, liveOpen map[[2]string]bool, now i
 		}
 		usable := make([]bool, 48)
 		for sl := 0; sl < 48; sl++ {
+			if activeDays[pk][sl] < ReachScheduleMinActiveDays {
+				continue
+			}
 			if presence[pk][sl] >= ReachSchedulePresenceMin {
 				_, p50, _, _ := weightedBaselineStats(slots[sl], params)
 				if p50 >= ReachScheduleMedianMin {
@@ -454,11 +476,13 @@ func deriveSchedule(profile []BaselineDayRow, liveOpen map[[2]string]bool, now i
 				continue
 			}
 			start, end := run[0], run[1]
-			// Now inside the run (but not exactly at its start) -> already in session.
-			minsTo := ((start - nowSlot + 48) % 48) * 30
-			if slotInRun(nowSlot, start, end) && minsTo != 0 {
+			// Now anywhere inside the run -> not "upcoming": the pair is in its
+			// usual window and quiet (the 0-min boundary case used to leak
+			// through as "in 0 min").
+			if slotInRun(nowSlot, start, end) {
 				continue
 			}
+			minsTo := ((start - nowSlot + 48) % 48) * 30
 			// Average presence across the run.
 			sum, n := 0.0, 0
 			for sl := start; ; sl = (sl + 1) % 48 {

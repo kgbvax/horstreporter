@@ -215,6 +215,44 @@ func TestDeriveSchedule(t *testing.T) {
 	if got := deriveSchedule(sparse, nil, (1700000000 + 86400)); len(got) != 0 {
 		t.Errorf("sparse presence produced %d entries, want 0", len(got))
 	}
+
+	// Artifact day: a real daily run plus ONE stray day with links at an
+	// unrelated slot. Before the denominator fix the stray read as
+	// "usual opening, 100% of days".
+	var artifact []BaselineDayRow
+	real := []int{(nowSlot + 8) % 48, (nowSlot + 9) % 48}
+	for d := 0; d < 5; d++ {
+		for _, sl := range real {
+			artifact = append(artifact, BaselineDayRow{Band: "160m", Region: "NA", Slot: sl, DayIndex: int64(22000 + d), LinkCount: 8})
+		}
+	}
+	stray := (nowSlot + 20) % 48
+	artifact = append(artifact, BaselineDayRow{Band: "160m", Region: "NA", Slot: stray, DayIndex: 22004, LinkCount: 2})
+	got = deriveSchedule(artifact, nil, now)
+	for _, e := range got {
+		if e.OpenUTC == slotHHMM(stray) {
+			t.Errorf("artifact day produced entry %+v, want suppressed", e)
+		}
+		if e.Presence > 0 && e.MinutesToOpen == 0 {
+			t.Errorf("in-session entry leaked as minutes_to_open=0: %+v", e)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("artifact fixture entries = %+v, want exactly the real run", got)
+	}
+
+	// A window whose start slot IS the current slot is in-session, not
+	// "in 0 min" — exclude it.
+	nowRun := []int{nowSlot, (nowSlot + 1) % 48}
+	var inSession []BaselineDayRow
+	for d := 0; d < 10; d++ {
+		for _, sl := range nowRun {
+			inSession = append(inSession, BaselineDayRow{Band: "40m", Region: "AS", Slot: sl, DayIndex: int64(23000 + d), LinkCount: 6})
+		}
+	}
+	if got := deriveSchedule(inSession, nil, now); len(got) != 0 {
+		t.Errorf("current-window entries = %+v, want none", got)
+	}
 }
 
 func TestDetectSurges(t *testing.T) {
