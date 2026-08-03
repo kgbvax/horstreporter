@@ -156,3 +156,26 @@ func TestFusionInsufficientData(t *testing.T) {
 		t.Fatalf("expected insufficient_data, got %s", v.Bands[0].State)
 	}
 }
+
+// TestEventExplanationsSkipsRoutinePOTA pins the 2026-08-03 fix: POTA
+// activator spots are routine baseline activity, not anomaly events — they
+// must not explain (and thereby cap) cells, or every EU cell sits at the
+// event cap whenever activators are on the air.
+func TestEventExplanationsSkipsRoutinePOTA(t *testing.T) {
+	events := []FusionEvent{
+		{Source: "pota", Title: "DK5UR @ DE-0837", BandMask: "20m", Region: "EU"},
+		{Source: "pota", Title: "DK5UR @ DE-0837", BandMask: "20m", Region: "EU"},
+		{Source: "wa7bnm", Title: "CQ WW CW", BandMask: "80m-10m", Region: ""},
+		{Source: "ng3k", Title: "5V7A DXpedition", BandMask: "", Region: "AF"},
+	}
+	got := eventExplanations("20m", "EU", events)
+	if len(got) != 1 || got[0] != "CQ WW CW" {
+		t.Errorf("20m EU explanations = %v, want only [CQ WW CW]", got)
+	}
+	if got := eventExplanations("20m", "AF", events); len(got) != 2 {
+		t.Errorf("20m AF explanations = %v, want contest + dxpedition", got)
+	}
+	if got := eventExplanations("20m", "JA", events); len(got) != 1 || got[0] != "CQ WW CW" {
+		t.Errorf("20m JA explanations = %v, want only global contest", got)
+	}
+}

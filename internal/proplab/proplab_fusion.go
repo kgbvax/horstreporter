@@ -418,15 +418,31 @@ func fusionBaselineKey(band, region string, slot int) string {
 	return band + "|" + region + "|" + strconv.Itoa(slot)
 }
 
+// eventExplanations lists the anomaly events that can "explain" elevated
+// activity in a (band, region) cell — contests and DXpeditions. Routine
+// activation feeds (Source "pota": one event per activator spot, thousands
+// concurrently) are deliberately EXCLUDED: they are part of the everyday
+// baseline, and letting them explain/cap cells silently caps e.g. all of EU
+// whenever activators are on the air (observed live 2026-08-03: every EU cell
+// pinned at the event cap). Titles are deduped — one activator emits one
+// event per spot refresh.
 func eventExplanations(band, region string, events []FusionEvent) []string {
 	var out []string
+	seen := make(map[string]bool)
 	for _, e := range events {
+		if e.Source == "pota" {
+			continue
+		}
 		if e.BandMask != "" && !eventBandMatches(e.BandMask, band) {
 			continue
 		}
 		if e.Region != "" && e.Region != region {
 			continue
 		}
+		if seen[e.Title] {
+			continue
+		}
+		seen[e.Title] = true
 		out = append(out, e.Title)
 	}
 	return out
