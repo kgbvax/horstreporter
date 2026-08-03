@@ -52,7 +52,7 @@ func TestLadderVerdictOpenCoherentRun(t *testing.T) {
 		eng.Observe(newTestSpot(now, "10m", "DL10M"+strconv.Itoa(i), "W10M"+strconv.Itoa(i), "JO62QM", "FN31AB", -5+i))
 	}
 
-	expected := map[cellBandKey]float64{}
+	expected := map[CellExpectedKey]float64{}
 	reachable := map[string]map[string]bool{
 		"20m": {"NA": true},
 		"17m": {"NA": true},
@@ -86,7 +86,7 @@ func TestLadderVerdictEsLane(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		eng.Observe(newTestSpot(now, "6m", "DL"+strconv.Itoa(i), "G"+strconv.Itoa(i), "JO62QM", "JO01", 0))
 	}
-	expected := map[cellBandKey]float64{}
+	expected := map[CellExpectedKey]float64{}
 	reachable := map[string]map[string]bool{"6m": {"EU": true}}
 	params := DefaultLadderParams()
 	v := eng.Verdict("JO62QM", false, nil, reachable, expected, params, now)
@@ -180,13 +180,21 @@ func TestCusumOnsetLatchAndGate(t *testing.T) {
 	cells := []cellBandKey{cbk1, cbk2}
 	baseBucket := int64(600000)
 
+	// Expected baseline μ = 0.5 links/bucket at the current slot: the build-up
+	// to 6 links/bucket is a genuine 12× onset. Constant activity at the
+	// baseline level must never alarm (that IS the normal state).
 	step := func(e *LadderEngine, k int64, links int) (int, string) {
 		now := (baseBucket+k)*BucketSeconds + 100
+		slot := UTCSlotOfDay(now)
+		expected := map[CellExpectedKey]float64{
+			{Band: "20m", Cell4: cbk1.Cell4, Region: "EU", Slot: slot}: 0.5,
+			{Band: "20m", Cell4: cbk2.Cell4, Region: "EU", Slot: slot}: 0.5,
+		}
 		live := map[cellBandKey]*ladderBandAggregate{
 			cbk1: {linkCount: links},
 			cbk2: {linkCount: links},
 		}
-		return e.minOnsetAge(cells, live, nil, params, now)
+		return e.minOnsetAge(cells, live, expected, params, now)
 	}
 
 	// Gate: ten consecutive 1-link buckets must never alarm.
@@ -197,15 +205,29 @@ func TestCusumOnsetLatchAndGate(t *testing.T) {
 		}
 	}
 
+	// Normal activity: constant links at the baseline must not alarm — the
+	// drift (1.5×μ) exceeds the input, so S drains for the normal state.
+	e = NewLadderEngine()
+	for k := int64(0); k < 10; k++ {
+		if age, _ := step(e, k, 1); age >= 0 { // 1 link < gate anyway; see build-up for normal vs onset
+			t.Fatalf("baseline bucket %d alarmed (age %d), want none", k, age)
+		}
+	}
+
 	// Coherence: a single alarmed cell must never suffice.
 	e = NewLadderEngine()
 	for k := int64(0); k < 6; k++ {
 		now := (baseBucket+k)*BucketSeconds + 100
+		slot := UTCSlotOfDay(now)
+		expected := map[CellExpectedKey]float64{
+			{Band: "20m", Cell4: cbk1.Cell4, Region: "EU", Slot: slot}: 0.5,
+			{Band: "20m", Cell4: cbk2.Cell4, Region: "EU", Slot: slot}: 0.5,
+		}
 		live := map[cellBandKey]*ladderBandAggregate{
 			cbk1: {linkCount: 6},
 			cbk2: {linkCount: 1}, // cbk2 stays gated-quiet
 		}
-		if age, _ := e.minOnsetAge(cells, live, nil, params, now); age >= 0 {
+		if age, _ := e.minOnsetAge(cells, live, expected, params, now); age >= 0 {
 			t.Fatalf("single-cell build-up alarmed at bucket %d (age %d), want none", k, age)
 		}
 	}

@@ -294,6 +294,51 @@ func (s *dxPostgresStore) loadProplabCellBaseline(ctx context.Context, bands []s
 	return out, rows.Err()
 }
 
+// loadProplabCellExpected returns expected LINKS PER 15-MIN BUCKET per
+// (band, cell4, region, slot-of-day) over the lookback window — the baseline
+// the Ladder CUSUM detector compares current activity against. Without it the
+// detector saturated on any activity (2026-08-03: ~507 false alarms/week).
+// Lane 'ft8' only: RBN CW/RTTY rates would inflate the expectation for the
+// FT8-dominated ladder evaluation.
+func (s *dxPostgresStore) loadProplabCellExpected(ctx context.Context, lookbackDays int, now int64) (map[proplab.CellExpectedKey]float64, error) {
+	if s == nil {
+		return nil, nil
+	}
+	if lookbackDays <= 0 {
+		lookbackDays = 21
+	}
+	if now <= 0 {
+		now = time.Now().Unix()
+	}
+	start := now - int64(lookbackDays*24*60*60)
+	rows, err := s.pool.Query(ctx, `
+		SELECT band, cell4, region,
+		       (((bucket_start / 900) % 96) / 2) AS slot_of_day,
+		       SUM(link_count)::bigint AS link_count,
+		       COUNT(DISTINCT (bucket_start / 86400))::bigint AS days
+		FROM proplab_cell_buckets
+		WHERE bucket_start >= $1 AND lane = 'ft8'
+		GROUP BY band, cell4, region, (((bucket_start / 900) % 96) / 2)
+	`, start)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[proplab.CellExpectedKey]float64)
+	for rows.Next() {
+		var key proplab.CellExpectedKey
+		var links, days int64
+		if err := rows.Scan(&key.Band, &key.Cell4, &key.Region, &key.Slot, &links, &days); err != nil {
+			return nil, err
+		}
+		if days > 0 {
+			// Each slot covers two 15-min buckets.
+			out[key] = float64(links) / (2 * float64(days))
+		}
+	}
+	return out, rows.Err()
+}
+
 // --- Destination bucket queries (reachability product view) -----------------
 
 // destBucketSlotSQL is the 30-min UTC slot expression for the dest table. Keep

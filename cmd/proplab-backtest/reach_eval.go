@@ -352,10 +352,10 @@ func destBackfillBatch(ctx context.Context, pool *pgxpool.Pool, start, end int64
 
 	for rows.Next() {
 		var (
-			st                int64
-			band              string
-			sl, rl, sc, rc    string
-			snr               int
+			st             int64
+			band           string
+			sl, rl, sc, rc string
+			snr            int
 		)
 		if err := rows.Scan(&st, &band, &sl, &rl, &sc, &rc, &snr); err != nil {
 			return 0, err
@@ -464,9 +464,9 @@ type reachKeeper struct {
 
 	tp, fp, fn, tn int
 
-	surgeByKind  map[string]int
-	surgeTruth   map[string]int // surges whose pair turned true in the forward window
-	scoredTicks  int
+	surgeByKind map[string]int
+	surgeTruth  map[string]int // surges whose pair turned true in the forward window
+	scoredTicks int
 }
 
 func newReachKeeper(scopes []string, scopeMap map[string]bool) *reachKeeper {
@@ -577,10 +577,10 @@ func (k *reachKeeper) metrics() map[string]any {
 			label = "nil-index"
 		}
 		bins = append(bins, map[string]any{
-			"bin":            label,
-			"cells":          k.binCount[i],
-			"truth_rate":     roundF(float64(k.binTruth[i]) / float64(k.binCount[i])),
-			"mean_fwd_lpm":   roundF(k.binFwdLpmSum[i] / float64(k.binCount[i])),
+			"bin":          label,
+			"cells":        k.binCount[i],
+			"truth_rate":   roundF(float64(k.binTruth[i]) / float64(k.binCount[i])),
+			"mean_fwd_lpm": roundF(k.binFwdLpmSum[i] / float64(k.binCount[i])),
 		})
 	}
 	precision, recall, accuracy := 0.0, 0.0, 0.0
@@ -641,9 +641,9 @@ func destLiveBandsRegionsBT(live []proplab.DestRow) (bands, regions []string) {
 // distribution at which the ladder declares open, CUSUM onset lead/false
 // alarms, and open-runs contiguity violations.
 type ladderValKeeper struct {
-	bands        map[string]*ladderValBand
-	contigViol   int
-	openTicks    int
+	bands      map[string]*ladderValBand
+	contigViol int
+	openTicks  int
 }
 
 type ladderValBand struct {
@@ -766,9 +766,9 @@ func (k *ladderValKeeper) metrics() map[string]any {
 		perBand[band] = bm
 	}
 	out := map[string]any{
-		"bands":                    perBand,
-		"open_ticks":               k.openTicks,
-		"contiguity_violations":    k.contigViol,
+		"bands":                 perBand,
+		"open_ticks":            k.openTicks,
+		"contiguity_violations": k.contigViol,
 	}
 	if k.openTicks > 0 {
 		out["contiguity_violation_rate"] = roundF(float64(k.contigViol) / float64(k.openTicks))
@@ -779,4 +779,41 @@ func (k *ladderValKeeper) metrics() map[string]any {
 		out["lpm_at_open_p10_all"] = roundF(proplab.PercentileFloat(allLpm, 0.1))
 	}
 	return out
+}
+
+// --- CUSUM expected-activity baseline ---------------------------------------
+
+// loadCellExpectedDB mirrors dxPostgresStore.loadProplabCellExpected for the
+// replay harness: expected links per 15-min bucket per (band, cell4, region,
+// slot-of-day) over the lookback window ending at `now`.
+func loadCellExpectedDB(ctx context.Context, pool *pgxpool.Pool, lookbackDays int, now int64) (map[proplab.CellExpectedKey]float64, error) {
+	if lookbackDays <= 0 {
+		lookbackDays = 21
+	}
+	start := now - int64(lookbackDays*24*60*60)
+	rows, err := pool.Query(ctx, `
+		SELECT band, cell4, region,
+		       (((bucket_start / 900) % 96) / 2) AS slot_of_day,
+		       SUM(link_count)::bigint AS link_count,
+		       COUNT(DISTINCT (bucket_start / 86400))::bigint AS days
+		FROM proplab_cell_buckets
+		WHERE bucket_start >= $1 AND lane = 'ft8'
+		GROUP BY band, cell4, region, (((bucket_start / 900) % 96) / 2)
+	`, start)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[proplab.CellExpectedKey]float64)
+	for rows.Next() {
+		var key proplab.CellExpectedKey
+		var links, days int64
+		if err := rows.Scan(&key.Band, &key.Cell4, &key.Region, &key.Slot, &links, &days); err != nil {
+			return nil, err
+		}
+		if days > 0 {
+			out[key] = float64(links) / (2 * float64(days))
+		}
+	}
+	return out, rows.Err()
 }

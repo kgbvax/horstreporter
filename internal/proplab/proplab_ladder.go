@@ -22,21 +22,25 @@ import (
 // so the engine is usable immediately; the Propagation Lab UI exposes each
 // as a slider and sends overrides as query parameters.
 type LadderParams struct {
-	MinLinks          int     `json:"min_links"`
-	SnrFloorFT8dB     int     `json:"snr_floor_ft8"`
-	SnrFloorRBNdB     int     `json:"snr_floor_rbn"`
-	WitnessMin        int     `json:"witness_min"`
-	EsMinKm           int     `json:"es_min_km"`
-	EsMaxKm           int     `json:"es_max_km"`
-	CoherenceMinBands int     `json:"coherence_min_bands"`
-	CusumDrift        float64 `json:"cusum_drift"`
-	CusumThreshold    float64 `json:"cusum_threshold"`
+	MinLinks          int `json:"min_links"`
+	SnrFloorFT8dB     int `json:"snr_floor_ft8"`
+	SnrFloorRBNdB     int `json:"snr_floor_rbn"`
+	WitnessMin        int `json:"witness_min"`
+	EsMinKm           int `json:"es_min_km"`
+	EsMaxKm           int `json:"es_max_km"`
+	CoherenceMinBands int `json:"coherence_min_bands"`
+	// CusumDrift is the statistic's drain margin: drift = expected links per
+	// bucket × (1 + CusumDrift), so MERELY-NORMAL activity (links ≈ μ) drains
+	// S toward 0 and only sustained above-expected activity accumulates.
+	CusumDrift float64 `json:"cusum_drift"`
+	// CusumThreshold is the alarm threshold in units of expected links per
+	// bucket (alarm while S ≥ CusumThreshold × μ).
+	CusumThreshold float64 `json:"cusum_threshold"`
 	// CusumMinBucketLinks gates the CUSUM accumulator: buckets with fewer
 	// observed links contribute 0 (they DRAIN the statistic instead of raising
 	// it). Without this gate (2026-08-03 calibration: ~39 false alarms per
-	// band per week, 20m ~290) a single sporadic link in a quiet cell pinned
-	// the statistic above threshold permanently — obs climbs to 1 while the
-	// drift is only CusumDrift*exp, so S could never return to 0.
+	// band per week) a single sporadic link in a quiet cell pinned the
+	// statistic above threshold semi-permanently.
 	CusumMinBucketLinks  int     `json:"cusum_min_bucket_links"`
 	EwmaAlpha            float64 `json:"ewma_alpha"`
 	ExpectedLookbackDays int     `json:"expected_lookback_days"`
@@ -102,6 +106,20 @@ type cellBandKey struct {
 	Band   string
 }
 
+// CellExpectedKey indexes the cell-band expected-activity baseline by UTC
+// slot-of-day (0..47): expected LINKS PER 15-MIN BUCKET from the cell-bucket
+// store (persisted by this engine, ExpectedLookbackDays window). Exported so
+// the service/backtest can load it from Postgres and hand it to Verdict.
+// The 2026-08-03 calibration showed the detector is meaningless without it:
+// every caller passed nil, the exp=0.05 floor saturated, and onsets fired
+// ~507 false alarms per week.
+type CellExpectedKey struct {
+	Band   string
+	Cell4  string
+	Region string
+	Slot   int
+}
+
 // cusumState tracks the one-sided CUSUM statistic, the bucket index of the
 // last zero crossing (onset age estimate), and the bucket where the statistic
 // first crossed the alarm threshold since that reset. CrossIdx is the alarm
@@ -112,7 +130,8 @@ type cellBandKey struct {
 type cusumState struct {
 	S           float64
 	LastZeroIdx int
-	CrossIdx    int // -1 = below threshold since last zero crossing
+	CrossIdx    int     // -1 = below threshold since last zero crossing
+	ExpLinks    float64 // expected links/bucket of the last update (terminator probe)
 }
 
 // maxOnsetReportBuckets bounds how long after its threshold crossing an onset
@@ -126,7 +145,7 @@ type LadderEngine struct {
 	mu      sync.Mutex
 	buckets map[ladderBucketKey]*ladderCellBucket
 	cusum   map[cellBandKey]*cusumState
-	ewma    map[cellBandKey]float64 // expected presence, 0..1
+	ewma    map[cellBandKey]float64 // smoothed recent links/bucket (expected-baseline fallback)
 }
 
 // NewLadderEngine creates a fresh Ladder engine.
@@ -249,12 +268,13 @@ type LadderVerdict struct {
 }
 
 // Verdict evaluates the current window and returns per-band recommendations.
-// expected is a map of (cell,band) -> expected fractional presence in a bucket
-// (0..1) used by the CUSUM/change-point detector. reachable is a map of
+// expected maps (cell,band,slot) -> expected links per 15-min bucket (from
+// the cell-bucket baseline; nil degrades the CUSUM detector to its internal
+// EWMA fallback). reachable is a map of
 // band -> set of regions the target historically reaches, used to scope the
 // verdict to bands/regions relevant to the operator. If reachable is empty
 // the engine falls back to all observed cells.
-func (e *LadderEngine) Verdict(target string, surroundings bool, history []Spot, reachable map[string]map[string]bool, expected map[cellBandKey]float64, params LadderParams, now int64) LadderVerdict {
+func (e *LadderEngine) Verdict(target string, surroundings bool, history []Spot, reachable map[string]map[string]bool, expected map[CellExpectedKey]float64, params LadderParams, now int64) LadderVerdict {
 	resp := LadderVerdict{
 		GeneratedAt: now,
 		Params:      params,
@@ -269,13 +289,6 @@ func (e *LadderEngine) Verdict(target string, surroundings bool, history []Spot,
 	// the last two 15-minute windows for MUF/onset evaluation.
 	windowStart := AlignBucketStart(now - 30*60)
 	live := e.collectLiveBuckets(windowStart)
-
-	// Seed expected-presence EWMA if absent.
-	for cbk, exp := range expected {
-		if _, ok := e.ewma[cbk]; !ok {
-			e.ewma[cbk] = exp
-		}
-	}
 
 	// Determine which cells matter for this target.
 	relevantCells := e.relevantCells(target, surroundings, history, live, reachable)
@@ -541,50 +554,58 @@ const onsetCoherenceMinCells = 2
 // -1 if none) plus the midpoint region of the youngest alarmed cell — but only
 // when at least onsetCoherenceMinCells distinct cells hold a fresh alarm
 // (multi-cell coherence: openings are area phenomena, not single-cell noise).
-func (e *LadderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*ladderBandAggregate, expected map[cellBandKey]float64, params LadderParams, now int64) (int, string) {
+func (e *LadderEngine) minOnsetAge(cells []cellBandKey, live map[cellBandKey]*ladderBandAggregate, expected map[CellExpectedKey]float64, params LadderParams, now int64) (int, string) {
 	bucketIdx := int(now / BucketSeconds)
 	minAge := -1
 	minRegion := ""
 	freshCells := 0
+	slot := UTCSlotOfDay(now)
 	for _, cbk := range cells {
 		agg := live[cbk]
 		if agg == nil {
 			continue
 		}
-		exp := expected[cbk]
-		if exp <= 0 {
-			exp = e.ewma[cbk]
-			if exp <= 0 {
-				exp = 0.05 // tiny background so a first spot can raise
+		// Expected links/bucket at this UTC slot from the cell-bucket baseline;
+		// fall back to the engine EWMA (smoothed recent links/bucket), then a
+		// tiny floor. Pre-2026-08-03 this was hard-wired to the floor — the
+		// detector then saturated on ANY activity (507 false alarms/week).
+		mu := expected[CellExpectedKey{Band: cbk.Band, Cell4: cbk.Cell4, Region: cbk.Region, Slot: slot}]
+		e.ewma[cbk] = params.EwmaAlpha*float64(agg.linkCount) + (1-params.EwmaAlpha)*e.ewma[cbk]
+		if mu <= 0 {
+			if mu = e.ewma[cbk]; mu <= 0 {
+				mu = 0.05
 			}
 		}
-		// Update EWMA with observed fractional presence for next time.
-		obs := math.Min(1.0, float64(agg.linkCount)/math.Max(1.0, exp*float64(params.WitnessMin)))
-		old := e.ewma[cbk]
-		e.ewma[cbk] = params.EwmaAlpha*obs + (1-params.EwmaAlpha)*old
-
+		// Sparse buckets (fewer links than the gate) drain the statistic;
+		// sporadic singleton links must not accumulate toward an alarm.
+		cLinks := 0.0
+		if agg.linkCount >= params.CusumMinBucketLinks {
+			cLinks = float64(agg.linkCount)
+			// Saturation: one pileup bucket (contest burst, ingest hiccup)
+			// must not insta-trip the alarm on its own.
+			if sat := 6*mu + float64(params.CusumMinBucketLinks); cLinks > sat {
+				cLinks = sat
+			}
+		}
 		st := e.cusum[cbk]
 		if st == nil {
 			st = &cusumState{LastZeroIdx: bucketIdx, CrossIdx: -1}
 			e.cusum[cbk] = st
 		}
-		// Sparse buckets (fewer links than the gate) drain the statistic;
-		// sporadic singleton links must not accumulate toward an alarm.
-		cObs := obs
-		if agg.linkCount < params.CusumMinBucketLinks {
-			cObs = 0
-		}
-		drift := params.CusumDrift * exp
-		st.S += cObs - drift
+		st.ExpLinks = mu
+		// Drain under merely-normal activity (links ≈ μ < drift).
+		drift := (1 + params.CusumDrift) * mu
+		st.S += cLinks - drift
 		if st.S < 0 {
 			st.S = 0
 			st.LastZeroIdx = bucketIdx
 			st.CrossIdx = -1
 		}
-		if st.S >= params.CusumThreshold*exp && st.CrossIdx < 0 {
+		threshold := params.CusumThreshold * mu
+		if st.S >= threshold && st.CrossIdx < 0 {
 			st.CrossIdx = bucketIdx
 		}
-		if st.S >= params.CusumThreshold*exp && st.CrossIdx >= 0 &&
+		if st.S >= threshold && st.CrossIdx >= 0 &&
 			bucketIdx-st.CrossIdx <= maxOnsetReportBuckets && st.LastZeroIdx < bucketIdx {
 			freshCells++
 			ageBuckets := bucketIdx - st.LastZeroIdx
@@ -619,7 +640,7 @@ func (e *LadderEngine) terminatorHints(relevantCells, allCells []cellBandKey, pa
 			continue
 		}
 		st := e.cusum[cbk]
-		if st == nil || st.S < params.CusumThreshold*0.5 {
+		if st == nil || st.ExpLinks <= 0 || st.S < params.CusumThreshold*st.ExpLinks*0.5 {
 			continue
 		}
 		_, lon := LocatorToLatLng(cbk.Cell4)

@@ -42,12 +42,19 @@ type ProplabService struct {
 	reachPrev         map[string]*proplab.ReachVerdict
 	reachSurges       map[string]map[string]proplab.ReachSurge
 	destProfiles      map[string]*destProfileEntry
+	cellExpected      map[proplab.CellExpectedKey]float64
+	cellExpectedLB    int
+	cellExpectedAt    time.Time
 	lastPrune         time.Time
 	stopCh            chan struct{}
 	wg                sync.WaitGroup
 	started           bool
 	recomputeInterval time.Duration
 }
+
+// cellExpectedMaxAge is the cache TTL for the CUSUM expected-activity
+// baseline; accrual is daily, so a few hours of staleness is invisible.
+const cellExpectedMaxAge = 6 * time.Hour
 
 // newProplabService builds the service. Even when disabled it is safe to call
 // Observe (it becomes a no-op). The store pointer is taken from the baseline
@@ -162,7 +169,36 @@ func (s *ProplabService) LadderVerdict(target string, surroundings bool, params 
 	}
 	now := time.Now().Unix()
 	history := toProplabSpots(s.recentHistoryCopy())
-	return s.ladder.Verdict(target, surroundings, history, nil, nil, p, now)
+	return s.ladder.Verdict(target, surroundings, history, nil, s.cellExpectedFor(p), p, now)
+}
+
+// cellExpectedFor returns the cached CUSUM expected-activity baseline for the
+// params' lookback, refreshing it at most every cellExpectedMaxAge. Nil on
+// load failure — the engine degrades to its EWMA fallback, never to an error.
+// (Lab param overrides of ExpectedLookbackDays miss the cache on purpose:
+// they re-load on their own lookback.)
+func (s *ProplabService) cellExpectedFor(p proplab.LadderParams) map[proplab.CellExpectedKey]float64 {
+	if s.store == nil {
+		return nil
+	}
+	s.mu.RLock()
+	cached, lb, at := s.cellExpected, s.cellExpectedLB, s.cellExpectedAt
+	s.mu.RUnlock()
+	if cached != nil && lb == p.ExpectedLookbackDays && time.Since(at) < cellExpectedMaxAge {
+		return cached
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	rows, err := s.store.loadProplabCellExpected(ctx, p.ExpectedLookbackDays, time.Now().Unix())
+	cancel()
+	if err != nil {
+		logInfo("Proplab cell expected baseline load failed: %v", err)
+		return cached // serve stale rather than nothing
+	}
+	s.mu.Lock()
+	s.cellExpected, s.cellExpectedLB, s.cellExpectedAt = rows, p.ExpectedLookbackDays, time.Now()
+	s.mu.Unlock()
+	logInfo("Proplab cell expected baseline loaded: cells=%d lookback=%dd", len(rows), p.ExpectedLookbackDays)
+	return rows
 }
 
 // FusionVerdict returns the variant-C result. A nil params pointer uses the

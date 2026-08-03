@@ -32,8 +32,8 @@ func main() {
 
 		destBackfillDays  = flag.Int("dest-backfill-days", 0, "Backfill proplab_dest_buckets from dx_raw_spots for the last N days (2h batches), then exit")
 		destBackfillStart = flag.String("dest-backfill-start", "", "Backfill start override (RFC3339 or Unix); with -dest-backfill-days, continues a partial run without double-counting")
-		destEval         = flag.Bool("dest-eval", false, "Replay the reachability composer over destination buckets; print calibration metrics. -target scopes the replay (empty = global).")
-		destHoldout      = flag.Float64("dest-holdout", 0, "Reporter callsign holdout fraction for reach calibration (e.g. 0.25); holdout callsigns are excluded from the live window but not from ground truth")
+		destEval          = flag.Bool("dest-eval", false, "Replay the reachability composer over destination buckets; print calibration metrics. -target scopes the replay (empty = global).")
+		destHoldout       = flag.Float64("dest-holdout", 0, "Reporter callsign holdout fraction for reach calibration (e.g. 0.25); holdout callsigns are excluded from the live window but not from ground truth")
 	)
 	flag.Parse()
 
@@ -92,6 +92,14 @@ func main() {
 	ladderParams := proplab.DefaultLadderParams()
 	fusionParams := proplab.DefaultFusionParams()
 	fusionParams.LookbackDays = *lookbackDays
+
+	// CUSUM expected-activity baseline (links/bucket per cell,band,slot from
+	// the persisted cell buckets). Static across the replay window — the
+	// detector's alternative (no baseline) saturates on any activity.
+	cellExpected, err := loadCellExpectedDB(ctx, pool, ladderParams.ExpectedLookbackDays, startTS)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cell expected baseline load failed (CUSUM degraded): %v\n", err)
+	}
 
 	stepSec := int64(*stepMin * 60)
 	nextEval := proplab.AlignBucketStart(startTS) + stepSec
@@ -160,7 +168,7 @@ func main() {
 
 		for raw.SpotTime >= nextEval {
 			nowEval := nextEval
-			lv, fv, err := evalAt(ctx, pool, ladder, fusion, *target, *surroundings, fusionParams, ladderParams, nowEval)
+			lv, fv, err := evalAt(ctx, pool, ladder, fusion, *target, *surroundings, fusionParams, ladderParams, cellExpected, nowEval)
 			if err != nil {
 				log.Fatalf("eval at %d: %v", nowEval, err)
 			}
@@ -192,7 +200,7 @@ func main() {
 	// Final evaluation at endTS if no spot landed exactly there.
 	if nextEval == endTS {
 		nowEval := endTS
-		lv, fv, err := evalAt(ctx, pool, ladder, fusion, *target, *surroundings, fusionParams, ladderParams, nowEval)
+		lv, fv, err := evalAt(ctx, pool, ladder, fusion, *target, *surroundings, fusionParams, ladderParams, cellExpected, nowEval)
 		if err != nil {
 			log.Fatalf("final eval: %v", err)
 		}
@@ -233,11 +241,12 @@ func printJSONTo(w *os.File, v any) {
 
 // evalAt runs one Ladder + Fusion evaluation at a given timestamp.
 func evalAt(ctx context.Context, pool *pgxpool.Pool, ladder *proplab.LadderEngine, fusion *proplab.FusionEngine,
-	target string, surroundings bool, fusionParams proplab.FusionParams, ladderParams proplab.LadderParams, nowEval int64) (proplab.LadderVerdict, proplab.FusionVerdict, error) {
+	target string, surroundings bool, fusionParams proplab.FusionParams, ladderParams proplab.LadderParams,
+	expected map[proplab.CellExpectedKey]float64, nowEval int64) (proplab.LadderVerdict, proplab.FusionVerdict, error) {
 	cutoff := proplab.AlignBucketStart(nowEval - proplab.BucketSeconds)
 	_ = ladder.CloseBuckets(cutoff)
 
-	lv := ladder.Verdict(target, surroundings, nil, nil, nil, ladderParams, nowEval)
+	lv := ladder.Verdict(target, surroundings, nil, nil, expected, ladderParams, nowEval)
 	live := ladder.RegionCounts(proplab.AlignBucketStart(nowEval - 20*60))
 	var baseline []proplab.BaselineDayRow
 	if len(live) > 0 {
@@ -564,10 +573,10 @@ func (k *scoreKeeper) metrics() map[string]any {
 		}
 		openSteps := len(s.groundOpenAt)
 		bm := map[string]any{
-			"steps":                s.steps,
-			"ground_open_steps":    openSteps,
-			"ladder_open_steps":    s.ladderOpenSteps,
-			"fusion_open_steps":    s.fusionOpenSteps,
+			"steps":                  s.steps,
+			"ground_open_steps":      openSteps,
+			"ladder_open_steps":      s.ladderOpenSteps,
+			"fusion_open_steps":      s.fusionOpenSteps,
 			"ladder_false_positives": s.ladderFalsePositives,
 			"fusion_false_positives": s.fusionFalsePositives,
 		}
