@@ -1,0 +1,264 @@
+/* Pathscope v0 — minimal, dark-aware styles. The matrix is the only
+   visual element; everything else is chrome. No vendor CSS, no Bootstrap;
+   the page is self-contained so it can be served standalone or via the
+   embedded pathscope binary. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #0f1419;
+  --bg-elev: #161c24;
+  --border: #25303d;
+  --text: #e6edf3;
+  --text-muted: #8b9aab;
+  --accent: #7ba66b;
+  --warn: #d77a3a;
+  --bad: #b03a2e;
+  --pill-bg: #1d2530;
+  --hover: #2a3744;
+  --home: #ffd166;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f8f9fb;
+    --bg-elev: #ffffff;
+    --border: #d8dde3;
+    --text: #1a1f24;
+    --text-muted: #5a6776;
+    --pill-bg: #eef1f5;
+    --hover: #e2e7ed;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.brand {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.meta {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.pill {
+  background: var(--pill-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+main {
+  padding: 1rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+#legend {
+  margin-bottom: 1rem;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.legend-label {
+  min-width: 3.5rem;
+}
+
+.legend-bar {
+  display: flex;
+  flex: 1;
+  height: 0.5rem;
+  border-radius: 0.25rem;
+  overflow: hidden;
+}
+
+.legend-tick {
+  flex: 1;
+}
+
+.legend-labels {
+  display: flex;
+  justify-content: space-between;
+  flex: 1;
+  font-size: 0.7rem;
+  margin-left: 0.5rem;
+}
+
+.legend-note {
+  margin: 0.5rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.matrix {
+  display: grid;
+  grid-template-columns: 4rem repeat(11, minmax(0, 1fr));
+  gap: 2px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  overflow: hidden;
+}
+
+.cell, .axis {
+  background: var(--bg-elev);
+  padding: 0.4rem 0.3rem;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-height: 3rem;
+}
+
+.axis {
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  min-height: 1.6rem;
+}
+
+.axis.row {
+  /* row labels (band) */
+  text-align: right;
+  padding-right: 0.5rem;
+}
+
+.cell {
+  position: relative;
+  cursor: default;
+  transition: transform 0.1s ease;
+}
+
+.cell:hover {
+  transform: scale(1.04);
+  z-index: 2;
+  box-shadow: 0 0 0 2px var(--hover);
+}
+
+.cell .top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.cell .score {
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.cell .region.is-home {
+  color: var(--home);
+}
+
+.cell .bars {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 0.25rem;
+}
+
+.cell .bar {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.6rem;
+  color: var(--text-muted);
+}
+
+.cell .bar-fill {
+  flex: 1;
+  height: 0.35rem;
+  background: var(--border);
+  border-radius: 0.1rem;
+  overflow: hidden;
+}
+
+.cell .bar-fill > span {
+  display: block;
+  height: 100%;
+  background: var(--text-muted);
+}
+
+.cell .bar.workable .bar-fill > span {
+  background: var(--accent);
+}
+
+.cell .bar.unworkable .bar-fill > span {
+  background: var(--bad);
+  opacity: 0.3;
+}
+
+.cell .bar.ft8 { color: #f4a261; }
+.cell .bar.ft4 { color: #e9c46a; }
+.cell .bar.cw  { color: #2a9d8f; }
+.cell .bar.rtty { color: #8d99ae; }
+.cell .bar.ssb { color: #f4a261; }
+
+.cell .badges {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.3rem;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.cell .prob {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.cell .conf {
+  font-variant-numeric: tabular-nums;
+}
+
+.status {
+  margin: 1rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.status.error {
+  color: var(--bad);
+}

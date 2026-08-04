@@ -1,0 +1,34 @@
+# Reference systemd unit for pathscope. The DSN lives in
+# /etc/horstreporter/pathscope.env (shared with the main horstreporter
+# binary which can write WAVELOG_API_KEY, DXCLUSTER_USERNAME, etc. there).
+# This file is the manual-install reference; the install script that
+# deploys the binary is the recommended path.
+#
+# Manual install:
+#   sudo cp pathscope-linux-x64 /opt/horstreporter/ && sudo chown hk:hk /opt/horstreporter/pathscope-linux-x64
+#   sudo cp cmd/pathscope/pathscope.service /etc/systemd/system/pathscope.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now pathscope
+[Unit]
+Description=horstreporter pathscope — band × region opening forecast
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hk
+Group=hk
+WorkingDirectory=/opt/horstreporter
+EnvironmentFile=-/etc/horstreporter/pathscope.env
+EnvironmentFile=-/etc/horstreporter/horstreporter.env
+ExecStart=/opt/horstreporter/pathscope-linux-x64
+Restart=on-failure
+RestartSec=5
+# hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/horstreporter
+
+[Install]
+WantedBy=multi-user.target

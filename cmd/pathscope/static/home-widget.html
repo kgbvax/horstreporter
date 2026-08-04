@@ -1,0 +1,50 @@
+<!-- home-widget.html — a one-line embed for the horstreporter home page.
+     Served at /pathscope/home-widget.html. The host page includes this
+     via an iframe or via a fetch-and-inject pattern; the widget is
+     self-contained and does not require any host CSS. -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pathscope · Home Widget</title>
+<link rel="stylesheet" href="./style.css">
+<style>
+  body { padding: 0.5rem 0.75rem; }
+  .widget { display: flex; gap: 0.75rem; align-items: baseline; }
+  .widget .lead { font-weight: 600; }
+  .widget .top { color: var(--accent); font-variant-numeric: tabular-nums; }
+  .widget .meta { color: var(--text-muted); font-size: 0.78rem; }
+  .widget .err { color: var(--bad); }
+</style>
+</head>
+<body>
+<div class="widget" id="widget">
+  <span class="lead">Pathscope</span>
+  <span class="top" id="top">…</span>
+  <span class="meta" id="meta"></span>
+</div>
+<script type="module">
+  const top = document.getElementById('top');
+  const meta = document.getElementById('meta');
+
+  async function tick() {
+    try {
+      const res = await fetch('./api/pathscope/v1/glance');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      // Find the highest-scoring cell.
+      let best = data.cells[0];
+      for (const c of data.cells) if (c.score > best.score) best = c;
+      top.textContent = `${best.band} → ${best.region} (${best.score.toFixed(1)})`;
+      meta.textContent = `${new Date(data.observed_at).toLocaleTimeString()} · ${data.cells.length} cells`;
+    } catch (err) {
+      top.textContent = '—';
+      meta.innerHTML = `<span class="err">${err}</span>`;
+    }
+  }
+  tick();
+  setInterval(tick, 30_000);
+</script>
+</body>
+</html>

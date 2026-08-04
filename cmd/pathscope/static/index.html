@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pathscope — Band Openings</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<header class="bar">
+  <h1 class="brand">Pathscope</h1>
+  <div class="meta">
+    <span class="pill" id="qth-pill">QTH: …</span>
+    <span class="pill" id="home-pill">Home: …</span>
+    <span class="pill" id="sw-pill">SW: …</span>
+    <span class="pill" id="observed-pill">…</span>
+  </div>
+</header>
+
+<main>
+  <section id="legend" aria-label="Legend">
+    <div class="legend-row">
+      <span class="legend-label">Activity</span>
+      <div class="legend-bar">
+        <span class="legend-tick" style="background:#1d2a3a"></span>
+        <span class="legend-tick" style="background:#26415e"></span>
+        <span class="legend-tick" style="background:#345b7a"></span>
+        <span class="legend-tick" style="background:#4f7d9a"></span>
+        <span class="legend-tick" style="background:#7ba66b"></span>
+        <span class="legend-tick" style="background:#c3b14a"></span>
+        <span class="legend-tick" style="background:#d77a3a"></span>
+        <span class="legend-tick" style="background:#b03a2e"></span>
+      </div>
+      <span class="legend-labels"><span>low</span><span>high</span></span>
+    </div>
+    <p class="legend-note">Each cell shows live band × region activity. The mini-bars rank modes (FT8 / FT4 / CW / RTTY / SSB) by z-score; the badge gives the headline probability of a contact in the next 5 minutes.</p>
+  </section>
+
+  <section id="glance" aria-label="Band by region heatmap">
+    <div id="matrix" class="matrix" role="grid"></div>
+    <p id="status" class="status">Loading…</p>
+  </section>
+</main>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -194,6 +194,7 @@ func main() {
 	dxPostgresDSN := flag.String("dx-postgres-dsn", "", "Postgres DSN for DX baseline and raw spot storage (falls back to env DX_POSTGRES_DSN, then the built-in default; keep secrets out of argv via the env var)")
 	dxPostgresFailFast := flag.Bool("dx-postgres-fail-fast", true, "Exit immediately when Postgres init/migration fails")
 	horstpropURL := flag.String("horstprop-url", "http://127.0.0.1:9970", "Reverse-proxy /horstprop/* to this local horstprop scoring service (empty disables the mount)")
+	pathscopeURL := flag.String("pathscope-url", "http://127.0.0.1:9960", "Reverse-proxy /pathscope/* to this local pathscope scoring service (empty disables the mount)")
 	dxClusterEnable := flag.Bool("dxcluster-enable", false, "Enable optional DX cluster ingest")
 	dxClusterEndpoint := flag.String("dxcluster-endpoint", "db0erf.de:7300", "DX cluster endpoint in host:port format")
 	dxClusterReconnectSeconds := flag.Int("dxcluster-reconnect-seconds", 15, "Delay before reconnecting to DX cluster after disconnect")
@@ -420,8 +421,6 @@ func main() {
 	appMux.HandleFunc("/api/stats", statsHandler)
 	appMux.HandleFunc("/api/dx_conditions", dxConditionsHandler)
 	appMux.HandleFunc("/api/hot_bands", hotBandsHandler)
-	appMux.HandleFunc("/api/dxpulse/v1/matrix", dxPulseMatrixHandler)
-	appMux.HandleFunc("/api/dxpulse/v1/summary", dxPulseSummaryHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
 	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)
 	appMux.HandleFunc("/api/opmode/status", opModeStatusHandler)
@@ -436,6 +435,16 @@ func main() {
 	if proxy, ok := newHorstpropProxy(*horstpropURL); ok {
 		appMux.Handle("/horstprop/", proxy)
 		logInfo("horstprop proxy mounted at /horstprop/ -> %s", *horstpropURL)
+	}
+
+	// Reverse-proxy /pathscope/* to the local pathscope scoring service.
+	// pathscope exposes its own static assets AND an SSE stream; the
+	// proxy uses FlushInterval: -1 (set in newPathscopeProxy) so the
+	// SSE bytes flush per event rather than buffering. Thin passthrough;
+	// no scoring logic lives here.
+	if proxy, ok := newPathscopeProxy(*pathscopeURL); ok {
+		appMux.Handle("/pathscope/", proxy)
+		logInfo("pathscope proxy mounted at /pathscope/ -> %s", *pathscopeURL)
 	}
 
 	// Mount DXLens (separate module) at /dxlens/. Reads HorstReporter's
