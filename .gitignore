@@ -42,6 +42,9 @@ go.work.sum
 /pathscope
 /pathscope-linux-x64
 
+# removed proplab backtest binary (may be rebuilt by old scripts)
+/proplab-backtest-linux-x64
+
 # horstawards local award snapshot store (written by the operator agent)
 horstawards-data/
 
