@@ -113,11 +113,14 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 
 ## API endpoints
 
+Canonical reference: `docs/api.md` (includes response shapes, caches, and explicit exclusions).
+
 - `GET /api/stream` — SSE; params: `target`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `target`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed)
 - `GET /api/dx_conditions` — DX score/conditions per band; params: `target`, `minutes`, `surroundings`, `cw_min_db`
 - `GET /api/proplab/v1/params` — default parameters for variants B and C
 - `GET /api/proplab/v1/ladder` — variant B verdict; params: `target`, `surroundings`, plus any `proplabParamsB` field as query override
 - `GET /api/proplab/v1/fusion` — variant C verdict; params: any `proplabParamsC` field as query override
+- `GET /api/proplab/v1/reachability` — product view (reachability index, surges, schedule); params: `target`, `surroundings` only (empty target = global view)
 - `GET /api/stats` — active connections, history size/minutes
 - `GET /api/capture_snapshot` — deterministic filtered spot snapshot for server-driven frame capture
 - `GET /dxlens/` — DXLens module UI (reads HorstReporter's in-memory baseline via adapter)

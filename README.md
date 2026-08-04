@@ -48,11 +48,12 @@ Then open `http://localhost:8080/proplab/`. Each variant has its own parameter p
 - `-proplab-cell-retention-days` — PG retention for proplab tables (default `60`, `0` disables)
 - `-proplab-disable` — turn the lab engines off entirely
 
-Backend endpoints:
+Backend endpoints (canonical reference: [docs/api.md](docs/api.md)):
 
 - `GET /api/proplab/v1/params` — default B/C parameters
 - `GET /api/proplab/v1/ladder?target=JO62qm&...` — variant B verdict
 - `GET /api/proplab/v1/fusion?...` — variant C verdict
+- `GET /api/proplab/v1/reachability?target=JO62qm` — product view: reachability index heatmap, surges, opening schedule
 
 ## Run locally
 
