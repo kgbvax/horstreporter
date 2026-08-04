@@ -11,7 +11,10 @@
 // pathscope_mount.go so the SSE flows through the main binary's TLS
 // termination without an nginx buffering config change.
 //
-// Configuration via env (preferred) or flag:
+// Configuration via env (used by systemd EnvironmentFile) or flag
+// (overrides env when set on argv). In production the systemd unit runs
+// the binary with no flags, so env values are authoritative; flags are
+// mostly useful for local dev and the deploy script.
 //
 //	PATHSCOPE_DSN          Postgres DSN (defaults to DX_POSTGRES_DSN)
 //	PATHSCOPE_LISTEN       listen address (default :9960)

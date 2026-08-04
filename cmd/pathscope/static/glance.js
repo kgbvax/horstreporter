@@ -4,7 +4,25 @@
 
 import { scoreToColor } from './color.js';
 
-const MODES_DISPLAY = ['FT8', 'FT4', 'CW', 'RTTY', 'SSB'];
+// FALLBACK_MODES is used when the very first SSE event arrives with no
+// cells yet (race between health load and stream open) — the matrix
+// would otherwise render without any mode ordering. Once a real payload
+// lands, modesFromPayload() takes over and we never consult this list
+// again.
+const FALLBACK_MODES = ['FT8', 'FT4', 'CW', 'RTTY', 'SSB'];
+
+// modesFromPayload derives the per-mode display order from the first
+// cell's mode_breakdown so adding a new mode on the server side
+// propagates to the UI without touching this file. Falls back to the
+// hard-coded list only when the payload lacks a mode breakdown entirely.
+function modesFromPayload(payload) {
+  for (const c of payload.cells || []) {
+    if (c.mode_breakdown && c.mode_breakdown.length > 0) {
+      return c.mode_breakdown.map(m => m.mode);
+    }
+  }
+  return FALLBACK_MODES;
+}
 
 function scoreBar(mode) {
   // Normalise the z-score to 0..1 for the bar width. Clamp to [-3, +6] to
@@ -40,7 +58,7 @@ function cellHTML(cell, opts) {
   const cls = isHome ? `${textClass} is-home` : textClass;
   const prob = (cell.probability * 100).toFixed(0);
   const conf = (cell.confidence * 100).toFixed(0);
-  const top = MODES_DISPLAY.map(m => {
+  const top = modesDisplay.map(m => {
     const mode = cell.mode_breakdown.find(x => x.mode === m);
     return mode ? scoreBar(mode) : '';
   }).join('');
@@ -62,8 +80,17 @@ function cellHTML(cell, opts) {
 
 export function renderMatrix(root, payload, opts) {
   const { bands, regions, cells } = payload;
+  // Derive the per-mode display order from the first cell's breakdown so
+  // adding a new mode server-side shows up automatically. We can't do
+  // this once per cell because modes would then sort cell-by-cell.
+  const modesDisplay = modesFromPayload(payload);
   const byKey = new Map();
-  for (const c of cells) byKey.set(`${c.band}|${c.region}`, c);
+  // Normalise the lookup key: the API today returns uppercase bands and
+  // uppercase region strings, but trim/lowercase before composing so a
+  // future caller (a debug tool, a stale service) can't silently blank
+  // out the matrix by sending mixed casing.
+  const normalise = (s) => String(s || '').trim().toUpperCase();
+  for (const c of cells) byKey.set(`${normalise(c.band)}|${normalise(c.region)}`, c);
 
   const fragments = [];
   fragments.push('<div class="axis"></div>');

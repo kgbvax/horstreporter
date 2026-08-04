@@ -11,6 +11,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -196,7 +197,12 @@ func (s *Server) handleGlance(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.buildGlance(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		// Log the full error server-side so an operator can diagnose;
+		// return a generic envelope to the client so internal error
+		// strings (which may carry PG table names or constraint hints)
+		// don't leak to anonymous browsers.
+		log.Printf("pathscope: glance: %v", err)
+		writeError(w, http.StatusInternalServerError, "scoring pipeline unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -319,17 +325,20 @@ func (s *Server) handleCell(w http.ResponseWriter, r *http.Request) {
 
 	liveRates, err := s.store.LiveRates(ctx, since, now, nil)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "live rates: "+err.Error())
+		log.Printf("pathscope: cell %s/%s live rates: %v", band, regionName, err)
+		writeError(w, http.StatusInternalServerError, "scoring pipeline unavailable")
 		return
 	}
 	liveSNR, err := s.store.LiveSNR(ctx, since, now)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "live snr: "+err.Error())
+		log.Printf("pathscope: cell %s/%s live snr: %v", band, regionName, err)
+		writeError(w, http.StatusInternalServerError, "scoring pipeline unavailable")
 		return
 	}
 	baselines, err := s.store.Baseline(ctx, 30, now, []string{band})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "baseline: "+err.Error())
+		log.Printf("pathscope: cell %s/%s baseline: %v", band, regionName, err)
+		writeError(w, http.StatusInternalServerError, "scoring pipeline unavailable")
 		return
 	}
 	solar, err := s.store.SolarContext(ctx)
@@ -491,9 +500,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	initial, err := s.buildGlance(ctx)
 	cancel()
 	if err != nil {
-		fmt.Fprintf(w, "event: server_error\ndata: %s\n\n", jsonError(err))
-		flusher.Flush()
+		// Log the full error server-side; tell the client something went
+		// wrong without echoing PG error text into the SSE stream.
 		log.Printf("pathscope: stream initial build failed: %v", err)
+		fmt.Fprintf(w, "event: server_error\ndata: %s\n\n", jsonError(errInternal))
+		flusher.Flush()
 		return
 	}
 	if err := writeSSEEvent(w, initial); err != nil {
@@ -540,6 +551,13 @@ func writeSSEEvent(w io.Writer, g GlanceResponse) error {
 	_, err = fmt.Fprintf(w, "data: %s\n\n", b)
 	return err
 }
+
+// errInternal is the wire-level message used when something goes wrong
+// during an SSE initial build — it intentionally does NOT include the
+// underlying PG / scoring error so internal error text doesn't leak to
+// anonymous browsers. The original error is logged server-side at the
+// failure site, not here.
+var errInternal = errors.New("scoring pipeline unavailable")
 
 // jsonError returns a JSON string for embedding inside an SSE
 // server_error event. It deliberately uses a manual escape (not

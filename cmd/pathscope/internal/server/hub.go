@@ -7,9 +7,9 @@ import (
 // Client is a single SSE subscriber on the Pathscope glance hub. The send
 // channel carries the most recent GlanceResponse; a per-client buffer (4)
 // absorbs short browser pauses without forcing the broadcaster to block.
-// When the buffer fills, the broadcaster drops the OLDEST pending event
-// (see safeSend below) — the matrix is fully derived state, so missing
-// one event is invisible to the user as long as the next one arrives.
+// When the buffer fills, the broadcaster drops the NEW message (see
+// safeSend below) — the matrix is fully derived state, so missing one
+// event is invisible to the user as long as the next one arrives.
 type Client struct {
 	send chan GlanceResponse
 }

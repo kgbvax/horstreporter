@@ -215,12 +215,20 @@ type fakeStore struct {
 	ratesErrAfter    int
 	snrErrAfter      int
 	baselineErrAfter int
+
+	// ratesAlwaysErr makes every LiveRates call fail with the embedded
+	// PG-style message — used by tests that need to assert how errors
+	// surface to clients (the SSE server_error path).
+	ratesAlwaysErr bool
 }
 
 func (f *fakeStore) LiveRates(ctx context.Context, since, until time.Time, lanes []string) (map[pathscope.Mode]map[region.Region]map[string]int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	n := f.ratesCalls.Add(1)
+	if f.ratesAlwaysErr {
+		return nil, errors.New("simulated live rates failure")
+	}
 	if f.ratesErrAfter > 0 && n <= int64(f.ratesErrAfter) {
 		return nil, errors.New("simulated live rates failure")
 	}
@@ -514,5 +522,81 @@ func TestSSEHandlerEmitsHeadersAndInitialEvent(t *testing.T) {
 	}
 	if n := store.baselineCalls.Load(); n != 1 {
 		t.Errorf("baseline calls = %d, want 1", n)
+	}
+}
+
+// TestSSEInitialErrorDoesNotLeakPGText pins the behaviour that when the
+// initial buildGlance in handleStream fails (e.g. PG transient), the
+// `event: server_error` payload MUST NOT echo the underlying PG error —
+// it must carry the generic "scoring pipeline unavailable" message. The
+// underlying error is logged server-side, not serialised into the SSE
+// stream, so an anonymous browser can't probe for table names or
+// constraint hints.
+func TestSSEInitialErrorDoesNotLeakPGText(t *testing.T) {
+	t.Parallel()
+	store := &fakeStore{
+		rates:         map[pathscope.Mode]map[region.Region]map[string]int{},
+		snr:           map[pathscope.Mode]map[region.Region]pathscope.SNRStats{},
+		baselines:     []pathscope.Baseline{},
+		solar:         pathscope.SolarContext{},
+		ratesAlwaysErr: true,
+	}
+	s := New(Deps{
+		Store:      store,
+		Engine:     fakeEngine{},
+		QTH:        "JO62qm",
+		HomeRegion: region.EU,
+		Version:    "test",
+		Static:     testStatic,
+		Interval:   5 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/pathscope/v1/stream", nil).WithContext(ctx)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.ServeHTTP(rec, req)
+	}()
+
+	cancel()
+	<-done
+
+	body := rec.Body.String()
+	if body == "" {
+		t.Fatalf("empty body — server_error event did not land")
+	}
+
+	// Find the `event: server_error` line; the next `data:` line is the
+	// payload. Verify the payload does NOT contain the PG fake error.
+	lines := strings.Split(body, "\n")
+	var sawEvent, sawData bool
+	var dataPayload string
+	for _, ln := range lines {
+		switch {
+		case strings.HasPrefix(ln, "event: "):
+			if ln[len("event: "):] == "server_error" {
+				sawEvent = true
+			}
+		case strings.HasPrefix(ln, "data: "):
+			dataPayload = ln[len("data: "):]
+			sawData = true
+		}
+	}
+	if !sawEvent {
+		t.Fatalf("no 'event: server_error' line in body:\n%s", body)
+	}
+	if !sawData {
+		t.Fatalf("no 'data:' line after server_error:\n%s", body)
+	}
+	if strings.Contains(dataPayload, "simulated live rates failure") {
+		t.Errorf("server_error payload leaked PG error text: %q", dataPayload)
+	}
+	if !strings.Contains(dataPayload, "scoring pipeline unavailable") {
+		t.Errorf("server_error payload missing generic message: %q", dataPayload)
 	}
 }

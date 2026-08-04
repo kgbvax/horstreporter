@@ -8,6 +8,7 @@
 // on transient disconnect we just flip the status pill to "Reconnecting…".
 
 import { renderMatrix } from './glance.js';
+import { LEGEND_COLORS } from './color.js';
 
 const STREAM_URL = '/pathscope/api/pathscope/v1/stream';
 
@@ -22,6 +23,17 @@ const els = {
 
 let homeRegion = null;
 let eventSource = null;
+
+// renderLegend paints the gradient bar from the LUT's anchor stops so the
+// legend stays in lockstep with scoreToColor. The hard-coded 5-stop
+// gradient that lived in index.html was a divergence hazard — every
+// tweak to the palette used to require editing both files.
+function renderLegend() {
+  const bar = document.querySelector('.legend-bar');
+  if (!bar) return;
+  const gradient = `linear-gradient(to right, ${LEGEND_COLORS.join(', ')})`;
+  bar.style.background = gradient;
+}
 
 async function loadHealth() {
   const res = await fetch('/api/pathscope/v1/health');
@@ -76,6 +88,7 @@ window.addEventListener('pagehide', () => {
 });
 
 async function bootstrap() {
+  renderLegend();
   try {
     await loadHealth();
   } catch (err) {
