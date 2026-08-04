@@ -46,24 +46,3 @@ func PercentileInt(in []int, p float64) float64 {
 }
 
 // PercentileFloat is PercentileInt for float64 slices (sorted in place).
-func PercentileFloat(in []float64, p float64) float64 {
-	sort.Float64s(in)
-	n := len(in)
-	if n == 0 {
-		return 0
-	}
-	if p <= 0 {
-		return in[0]
-	}
-	if p >= 1 {
-		return in[n-1]
-	}
-	idx := int(math.Ceil(float64(n)*p)) - 1
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= n {
-		idx = n - 1
-	}
-	return in[idx]
-}

@@ -51,14 +51,9 @@ npm test
 # Frontend typecheck + tests
 npm run check
 
-# Optional Propagation Lab flags
-#   -proplab-disable              # turn off Ladder + Fusion engines entirely
-#   -proplab-cell-retention-days  # proplab PG retention (default 60; 0 disables)
-#   -proplab-sw-enable            # enable NOAA SWPC / D-RAP / OVATION ingest (placeholder)
-#   -proplab-events-enable        # enable contest/DXpedition/POTA calendar ingest (placeholder)
-
-# Replay historical spots through the proplab engines (uses DATABASE_URL env or -db flag)
-go run ./cmd/proplab-backtest -target JO62qm -duration 24h
+# Cell bucket feed (path-scope data plumbing; Propagation Lab was removed 2026-08-04)
+#   -proplab-cell-retention-days  # retention for proplab_cell_buckets / proplab_sw_series (default 60; 0 disables)
+#   -proplab-sw-enable            # NOAA SWPC index series ingest (kp/F10.7/xray/OVATION; consumed by pathscope)
 
 # Mercator perf gate (catch draw/zoom regressions)
 npm run perf:gate:mercator
@@ -80,25 +75,17 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `rbn.go` — optional RBN (Reverse Beacon Network) CW/RTTY raw telnet ingest; `source_type='rbn'`, activity + live only (kept out of the FT8-SNR baseline)
 - `opmode.go` — operator mode endpoint wiring (browser calls local agent directly; backend never proxies)
 - `dxlens_mount.go` — mounts the `dxlens` sibling module at `/dxlens/`
-- `dx_proplab.go` — `ProplabService`: Ladder/Fusion orchestrator, ingest hooks, 60s bucket-persistence tick, retention pruning
-- `dx_proplab_store.go` — Postgres persistence for proplab cell buckets, space-weather series, D-RAP snapshots, and event calendar
-- `internal/proplab/` — shared Propagation Lab engine package consumed by the backend and `cmd/proplab-backtest`
-  - `proplab_ladder.go` — variant B: midpoint-cell MUF ladder, band-coherence, CUSUM onsets, terminator hints
-  - `proplab_fusion.go` — variant C: conditional-quantile baseline + event/SW fusion + `PropagationPrior` seam
-  - `geo.go`, `band.go`, `time.go`, `spot.go`, `region.go`, `stats.go` — self-contained helpers so the package has no dependency on `package main`
-- `proplab_server.go` — `/api/proplab/v1/*` HTTP handlers and short-lived verdict caches
-- `sw_ingest.go` — optional NOAA SWPC / D-RAP / OVATION polling for Fusion
-- `eventcal.go` — optional contest / DXpedition / POTA calendar ingest for Fusion
+- `dx_cellfeed.go` — `CellBucketFeed`: midpoint-cell bucket accumulator + 60s persistence tick + retention pruning (writes `proplab_cell_buckets` for pathscope; all that remains of the removed Propagation Lab)
+- `internal/proplab/` — primitives for that feed: `buckets.go` (`CellBucketEngine`), plus `geo.go`, `band.go`, `time.go`, `spot.go`, `region.go`, `stats.go`, `dx_midpoint.go`, `lane.go`, `types.go` (engines were deleted; name kept for stability)
+- `sw_ingest.go` — optional NOAA SWPC / OVATION polling into `proplab_sw_series` (consumed by pathscope)
 - `cmd/horstoperator-agent/` — standalone local agent bridging browser opmode to PSTrotator UDP; resolves Wavelog attributes for the Chase Queue and computes award "wanted" in-process via `internal/awards` (operator log stays local)
 - `cmd/horstprop/` — standalone HF link-quality scoring service (separate binary; consumes HorstReporter read-only over HTTP; see `docs/horstprop.md`)
-- `cmd/proplab-backtest/` — standalone replay harness: reads `dx_raw_spots` from Postgres and emits per-timestamp Ladder + Fusion verdicts (JSON/CSV)
 - `internal/awards/` — local award-progress engine embedded in the agent: slot index (DXCC/WAS/POTA) from the operator's Wavelog log + POTA hunted-parks CSV; `Manager` + `award`/`adif`/`refdata`/`source`/`store` (see `docs/horstawards.md`)
 - `internal/propcontract/` — score contract types shared between the backend and `cmd/horstprop`
 - `internal/awardcontract/` — award `WantedSpot`/`WantedResult` types shared between the agent and `internal/awards`
 
 **Frontend core files (`static/`):**
 - `app.js` — app boot, SSE stream lifecycle, projection/style gating
-- `proplab/index.html` + `proplab/proplab.js` — standalone Propagation Lab A/B/C testing page
 - `renderers.js` — Mercator map rendering modes
 - `azimuth-runtime.js` — Azimuthal (canvas) rendering
 - `map.js` — Leaflet map setup + overlays
@@ -117,10 +104,6 @@ Canonical reference: `docs/api.md` (includes response shapes, caches, and explic
 
 - `GET /api/stream` — SSE; params: `target`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `target`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed)
 - `GET /api/dx_conditions` — DX score/conditions per band; params: `target`, `minutes`, `surroundings`, `cw_min_db`
-- `GET /api/proplab/v1/params` — default parameters for variants B and C
-- `GET /api/proplab/v1/ladder` — variant B verdict; params: `target`, `surroundings`, plus any `proplabParamsB` field as query override
-- `GET /api/proplab/v1/fusion` — variant C verdict; params: any `proplabParamsC` field as query override
-- `GET /api/proplab/v1/reachability` — product view (reachability index, surges, schedule); params: `target`, `surroundings` only (empty target = global view)
 - `GET /api/stats` — active connections, history size/minutes
 - `GET /api/capture_snapshot` — deterministic filtered spot snapshot for server-driven frame capture
 - `GET /dxlens/` — DXLens module UI (reads HorstReporter's in-memory baseline via adapter)
@@ -129,6 +112,6 @@ Canonical reference: `docs/api.md` (includes response shapes, caches, and explic
 
 - Don't modify anything under `static/vendor/`
 - Don't split the *core* backend into microservices; it is intentionally single-service/single-binary. (Separate operator-side binaries like `cmd/horstoperator-agent` and `cmd/horstprop` that consume the backend/log read-only over HTTP are the sanctioned pattern — they don't grow the core binary.)
-- Keep the scoring boundary: per-spot/path **link** scoring lives only in `cmd/horstprop` (consumed by the Chase Queue via `/horstprop/v1/score`). horstreporter owns the shared, multi-station band/region **conditions** analytics (`dx_conditions.go`, `hot_bands.go`, `dxpulse.go`, dxlens) backed by the Postgres baseline. Don't add per-spot/path scoring to horstreporter.
+- Keep the scoring boundary: per-spot/path **link** scoring lives only in `cmd/horstprop` (consumed by the Chase Queue via `/horstprop/v1/score`). horstreporter owns the shared, multi-station band/region **conditions** analytics (`dx_conditions.go`, `hot_bands.go`, dxlens) backed by the Postgres baseline. Don't add per-spot/path scoring to horstreporter.
 - Keep the awards boundary: the operator's personal **award progress** ("wanted") lives only in the local operator agent (`internal/awards`, merged into the enrich `needed[]`). The operator's log/award data must stay local — never pulled to the shared core/server.
 - Don't assume Gin/Echo/React/Vite conventions

@@ -212,10 +212,8 @@ func main() {
 	liveHistoryRetentionFlag := flag.Int("live-history-minutes", defaultLiveHistoryRetentionMinutes, "Maximum age of retained live spots in minutes")
 	dxBaselineMaxEventsFlag := flag.Int("dx-baseline-max-events", defaultDxBaselineMaxEvents, "Maximum number of retained DX baseline events")
 	dxRawSpotRetentionDaysFlag := flag.Int("dx-raw-spot-retention-days", 60, "Delete dx_raw_spots rows older than this many days (0 disables retention).")
-	proplabDisableFlag := flag.Bool("proplab-disable", false, "Disable the Propagation Lab engines (Ladder + Fusion)")
-	proplabCellRetentionDaysFlag := flag.Int("proplab-cell-retention-days", 60, "Delete proplab cell buckets / SW / event rows older than this many days (0 disables retention).")
-	proplabSWEnableFlag := flag.Bool("proplab-sw-enable", false, "Enable space-weather ingest for the Fusion engine (NOAA SWPC / D-RAP / OVATION)")
-	proplabEventsEnableFlag := flag.Bool("proplab-events-enable", false, "Enable event-calendar ingest for the Fusion engine (contests, DXpeditions, POTA)")
+	proplabCellRetentionDaysFlag := flag.Int("proplab-cell-retention-days", 60, "Delete proplab cell bucket / SW series rows older than this many days (0 disables retention).")
+	proplabSWEnableFlag := flag.Bool("proplab-sw-enable", false, "Enable space-weather index series ingest (NOAA SWPC kp/F10.7/xray/OVATION; consumed by pathscope)")
 	opModeEnableFlag := flag.Bool("opmode-enable", true, "Deprecated: backend opmode integration endpoints are always enabled")
 	opModeControlEnableFlag := flag.Bool("opmode-control-enable", false, "Allow rotate/control commands in operator mode")
 	opModeAgentURLFlag := flag.String("opmode-agent-url", "", "Deprecated and ignored: backend never proxies to local operator agent")
@@ -295,28 +293,22 @@ func main() {
 		}
 	}
 
-	proplabService = newProplabService(dxBaseline, *proplabDisableFlag, *proplabCellRetentionDaysFlag)
-	if !*proplabDisableFlag {
-		// Seed the ladder with only the most recent 15 minutes of live history so
-		// the first /proplab/ page load has some data without duplicating the full
-		// startup spot cache into the ladder engine.
-		proplabBackfillMinutes := 15
-		if cached, err := dxBaseline.LoadRecentSpotCache(proplabBackfillMinutes, time.Now().Unix(), *dxClusterEnable); err != nil {
-			logInfo("Proplab startup spot-cache backfill failed (last %d minutes): %v", proplabBackfillMinutes, err)
+	cellBucketFeed = newCellBucketFeed(dxBaseline, *proplabCellRetentionDaysFlag)
+	{
+		// Seed the cell bucket engine with the most recent 15 minutes of live
+		// history so pathscope has fresh rows immediately after restart.
+		cellBackfillMinutes := 15
+		if cached, err := dxBaseline.LoadRecentSpotCache(cellBackfillMinutes, time.Now().Unix(), *dxClusterEnable); err != nil {
+			logInfo("Cell bucket startup spot-cache backfill failed (last %d minutes): %v", cellBackfillMinutes, err)
 		} else if len(cached) > 0 {
-			proplabService.Backfill(cached)
-			logInfo("Proplab startup spot-cache backfill fed %d spots (last %d minutes)", len(cached), proplabBackfillMinutes)
+			cellBucketFeed.Backfill(cached)
+			logInfo("Cell bucket startup spot-cache backfill fed %d spots (last %d minutes)", len(cached), cellBackfillMinutes)
 		}
-		proplabService.Start()
-		logInfo("Propagation Lab enabled (retention=%dd, sw=%v, events=%v)", *proplabCellRetentionDaysFlag, *proplabSWEnableFlag, *proplabEventsEnableFlag)
+		cellBucketFeed.Start()
+		logInfo("Cell bucket feed enabled (retention=%dd, sw=%v)", *proplabCellRetentionDaysFlag, *proplabSWEnableFlag)
 		if *proplabSWEnableFlag {
 			go startProplabSWIngest()
 		}
-		if *proplabEventsEnableFlag {
-			go startProplabEventIngest()
-		}
-	} else {
-		logInfo("Propagation Lab disabled by flag")
 	}
 
 	if *enablePprof {
@@ -424,10 +416,6 @@ func main() {
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
 	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)
 	appMux.HandleFunc("/api/opmode/status", opModeStatusHandler)
-	appMux.HandleFunc("/api/proplab/v1/params", proplabParamsHandler)
-	appMux.HandleFunc("/api/proplab/v1/ladder", proplabLadderHandler)
-	appMux.HandleFunc("/api/proplab/v1/fusion", proplabFusionHandler)
-	appMux.HandleFunc("/api/proplab/v1/reachability", proplabReachHandler)
 
 	// Reverse-proxy /horstprop/* to the local horstprop scoring service so the
 	// Chase Queue reaches it same-origin (horstprop itself stays bound to

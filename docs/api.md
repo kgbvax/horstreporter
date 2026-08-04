@@ -114,27 +114,6 @@ priority ("high"|"normal"), reason, rank_score, spots_per_minute,
 baseline_activity, activity_ratio, sustained_bins, p90_distance_km,
 baseline_p90_distance_km?, distance_ratio?, trend, trend_delta, status}]}`.
 
-### `GET /api/dxpulse/v1/matrix` — band × region matrix
-
-Params: `target`|`locator` (required, valid locator), `surroundings`,
-`mode` (`"quality"` default | `"anomaly"`), `minutes` (default 15, max 60),
-`lookback_days` (anomaly only; default 45, max 90).
-
-Response: `bands[]`, `regions[]`, `matrix[][]` of cells `{band, region,
-state, label, color_bucket, current_spot_count, current_unique_paths,
-current_unique_remote_grids, avg_snr?, median_snr?,
-last_seen_age_seconds?, baseline_*`, `confidence`}`. Anomaly mode adds
-`baseline_expected_spot_count`, `baseline_ratio`, `baseline_support`,
-`baseline_support_days` and reads the Postgres baseline.
-
-### `GET /api/dxpulse/v1/summary` — condensed matrix view
-
-Same params. Response: `best_bands[{band, state, label,
-current_spot_count, confidence}]`, `top_regions[{region, total_spot_count,
-active_bands, best_band?, best_band_state?, best_band_strength}]` (max 5),
-`hot_cells[{band, region, state, label, current_spot_count, confidence,
-strength}]`.
-
 ### `GET /api/square_details` — one grid square's reports
 
 Params: `locator` (required, valid Maidenhead or 400), plus the same context
@@ -168,90 +147,21 @@ false, error: "backend proxy disabled by design; browser must connect to
 local agent directly"}`. There is deliberately no opmode proxy — the
 browser calls the local agent itself.
 
-## Propagation Lab (`/api/proplab/v1/*`)
+## Removed features
 
-All GET (405 otherwise). 503 `Propagation Lab disabled` with
-`-proplab-disable` (except `/params`). Verdicts are cached 5 s keyed on the
-request. JSON `Cache-Control: no-store`.
+**Propagation Lab** (`/api/proplab/v1/params|ladder|fusion|reachability`,
+`/proplab/` UI) and **DXPulse** (`/api/dxpulse/v1/matrix|summary`,
+`/dxpulse/` UI) were removed 2026-08-04. What remains is the data
+plumbing their sibling consumer needs:
 
-### `GET /api/proplab/v1/params`
-
-No params. `{b: <LadderParams>, c: <FusionParams>}` — the server's current
-defaults in their JSON forms (`min_links`, …, `cusum_min_bucket_links`,
-`expected_lookback_days`, … for B; `lookback_days`, `quantile_lo`,
-`guardband_sigma`, `open_ratio`, … for C). The A/B/C lab page uses these to
-seed its parameter forms.
-
-### `GET /api/proplab/v1/ladder` — variant B verdict (midpoint MUF ladder)
-
-Params: `target` + `surroundings` (empty target is legal), plus **any
-LadderParams field as a query override** (no bounds checking; parse
-failures fall back to server defaults).
-
-Response `LadderVerdict`: `{generated_at, params, bands: [{band, state
-("open"|"rising"|"activity_spike"|"closed"|"unconfirmed"), reason,
-confidence, spots_per_minute, links_per_minute, muf_cells[], es_cells[],
-onset_min_ago (-1 = none), onset_region?, forecast_hints[]}], open_runs
-[][string], empirical_muf (0 = none), data_thin}`.
-
-Onset semantics: `onset_min_ago` ≥ 0 only while a CUSUM threshold crossing
-is fresh (≤ 4 h) and ≥ 2 distinct band cells are alarmed; the detector
-compares against the slot-conditioned expected-activity baseline.
-
-### `GET /api/proplab/v1/fusion` — variant C verdict (quantile + SW fusion)
-
-Params: **any FusionParams field as query override**. Target is not used —
-fusion is global.
-
-Response `FusionVerdict`: `{generated_at, params, bands: [{band, region,
-state, label, reason, confidence, spots_per_minute, links_per_minute,
-baseline_p50, activity_ratio, closure_type
-("muf_limited"|"absorption_limited"|"auroral"|""), explained_by[]}],
-data_thin, sw_available, has_drap, drap_age_min, drap_haf{region:float},
-events_active}`.
-
-`explained_by` lists anomaly events explaining elevated activity — contest /
-DXpedition calendar entries only; routine POTA activator spots are
-deliberately excluded (they are baseline activity, not events).
-
-### `GET /api/proplab/v1/reachability` — product view (reachability index)
-
-The operator-facing payload: scalar reachability per (band × DX-destination
-region), surges, usual-opening schedule, empirical MUF headroom. **No param
-overrides by design** — the index must mean the same thing for everyone.
-
-Params: `target` + `surroundings` only. **Empty target is valid** → global
-view (no scope filter); the UI labels the input "QTH".
-
-Response `ReachVerdict`:
-
-- `qth`, `surroundings`, `generated_at`
-- `index_scale` — disclaimer string ("heuristic 0-100; not a calibrated
-  probability")
-- flags: `data_thin`, `schedule_unavailable`, `sw_available`, `has_drap`,
-  `drap_age_min`, `events_active`
-- `muf` — path-midpoint physics from the ladder: `empirical_mhz`,
-  `open_runs`, `next_rung_band`, `next_rung_mhz`, `next_rung_open`
-- `cells[]` — one per live (band, dx-region) pair: `index` (0-100; **null**
-  when witnesses == 0 — "no data" is distinct from "observed dead"),
-  `links_per_min`, `baseline_p50`, `activity_ratio`, `witnesses`,
-  `persistence` (0-1, active buckets / 2 h), `closure_cause`, `capped`,
-  `cell_data_thin`, `spots_per_min`, `explained_by[]`
-- `surges[]` — `{kind ("onset"|"activity_jump"|"new_region"), band, region,
-  first_seen, strength (0-100), detail}`; carried 4 h, suppressed on first
-  tick
-- `schedule[]` — usual openings for pairs NOT currently reachable: `{band,
-  region, open_utc, close_utc, minutes_to_open, presence}` sorted by
-  `minutes_to_open`. `presence` = fraction of the pair's distinct active
-  days the slot was open (a slot must open on ≥ 3 distinct days to appear
-  at all).
-
-Index semantics (calibration-verified 2026-08-03, holdout-tested): raw
-activity = `min(score(live/baseline ratio), score(absolute live lpm))`
-anchored r/lpm 0.5 → 0, 1.0 → 15, 2.0 → 50, 8.0 → 83, ≥ 16 → 100; ×
-witness (1 → 0.5, 2 → 0.75, ≥ 3 → 1.0) × persistence (0.8+0.2p) × 0.7 when
-no baseline; hard caps from typed closure causes (absorption ≤ 15, auroral
-≤ 25, MUF-limited ≤ 30, contest/DXpedition-explained ≤ 20).
+- `proplab_cell_buckets` is still written by the in-process cell bucket
+  feed (midpoint cell × band × lane, 15-min buckets) — read by
+  **pathscope**. The `-proplab-cell-retention-days` flag now governs this
+  feed's tables.
+- `proplab_sw_series` is still written by `-proplab-sw-enable` — also
+  read by pathscope (kp / F10.7 / x-ray / OVATION series).
+- The now-dormant tables (`proplab_dest_buckets`, `proplab_drap_snapshots`,
+  `proplab_events`) are no longer written nor pruned by the service.
 
 ## Reverse proxies
 
@@ -297,5 +207,5 @@ the first snapshot builds.
   Chase Queue through the agent's enrich response).
 - **No per-spot/path link scoring** — that is horstprop's contract,
   consumed via `/horstprop/v1/score`.
-- **No `/api/proplab/v1/dest`** or other proplab internals — the store
-  tables back `/reachability` only.
+- **No `/api/proplab/*`** and **no `/api/dxpulse/*`** — both features were
+  removed (see "Removed features"); only the pathscope feed tables remain.

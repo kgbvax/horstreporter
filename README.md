@@ -27,33 +27,16 @@ This repository now includes a requirements-aligned DX conditions engine and Hom
 - Direct Home Assistant MQTT publishing is currently **disabled/removed**.
 - DX analytics remain available through `GET /api/dx_conditions` and can be consumed by external adapters or polling integrations.
 
-### Propagation Lab (A/B/C experiments)
+### Cell bucket feed (for pathscope)
 
-A standalone `/proplab/` page compares three ways of deciding which bands and regions are active:
+The former Propagation Lab and DXPulse features were removed (2026-08-04).
+What remains is the ingest/persistence they also produced, because the
+[pathscope](#) module consumes it:
 
-- **A / Baseline** — the current production `dx_conditions` engine.
-- **B / Ladder** — within-data physics: midpoint-cell MUF ladder, band-coherence, CUSUM onsets, terminator hints.
-- **C / Fusion** — conditional-quantile baseline with event/SW fusion.
+- `proplab_cell_buckets` — midpoint cell × band × lane 15-minute buckets written in-process from the live spot stream. Retention: `-proplab-cell-retention-days` (default `60`, `0` disables).
+- `proplab_sw_series` — NOAA SWPC index series (kp, F10.7, x-ray, OVATION), gated by `-proplab-sw-enable`.
 
-Run with the lab enabled (default):
-
-```bash
-go run . -dev -port 8080
-```
-
-Then open `http://localhost:8080/proplab/`. Each variant has its own parameter panel; overrides are sent as query parameters. Optional ingest flags for Fusion context:
-
-- `-proplab-sw-enable` — space-weather ingest (NOAA SWPC feeds; placeholder poller)
-- `-proplab-events-enable` — contest/DXpedition/POTA calendar ingest (placeholder poller)
-- `-proplab-cell-retention-days` — PG retention for proplab tables (default `60`, `0` disables)
-- `-proplab-disable` — turn the lab engines off entirely
-
-Backend endpoints (canonical reference: [docs/api.md](docs/api.md)):
-
-- `GET /api/proplab/v1/params` — default B/C parameters
-- `GET /api/proplab/v1/ladder?target=JO62qm&...` — variant B verdict
-- `GET /api/proplab/v1/fusion?...` — variant C verdict
-- `GET /api/proplab/v1/reachability?target=JO62qm` — product view: reachability index heatmap, surges, opening schedule
+Backend endpoints are documented in [docs/api.md](docs/api.md).
 
 ## Run locally
 

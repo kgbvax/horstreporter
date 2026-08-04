@@ -11,10 +11,10 @@ import (
 // backfill with an int4 encode error).
 func TestHaversineKmNeverNaN(t *testing.T) {
 	cases := [][4]float64{
-		{200, 400, -300, 999},   // far out of range
-		{90, 0, -90, 180},       // exact antipodes
-		{50, 10, 50, 10},        // identical
-		{0, 0, 0, 0},            // origin
+		{200, 400, -300, 999}, // far out of range
+		{90, 0, -90, 180},     // exact antipodes
+		{50, 10, 50, 10},      // identical
+		{0, 0, 0, 0},          // origin
 		{52.4, 13.3, 35.6, 139.7},
 	}
 	for _, c := range cases {

@@ -11,11 +11,11 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"horstreporter/internal/proplab"
 )
 
-// sw_ingest.go polls free NOAA SWPC feeds for the Propagation Lab Fusion engine.
+// sw_ingest.go polls free NOAA SWPC feeds into the proplab_sw_series table,
+// consumed by the pathscope module. It is all that remains of the Propagation
+// Lab's space-weather context (the Fusion/D-RAP consumers were removed).
 // It runs only when -proplab-sw-enable is set. Each feed is polled in its own
 // goroutine so a slow or temporarily broken feed cannot block the others.
 //
@@ -35,18 +35,19 @@ const (
 )
 
 type swIngestService struct {
-	mu     sync.RWMutex
 	store  *dxPostgresStore
 	stopCh chan struct{}
 	wg     sync.WaitGroup
 	client *http.Client
-
-	sw proplab.FusionSWSnapshot
 }
 
 func startProplabSWIngest() {
+	store := (*dxPostgresStore)(nil)
+	if cellBucketFeed != nil {
+		store = cellBucketFeed.store
+	}
 	svc := &swIngestService{
-		store:  proplabService.store,
+		store:  store,
 		stopCh: make(chan struct{}),
 		client: &http.Client{Timeout: 30 * time.Second},
 	}
@@ -71,7 +72,6 @@ func (s *swIngestService) start() {
 		{"f10.7", 15 * time.Minute, s.fetchF107},
 		{"xray", 1 * time.Minute, s.fetchXray},
 		{"ovation", 5 * time.Minute, s.fetchOvation},
-		{"drap", 15 * time.Minute, s.fetchDrap},
 	}
 
 	for _, f := range feeds {
@@ -101,13 +101,6 @@ func (s *swIngestService) fetchAll() {
 	s.fetchF107()
 	s.fetchXray()
 	s.fetchOvation()
-	s.fetchDrap()
-}
-
-func (s *swIngestService) snapshot() proplab.FusionSWSnapshot {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.sw
 }
 
 func (s *swIngestService) fetchKp() {
@@ -117,10 +110,10 @@ func (s *swIngestService) fetchKp() {
 		return
 	}
 	var records []struct {
-		TimeTag      string  `json:"time_tag"`
-		EstimatedKp  float64 `json:"estimated_kp"`
-		ObservedKp   int     `json:"kp_index"`
-		ObservedKpS  string  `json:"kp"`
+		TimeTag     string  `json:"time_tag"`
+		EstimatedKp float64 `json:"estimated_kp"`
+		ObservedKp  int     `json:"kp_index"`
+		ObservedKpS string  `json:"kp"`
 	}
 	if err := json.Unmarshal(body, &records); err != nil {
 		logInfo("SW Kp parse failed: %v", err)
@@ -159,11 +152,6 @@ func (s *swIngestService) fetchKp() {
 	if latest.ObsTime == 0 {
 		latest.ObsTime = now
 	}
-	s.mu.Lock()
-	s.sw.Kp = latest.Value
-	s.sw.Available = true
-	s.sw.FetchedAt = latest.ObsTime
-	s.mu.Unlock()
 }
 
 func (s *swIngestService) fetchF107() {
@@ -184,11 +172,6 @@ func (s *swIngestService) fetchF107() {
 		logInfo("SW F10.7 store failed: %v", err)
 		return
 	}
-	s.mu.Lock()
-	s.sw.SFI = v
-	s.sw.Available = true
-	s.sw.FetchedAt = ts
-	s.mu.Unlock()
 }
 
 func (s *swIngestService) fetchXray() {
@@ -241,11 +224,6 @@ func (s *swIngestService) fetchXray() {
 		logInfo("SW X-ray store failed: %v", err)
 		return
 	}
-	s.mu.Lock()
-	s.sw.XrayClass = xrayClassFromFlux(best.Flux)
-	s.sw.Available = true
-	s.sw.FetchedAt = ts
-	s.mu.Unlock()
 }
 
 func (s *swIngestService) fetchOvation() {
@@ -290,41 +268,6 @@ func (s *swIngestService) fetchOvation() {
 		logInfo("SW OVATION store failed: %v", err)
 		return
 	}
-	s.mu.Lock()
-	s.sw.AuroraGW = gw
-	s.sw.Available = true
-	s.sw.FetchedAt = ts
-	s.mu.Unlock()
-}
-
-func (s *swIngestService) fetchDrap() {
-	body, err := drapTextGet(s.client, swDrapURL)
-	if err != nil {
-		logInfo("SW D-RAP fetch failed: %v", err)
-		return
-	}
-	grid, err := proplab.ParseDRAPText(body)
-	if err != nil {
-		logInfo("SW D-RAP parse failed: %v", err)
-		return
-	}
-	if grid.ValidAt == 0 {
-		grid.ValidAt = time.Now().Unix()
-	}
-	row := proplabDRAPRow{ObsTime: grid.ValidAt, Text: body}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := s.store.upsertProplabDRAP(ctx, row); err != nil {
-		logInfo("SW D-RAP store failed: %v", err)
-		return
-	}
-	s.mu.Lock()
-	s.sw.DrapHAF = grid.RegionHAFMap()
-	s.sw.HasDrap = true
-	s.sw.DrapAgeMin = 0
-	s.sw.Available = true
-	s.sw.FetchedAt = grid.ValidAt
-	s.mu.Unlock()
 }
 
 // drapTextGet fetches a plain-text D-RAP grid with the correct Accept header.

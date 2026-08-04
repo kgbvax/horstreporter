@@ -38,6 +38,10 @@ go.work.sum
 # operator-agent build artifact (root-anchored; `go build ./cmd/horstoperator-agent`)
 /horstoperator-agent
 
+# pathscope build artifacts (root-anchored; source lives in cmd/pathscope/)
+/pathscope
+/pathscope-linux-x64
+
 # horstawards local award snapshot store (written by the operator agent)
 horstawards-data/
 
