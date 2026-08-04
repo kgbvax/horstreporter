@@ -27,9 +27,14 @@ import (
 // Deps is the read-only dependency bag the server needs at startup. The
 // fields are passed by value (not by pointer) so the receiver is a value
 // type and the wiring is explicit about lifetimes.
+//
+// Store and Engine are interfaces (declared below) so the server can be
+// tested with fakes; the production *pathscope.Store and
+// *pathscope.ScoringEngine satisfy them implicitly — main.go doesn't
+// need to change.
 type Deps struct {
-	Store      *pathscope.Store
-	Engine     *pathscope.ScoringEngine
+	Store      Store
+	Engine     Engine
 	QTH        string         // operator's Maidenhead locator
 	HomeRegion region.Region  // derived from QTH
 	Version    string
@@ -38,10 +43,24 @@ type Deps struct {
 	Interval   time.Duration  // how often the SSE ticker re-scores (default 5s)
 }
 
+// Store is the read-only data surface the server needs. *pathscope.Store
+// satisfies it. Test fakes implement the same four methods.
+type Store interface {
+	LiveRates(ctx context.Context, since, until time.Time, lanes []string) (map[pathscope.Mode]map[region.Region]map[string]int, error)
+	LiveSNR(ctx context.Context, since, until time.Time) (map[pathscope.Mode]map[region.Region]pathscope.SNRStats, error)
+	Baseline(ctx context.Context, lookbackDays int, now time.Time, bands []string) ([]pathscope.Baseline, error)
+	SolarContext(ctx context.Context) (pathscope.SolarContext, error)
+}
+
+// Engine is the scoring surface. *pathscope.ScoringEngine satisfies it.
+type Engine interface {
+	ScoreCell(band string, reg region.Region, liveRates map[pathscope.Mode]int, baselines []pathscope.Baseline, liveSNR map[pathscope.Mode]pathscope.SNRStats, solar pathscope.SolarContext) pathscope.CellScore
+}
+
 // Server is the http.Handler. It is safe for concurrent use.
 type Server struct {
-	store       *pathscope.Store
-	engine      *pathscope.ScoringEngine
+	store       Store
+	engine      Engine
 	qth         string
 	homeRegion  region.Region
 	version     string

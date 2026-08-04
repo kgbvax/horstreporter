@@ -20,10 +20,24 @@ function scoreBar(mode) {
   `;
 }
 
+// isLight returns true when the hex colour's Rec. 709 luminance is
+// above the midpoint of [0, 255]. The threshold is intentionally
+// close to the middle of the range so the same cell always picks the
+// same text colour regardless of which palette (viridis / rocket /
+// future) is in use.
+function isLight(hex) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return L > 140;
+}
+
 function cellHTML(cell, opts) {
   const bg = scoreToColor(cell.score);
+  const textClass = isLight(bg) ? 'cell region on-light' : 'cell region on-dark';
   const isHome = cell.region === opts.homeRegion;
-  const cls = isHome ? 'cell region is-home' : 'cell region';
+  const cls = isHome ? `${textClass} is-home` : textClass;
   const prob = (cell.probability * 100).toFixed(0);
   const conf = (cell.confidence * 100).toFixed(0);
   const top = MODES_DISPLAY.map(m => {

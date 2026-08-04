@@ -86,36 +86,40 @@ main {
   margin-bottom: 1rem;
 }
 
-.legend-row {
+/* The legend is a vertical stack: the gradient bar (full row) sits
+   above two labels anchored to its left and right edges. Earlier
+   versions rendered the bar and labels side-by-side in one flex row,
+   which left the labels stranded next to the bar's right edge
+   instead of aligned under its endpoints — see issue 'legend key
+   reverse'. */
+.legend-stack {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.78rem;
-  color: var(--text-muted);
-}
-
-.legend-label {
-  min-width: 3.5rem;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
 .legend-bar {
-  display: flex;
-  flex: 1;
-  height: 0.5rem;
-  border-radius: 0.25rem;
-  overflow: hidden;
-}
-
-.legend-tick {
-  flex: 1;
+  height: 0.6rem;
+  border-radius: 0.3rem;
+  border: 1px solid var(--border);
 }
 
 .legend-labels {
   display: flex;
   justify-content: space-between;
-  flex: 1;
-  font-size: 0.7rem;
-  margin-left: 0.5rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.legend-labels em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.legend-label-start,
+.legend-label-end {
+  white-space: nowrap;
 }
 
 .legend-note {
@@ -172,23 +176,19 @@ main {
   box-shadow: 0 0 0 2px var(--hover);
 }
 
+/* Structural layout — the per-text-color rules (.on-light / .on-dark)
+   below override the colour values but the layout itself stays here. */
 .cell .top {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   font-size: 0.7rem;
-  color: var(--text-muted);
 }
 
 .cell .score {
   font-weight: 700;
   font-size: 0.85rem;
-  color: var(--text);
   font-variant-numeric: tabular-nums;
-}
-
-.cell .region.is-home {
-  color: var(--home);
 }
 
 .cell .bars {
@@ -203,7 +203,6 @@ main {
   align-items: center;
   gap: 0.25rem;
   font-size: 0.6rem;
-  color: var(--text-muted);
 }
 
 .cell .bar-fill {
@@ -217,14 +216,69 @@ main {
 .cell .bar-fill > span {
   display: block;
   height: 100%;
+}
+
+/* Cells set on-light or on-dark based on the cell background luminance
+   (see glance.js isLight). Each variant picks text colours with enough
+   contrast against its background so the score / P / c / mode bars stay
+   readable across the whole rocket ramp. */
+.cell.on-light {
+  color: #1a1f24;
+}
+
+.cell.on-light .top,
+.cell.on-light .bar,
+.cell.on-light .badges {
+  color: rgba(26, 31, 36, 0.7);
+}
+
+.cell.on-light .score {
+  color: #1a1f24;
+}
+
+.cell.on-light .region.is-home {
+  color: #b06500;
+}
+
+.cell.on-light .bar-fill > span {
+  background: rgba(26, 31, 36, 0.6);
+}
+
+.cell.on-light .bar.workable .bar-fill > span {
+  background: #2e6f2e;
+}
+
+.cell.on-light .bar.unworkable .bar-fill > span {
+  background: rgba(176, 58, 46, 0.7);
+}
+
+.cell.on-dark {
+  color: var(--text);
+}
+
+.cell.on-dark .top,
+.cell.on-dark .bar,
+.cell.on-dark .badges {
+  color: var(--text-muted);
+}
+
+.cell.on-dark .score {
+  color: var(--text);
+}
+
+.cell.on-dark .region.is-home {
+  color: var(--home);
+}
+
+.cell.on-dark .bar-fill > span {
   background: var(--text-muted);
 }
 
-.cell .bar.workable .bar-fill > span {
+.cell.on-dark .bar.workable .bar-fill > span {
   background: var(--accent);
 }
 
-.cell .bar.unworkable .bar-fill > span {
+.cell.on-dark .bar.unworkable .bar-fill > span {
   background: var(--bad);
   opacity: 0.3;
 }
