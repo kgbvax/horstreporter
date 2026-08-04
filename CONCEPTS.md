@@ -34,8 +34,6 @@ A Maidenhead grid locator — the compact alphanumeric encoding of a station's p
 
 Precision varies by length: a 2-char field, a 4-char square, a 6-char subsquare. The 4-char square (2° longitude × 1° latitude) is the standard working resolution for matching, mapping and clustering. Some baseline keys collapse a square further to its 2×2 block anchor so neighbouring squares aggregate together.
 
-### Target
-The callsign or Locator a client is monitoring — the centre of interest for a stream or a DX-conditions query. A Spot matches the Target when the Target appears as the Sender or Receiver (exact/affixed callsign match, or locator-prefix match when the Target is a Locator).
 
 ### Surroundings
 An option that expands a Locator Target to also include its eight neighbouring grid squares, widening coverage when a single square is too sparse. Applies only when the Target is a valid Locator.
@@ -89,16 +87,12 @@ The fraction of a band's current matched paths that are DX-grade (intercontinent
 ### Trend
 The short-term direction of a band's recent activity — rising, falling, or stable — derived by comparing the first and second halves of a recent per-band activity sparkline (a normalised mini time-series of quality-weighted spot counts).
 
-### DX Pulse
-A regional view of conditions that scores activity per world region (EU, NA, AS, …) rather than per band, in quality and anomaly modes, against a region-specific Baseline. Answers "where is being heard right now" as opposed to the band-centric DX Potential Score.
-
+ 
 ### Hot bands
 A recommender that surfaces a few bands worth attention right now for the Target, each tagged by why: a "surprise" opening on a normally quiet band, a "dx_surge" of unusually long paths, or a "rising" trend. Bands the operator is already on are suppressed.
 
 ## Operator tooling
 
-### horstprop
-A standalone companion service that scores the HF link quality of a single DX path — home station to spotted DX station — returning a 0–100 score with a grade and a per-layer breakdown. Runs as its own binary, talks to the shared backend read-only over HTTP, and shares only contract types with it.
 
 ### horstoperator-agent
 A trusted local agent running on the operator's own machine that holds operator-private secrets (logbook API key, rig and rotor access) and reverse-proxies the shared backend, so secrets and personal log data never leave the local box. The browser sees a single origin while operator-local endpoints stay local.
