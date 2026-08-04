@@ -656,40 +656,6 @@ export function gridSnrOpacity(scoreDb) {
     return Math.min(0.75, 0.45 + 0.015 * s);
 }
 
-export function normalizeDxPulseTarget(target) {
-    const value = String(target || '').trim().toUpperCase();
-    if (!/^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(value)) {
-        return '';
-    }
-    return value.slice(0, 4);
-}
-
-export function buildDxPulseUrl({ target, minutes, surroundings = false, mode = 'quality', lookbackDays = 45 } = {}) {
-    const locator = normalizeDxPulseTarget(target);
-    if (!locator) {
-        return '';
-    }
-    const params = new URLSearchParams();
-    params.set('target', locator);
-    params.set('mode', mode === 'anomaly' ? 'anomaly' : 'quality');
-
-    const parsedMinutes = Number.parseInt(minutes, 10);
-    if (Number.isFinite(parsedMinutes) && parsedMinutes > 0) {
-        params.set('minutes', String(parsedMinutes));
-    }
-
-    const parsedLookback = Number.parseInt(lookbackDays, 10);
-    if (Number.isFinite(parsedLookback) && parsedLookback > 0) {
-        params.set('lookback_days', String(parsedLookback));
-    }
-
-    if (surroundings) {
-        params.set('surroundings', 'true');
-    }
-
-    return `/dxpulse/?${params.toString()}`;
-}
-
 export function getMinSnrMode() {
     const checkedRadio = document.querySelector('input[name="min-snr"]:checked');
     return checkedRadio ? checkedRadio.value : 'none';

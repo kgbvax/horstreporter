@@ -635,67 +635,6 @@ func dxPulseRegionBaselineKeysForSpot(ts int64, band string, senderLoc string, r
 	return keys
 }
 
-func (s *dxPostgresStore) dxPulseBaselineForTargets(targets []string, lookbackDays int, windowMinutes int, now int64) (map[string]*dxPulseBaselineAccumulator, bool, error) {
-	if len(targets) == 0 {
-		return map[string]*dxPulseBaselineAccumulator{}, false, nil
-	}
-	if lookbackDays <= 0 {
-		lookbackDays = dxPulseDefaultBaselineLookbackDays
-	}
-	if windowMinutes <= 0 {
-		windowMinutes = dxPulseDefaultWindowMinutes
-	}
-	if now <= 0 {
-		now = time.Now().Unix()
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	var baselineExists bool
-	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM dx_region_baseline_daily LIMIT 1)`).Scan(&baselineExists); err != nil {
-		return nil, false, err
-	}
-	if !baselineExists {
-		return map[string]*dxPulseBaselineAccumulator{}, false, nil
-	}
-
-	dayEnd := utcDayIndex(now - dxPulseBaselineExclusionSeconds)
-	dayStart := utcDayIndex(now - int64(lookbackDays*24*60*60))
-	if dayEnd < dayStart {
-		return map[string]*dxPulseBaselineAccumulator{}, true, nil
-	}
-	slots := dxPulseWindowSlots(now, windowMinutes)
-	rows, err := s.pool.Query(ctx, `
-		SELECT band, region, SUM(spot_count)::bigint, COUNT(DISTINCT day_index)::bigint
-		FROM dx_region_baseline_daily
-		WHERE target_grid4 = ANY($1)
-		  AND day_index BETWEEN $2 AND $3
-		  AND slot_of_day = ANY($4)
-		GROUP BY band, region
-	`, targets, dayStart, dayEnd, slots)
-	if err != nil {
-		return nil, true, err
-	}
-	defer rows.Close()
-
-	out := make(map[string]*dxPulseBaselineAccumulator)
-	for rows.Next() {
-		var band string
-		var region string
-		var totalCount int64
-		var activeDays int64
-		if err := rows.Scan(&band, &region, &totalCount, &activeDays); err != nil {
-			return nil, true, err
-		}
-		out[dxPulseCellKey(band, region)] = &dxPulseBaselineAccumulator{
-			totalCount:     int(totalCount),
-			activeDayCount: int(activeDays),
-		}
-	}
-	return out, true, rows.Err()
-}
-
 func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTier, snrTier int, targetTokens [4]string) error {
 	uniqueTargets := dedupeTargetTokens(targetTokens)
 

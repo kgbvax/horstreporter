@@ -267,15 +267,6 @@ func (e *DxBaselineEngine) PruneRawSpotsOlderThan(cutoff int64) (int64, error) {
 	return st.pruneRawSpotsOlderThan(cutoff)
 }
 
-func (e *DxBaselineEngine) LoadDxPulseBaseline(targets []string, lookbackDays int, windowMinutes int, now int64) (map[string]*dxPulseBaselineAccumulator, bool, error) {
-	e.mu.RLock()
-	st := e.store
-	e.mu.RUnlock()
-	if st == nil {
-		return map[string]*dxPulseBaselineAccumulator{}, false, nil
-	}
-	return st.dxPulseBaselineForTargets(targets, lookbackDays, windowMinutes, now)
-}
 
 func (e *DxBaselineEngine) NumBuckets() int {
 	e.mu.RLock()
