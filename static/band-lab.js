@@ -257,7 +257,7 @@ function renderBandCards(cardsEl, grouped, target, minutes) {
 
     const targetCenter = getTargetCenter(target);
     const dxBands = toBandMetricMap(runtime.dxCache);
-    const globalMaxDistanceKm = targetCenter ? getGlobalMaxDistanceKm(grouped, targetCenter) : null;
+    const globalDistanceCapKm = targetCenter ? getGlobalDistanceCapKm(grouped, targetCenter) : null;
     const allBandCounts = bands.map((band) => (grouped.get(band) || []).length);
     const totalReportsAllBands = allBandCounts.reduce((sum, n) => sum + n, 0);
     const maxReportsSingleBand = Math.max(0, ...allBandCounts);
@@ -296,21 +296,30 @@ function renderBandCards(cardsEl, grouped, target, minutes) {
         const safeBand = sanitizeBandId(band);
         const points = grouped.get(band) || [];
         drawActivityChart(document.getElementById(`band-lab-activity-${safeBand}`), points, dxBands.get(band), minutes);
-        drawScatterChart(document.getElementById(`band-lab-scatter-${safeBand}`), points, targetCenter, band, globalMaxDistanceKm);
+        drawScatterChart(document.getElementById(`band-lab-scatter-${safeBand}`), points, targetCenter, band, globalDistanceCapKm);
     }
 }
 
-function getGlobalMaxDistanceKm(grouped, targetCenter) {
-    let maxDistance = 500;
+// Robust axis cap for the distance axis: the p95 of every report's distance
+// from the target across all bands, NOT the raw max. A single antipodean spot
+// would otherwise set the axis max for every band's scatter and compress the
+// whole population against the left edge. p95 trims extreme outliers while
+// keeping the bulk; the score baseline already uses p90 server-side, so this
+// is consistent in spirit. Floored at 500 km so tiny populations still get a
+// readable axis. Points beyond the cap are clamped to the edge and marked
+// (see drawScatterChart), never silently dropped.
+function getGlobalDistanceCapKm(grouped, targetCenter) {
+    const distances = [];
     for (const points of grouped.values()) {
         for (const point of points) {
             const d = haversineKm(targetCenter.lat, targetCenter.lng, Number(point.lat), Number(point.lng));
-            if (Number.isFinite(d)) {
-                maxDistance = Math.max(maxDistance, d);
-            }
+            if (Number.isFinite(d)) distances.push(d);
         }
     }
-    return maxDistance;
+    if (distances.length === 0) return 500;
+    distances.sort((a, b) => a - b);
+    const cap = quantileSorted(distances, 0.95);
+    return Number.isFinite(cap) ? Math.max(500, cap) : 500;
 }
 
 function getTargetCenter(target) {
@@ -326,7 +335,7 @@ function getTargetCenter(target) {
 // Pure: turn spots + target center into scatter samples + axis ranges, or null
 // when there is no usable distance data. Extracted from drawScatterChart so the
 // math is unit-testable without a canvas.
-export function computeScatterData(points, targetCenter, globalMaxDistanceKm) {
+export function computeScatterData(points, targetCenter, globalDistanceCapKm) {
     if (!targetCenter || !points || points.length === 0) return null;
     const samples = points
         .map((p) => ({
@@ -335,14 +344,19 @@ export function computeScatterData(points, targetCenter, globalMaxDistanceKm) {
         }))
         .filter((v) => Number.isFinite(v.d) && Number.isFinite(v.s));
     if (samples.length === 0) return null;
-    const maxDist = Math.max(500, Number(globalMaxDistanceKm) || 0, ...samples.map((s) => s.d));
+    // Axis max is the robust global p95 cap, not the raw max — so one distant
+    // outlier can't stretch the scale. Points beyond the cap are clamped to the
+    // right edge and flagged `clipped` so the renderer marks them with a
+    // chevron instead of plotting them off-chart or inflating the axis.
+    const maxDist = Math.max(500, Number(globalDistanceCapKm) || 0);
+    for (const s of samples) s.clipped = s.d > maxDist;
     const minSnr = Math.min(-20, -15, ...samples.map((s) => s.s));
     const maxSnr = Math.max(20, 0, ...samples.map((s) => s.s));
     const snrRange = Math.max(10, maxSnr - minSnr);
     return { samples, maxDist, minSnr, maxSnr, snrRange };
 }
 
-function drawScatterChart(canvas, points, targetCenter, band, globalMaxDistanceKm) {
+function drawScatterChart(canvas, points, targetCenter, band, globalDistanceCapKm) {
     const prepared = prepareCanvas(canvas, 230, 120);
     if (!prepared) return;
     const { ctx, w, h } = prepared;
@@ -355,7 +369,7 @@ function drawScatterChart(canvas, points, targetCenter, band, globalMaxDistanceK
     const pal = chartPalette();
     drawChartFrame(ctx, pad, pw, ph, pal);
 
-    const data = computeScatterData(points, targetCenter, globalMaxDistanceKm);
+    const data = computeScatterData(points, targetCenter, globalDistanceCapKm);
     if (!data) {
         drawNoData(ctx, w, h, 'no distance data', pal);
         return;
@@ -380,22 +394,33 @@ function drawScatterChart(canvas, points, targetCenter, band, globalMaxDistanceK
     const p50Dist = quantileSorted(sortedDistances, 0.5);
     const p90Dist = quantileSorted(sortedDistances, 0.9);
 
-    if (Number.isFinite(p50Dist)) {
+    if (Number.isFinite(p50Dist) && p50Dist <= maxDist) {
         const x = pad.l + (p50Dist / maxDist) * pw;
         ctx.strokeStyle = hexToRgba(pal.grid, 0.38);
         dashedLine(ctx, x, pad.t, x, pad.t + ph, [2, 4], 0.9);
     }
 
-    if (Number.isFinite(p90Dist)) {
+    if (Number.isFinite(p90Dist) && p90Dist <= maxDist) {
         const x = pad.l + (p90Dist / maxDist) * pw;
         ctx.strokeStyle = hexToRgba(pal.grid, 0.3);
         dashedLine(ctx, x, pad.t, x, pad.t + ph, [2, 5], 0.9);
     }
 
-    ctx.fillStyle = hexToRgba(bandColors[band] || '#4f46e5', 0.5);
+    const dotColor = hexToRgba(bandColors[band] || '#4f46e5', 0.5);
+    const clipColor = hexToRgba(bandColors[band] || '#4f46e5', 0.85);
+    ctx.font = '11px sans-serif';
     for (const sample of samples) {
-        const x = pad.l + (sample.d / maxDist) * pw;
         const y = pad.t + ph - ((sample.s - minSnr) / snrRange) * ph;
+        if (sample.clipped) {
+            // Pinned to the right edge with a chevron: still visible so the
+            // outlier isn't hidden, but it no longer stretches the distance axis.
+            ctx.fillStyle = clipColor;
+            ctx.textAlign = 'right';
+            ctx.fillText('›', pad.l + pw - 1, y + 3);
+            continue;
+        }
+        const x = pad.l + (sample.d / maxDist) * pw;
+        ctx.fillStyle = dotColor;
         fillCircle(ctx, x, y, 2.2);
     }
 
