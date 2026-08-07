@@ -54,6 +54,58 @@ func TestParseRBNSpot(t *testing.T) {
 		{name: "missing dB token", line: "DX de W3LPL-#: 14024.0 N0CALL CW 22 EN91 1234 Z", wantOk: false},
 		{name: "non-numeric frequency rejected", line: "DX de W3LPL-#: abc N0CALL CW 22 dB EN91 1234 Z", wantOk: false},
 		{name: "missing mode token rejected", line: "DX de W3LPL-#: 14024.0 N0CALL 22 dB EN91 1234 Z", wantOk: false},
+		{
+			name:   "JT65 mode parsed (previously dropped)",
+			line:   "DX de W3LPL-#:      14076.0  N0CALL         JT65  18 dB   EN91   1234 Z",
+			wantOk: true,
+			want: rbnSpot{
+				Skimmer:      "W3LPL-#",
+				DXCall:       "N0CALL",
+				FrequencyKHz: 14076.0,
+				Mode:         "JT65",
+				DB:           18,
+				ObservedAt:   1700000000,
+			},
+		},
+		{
+			name:   "JS8 mode parsed (previously dropped)",
+			line:   "DX de W3LPL-#:      14078.0  N0CALL         JS8   12 dB   EN91   1234 Z",
+			wantOk: true,
+			want: rbnSpot{
+				Skimmer:      "W3LPL-#",
+				DXCall:      "N0CALL",
+				FrequencyKHz: 14078.0,
+				Mode:         "JS8",
+				DB:           12,
+				ObservedAt:   1700000000,
+			},
+		},
+		{
+			name:   "OLIVIA mode parsed (previously dropped)",
+			line:   "DX de W3LPL-#:      14072.0  N0CALL         OLIVIA  14 dB   EN91   1234 Z",
+			wantOk: true,
+			want: rbnSpot{
+				Skimmer:      "W3LPL-#",
+				DXCall:      "N0CALL",
+				FrequencyKHz: 14072.0,
+				Mode:         "OLIVIA",
+				DB:           14,
+				ObservedAt:   1700000000,
+			},
+		},
+		{
+			name:   "MSK144 mode parsed (previously dropped)",
+			line:   "DX de W3LPL-#:      50260.0  N0CALL         MSK144  9 dB   EN91   1234 Z",
+			wantOk: true,
+			want: rbnSpot{
+				Skimmer:      "W3LPL-#",
+				DXCall:      "N0CALL",
+				FrequencyKHz: 50260.0,
+				Mode:         "MSK144",
+				DB:           9,
+				ObservedAt:   1700000000,
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

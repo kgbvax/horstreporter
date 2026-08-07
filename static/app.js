@@ -6,7 +6,7 @@ import { initUI, attachUITooltipEvents, initGridSnrLegend } from './ui.js';
 import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
 import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initHorstKevin } from './horst-kevin.js';
-import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers } from './renderers.js';
+import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, resetRenderFingerprint } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
@@ -15,6 +15,10 @@ import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation
 const AZIMUTH_MAX_HORIZON_KM = 20015;
 const AZIMUTH_MIN_ZOOM = 1.0;
 const AZIMUTH_MAX_ZOOM = 5.0;
+// Cap on state.liveSpots to bound memory between 5s age-prune ticks. A hot
+// band can push thousands of spots/sec; without this the array grows
+// unbounded until the prune runs. Drop oldest-arrived in a batch when over.
+const MAX_LIVE_SPOTS = 20000;
 let suppressAzimuthClickUntil = 0;
 let hotBandIndicator = null;
 let horstKevin = null;
@@ -868,6 +872,7 @@ async function applyProjectionMode(projection) {
     }
 
     setAzimuthEnabled(false);
+    resetRenderFingerprint();
     syncAzimuthZoomOutHint();
     if (map) map.invalidateSize();
     await syncMercatorOverlays(true);
@@ -1619,6 +1624,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
             state.heatLayer = null;
         }
         clearDxClusterMarkers();
+        resetRenderFingerprint();
         if (state.targetLayer) {
             map.removeLayer(state.targetLayer);
             state.targetLayer = null;
@@ -1654,6 +1660,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         state.heatLayer = null;
     }
     clearDxClusterMarkers();
+    resetRenderFingerprint();
 
     if (state.targetLayer) {
         map.removeLayer(state.targetLayer);
@@ -1726,6 +1733,12 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     state.eventSource.addEventListener('server_error', (e) => {
         state.eventSource.close();
+        state.eventSource = null;
+        if (state.renderInterval) {
+            clearInterval(state.renderInterval);
+            state.renderInterval = null;
+        }
+        historyLoading = false;
         statusEl.innerHTML = `Status: <span style="color: red;">${e.data}</span>`;
         setFaviconColor('#dc3545'); // Red for error
         if (btnSubmit) setSubmitMode(btnSubmit, 'go');
@@ -1740,8 +1753,19 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     state.eventSource.onmessage = (e) => {
         totalReceived++;
-        
-        const spot = JSON.parse(e.data);
+
+        let spot;
+        try {
+            spot = JSON.parse(e.data);
+        } catch (err) {
+            console.warn('Malformed spot frame, skipping:', err, e.data);
+            return;
+        }
+        // Cap liveSpots: drop oldest-arrived in a batch when over the limit so a
+        // hot-band burst between 5s prunes can't grow memory unbounded.
+        if (state.liveSpots.length >= MAX_LIVE_SPOTS) {
+            state.liveSpots.splice(0, state.liveSpots.length - MAX_LIVE_SPOTS + 1);
+        }
         state.liveSpots.push(spot);
         setFaviconColor('#28a745'); // Green for active receiving
 
@@ -1762,9 +1786,30 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
     };
 
     state.eventSource.onerror = (e) => {
-        console.error("Stream error:", e);
-        statusEl.innerHTML = `Status: <span style="color: red;">Connection error / Disconnected</span>`;
-        setFaviconColor('#dc3545'); // Red for error
+        const es = e.currentTarget || state.eventSource;
+        // EventSource auto-reconnects on transient errors (readyState CONNECTING);
+        // only treat a CLOSED connection as fatal so a brief blip doesn't flap
+        // the status red and tear down a stream that will recover on its own.
+        if (es && es.readyState === EventSource.CLOSED) {
+            console.error("Stream closed (fatal):", e);
+            if (state.eventSource) {
+                state.eventSource.close();
+                state.eventSource = null;
+            }
+            if (state.renderInterval) {
+                clearInterval(state.renderInterval);
+                state.renderInterval = null;
+            }
+            historyLoading = false;
+            statusEl.innerHTML = `Status: <span style="color: red;">Connection error / Disconnected</span>`;
+            setFaviconColor('#dc3545'); // Red for error
+            if (btnSubmit) setSubmitMode(btnSubmit, 'go');
+            return;
+        }
+        // Transient — reconnecting. Surface it but don't tear down.
+        console.warn("Stream error (reconnecting):", e);
+        statusEl.innerHTML = `Status: <span style="color: orange;">Reconnecting…</span>`;
+        setFaviconColor('#ffa500');
     };
 
     state.renderInterval = setInterval(() => {

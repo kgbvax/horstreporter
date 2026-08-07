@@ -165,8 +165,10 @@ func TestLegacyV5SnapshotLoadCollapsesSource4AndBlocks(t *testing.T) {
 	}
 }
 
-// TestSaveProducesV6Snapshot asserts the engine writes version 6 on save,
-// and that the persisted JSON has no source4 field on its buckets.
+// TestSaveProducesV6Snapshot asserts the engine writes the current snapshot
+// version on save, and that the persisted JSON has no source4 field on its
+// buckets. (Version bumped to 7 when regional_buckets were added; the
+// source4 invariant is still the v6 contract this test guards.)
 func TestSaveProducesV6Snapshot(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dx_baseline.json")
@@ -187,9 +189,11 @@ func TestSaveProducesV6Snapshot(t *testing.T) {
 	if err := json.Unmarshal(raw, &snap); err != nil {
 		t.Fatalf("parse saved file: %v", err)
 	}
-	if v, ok := snap["version"].(float64); !ok || int(v) != 6 {
-		t.Errorf("snapshot version = %v, want 6", snap["version"])
+	if v, ok := snap["version"].(float64); !ok || int(v) != 7 {
+		t.Errorf("snapshot version = %v, want 7", snap["version"])
 	}
+	// regional_buckets may be omitted (omitempty) when empty — that's fine;
+	// Load handles nil. Only assert presence when non-empty.
 	// The first bucket should not have a source4 field.
 	buckets, _ := snap["buckets"].(map[string]any)
 	for _, b := range buckets {

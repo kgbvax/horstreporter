@@ -79,7 +79,7 @@ type rbnSpot struct {
 // and time are ignored; ObservedAt is taken from time.Now() (the live stream is real-time,
 // matching DX-cluster). The skimmer class allows the RBN per-band "-#" / "-<n>" suffix and
 // portable callsigns.
-var rbnLinePattern = regexp.MustCompile(`(?i)^DX\s+de\s+([A-Z0-9\-/#]+)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s+([A-Z0-9/\-]+)\s+(CW|RTTY|PSK[0-9]*|FT8|FT4|SSB|AM|FM|DIGI)\s+(\d+)\s*dB`)
+var rbnLinePattern = regexp.MustCompile(`(?i)^DX\s+de\s+([A-Z0-9\-/#]+)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s+([A-Z0-9/\-]+)\s+(CW|RTTY|PSK[0-9]*|FT8|FT4|SSB|AM|FM|DIGI|JT65|JT9|JS8|FST4|WSPR|OLIVIA|CONTESTIA|HELL|MFSK[0-9]*|FSK441|MSK144|Q65|JT4)\s+(\d+)\s*dB`)
 
 func startRBNIngest(cfg rbnConfig) {
 	if !cfg.Enabled {
@@ -162,6 +162,10 @@ func runRBNSession(endpoint string, cfg rbnConfig) error {
 	for scanner.Scan() {
 		linesSeen++
 		rbnAccounting.linesSeen.Add(1)
+		// Refresh a per-line idle deadline so a half-open TCP connection
+		// (NAT timeout, server hang without FIN) triggers a reconnect
+		// instead of blocking scanner.Scan() forever.
+		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		rawLine := scanner.Text()
 		line := strings.TrimSpace(rawLine)
 		if logLevel == "DEBUG" {

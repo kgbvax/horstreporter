@@ -21,16 +21,18 @@ const (
 type dxPostgresStore struct {
 	pool *pgxpool.Pool
 
-	mu              sync.Mutex
-	pendingGlobal   map[baselineGlobalKey]baselineDelta
-	pendingTarget   map[baselineTargetDeltaKey]baselineDelta
-	pendingRegion   map[dxPulseRegionBaselineDailyKey]int64
-	pendingCount    int
-	pendingRawSpots []rawSpotRow
+	mu                   sync.Mutex
+	pendingGlobal        map[baselineGlobalKey]baselineDelta
+	pendingTarget        map[baselineTargetDeltaKey]baselineDelta
+	pendingRegion        map[dxPulseRegionBaselineDailyKey]int64
+	pendingRegionBaseline map[regionBaselineKey]baselineDelta
+	pendingCount         int
+	pendingRawSpots      []rawSpotRow
 
-	flushCh chan struct{}
-	stopCh  chan struct{}
-	wg      sync.WaitGroup
+	flushCh   chan struct{}
+	stopCh    chan struct{}
+	closeOnce *sync.Once
+	wg        sync.WaitGroup
 
 	// baselineStatsCache memoizes the display-only baseline stats (bucket/event
 	// planner estimates + the baseline_first_observed_at history span). These
@@ -66,6 +68,16 @@ type baselinePair struct {
 	DistanceTier int
 	SnrTier      int
 	Count        int64
+}
+
+// regionBaselineKey keys the dx_baseline_region table: observer's DXPulse
+// region + the standard 4-dimension bucket key.
+type regionBaselineKey struct {
+	ObserverRegion string
+	Band           string
+	SlotOfDay      int
+	DistanceTier   int
+	SnrTier        int
 }
 
 // bandSlotKey indexes the all-bands/all-slots baseline breakdown by (band, slot).
@@ -110,9 +122,11 @@ func newDxPostgresStore(ctx context.Context, dsn string) (*dxPostgresStore, erro
 	st.pendingGlobal = make(map[baselineGlobalKey]baselineDelta, 2048)
 	st.pendingTarget = make(map[baselineTargetDeltaKey]baselineDelta, 4096)
 	st.pendingRegion = make(map[dxPulseRegionBaselineDailyKey]int64, 2048)
+	st.pendingRegionBaseline = make(map[regionBaselineKey]baselineDelta, 2048)
 	st.pendingRawSpots = make([]rawSpotRow, 0, 512)
 	st.flushCh = make(chan struct{}, 1)
 	st.stopCh = make(chan struct{})
+	st.closeOnce = &sync.Once{}
 	if err := st.initSchema(ctx); err != nil {
 		pool.Close()
 		return nil, err
@@ -125,7 +139,8 @@ func (s *dxPostgresStore) Close() {
 	if s == nil {
 		return
 	}
-	close(s.stopCh)
+	// Guard against double-close: close(s.stopCh) panics if called twice.
+	s.closeOnce.Do(func() { close(s.stopCh) })
 	s.wg.Wait()
 	if s.pool != nil {
 		s.pool.Close()
@@ -172,7 +187,7 @@ func (s *dxPostgresStore) flushPendingWithTimeout(timeout time.Duration) {
 
 func (s *dxPostgresStore) flushPending(ctx context.Context) error {
 	s.mu.Lock()
-	if len(s.pendingGlobal) == 0 && len(s.pendingTarget) == 0 && len(s.pendingRegion) == 0 {
+	if len(s.pendingGlobal) == 0 && len(s.pendingTarget) == 0 && len(s.pendingRegion) == 0 && len(s.pendingRegionBaseline) == 0 {
 		s.mu.Unlock()
 		return nil
 	}
@@ -180,19 +195,22 @@ func (s *dxPostgresStore) flushPending(ctx context.Context) error {
 	global := s.pendingGlobal
 	target := s.pendingTarget
 	region := s.pendingRegion
+	regionBaseline := s.pendingRegionBaseline
 	globalCount := len(global)
 	targetCount := len(target)
 	regionCount := len(region)
+	regionBaselineCount := len(regionBaseline)
 	s.pendingGlobal = make(map[baselineGlobalKey]baselineDelta, len(global)/2+16)
 	s.pendingTarget = make(map[baselineTargetDeltaKey]baselineDelta, len(target)/2+16)
 	s.pendingRegion = make(map[dxPulseRegionBaselineDailyKey]int64, len(region)/2+16)
+	s.pendingRegionBaseline = make(map[regionBaselineKey]baselineDelta, len(regionBaseline)/2+16)
 	s.pendingCount = 0
 	s.mu.Unlock()
 
 	started := time.Now()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		s.mergePendingBack(global, target, region)
+		s.mergePendingBack(global, target, region, regionBaseline)
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
@@ -232,30 +250,41 @@ func (s *dxPostgresStore) flushPending(ctx context.Context) error {
 		queued++
 	}
 
+	for k, d := range regionBaseline {
+		batch.Queue(`
+			INSERT INTO dx_baseline_region (observer_region, band, slot_of_day, distance_tier, snr_tier, count)
+			VALUES ($1,$2,$3,$4,$5,$6)
+			ON CONFLICT (observer_region, band, slot_of_day, distance_tier, snr_tier)
+			DO UPDATE SET
+				count = dx_baseline_region.count + EXCLUDED.count
+		`, k.ObserverRegion, k.Band, k.SlotOfDay, k.DistanceTier, k.SnrTier, d.Count)
+		queued++
+	}
+
 	if queued > 0 {
 		br := tx.SendBatch(ctx, batch)
 		for i := 0; i < queued; i++ {
 			if _, err := br.Exec(); err != nil {
 				_ = br.Close()
-				s.mergePendingBack(global, target, region)
+				s.mergePendingBack(global, target, region, regionBaseline)
 				return err
 			}
 		}
 		if err := br.Close(); err != nil {
-			s.mergePendingBack(global, target, region)
+			s.mergePendingBack(global, target, region, regionBaseline)
 			return err
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		s.mergePendingBack(global, target, region)
+		s.mergePendingBack(global, target, region, regionBaseline)
 		return err
 	}
-	logDebug("DX postgres baseline batch flushed: global=%d target=%d region=%d total=%d in %s", globalCount, targetCount, regionCount, globalCount+targetCount+regionCount, time.Since(started).Round(time.Millisecond))
+	logDebug("DX postgres baseline batch flushed: global=%d target=%d region=%d region_baseline=%d total=%d in %s", globalCount, targetCount, regionCount, regionBaselineCount, globalCount+targetCount+regionCount+regionBaselineCount, time.Since(started).Round(time.Millisecond))
 	return nil
 }
 
-func (s *dxPostgresStore) mergePendingBack(global map[baselineGlobalKey]baselineDelta, target map[baselineTargetDeltaKey]baselineDelta, region map[dxPulseRegionBaselineDailyKey]int64) {
+func (s *dxPostgresStore) mergePendingBack(global map[baselineGlobalKey]baselineDelta, target map[baselineTargetDeltaKey]baselineDelta, region map[dxPulseRegionBaselineDailyKey]int64, regionBaseline map[regionBaselineKey]baselineDelta) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -273,6 +302,12 @@ func (s *dxPostgresStore) mergePendingBack(global map[baselineGlobalKey]baseline
 	}
 	for k, v := range region {
 		s.pendingRegion[k] += v
+		s.pendingCount++
+	}
+	for k, d := range regionBaseline {
+		e := s.pendingRegionBaseline[k]
+		e.Count += d.Count
+		s.pendingRegionBaseline[k] = e
 		s.pendingCount++
 	}
 }
@@ -317,6 +352,19 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			snr_tier INTEGER NOT NULL,
 			count BIGINT NOT NULL,
 			PRIMARY KEY (target_token, band, slot_of_day, distance_tier, snr_tier)
+		);`,
+		// Regional baseline: the middle tier (target → region → global). Keyed
+		// by the observer's DXPulse region + the standard 4-dimension bucket key.
+		// Written on every spot (both ends' regions) alongside the global/target
+		// buckets; read by Evaluate when the target's own history is too thin.
+		`CREATE TABLE IF NOT EXISTS dx_baseline_region (
+			observer_region TEXT NOT NULL,
+			band TEXT NOT NULL,
+			slot_of_day INTEGER NOT NULL,
+			distance_tier INTEGER NOT NULL,
+			snr_tier INTEGER NOT NULL,
+			count BIGINT NOT NULL,
+			PRIMARY KEY (observer_region, band, slot_of_day, distance_tier, snr_tier)
 		);`,
 		`ALTER TABLE dx_baseline_global DROP COLUMN IF EXISTS sum_distance;`,
 		`ALTER TABLE dx_baseline_global DROP COLUMN IF EXISTS sum_snr;`,
@@ -699,6 +747,27 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 		s.pendingCount++
 	}
 
+	// Regional baseline (dx_baseline_region): increment for both ends'
+	// DXPulse regions so either operator's Evaluate benefits. This is the
+	// Postgres mirror of the in-memory regionalBuckets write in Observe.
+	for _, loc := range [2]string{m.SL, m.RL} {
+		r := string(dxPulseRegionForLocator(loc))
+		if r == "" || r == string(dxPulseRegionUnknown) {
+			continue
+		}
+		rk := regionBaselineKey{
+			ObserverRegion: r,
+			Band:            band,
+			SlotOfDay:       slotOfDay,
+			DistanceTier:    distTier,
+			SnrTier:         snrTier,
+		}
+		rd := s.pendingRegionBaseline[rk]
+		rd.Count += 1
+		s.pendingRegionBaseline[rk] = rd
+		s.pendingCount++
+	}
+
 	// DX-cluster spots are persisted separately, with full fidelity (frequency,
 	// comment, source_type 'dxcluster'), via PersistRawSpot. Don't also enqueue a
 	// frequency-less 'mqtt' raw row for them here: that duplicate restores as an
@@ -746,11 +815,34 @@ func (s *dxPostgresStore) flushRawSpots(ctx context.Context) error {
 		}
 		q, args := buildRawSpotInsertSQL(chunk)
 		if _, err := s.pool.Exec(ctx, q, args...); err != nil {
+			// Re-queue the failed chunk and all remaining unflushed rows so a
+			// transient PG error doesn't permanently drop spots from the raw
+			// history. Earlier chunks in this loop already committed; the rows
+			// from `start` onward are prepended back into pendingRawSpots,
+			// mirroring mergePendingBack's requeue pattern for baseline deltas.
+			s.mergeRawSpotsBack(rows[start:])
 			return err
 		}
 	}
 	s.touchBaselineFirstObserved(ctx, minSpotTime)
 	return nil
+}
+
+// mergeRawSpotsBack re-enqueues raw spot rows that failed to flush back into
+// pendingRawSpots so they survive a transient Postgres error and are retried
+// on the next flush tick. Rows are prepended to preserve arrival order.
+func (s *dxPostgresStore) mergeRawSpotsBack(rows []rawSpotRow) {
+	if len(rows) == 0 {
+		return
+	}
+	s.mu.Lock()
+	// Prepend the failed rows ahead of any rows added since the swap so they
+	// are retried first (oldest-first), keeping the stored order roughly stable.
+	combined := make([]rawSpotRow, 0, len(rows)+len(s.pendingRawSpots))
+	combined = append(combined, rows...)
+	combined = append(combined, s.pendingRawSpots...)
+	s.pendingRawSpots = combined
+	s.mu.Unlock()
 }
 
 // buildRawSpotInsertSQL builds one multi-VALUES INSERT for a chunk of precomputed
@@ -893,7 +985,11 @@ func (s *dxPostgresStore) bandPairs(ctx context.Context, table string, targets [
 //
 // targetIdx is nil when targets is empty. Both indexes are nil only on query
 // error; callers fall back to zero/unused, matching the old per-call err paths.
-func (s *dxPostgresStore) allBandBaselinePairs(targets []string) (map[bandSlotKey][]baselinePair, map[bandSlotKey][]baselinePair, error) {
+// allBandBaselinePairs fetches the three baseline indexes (target, global,
+// region) needed by Evaluate's per-band loop in 3 PG round-trips. targetIdx is
+// nil when targets is empty; regionIdx is nil when operatorRegion is "". All
+// indexes are nil only on query error; callers fall back to zero/unused.
+func (s *dxPostgresStore) allBandBaselinePairs(targets []string, operatorRegion string) (map[bandSlotKey][]baselinePair, map[bandSlotKey][]baselinePair, map[bandSlotKey][]baselinePair, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 
@@ -906,11 +1002,28 @@ func (s *dxPostgresStore) allBandBaselinePairs(targets []string) (map[bandSlotKe
 			GROUP BY band, slot_of_day, distance_tier, snr_tier
 		`, targets)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		targetIdx, err = scanBandSlotPairs(rows)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
+		}
+	}
+
+	var regionIdx map[bandSlotKey][]baselinePair
+	if operatorRegion != "" {
+		rows, err := s.pool.Query(ctx, `
+			SELECT band, slot_of_day, distance_tier, snr_tier, SUM(count)::bigint
+			FROM dx_baseline_region
+			WHERE observer_region = $1
+			GROUP BY band, slot_of_day, distance_tier, snr_tier
+		`, operatorRegion)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		regionIdx, err = scanBandSlotPairs(rows)
+		if err != nil {
+			return nil, nil, nil, err
 		}
 	}
 
@@ -920,13 +1033,13 @@ func (s *dxPostgresStore) allBandBaselinePairs(targets []string) (map[bandSlotKe
 		GROUP BY band, slot_of_day, distance_tier, snr_tier
 	`)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	globalIdx, err := scanBandSlotPairs(rows)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return targetIdx, globalIdx, nil
+	return targetIdx, globalIdx, regionIdx, nil
 }
 
 // scanBandSlotPairs drains rows into a map[bandSlotKey][]baselinePair.
@@ -958,17 +1071,23 @@ func sumPairs(pairs []baselinePair) int64 {
 	return sum
 }
 
-// pairsForBandSlot returns the target pairs for (band, slot) when present
-// (used=true), otherwise the global pairs (used=false) — the exact target→global
-// fallback precedence of baselineActivityForBand/baselineSupportForBand/
-// baselineQuantilesForBand. A nil/empty target index yields global + used=false.
-func pairsForBandSlot(targetIdx, globalIdx map[bandSlotKey][]baselinePair, band string, slot int) ([]baselinePair, bool) {
+// pairsForBandSlot returns the pairs for (band, slot) using a three-tier
+// fallback: target → region → global, matching the in-memory helpers. Returns
+// (pairs, targetUsed, regionUsed). A nil/empty target index with a non-empty
+// region index yields region + (false, true); both empty yields global +
+// (false, false).
+func pairsForBandSlot(targetIdx, regionIdx, globalIdx map[bandSlotKey][]baselinePair, band string, slot int) ([]baselinePair, bool, bool) {
 	if targetIdx != nil {
 		if pairs, ok := targetIdx[bandSlotKey{Band: band, Slot: slot}]; ok && len(pairs) > 0 {
-			return pairs, true
+			return pairs, true, false
 		}
 	}
-	return globalIdx[bandSlotKey{Band: band, Slot: slot}], false
+	if regionIdx != nil {
+		if pairs, ok := regionIdx[bandSlotKey{Band: band, Slot: slot}]; ok && len(pairs) > 0 {
+			return pairs, false, true
+		}
+	}
+	return globalIdx[bandSlotKey{Band: band, Slot: slot}], false, false
 }
 
 // quantilesFromPairs computes the weighted q25/q75 band-score quantiles from
@@ -1044,29 +1163,42 @@ func quantilesFromPairs(pairs []baselinePair) (q25, q75 float64, ok bool) {
 }
 
 // baselineP90DistanceForBand returns the tier-weighted p90 path length for a
-// (band, slot), summed across all SNR tiers. Falls back from target buckets to
-// global when the target has no rows. See dx_conditions.go:p90FromTierCounts
-// for the interpolation method.
-func (s *dxPostgresStore) baselineP90DistanceForBand(targets []string, band string, slot int) (float64, bool, error) {
+// (band, slot), summed across all SNR tiers. Uses a three-tier fallback:
+// target → region → global. Returns (km, targetUsed, regionUsed, err).
+func (s *dxPostgresStore) baselineP90DistanceForBand(targets []string, operatorRegion, band string, slot int) (float64, bool, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	targetPairs, err := s.bandPairs(ctx, "dx_baseline_target", targets, band, slot)
 	if err != nil {
-		return 0, false, err
+		return 0, false, false, err
 	}
 	var tiers [5]int64
-	used := false
+	usedTarget := false
 	for _, p := range targetPairs {
 		if p.DistanceTier < 0 || p.DistanceTier > 4 || p.Count <= 0 {
 			continue
 		}
 		tiers[p.DistanceTier] += p.Count
-		used = true
+		usedTarget = true
 	}
-	if !used {
+	usedRegion := false
+	if !usedTarget && operatorRegion != "" {
+		regionPairs, err := s.regionBandPairs(ctx, operatorRegion, band, slot)
+		if err != nil {
+			return 0, false, false, err
+		}
+		for _, p := range regionPairs {
+			if p.DistanceTier < 0 || p.DistanceTier > 4 || p.Count <= 0 {
+				continue
+			}
+			tiers[p.DistanceTier] += p.Count
+			usedRegion = true
+		}
+	}
+	if !usedTarget && !usedRegion {
 		globalPairs, err := s.bandPairs(ctx, "dx_baseline_global", nil, band, slot)
 		if err != nil {
-			return 0, false, err
+			return 0, false, false, err
 		}
 		for _, p := range globalPairs {
 			if p.DistanceTier < 0 || p.DistanceTier > 4 || p.Count <= 0 {
@@ -1075,7 +1207,30 @@ func (s *dxPostgresStore) baselineP90DistanceForBand(targets []string, band stri
 			tiers[p.DistanceTier] += p.Count
 		}
 	}
-	return p90FromTierCounts(tiers), used, nil
+	return p90FromTierCounts(tiers), usedTarget, usedRegion, nil
+}
+
+// regionBandPairs queries dx_baseline_region for a single (operator_region, band, slot).
+func (s *dxPostgresStore) regionBandPairs(ctx context.Context, operatorRegion, band string, slot int) ([]baselinePair, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT distance_tier, snr_tier, SUM(count)::bigint
+		FROM dx_baseline_region
+		WHERE observer_region = $1 AND band = $2 AND slot_of_day = $3
+		GROUP BY distance_tier, snr_tier
+	`, operatorRegion, band, slot)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]baselinePair, 0, 24)
+	for rows.Next() {
+		var p baselinePair
+		if err := rows.Scan(&p.DistanceTier, &p.SnrTier, &p.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 // activityByBinForTargets returns raw spots/min per (band, time-bin) over the

@@ -32,6 +32,16 @@ func TestParseResolveAndISO(t *testing.T) {
 	if _, _, ok := res.Resolve("ZZ9ZZ"); ok {
 		t.Error("ZZ9ZZ should not resolve")
 	}
+	// Entity centroid (East-positive lon) is populated for the regional
+	// baseline's DXCC-center fallback when a callsign has no QRZ locator.
+	ent, _, _ = res.Resolve("DL7VEE")
+	if ent.Lat != 51.0 || ent.Lon != 10.0 {
+		t.Errorf("DL7VEE centroid = (%v, %v), want (51, 10) East-positive", ent.Lat, ent.Lon)
+	}
+	ent, _, _ = res.Resolve("JA1XYZ")
+	if ent.Lat != 36.0 || ent.Lon != 139.0 {
+		t.Errorf("JA1XYZ centroid = (%v, %v), want (36, 139) East-positive", ent.Lat, ent.Lon)
+	}
 }
 
 // Guard the generated table is present and sane.

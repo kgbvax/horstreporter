@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"horstreporter/internal/cty"
 )
 
 const (
@@ -77,25 +79,35 @@ type dxObservedEvent struct {
 }
 
 type baselineSnapshot struct {
-	Version       int                        `json:"version"`
-	SavedAt       int64                      `json:"saved_at"`
-	FirstEventAt  int64                      `json:"first_event_at,omitempty"`
-	LastEventAt   int64                      `json:"last_event_at,omitempty"`
-	Buckets       map[string]*baselineBucket `json:"buckets"`
-	TargetBuckets map[string]*baselineBucket `json:"target_buckets,omitempty"`
-	Events        []dxObservedEvent          `json:"events,omitempty"`
+	Version         int                        `json:"version"`
+	SavedAt         int64                      `json:"saved_at"`
+	FirstEventAt    int64                      `json:"first_event_at,omitempty"`
+	LastEventAt     int64                      `json:"last_event_at,omitempty"`
+	Buckets         map[string]*baselineBucket `json:"buckets"`
+	TargetBuckets   map[string]*baselineBucket `json:"target_buckets,omitempty"`
+	RegionalBuckets map[string]*baselineBucket `json:"regional_buckets,omitempty"`
+	Events          []dxObservedEvent          `json:"events,omitempty"`
 }
 
 type DxBaselineEngine struct {
-	mu            sync.RWMutex
-	path          string
-	store         *dxPostgresStore
-	buckets       map[string]*baselineBucket
-	targetBuckets map[string]*baselineBucket
-	firstEventAt  int64
-	lastEventAt   int64
-	eventsStart   int
-	events        []dxObservedEvent
+	mu              sync.RWMutex
+	path            string
+	store           *dxPostgresStore
+	buckets         map[string]*baselineBucket
+	targetBuckets   map[string]*baselineBucket
+	regionalBuckets map[string]*baselineBucket
+	firstEventAt    int64
+	lastEventAt     int64
+	eventsStart     int
+	events          []dxObservedEvent
+
+	// callsignResolver enables QRZ locator lookup for callsign targets so the
+	// regional baseline can be derived (operator region = dxPulseRegionForLocator).
+	// Optional — when nil, callsign targets fall back to ctyResolver, then global.
+	callsignResolver CallsignLocatorResolver
+	// ctyResolver provides DXCC entity centroids (lat/lon) as a last-resort
+	// region derivation when QRZ has no locator for a callsign target.
+	ctyResolver *cty.Resolver
 }
 
 type dxBandCondition struct {
@@ -125,8 +137,10 @@ type dxBandCondition struct {
 	P90Snr                   float64        `json:"p90_snr"`
 	BaselineActivity         float64        `json:"baseline_activity"`
 	TargetBaselineUsed       bool           `json:"target_baseline_used"`
+	RegionalBaselineUsed     bool           `json:"regional_baseline_used"`
 	BaselineActivityBySlot   []float64      `json:"baseline_activity_by_slot,omitempty"`
 	BaselineSlotUsedByTarget []bool         `json:"baseline_slot_used_by_target,omitempty"`
+	BaselineSlotUsedByRegion []bool         `json:"baseline_slot_used_by_region,omitempty"`
 	DominantDirection        string         `json:"dominant_direction"`
 	AzimuthSectors           map[string]int `json:"azimuth_sectors,omitempty"`
 	RegionCounts             map[string]int `json:"region_counts,omitempty"`
@@ -149,6 +163,7 @@ type dxConditionsResponse struct {
 	CwMinDb          int               `json:"cw_min_db"`
 	CurrentSlotOfDay int               `json:"current_slot_of_day"`
 	GeneratedAt      int64             `json:"generated_at"`
+	OperatorRegion   string            `json:"operator_region,omitempty"`
 	BaselineBuckets  int               `json:"baseline_buckets"`
 	BaselineEventCnt int               `json:"baseline_event_count"`
 	BaselineHistoryM int               `json:"baseline_history_minutes"`
@@ -205,11 +220,32 @@ func newDxBaselineEngine(path string) *DxBaselineEngine {
 		initialCap = 4096
 	}
 	return &DxBaselineEngine{
-		path:          strings.TrimSpace(path),
-		buckets:       make(map[string]*baselineBucket),
-		targetBuckets: make(map[string]*baselineBucket),
-		events:        make([]dxObservedEvent, 0, initialCap),
+		path:            strings.TrimSpace(path),
+		buckets:         make(map[string]*baselineBucket),
+		targetBuckets:   make(map[string]*baselineBucket),
+		regionalBuckets: make(map[string]*baselineBucket),
+		events:          make([]dxObservedEvent, 0, initialCap),
 	}
+}
+
+// SetResolvers wires the optional callsign→locator (QRZ) and DXCC-entity
+// (cty.dat) resolvers used by the regional baseline to derive the operator's
+// region for callsign targets. Locator targets derive their region directly;
+// callsign targets try QRZ first, then fall back to the DXCC entity centroid.
+// A nil argument leaves the existing resolver unchanged (so QRZ can be wired
+// later without clobbering the cty resolver set at startup).
+func (e *DxBaselineEngine) SetResolvers(callsign CallsignLocatorResolver, ctyRes *cty.Resolver) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	if callsign != nil {
+		e.callsignResolver = callsign
+	}
+	if ctyRes != nil {
+		e.ctyResolver = ctyRes
+	}
+	e.mu.Unlock()
 }
 
 func (e *DxBaselineEngine) EnablePostgres(dsn string) error {
@@ -271,7 +307,7 @@ func (e *DxBaselineEngine) PruneRawSpotsOlderThan(cutoff int64) (int64, error) {
 func (e *DxBaselineEngine) NumBuckets() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return len(e.buckets) + len(e.targetBuckets)
+	return len(e.buckets) + len(e.targetBuckets) + len(e.regionalBuckets)
 }
 
 func (e *DxBaselineEngine) Stats(now int64) (bucketCount, eventCount, historyMinutes int) {
@@ -330,6 +366,19 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 
 	baseKey := baselineKey(band, hour, distTier, snrTier)
 	e.observeBucket(e.buckets, baseKey, band, hour, distTier, snrTier)
+
+	// Regional baseline: write a bucket keyed by the observer's DXPulse region
+	// for both ends of the path. This is the middle tier (target → region →
+	// global) that gives operators with thin target history a baseline scoped
+	// to their part of the world instead of the global average. Both ends'
+	// regions are written (a spot between EU and NA increments both the EU-
+	// and NA-keyed regional buckets) so either operator's Evaluate benefits.
+	if r := string(dxPulseRegionForLocator(sl)); r != "" && r != string(dxPulseRegionUnknown) {
+		e.observeBucket(e.regionalBuckets, baselineRegionKey(r, band, hour, distTier, snrTier), band, hour, distTier, snrTier)
+	}
+	if r := string(dxPulseRegionForLocator(rl)); r != "" && r != string(dxPulseRegionUnknown) {
+		e.observeBucket(e.regionalBuckets, baselineRegionKey(r, band, hour, distTier, snrTier), band, hour, distTier, snrTier)
+	}
 
 	targetTokens := [4]string{
 		normalizeTargetTokenUpper(sc),
@@ -453,6 +502,12 @@ func (e *DxBaselineEngine) Load() error {
 	legacy := snap.Version < 6
 	e.buckets = remapBucketsForLoad(snap.Buckets, legacy)
 	e.targetBuckets = remapTargetBucketsForLoad(snap.TargetBuckets, legacy)
+	// Regional buckets were added in v7; older snapshots have none (the map
+	// stays nil → Observe will populate it going forward). remapBucketsForLoad
+	// handles the key shape (no source4 since v6).
+	if snap.RegionalBuckets != nil {
+		e.regionalBuckets = remapBucketsForLoad(snap.RegionalBuckets, legacy)
+	}
 
 	e.firstEventAt = snap.FirstEventAt
 	e.lastEventAt = snap.LastEventAt
@@ -486,13 +541,14 @@ func (e *DxBaselineEngine) Save() error {
 	}
 	e.mu.RLock()
 	snap := baselineSnapshot{
-		Version:       6,
-		SavedAt:       time.Now().Unix(),
-		FirstEventAt:  e.firstEventAt,
-		LastEventAt:   e.lastEventAt,
-		Buckets:       cloneBuckets(e.buckets),
-		TargetBuckets: cloneBuckets(e.targetBuckets),
-		Events:        e.snapshotEventsLocked(),
+		Version:         7,
+		SavedAt:         time.Now().Unix(),
+		FirstEventAt:    e.firstEventAt,
+		LastEventAt:     e.lastEventAt,
+		Buckets:         cloneBuckets(e.buckets),
+		TargetBuckets:   cloneBuckets(e.targetBuckets),
+		RegionalBuckets: cloneBuckets(e.regionalBuckets),
+		Events:          e.snapshotEventsLocked(),
 	}
 	e.mu.RUnlock()
 
@@ -604,6 +660,47 @@ func remapTargetBucketsForLoad(src map[string]*baselineBucket, legacy bool) map[
 	return out
 }
 
+// deriveOperatorRegion determines the DXPulse region for the operator's
+// target, used to key the regional baseline (the middle tier of the
+// target → region → global fallback). Resolution order:
+//  1. Locator target → dxPulseRegionForLocator directly.
+//  2. Callsign target → QRZ locator → dxPulseRegionForLocator.
+//  3. Callsign target, QRZ fails → DXCC entity centroid (cty.dat) →
+//     dxPulseRegionForLatLng.
+//  4. All fail → "" (regional tier skipped; falls back to global).
+func (e *DxBaselineEngine) deriveOperatorRegion(target string) string {
+	if target == "" {
+		return ""
+	}
+	// Locator target: derive directly.
+	if isLocator(target) {
+		if r := dxPulseRegionForLocator(target); r != "" && r != dxPulseRegionUnknown {
+			return string(r)
+		}
+		return ""
+	}
+	// Callsign target: try QRZ, then cty.dat centroid.
+	e.mu.RLock()
+	qrz := e.callsignResolver
+	ctyRes := e.ctyResolver
+	e.mu.RUnlock()
+	if qrz != nil {
+		if info, err := qrz.LookupInfo(target); err == nil && info.Locator != "" {
+			if r := dxPulseRegionForLocator(info.Locator); r != "" && r != dxPulseRegionUnknown {
+				return string(r)
+			}
+		}
+	}
+	if ctyRes != nil {
+		if ent, _, ok := ctyRes.Resolve(target); ok && ent.Lat != 0 && ent.Lon != 0 {
+			if r := dxPulseRegionForLatLng(ent.Lat, ent.Lon); r != "" && r != dxPulseRegionUnknown {
+				return string(r)
+			}
+		}
+	}
+	return ""
+}
+
 func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes int, cwMinDb int, history []MQTTMessage, now int64) dxConditionsResponse {
 	target = normalizeTargetToken(target)
 	if minutes <= 0 {
@@ -637,6 +734,10 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		return resp
 	}
 
+	// Derive the operator's DXPulse region for the regional baseline tier.
+	operatorRegion := e.deriveOperatorRegion(target)
+	resp.OperatorRegion = operatorRegion
+
 	targets := []string{target}
 	if surroundings && isLocator(target) {
 		targets = getSurroundingSquares(target)
@@ -659,24 +760,33 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 	// that case) — avoiding a full bucket-map + ~1M-event ring copy per request
 	// and not holding the RLock through the copy (which blocks the 20k/min
 	// ingest Observe path).
-	var globalBuckets, targetBuckets map[string]*baselineBucket
+	var globalBuckets, targetBuckets, regionBuckets map[string]*baselineBucket
 	var events []dxObservedEvent
+	var firstEventAt, lastEventAt int64
 	if st == nil {
 		globalBuckets = cloneBuckets(e.buckets)
 		targetBuckets = cloneBuckets(e.targetBuckets)
+		regionBuckets = cloneBuckets(e.regionalBuckets)
 		events = e.snapshotEventsLocked()
+		// Capture the event span under the RLock — reading these unlocked
+		// (as the old code did) races with Observe's writes, skewing the
+		// history-minutes denominator and the baseline normaliser.
+		firstEventAt = e.firstEventAt
+		lastEventAt = e.lastEventAt
 	}
 	e.mu.RUnlock()
 
 	var aggGlobalBuckets map[string]*baselineBucket
 	var aggTargetBuckets map[string]*baselineBucket
+	var aggRegionBuckets map[string]*baselineBucket
 	if st == nil {
 		// v6: keys already exclude source4, so the maps are usable directly.
 		aggGlobalBuckets = globalBuckets
 		aggTargetBuckets = targetBuckets
-		resp.BaselineBuckets = len(globalBuckets) + len(targetBuckets)
+		aggRegionBuckets = regionBuckets
+		resp.BaselineBuckets = len(globalBuckets) + len(targetBuckets) + len(regionBuckets)
 		resp.BaselineEventCnt = len(events)
-		resp.BaselineHistoryM = baselineHistoryMinutes(e.firstEventAt, e.lastEventAt, events, now)
+		resp.BaselineHistoryM = baselineHistoryMinutes(firstEventAt, lastEventAt, events, now)
 	} else {
 		if b, ev, hm, err := st.baselineStats(now); err == nil {
 			resp.BaselineBuckets = b
@@ -710,10 +820,10 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 	// issuing ~100 per-band round-trips. nil on no-store or query error; the
 	// per-band derivation then yields zero/unused, matching the old per-call
 	// err == nil guards.
-	var baselinePairsTarget, baselinePairsGlobal map[bandSlotKey][]baselinePair
+	var baselinePairsTarget, baselinePairsGlobal, baselinePairsRegion map[bandSlotKey][]baselinePair
 	if st != nil {
-		if tt, tg, err := st.allBandBaselinePairs(baselineTargets); err == nil {
-			baselinePairsTarget, baselinePairsGlobal = tt, tg
+		if tt, tg, tr, err := st.allBandBaselinePairs(baselineTargets, operatorRegion); err == nil {
+			baselinePairsTarget, baselinePairsGlobal, baselinePairsRegion = tt, tg, tr
 		} else {
 			logDebug("dx allBandBaselinePairs failed (per-band baseline falls back to zero): %v", err)
 		}
@@ -737,6 +847,13 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 		}
 		ev, matched := extractMatchedBandEvent(m, targets)
 		if !matched {
+			continue
+		}
+		// Gate to the analysed HF/low-VHF band set (160m–2m). Microwave and
+		// other out-of-scope bands that occasionally arrive on the feeds are
+		// passed through for display but excluded from conditions, matching
+		// the gate already applied in hot_bands.go and dx_cellfeed.go.
+		if !bandInScope(ev.band) {
 			continue
 		}
 		// Keep the FT8-calibrated conditions accumulator (spots_per_min, classifyMode,
@@ -818,23 +935,26 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 
 		baselineActivity := 0.0
 		targetBaselineUsed := false
+		regionBaselineUsed := false
 		baselineSupport := int64(0)
 		q25, q75, quantileOK := 0.0, 0.0, false
 		var baselineActivityBySlot []float64
 		var baselineSlotUsedByTarget []bool
+		var baselineSlotUsedByRegion []bool
 		if st == nil {
-			baselineActivity, targetBaselineUsed = baselineActivityForBand(aggGlobalBuckets, aggTargetBuckets, baselineTargets, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM)
-			baselineSupport = baselineSupportForBand(aggGlobalBuckets, aggTargetBuckets, baselineTargets, band, resp.CurrentSlotOfDay)
-			q25, q75, quantileOK = baselineScoreQuantilesForBand(aggGlobalBuckets, aggTargetBuckets, baselineTargets, band, resp.CurrentSlotOfDay)
-			baselineActivityBySlot, baselineSlotUsedByTarget = baselineActivityForBandAllSlots(aggGlobalBuckets, aggTargetBuckets, baselineTargets, band, resp.BaselineHistoryM)
+			baselineActivity, targetBaselineUsed, regionBaselineUsed = baselineActivityForBand(aggGlobalBuckets, aggTargetBuckets, aggRegionBuckets, operatorRegion, baselineTargets, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM)
+			baselineSupport = baselineSupportForBand(aggGlobalBuckets, aggTargetBuckets, aggRegionBuckets, operatorRegion, baselineTargets, band, resp.CurrentSlotOfDay)
+			q25, q75, targetBaselineUsed, regionBaselineUsed, quantileOK = baselineScoreQuantilesForBand(aggGlobalBuckets, aggTargetBuckets, aggRegionBuckets, operatorRegion, baselineTargets, band, resp.CurrentSlotOfDay)
+			baselineActivityBySlot, baselineSlotUsedByTarget, baselineSlotUsedByRegion = baselineActivityForBandAllSlots(aggGlobalBuckets, aggTargetBuckets, aggRegionBuckets, operatorRegion, baselineTargets, band, resp.BaselineHistoryM)
 		} else {
 			// Derive all four baseline values from the single all-bands/all-slots
-			// index fetched above (2 PG round-trips total) instead of ~100
-			// per-band round-trips. On fetch failure both indexes are nil and
+			// index fetched above (3 PG round-trips total) instead of ~100
+			// per-band round-trips. On fetch failure all indexes are nil and
 			// every value stays zero/unused, matching the old per-call err guards.
-			pairs, used := pairsForBandSlot(baselinePairsTarget, baselinePairsGlobal, band, resp.CurrentSlotOfDay)
+			pairs, used, usedRegion := pairsForBandSlot(baselinePairsTarget, baselinePairsRegion, baselinePairsGlobal, band, resp.CurrentSlotOfDay)
 			baselineActivity = normalizeBaselineToSpotsPerMinute(float64(sumPairs(pairs)), resp.BaselineHistoryM)
 			targetBaselineUsed = used
+			regionBaselineUsed = usedRegion
 			baselineSupport = sumPairs(pairs)
 			q25, q75, quantileOK = quantilesFromPairs(pairs)
 			// Length-48 per-slot series, built only when the fetch succeeded
@@ -843,13 +963,16 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 			if baselinePairsGlobal != nil {
 				rates := make([]float64, SlotsOfDay)
 				usedSlot := make([]bool, SlotsOfDay)
+				usedRegionSlot := make([]bool, SlotsOfDay)
 				for slot := 0; slot < SlotsOfDay; slot++ {
-					ps, u := pairsForBandSlot(baselinePairsTarget, baselinePairsGlobal, band, slot)
+					ps, u, ur := pairsForBandSlot(baselinePairsTarget, baselinePairsRegion, baselinePairsGlobal, band, slot)
 					rates[slot] = normalizeBaselineToSpotsPerMinute(float64(sumPairs(ps)), resp.BaselineHistoryM)
 					usedSlot[slot] = u
+					usedRegionSlot[slot] = ur
 				}
 				baselineActivityBySlot = rates
 				baselineSlotUsedByTarget = usedSlot
+				baselineSlotUsedByRegion = usedRegionSlot
 			}
 		}
 
@@ -933,8 +1056,10 @@ func (e *DxBaselineEngine) Evaluate(target string, surroundings bool, minutes in
 			P90Snr:                   round1(p90Snr),
 			BaselineActivity:         round2(baselineActivity),
 			TargetBaselineUsed:       targetBaselineUsed,
+			RegionalBaselineUsed:     regionBaselineUsed,
 			BaselineActivityBySlot:   roundFloats2(baselineActivityBySlot),
 			BaselineSlotUsedByTarget: baselineSlotUsedByTarget,
+			BaselineSlotUsedByRegion: baselineSlotUsedByRegion,
 			DominantDirection:        direction,
 			AzimuthSectors:           acc.directionBins,
 			RegionCounts:             acc.regionBins,
@@ -1187,11 +1312,19 @@ func baselineHistoryMinutesFromEvents(events []dxObservedEvent, now int64) int {
 	return int((latest - earliest) / 60)
 }
 
+// compassOrder is the deterministic tiebreak order for dominantDirection. Go
+// map iteration is randomised, so without an explicit tiebreak two directions
+// with equal counts would win non-deterministically across calls, making the
+// bearing indicator jitter. N first matches the natural compass reading.
+var compassOrder = map[string]int{
+	"N": 0, "NE": 1, "E": 2, "SE": 3, "S": 4, "SW": 5, "W": 6, "NW": 7,
+}
+
 func dominantDirection(bins map[string]int) string {
 	best := ""
 	bestN := 0
 	for dir, n := range bins {
-		if n > bestN {
+		if n > bestN || (n == bestN && n > 0 && compassOrder[dir] < compassOrder[best]) {
 			best = dir
 			bestN = n
 		}
@@ -1202,7 +1335,10 @@ func dominantDirection(bins map[string]int) string {
 	return best
 }
 
-func baselineScoreQuantilesForBand(global, targetBuckets map[string]*baselineBucket, targets []string, band string, hour int) (float64, float64, bool) {
+// baselineScoreQuantilesForBand returns the 25th/75th percentile score proxy
+// for a band at the given slot, using a three-tier fallback: target-specific →
+// operator-region → global. Returns (q25, q75, targetUsed, regionUsed, ok).
+func baselineScoreQuantilesForBand(global, targetBuckets, regionBuckets map[string]*baselineBucket, operatorRegion string, targets []string, band string, hour int) (float64, float64, bool, bool, bool) {
 	type pair struct {
 		score  float64
 		weight int64
@@ -1233,6 +1369,7 @@ func baselineScoreQuantilesForBand(global, targetBuckets map[string]*baselineBuc
 		pairs = append(pairs, pair{score: proxy, weight: b.Count})
 	}
 
+	// Tier 1: target-specific.
 	for _, t := range targets {
 		for d := 0; d <= 4; d++ {
 			for s := 0; s <= 3; s++ {
@@ -1240,6 +1377,20 @@ func baselineScoreQuantilesForBand(global, targetBuckets map[string]*baselineBuc
 			}
 		}
 	}
+	targetUsed := maxCount > 0
+
+	// Tier 2: operator-region (only if target had no support).
+	regionUsed := false
+	if !targetUsed && operatorRegion != "" {
+		for d := 0; d <= 4; d++ {
+			for s := 0; s <= 3; s++ {
+				appendBucket(regionBuckets[baselineRegionKey(operatorRegion, band, hour, d, s)])
+			}
+		}
+		regionUsed = maxCount > 0
+	}
+
+	// Tier 3: global (only if target and region both had no support).
 	if maxCount == 0 {
 		for d := 0; d <= 4; d++ {
 			for s := 0; s <= 3; s++ {
@@ -1248,6 +1399,7 @@ func baselineScoreQuantilesForBand(global, targetBuckets map[string]*baselineBuc
 		}
 	}
 
+	// Collect pairs from whichever tier was selected (same tier as appendBucket).
 	for _, t := range targets {
 		for d := 0; d <= 4; d++ {
 			for s := 0; s <= 3; s++ {
@@ -1255,7 +1407,15 @@ func baselineScoreQuantilesForBand(global, targetBuckets map[string]*baselineBuc
 			}
 		}
 	}
-	if len(pairs) == 0 {
+	if targetUsed {
+		// pairs already collected from target; fall through to quantile calc.
+	} else if regionUsed {
+		for d := 0; d <= 4; d++ {
+			for s := 0; s <= 3; s++ {
+				collectBucket(regionBuckets[baselineRegionKey(operatorRegion, band, hour, d, s)])
+			}
+		}
+	} else if len(pairs) == 0 {
 		for d := 0; d <= 4; d++ {
 			for s := 0; s <= 3; s++ {
 				collectBucket(global[baselineKey(band, hour, d, s)])
@@ -1264,7 +1424,7 @@ func baselineScoreQuantilesForBand(global, targetBuckets map[string]*baselineBuc
 	}
 
 	if len(pairs) == 0 {
-		return 0, 0, false
+		return 0, 0, targetUsed, regionUsed, false
 	}
 
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i].score < pairs[j].score })
@@ -1273,7 +1433,7 @@ func baselineScoreQuantilesForBand(global, targetBuckets map[string]*baselineBuc
 		totalWeight += p.weight
 	}
 	if totalWeight < dxMinBaselineQuantileSupport {
-		return 0, 0, false
+		return 0, 0, targetUsed, regionUsed, false
 	}
 	q25Target := float64(totalWeight) * 0.25
 	q75Target := float64(totalWeight) * 0.75
@@ -1296,7 +1456,7 @@ func baselineScoreQuantilesForBand(global, targetBuckets map[string]*baselineBuc
 			break
 		}
 	}
-	return q25, q75, true
+	return q25, q75, targetUsed, regionUsed, true
 }
 
 func extractMatchedBandEvent(m MQTTMessage, targets []string) (matchedBandEvent, bool) {
@@ -1471,7 +1631,11 @@ func computeTrend(series []float64) (string, float64) {
 // baselineActivityForBand returns the expected spots/minute for a given band
 // and 30-minute slot, normalised by how many days of history are in the
 // baseline so the value stays comparable to the live spotsPerMin rate.
-func baselineActivityForBand(global, targetBuckets map[string]*baselineBucket, targets []string, band string, hour int, historyMinutes int) (float64, bool) {
+// baselineActivityForBand returns the expected spots/minute for a band at the
+// given slot, using a three-tier fallback: target-specific → operator-region →
+// global. The first bool marks whether the target baseline was used; the
+// second marks whether the regional baseline was used (both false = global).
+func baselineActivityForBand(global, targetBuckets, regionBuckets map[string]*baselineBucket, operatorRegion string, targets []string, band string, hour int, historyMinutes int) (float64, bool, bool) {
 	total := 0.0
 	for _, t := range targets {
 		for d := 0; d <= 4; d++ {
@@ -1483,7 +1647,21 @@ func baselineActivityForBand(global, targetBuckets map[string]*baselineBucket, t
 		}
 	}
 	if total > 0 {
-		return normalizeBaselineToSpotsPerMinute(total, historyMinutes), true
+		return normalizeBaselineToSpotsPerMinute(total, historyMinutes), true, false
+	}
+
+	// Regional fallback: the operator's region-scoped baseline.
+	if operatorRegion != "" {
+		for d := 0; d <= 4; d++ {
+			for s := 0; s <= 3; s++ {
+				if b := regionBuckets[baselineRegionKey(operatorRegion, band, hour, d, s)]; b != nil {
+					total += float64(b.Count)
+				}
+			}
+		}
+	}
+	if total > 0 {
+		return normalizeBaselineToSpotsPerMinute(total, historyMinutes), false, true
 	}
 
 	for d := 0; d <= 4; d++ {
@@ -1494,23 +1672,24 @@ func baselineActivityForBand(global, targetBuckets map[string]*baselineBucket, t
 		}
 	}
 	if total == 0 {
-		return 0, false
+		return 0, false, false
 	}
-	return normalizeBaselineToSpotsPerMinute(total, historyMinutes), false
+	return normalizeBaselineToSpotsPerMinute(total, historyMinutes), false, false
 }
 
 // baselineActivityForBandAllSlots returns the expected spots/minute for a band
 // at every 30-minute UTC slot (length-48 array). The accompanying boolean
-// slice marks per-slot whether the target-specific baseline was used; when
-// false for a slot, the value is from the global fallback or no data exists.
+// slices mark per-slot which baseline tier was used: usedTarget marks slots
+// served by the target-specific baseline; usedRegion marks slots served by the
+// operator-region baseline (when target was empty but region had data).
 //
 // Per-slot fallback is independent: a slot with a non-zero target count uses
-// the target baseline; a slot with no target rows falls back to global for
-// that slot only. The chart needs to know per slot which kind of baseline
-// it's looking at.
-func baselineActivityForBandAllSlots(global, targetBuckets map[string]*baselineBucket, targets []string, band string, historyMinutes int) ([]float64, []bool) {
+// the target baseline; a slot with no target rows falls back to region, then
+// global for that slot only.
+func baselineActivityForBandAllSlots(global, targetBuckets, regionBuckets map[string]*baselineBucket, operatorRegion string, targets []string, band string, historyMinutes int) ([]float64, []bool, []bool) {
 	rates := make([]float64, SlotsOfDay)
-	used := make([]bool, SlotsOfDay)
+	usedTarget := make([]bool, SlotsOfDay)
+	usedRegion := make([]bool, SlotsOfDay)
 	for slot := 0; slot < SlotsOfDay; slot++ {
 		targetTotal := 0.0
 		for _, t := range targets {
@@ -1524,8 +1703,24 @@ func baselineActivityForBandAllSlots(global, targetBuckets map[string]*baselineB
 		}
 		if targetTotal > 0 {
 			rates[slot] = normalizeBaselineToSpotsPerMinute(targetTotal, historyMinutes)
-			used[slot] = true
+			usedTarget[slot] = true
 			continue
+		}
+		// Regional fallback for this slot.
+		if operatorRegion != "" {
+			regionTotal := 0.0
+			for d := 0; d <= 4; d++ {
+				for s := 0; s <= 3; s++ {
+					if b := regionBuckets[baselineRegionKey(operatorRegion, band, slot, d, s)]; b != nil {
+						regionTotal += float64(b.Count)
+					}
+				}
+			}
+			if regionTotal > 0 {
+				rates[slot] = normalizeBaselineToSpotsPerMinute(regionTotal, historyMinutes)
+				usedRegion[slot] = true
+				continue
+			}
 		}
 		globalTotal := 0.0
 		for d := 0; d <= 4; d++ {
@@ -1539,7 +1734,7 @@ func baselineActivityForBandAllSlots(global, targetBuckets map[string]*baselineB
 			rates[slot] = normalizeBaselineToSpotsPerMinute(globalTotal, historyMinutes)
 		}
 	}
-	return rates, used
+	return rates, usedTarget, usedRegion
 }
 
 // normalizeBaselineToSpotsPerMinute converts a raw cumulative bucket count
@@ -1589,7 +1784,10 @@ func distanceTierBounds(tier int) (lo, hi float64) {
 // Tier counts are converted to a piecewise-uniform distribution over the
 // tier's [lo, hi] bound and the 90th percentile interpolated within the tier
 // where the cumulative weight crosses 0.9 of the total.
-func baselineP90DistanceForBand(global, targetBuckets map[string]*baselineBucket, targets []string, band string, hour int) (float64, bool) {
+// baselineP90DistanceForBand returns the p90 distance tier interpolation for a
+// band at the given slot, using a three-tier fallback: target → region → global.
+// Returns (km, targetUsed, regionUsed).
+func baselineP90DistanceForBand(global, targetBuckets, regionBuckets map[string]*baselineBucket, operatorRegion string, targets []string, band string, hour int) (float64, bool, bool) {
 	tierCounts := [5]int64{}
 	collectFromTarget := func() bool {
 		any := false
@@ -1605,6 +1803,21 @@ func baselineP90DistanceForBand(global, targetBuckets map[string]*baselineBucket
 		}
 		return any
 	}
+	collectFromRegion := func() bool {
+		any := false
+		if operatorRegion == "" {
+			return false
+		}
+		for d := 0; d <= 4; d++ {
+			for s := 0; s <= 3; s++ {
+				if b := regionBuckets[baselineRegionKey(operatorRegion, band, hour, d, s)]; b != nil && b.Count > 0 {
+					tierCounts[d] += b.Count
+					any = true
+				}
+			}
+		}
+		return any
+	}
 	collectFromGlobal := func() {
 		for d := 0; d <= 4; d++ {
 			for s := 0; s <= 3; s++ {
@@ -1615,11 +1828,15 @@ func baselineP90DistanceForBand(global, targetBuckets map[string]*baselineBucket
 		}
 	}
 
-	used := collectFromTarget()
-	if !used {
+	usedTarget := collectFromTarget()
+	usedRegion := false
+	if !usedTarget {
+		usedRegion = collectFromRegion()
+	}
+	if !usedTarget && !usedRegion {
 		collectFromGlobal()
 	}
-	return p90FromTierCounts(tierCounts), used
+	return p90FromTierCounts(tierCounts), usedTarget, usedRegion
 }
 
 func p90FromTierCounts(tierCounts [5]int64) float64 {
@@ -1661,12 +1878,26 @@ func p90FromTierCounts(tierCounts [5]int64) float64 {
 	return 0
 }
 
-func baselineSupportForBand(global, targetBuckets map[string]*baselineBucket, targets []string, band string, hour int) int64 {
+// baselineSupportForBand returns the total baseline bucket support for a band
+// at the given slot, using a three-tier fallback: target → region → global.
+func baselineSupportForBand(global, targetBuckets, regionBuckets map[string]*baselineBucket, operatorRegion string, targets []string, band string, hour int) int64 {
 	var support int64
 	for _, t := range targets {
 		for d := 0; d <= 4; d++ {
 			for s := 0; s <= 3; s++ {
 				if b := targetBuckets[baselineTargetKey(t, band, hour, d, s)]; b != nil {
+					support += b.Count
+				}
+			}
+		}
+	}
+	if support > 0 {
+		return support
+	}
+	if operatorRegion != "" {
+		for d := 0; d <= 4; d++ {
+			for s := 0; s <= 3; s++ {
+				if b := regionBuckets[baselineRegionKey(operatorRegion, band, hour, d, s)]; b != nil {
 					support += b.Count
 				}
 			}
@@ -1740,6 +1971,15 @@ func baselineKey(band string, slotOfDay, distanceTier, snrTier int) string {
 
 func baselineTargetKey(target, band string, slotOfDay, distanceTier, snrTier int) string {
 	return normalizeTargetToken(target) + "|" + baselineKey(band, slotOfDay, distanceTier, snrTier)
+}
+
+// baselineRegionKey keys a regional baseline bucket: the observer's DXPulse
+// region (e.g. "EU") prepended to the standard 4-dimension base key. This is
+// the middle tier of the target → region → global fallback: when the target's
+// own history is too thin, scoring falls back to the operator's regional
+// baseline before the global one, giving more accurate anomaly detection.
+func baselineRegionKey(region string, band string, slotOfDay, distanceTier, snrTier int) string {
+	return region + "|" + baselineKey(band, slotOfDay, distanceTier, snrTier)
 }
 
 func baselineTargetKeyFromBase(target, baseKey string) string {

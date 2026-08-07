@@ -388,29 +388,45 @@ func parseSWPCTime(s string) (int64, bool) {
 func parseDailySolarIndicesF107(text string) (float64, int64, bool) {
 	sc := bufio.NewScanner(strings.NewReader(text))
 	sc.Split(bufio.ScanLines)
-	var latest string
+	// Keep the last row with a physically valid flux, not just the last line:
+	// NOAA's "today" row often carries -1 (or -999) for the unobserved flux,
+	// and strconv.ParseFloat happily parses -1.0 — which would corrupt the
+	// propagation model (F10.7 is ~60-300 sfu). Scan all rows and prefer the
+	// newest one whose flux is a real observed value.
+	var bestFlux float64
+	var bestTime int64
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ":") {
 			continue
 		}
-		latest = line
-	}
-	if latest == "" {
-		return 0, 0, false
-	}
-	fields := strings.Fields(latest)
-	if len(fields) < 4 {
-		return 0, 0, false
-	}
-	// Format: YYYY MM DD flux ...
-	if flux, err := strconv.ParseFloat(fields[3], 64); err == nil {
-		dateStr := fields[0] + " " + fields[1] + " " + fields[2]
-		if t, err := time.Parse("2006 01 02", dateStr); err == nil {
-			return flux, t.Add(12 * time.Hour).Unix(), true
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
 		}
+		flux, err := strconv.ParseFloat(fields[3], 64)
+		if err != nil {
+			continue
+		}
+		// Reject sentinels (-1, -999, -9999) and non-physical values.
+		// Observed F10.7 is ~60-300 sfu; accept any positive value to stay
+		// permissive but reject the common placeholders outright.
+		if flux <= 0 {
+			continue
+		}
+		dateStr := fields[0] + " " + fields[1] + " " + fields[2]
+		t, err := time.Parse("2006 01 02", dateStr)
+		if err != nil {
+			continue
+		}
+		// Rows are in ascending date order; later valid rows win.
+		bestFlux = flux
+		bestTime = t.Add(12 * time.Hour).Unix()
 	}
-	return 0, 0, false
+	if bestTime == 0 {
+		return 0, 0, false
+	}
+	return bestFlux, bestTime, true
 }
 
 // xrayClassFromFlux converts GOES X-ray flux in W/m^2 to a class string like "M5.2".

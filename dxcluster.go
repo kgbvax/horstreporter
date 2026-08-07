@@ -123,6 +123,10 @@ func runDXClusterSession(endpoint string, cfg dxClusterConfig) error {
 	for scanner.Scan() {
 		linesSeen++
 		dxClusterAccounting.linesSeen.Add(1)
+		// Refresh a per-line idle deadline so a half-open TCP connection
+		// (NAT timeout, server hang without FIN) triggers a reconnect
+		// instead of blocking scanner.Scan() forever.
+		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		rawLine := scanner.Text()
 		line := strings.TrimSpace(rawLine)
 		if logLevel == "DEBUG" {

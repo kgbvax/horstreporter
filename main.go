@@ -269,6 +269,12 @@ func main() {
 	logInfo("DX postgres DSN source: %s", dsnSource(*dxPostgresDSN))
 
 	dxBaseline = newDxBaselineEngine(strings.TrimSpace(*dxBaselineFile))
+	// Wire the DXCC cty.dat resolver into the baseline engine so the regional
+	// baseline can derive the operator's region for callsign targets (QRZ
+	// locator → region; fallback to DXCC entity centroid → region). The cty
+	// resolver is always available (embedded cty.dat); QRZ is wired later when
+	// credentials are present (shared with DX-cluster/RBN ingest).
+	dxBaseline.SetResolvers(nil, loadCtyResolver(strings.TrimSpace(*ctyPath)))
 	if err := dxBaseline.EnablePostgres(dxPostgresDSNResolved); err != nil {
 		if *dxPostgresFailFast {
 			logFatal("DX postgres init failed (dsn=%s, fail-fast=true): %v", maskDSN(dxPostgresDSNResolved), err)
@@ -336,9 +342,13 @@ func main() {
 		resolver := CallsignLocatorResolver(nil)
 		if qrzUsername != "" && qrzPassword != "" {
 			resolver = newQRZLookupClient(qrzUsername, qrzPassword)
-			logInfo("QRZ callsign enrichment enabled (shared by DX-cluster + RBN)")
+			logInfo("QRZ callsign enrichment enabled (shared by DX-cluster + RBN + regional baseline)")
+			// Wire QRZ into the baseline engine so the regional baseline can
+			// resolve callsign targets to a locator (→ region). The cty
+			// resolver was already set at startup; this upgrades the QRZ slot.
+			dxBaseline.SetResolvers(resolver, nil)
 		} else {
-			logInfo("QRZ callsign enrichment disabled (missing credentials); DX-cluster/RBN spots are chart-only")
+			logInfo("QRZ callsign enrichment disabled (missing credentials); DX-cluster/RBN spots are chart-only; regional baseline uses DXCC center fallback")
 		}
 		ctyResolver := loadCtyResolver(strings.TrimSpace(*ctyPath))
 

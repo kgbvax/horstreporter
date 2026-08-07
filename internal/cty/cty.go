@@ -9,6 +9,7 @@ package cty
 import (
 	"bufio"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -17,6 +18,12 @@ type Entity struct {
 	Name          string
 	PrimaryPrefix string
 	Continent     string
+	// Lat, Lon is the AD1C entity centroid (East-positive longitude), used as a
+	// coarse region fallback when a callsign has no QRZ locator. This is the
+	// DXCC entity center, not the operator's actual QTH — good enough for the
+	// 11-region DXPulse classifier, not for square-level matching.
+	Lat float64
+	Lon float64
 }
 
 // Resolver resolves callsigns to DXCC entities. Exact-callsign overrides (the
@@ -74,6 +81,16 @@ func Parse(r io.Reader) (*Resolver, error) {
 			Name:          strings.TrimSpace(header[0]),
 			Continent:     strings.TrimSpace(header[3]),
 			PrimaryPrefix: strings.TrimPrefix(strings.TrimSpace(header[7]), "*"), // AD1C marks some with '*'
+		}
+		// header[4]=lat, header[5]=lon (West-positive in cty.dat). Negate lon
+		// to East-positive for consistency with the rest of the codebase.
+		// Parse errors are tolerated (lat/lon stay 0) so a malformed line
+		// doesn't break the whole resolver.
+		if lat, err := strconv.ParseFloat(strings.TrimSpace(header[4]), 64); err == nil {
+			ent.Lat = lat
+		}
+		if lonWest, err := strconv.ParseFloat(strings.TrimSpace(header[5]), 64); err == nil {
+			ent.Lon = -lonWest
 		}
 		for _, raw := range strings.Split(prefixBuf.String(), ",") {
 			tok := strings.TrimSpace(raw)

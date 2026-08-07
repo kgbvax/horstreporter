@@ -55,7 +55,8 @@ vi.mock('../static/ui.js', () => ({
 vi.mock('../static/renderers.js', () => ({
     updateMapVisualization: vi.fn(),
     updateBandLabels: vi.fn(),
-    clearDxClusterMarkers: vi.fn()
+    clearDxClusterMarkers: vi.fn(),
+    resetRenderFingerprint: vi.fn()
 }));
 
 vi.mock('../static/band-lab.js', () => ({

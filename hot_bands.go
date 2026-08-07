@@ -107,15 +107,20 @@ func (e *DxBaselineEngine) HotBands(target string, surroundings bool, minutes in
 			continue
 		}
 
-		baseP90, baseUsed := e.lookupBaselineP90(baselineTargets, b.Band, cond.CurrentSlotOfDay)
+		baseP90, baseUsed := e.lookupBaselineP90(baselineTargets, cond.OperatorRegion, b.Band, cond.CurrentSlotOfDay)
 		distRatio := 0.0
 		if baseP90 > 0 {
 			distRatio = b.P90DistanceKm / baseP90
 		}
 
 		// classify, in priority order — first match wins.
+		// The surprise/dx_surge gates accept either a target-specific OR a
+		// regional baseline — a regional baseline gives operators with thin
+		// target history the same "unusual opening" detection as those with
+		// rich target history.
+		baselineScoped := b.TargetBaselineUsed || b.RegionalBaselineUsed
 		switch {
-		case b.TargetBaselineUsed && trustedBaseline &&
+		case baselineScoped && trustedBaseline &&
 			b.BaselineActivity > 0 && b.BaselineActivity <= hotBandsSurpriseBaselineMx &&
 			ratio >= hotBandsSurpriseRatio:
 			recs = append(recs, hotBandRecommendation{
@@ -136,7 +141,7 @@ func (e *DxBaselineEngine) HotBands(target string, surroundings bool, minutes in
 				Status:              b.Status,
 			})
 
-		case b.TargetBaselineUsed && trustedBaseline && baseUsed &&
+		case baselineScoped && trustedBaseline && baseUsed &&
 			baseP90 > 0 && distRatio >= hotBandsDxSurgeRatio &&
 			b.P90DistanceKm >= hotBandsDxSurgeMinDistKm:
 			recs = append(recs, hotBandRecommendation{
@@ -188,27 +193,29 @@ func (e *DxBaselineEngine) HotBands(target string, surroundings bool, minutes in
 	return resp
 }
 
-func (e *DxBaselineEngine) lookupBaselineP90(targets []string, band string, slot int) (float64, bool) {
+func (e *DxBaselineEngine) lookupBaselineP90(targets []string, operatorRegion, band string, slot int) (float64, bool) {
 	if e == nil {
 		return 0, false
 	}
 	e.mu.RLock()
 	st := e.store
-	var globalCopy, targetCopy map[string]*baselineBucket
+	var globalCopy, targetCopy, regionCopy map[string]*baselineBucket
 	if st == nil {
 		globalCopy = cloneBuckets(e.buckets)
 		targetCopy = cloneBuckets(e.targetBuckets)
+		regionCopy = cloneBuckets(e.regionalBuckets)
 	}
 	e.mu.RUnlock()
 
 	if st != nil {
-		km, used, err := st.baselineP90DistanceForBand(targets, band, slot)
+		km, used, _, err := st.baselineP90DistanceForBand(targets, operatorRegion, band, slot)
 		if err != nil {
 			return 0, false
 		}
 		return km, used
 	}
-	return baselineP90DistanceForBand(globalCopy, targetCopy, targets, band, slot)
+	km, used, _ := baselineP90DistanceForBand(globalCopy, targetCopy, regionCopy, operatorRegion, targets, band, slot)
+	return km, used
 }
 
 // sustainedRecentBins counts the trailing consecutive sparkline bins whose

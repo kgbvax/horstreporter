@@ -988,25 +988,25 @@ func TestPairsForBandSlot(t *testing.T) {
 		{Band: "40m", Slot: 3}:  {{DistanceTier: 2, SnrTier: 1, Count: 9}},
 	}
 
-	// Target wins when present → used=true, target pairs.
-	p, used := pairsForBandSlot(target, global, "20m", 10)
-	if !used || len(p) != 1 || p[0].Count != 50 {
-		t.Fatalf("20m/10: expected target(50) used=true, got %v used=%v", p, used)
+	// Target wins when present → used=true, target pairs. (region=nil → regionUsed=false)
+	p, used, usedRegion := pairsForBandSlot(target, nil, global, "20m", 10)
+	if !used || usedRegion || len(p) != 1 || p[0].Count != 50 {
+		t.Fatalf("20m/10: expected target(50) used=true regionUsed=false, got %v used=%v regionUsed=%v", p, used, usedRegion)
 	}
-	// No target row → global fallback, used=false.
-	p, used = pairsForBandSlot(target, global, "40m", 3)
-	if used || len(p) != 1 || p[0].Count != 9 {
-		t.Fatalf("40m/3: expected global(9) used=false, got %v used=%v", p, used)
+	// No target row → global fallback, used=false, regionUsed=false.
+	p, used, usedRegion = pairsForBandSlot(target, nil, global, "40m", 3)
+	if used || usedRegion || len(p) != 1 || p[0].Count != 9 {
+		t.Fatalf("40m/3: expected global(9) used=false regionUsed=false, got %v used=%v regionUsed=%v", p, used, usedRegion)
 	}
-	// Neither → nil, false.
-	p, used = pairsForBandSlot(target, global, "80m", 0)
-	if used || p != nil {
-		t.Fatalf("80m/0: expected nil/false, got %v used=%v", p, used)
+	// Neither → nil, false, false.
+	p, used, usedRegion = pairsForBandSlot(target, nil, global, "80m", 0)
+	if used || usedRegion || p != nil {
+		t.Fatalf("80m/0: expected nil/false/false, got %v used=%v regionUsed=%v", p, used, usedRegion)
 	}
-	// Nil target index → global fallback, used=false.
-	p, used = pairsForBandSlot(nil, global, "40m", 3)
-	if used || len(p) != 1 || p[0].Count != 9 {
-		t.Fatalf("nil target: expected global(9) used=false, got %v used=%v", p, used)
+	// Nil target index → global fallback, used=false, regionUsed=false.
+	p, used, usedRegion = pairsForBandSlot(nil, nil, global, "40m", 3)
+	if used || usedRegion || len(p) != 1 || p[0].Count != 9 {
+		t.Fatalf("nil target: expected global(9) used=false regionUsed=false, got %v used=%v regionUsed=%v", p, used, usedRegion)
 	}
 }
 

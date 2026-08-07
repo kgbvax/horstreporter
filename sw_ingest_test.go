@@ -27,6 +27,71 @@ func TestParseSWPCTime(t *testing.T) {
 	}
 }
 
+func TestParseDailySolarIndicesF107(t *testing.T) {
+	// NOAA daily-solar-indices.txt column layout (whitespace-separated):
+	//   fields[0..2] = YYYY MM DD
+	//   fields[3]    = F10.7 cm radio flux
+	//   fields[4]    = SESC sunspot number
+	//   fields[5+]   = area, new regions, mean field, x-ray bkgd, flares...
+	// Missing values use -999 as a sentinel.
+	cases := []struct {
+		name     string
+		text     string
+		wantOk   bool
+		wantFlux float64
+	}{
+		{
+			name: "today row with -999 sentinel skipped, yesterday used",
+			text: "# NOAA SWPC daily solar indices\n" +
+				":Product: daily-solar-indices.txt\n" +
+				"#                         Sunspot\n" +
+				"#  Date     10.7cm Number  ...\n" +
+				"2026 07 30  142.5    120     550      2    -999      *   4  1  0\n" +
+				"2026 07 31  -999     0       0        0    -999      *   0  0  0\n",
+			wantOk:   true,
+			wantFlux: 142.5,
+		},
+		{
+			name: "all rows -999 sentinel, no valid flux",
+			text: "# NOAA SWPC\n" +
+				"2026 07 30  -999     0       0\n" +
+				"2026 07 31  -999     0       0\n",
+			wantOk:   false,
+			wantFlux: 0,
+		},
+		{
+			name:     "empty input",
+			text:     "",
+			wantOk:   false,
+			wantFlux: 0,
+		},
+		{
+			name: "single valid row",
+			text: "2026 07 30  142.5    120     550      2    -999      *   4  1  0\n",
+			wantOk:   true,
+			wantFlux: 142.5,
+		},
+		{
+			name: "multiple valid rows, latest (ascending date) wins",
+			text: "2026 07 29  140.0    100     410      2    -999      *   4  0  0\n" +
+				"2026 07 30  152.5    130     460      0    -999      *   1  1  0\n",
+			wantOk:   true,
+			wantFlux: 152.5,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			flux, _, ok := parseDailySolarIndicesF107(c.text)
+			if ok != c.wantOk {
+				t.Fatalf("ok = %v, want %v", ok, c.wantOk)
+			}
+			if ok && flux != c.wantFlux {
+				t.Errorf("flux = %g, want %g", flux, c.wantFlux)
+			}
+		})
+	}
+}
+
 func TestXrayClassFromFlux(t *testing.T) {
 	cases := []struct {
 		flux float64

@@ -46,10 +46,22 @@ function buildFilterCtx() {
     };
 }
 
-function buildRenderFingerprint(spots, filterCtx, style) {
-    const spotKey = `${spots.length}:${spots[0]?.T ?? ''}:${spots[spots.length - 1]?.T ?? ''}`;
-    const filterKey = `${filterCtx.minSnrMode}:${filterCtx.ssbMinDb}:${filterCtx.cwMinDb}:${filterCtx.selectedBand}:${[...filterCtx.enabledBands].sort().join(',')}:${style}`;
+function buildRenderFingerprint(spots, filterCtx, style, maxMinutes) {
+    // ageSeconds mutates every prune tick (app.js += 5 every 5s), so the
+    // fingerprint changes even when the spot count is stable. The streamSpot
+    // payload has no T field (server.go streamSpot), so the old `?.T` reads
+    // were always undefined and the fingerprint collapsed to length only,
+    // freezing the map at steady state.
+    const spotKey = `${spots.length}:${spots[0]?.ageSeconds ?? ''}:${spots[spots.length - 1]?.ageSeconds ?? ''}`;
+    const filterKey = `${filterCtx.minSnrMode}:${filterCtx.ssbMinDb}:${filterCtx.cwMinDb}:${filterCtx.selectedBand}:${[...filterCtx.enabledBands].sort().join(',')}:${style}:${maxMinutes ?? ''}`;
     return `${spotKey}|${filterKey}`;
+}
+
+// resetRenderFingerprint forces the next render to rebuild the heat layer even
+// if the spot set looks identical. Called on stream stop and projection switch
+// so a restarted/cleared stream always redraws.
+export function resetRenderFingerprint() {
+    lastRenderFingerprint = '';
 }
 
 function escapeHtml(value) {
@@ -175,7 +187,7 @@ export function updateMapVisualization(spots, maxMinutes) {
     const filterCtx = buildFilterCtx();
 
     // Item 1: skip layer rebuild when spots and filters are unchanged
-    const fingerprint = buildRenderFingerprint(spots, filterCtx, style);
+    const fingerprint = buildRenderFingerprint(spots, filterCtx, style, maxMinutes);
     const skipRebuild = fingerprint === lastRenderFingerprint && state.heatLayer !== null;
 
     if (!skipRebuild) {
