@@ -67,12 +67,14 @@ For each band, compute metrics including:
 Baseline buckets are keyed by context such as:
 
 - band,
-- hour-of-week,
+- slot-of-day (30-minute UTC window),
 - distance tier,
 - SNR tier,
-- plus target-aware buckets when available.
+- in three scopes: **target-specific** (your own callsign or locator block), **regional** (your DXPulse region — EU, NA, AS, …), and **global** (all reporters worldwide).
 
-This makes comparisons time-aware instead of global-only.
+Scoring falls back through the tiers: your own history first, then your region's, then the global average. The regional tier matters when your target has little history of its own (a rare callsign, a new operator): instead of comparing against the whole world, the engine compares against what's typical for your part of the world, so "unusual opening" alerts are accurate for your location. Your region is derived from your target — a locator maps directly, a callsign is resolved via QRZ and then falls back to the DXCC entity centroid.
+
+This makes comparisons time-aware and location-aware instead of global-only.
 
 ### 4) Band scoring and confidence
 

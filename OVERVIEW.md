@@ -181,8 +181,8 @@ Replay the past 24 hours of propagation as a time-lapse. Useful for post-contest
 **Solar and geomagnetic indices overlay**
 Display current solar flux (SFI), sunspot number (SSN), and K-index directly in the interface. When the K-index spikes, it's immediately visible alongside the degraded propagation on the map.
 
-**Personalised baseline**
-The current baseline is built from all reporters worldwide. A personalised baseline built only from reporters in your region would give more accurate "unusual opening" alerts for your specific location.
+**Personalised baseline** ✅
+The baseline now has three tiers: your own target history, your **regional** baseline (operators in your DXPulse region — EU, NA, AS, …), and the global average. Scoring falls back through the tiers, so operators with thin target history get a baseline scoped to their part of the world instead of the global average — giving more accurate "unusual opening" alerts for your specific location. Always on; no setup needed.
 
 ### Longer-term
 

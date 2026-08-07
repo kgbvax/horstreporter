@@ -64,7 +64,10 @@ A 0–100 estimate of how worthwhile a band looks right now for the Target, prod
 ### Baseline
 The historical model of normal band activity that current conditions are scored against, accumulated continuously from observed spots and exposed with depth metadata (history span and event count) so a reader can judge how trustworthy a comparison is.
 
-A baseline bucket is one aggregated count keyed by the context a spot occurred in: Band, Slot-of-day, Distance tier, and SNR tier. Target-specific buckets sit alongside global ones; scoring prefers the target-specific baseline and falls back to global when the Target's own history is too thin.
+A baseline bucket is one aggregated count keyed by the context a spot occurred in: Band, Slot-of-day, Distance tier, and SNR tier. Three scopes of bucket are kept, and scoring falls back through them in order: **target-specific** (the operator's own callsign or locator block), then **regional** (the operator's DXPulse region), then **global** (all reporters worldwide). The regional tier gives operators with thin target history a baseline scoped to their part of the world instead of the global average, so "unusual opening" detection is accurate for their location.
+
+### Operator region
+The DXPulse region (EU, NA, SA, AS, OC, …) the operator is inferred to be in, used to key the regional baseline tier. Derived per Evaluate call: a locator target maps directly; a callsign target is resolved via QRZ to a locator, then falls back to the DXCC entity centroid from cty.dat. When neither is available the regional tier is skipped and scoring falls back target → global.
 
 ### Slot-of-day
 A 30-minute window of the UTC day (48 per day) used as the time dimension of a Baseline bucket. Day-of-week is intentionally collapsed — propagation patterns repeat daily, not weekly — so all observations for the same slot across days aggregate together.
