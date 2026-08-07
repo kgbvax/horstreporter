@@ -650,6 +650,129 @@ func (s *dxPostgresStore) ensureDxPulseRegionBaseline(ctx context.Context) error
 	return nil
 }
 
+// ensureDxBaselineRegion backfills the dx_baseline_region table from
+// dx_raw_spots on the first startup after the table is created. Mirrors
+// ensureDxPulseRegionBaseline: if the table already has rows, it's a no-op;
+// otherwise it scans dx_raw_spots in ascending spot_time order, recomputes
+// the (observer_region, band, slot_of_day, distance_tier, snr_tier) bucket key
+// for each spot (deriving region, slot, dist tier, snr tier from the locators
+// and signal_report_db), and batches upserts. Guards against re-running via a
+// dx_meta key so a restart after a partial backfill doesn't redo the scan.
+func (s *dxPostgresStore) ensureDxBaselineRegion(ctx context.Context) error {
+	var baselineExists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM dx_baseline_region LIMIT 1)`).Scan(&baselineExists); err != nil {
+		return err
+	}
+	if baselineExists {
+		return nil
+	}
+
+	var rawExists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM dx_raw_spots LIMIT 1)`).Scan(&rawExists); err != nil {
+		return err
+	}
+	if !rawExists {
+		return nil
+	}
+
+	logInfo("DX regional baseline backfill starting from existing raw spots")
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT spot_time, band, sender_locator, receiver_locator, signal_report_db
+		FROM dx_raw_spots
+		ORDER BY spot_time ASC
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	agg := make(map[regionBaselineKey]int64, 8192)
+	flush := func() error {
+		if len(agg) == 0 {
+			return nil
+		}
+		batch := &pgx.Batch{}
+		keys := make([]regionBaselineKey, 0, len(agg))
+		for k, v := range agg {
+			keys = append(keys, k)
+			batch.Queue(`
+				INSERT INTO dx_baseline_region (observer_region, band, slot_of_day, distance_tier, snr_tier, count)
+				VALUES ($1,$2,$3,$4,$5,$6)
+				ON CONFLICT (observer_region, band, slot_of_day, distance_tier, snr_tier)
+				DO UPDATE SET count = dx_baseline_region.count + EXCLUDED.count
+			`, k.ObserverRegion, k.Band, k.SlotOfDay, k.DistanceTier, k.SnrTier, v)
+		}
+		br := s.pool.SendBatch(ctx, batch)
+		defer func() { _ = br.Close() }()
+		for range keys {
+			if _, err := br.Exec(); err != nil {
+				return err
+			}
+		}
+		clear(agg)
+		return nil
+	}
+
+	processed := int64(0)
+	skipped := int64(0)
+	for rows.Next() {
+		var ts int64
+		var band, senderLoc, receiverLoc string
+		var snr int
+		if err := rows.Scan(&ts, &band, &senderLoc, &receiverLoc, &snr); err != nil {
+			return err
+		}
+		// Recompute the bucket dimensions the in-memory Observe derives:
+		// normalizeBand, utcSlotOfDay, distanceTierForLocators, snrTierFromDb.
+		// Both ends' regions get a bucket (a spot between EU and NA increments
+		// both the EU- and NA-keyed regional buckets), matching Observe.
+		nb := normalizeBand(band)
+		if nb == "" || !bandInScope(nb) {
+			skipped++
+			continue
+		}
+		slot := utcSlotOfDay(ts)
+		distTier := distanceTierForLocators(senderLoc, receiverLoc)
+		snrt := snrTierFromDb(snr)
+		for _, loc := range [2]string{senderLoc, receiverLoc} {
+			r := string(dxPulseRegionForLocator(loc))
+			if r == "" || r == string(dxPulseRegionUnknown) {
+				continue
+			}
+			agg[regionBaselineKey{
+				ObserverRegion: r,
+				Band:            nb,
+				SlotOfDay:       slot,
+				DistanceTier:    distTier,
+				SnrTier:         snrt,
+			}]++
+		}
+		processed++
+		if len(agg) >= 5000 {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO dx_meta (k,v) VALUES ('dx_baseline_region_built_at',$1)
+		ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v
+	`, fmt.Sprintf("%d", time.Now().Unix())); err != nil {
+		return err
+	}
+
+	logInfo("DX regional baseline backfill finished (%d raw spots processed, %d skipped)", processed, skipped)
+	return nil
+}
+
 func dxPulseRegionBaselineKeysForSpot(ts int64, band string, senderLoc string, receiverLoc string) []dxPulseRegionBaselineDailyKey {
 	band = normalizeBand(band)
 	if band == "" {

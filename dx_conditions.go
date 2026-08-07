@@ -257,6 +257,15 @@ func (e *DxBaselineEngine) EnablePostgres(dsn string) error {
 		st.Close()
 		return err
 	}
+	// Backfill the regional baseline (dx_baseline_region) from dx_raw_spots so
+	// the three-tier fallback (target → region → global) has data immediately
+	// after the table is created, rather than accumulating over the first day.
+	// No-op once the table has rows; async so it doesn't delay the HTTP listener.
+	go func() {
+		if err := st.ensureDxBaselineRegion(context.Background()); err != nil {
+			logInfo("DX regional baseline backfill failed: %v", err)
+		}
+	}()
 	// Best-effort: record when baseline accumulation began so the per-minute
 	// normaliser has a real span. Non-fatal if it can't be determined yet.
 	if err := st.seedBaselineFirstObservedIfMissing(context.Background()); err != nil {
