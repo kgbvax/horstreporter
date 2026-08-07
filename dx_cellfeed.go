@@ -65,6 +65,17 @@ func cellfeedSchemaStmts() []string {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_proplab_sw_series_time
 			ON proplab_sw_series (series, obs_time DESC);`,
+
+		// Aggressive autovacuum on the hot bucket table: it accumulates
+		// additive upserts (insert + update on conflict) and can grow
+		// hundreds of thousands of dead tuples per day.
+		`ALTER TABLE proplab_cell_buckets SET (
+			autovacuum_vacuum_scale_factor = 0.05,
+			autovacuum_vacuum_threshold = 10000,
+			autovacuum_analyze_scale_factor = 0.02,
+			autovacuum_analyze_threshold = 10000,
+			autovacuum_vacuum_cost_limit = 2000
+		);`,
 	}
 }
 

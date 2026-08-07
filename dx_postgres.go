@@ -486,10 +486,17 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 		{
 			name: "tune autovacuum dx_region_baseline_daily",
 			sql: `ALTER TABLE dx_region_baseline_daily SET (
-				autovacuum_vacuum_scale_factor = 0.02,
-				autovacuum_vacuum_threshold = 20000,
-				autovacuum_analyze_scale_factor = 0.01,
-				autovacuum_analyze_threshold = 20000
+				autovacuum_vacuum_scale_factor = 0.01,
+				autovacuum_vacuum_threshold = 50000,
+				autovacuum_analyze_scale_factor = 0.005,
+				autovacuum_analyze_threshold = 50000
+			);`,
+		},
+		{
+			name: "tune autovacuum dx_raw_spots",
+			sql: `ALTER TABLE dx_raw_spots SET (
+				autovacuum_vacuum_scale_factor = 0.05,
+				autovacuum_analyze_scale_factor = 0.02
 			);`,
 		},
 	}

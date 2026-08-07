@@ -248,6 +248,20 @@ It also adds newer columns if missing:
 - `frequency_khz`
 - `comment`
 
+## Autovacuum / maintenance tuning
+
+Hot tables get per-table autovacuum overrides applied by `dxPostgresStore.initSchema` (and `cellfeedSchemaStmts` for `proplab_cell_buckets`).
+
+| Table | vacuum scale | vacuum threshold | analyze scale | analyze threshold | Notes |
+|---|---|---|---|---|---|
+| `dx_baseline_target` | 0.01 | 50 000 | 0.005 | 50 000 | heavy churn from baseline updates |
+| `dx_baseline_global` | 0.02 | 20 000 | 0.01 | 20 000 | smaller table, more frequent vacuum |
+| `dx_region_baseline_daily` | 0.01 | 50 000 | 0.005 | 50 000 | daily aggregates, many HOT updates |
+| `dx_raw_spots` | 0.05 | default | 0.02 | default | insert-only raw event stream |
+| `proplab_cell_buckets` | 0.05 | 10 000 | 0.02 | 10 000 | additive upserts on conflict |
+
+The Debian service installer also drops `/etc/cron.d/horstreporter-vacuum` — a nightly `VACUUM (ANALYZE)` on the hot tables at 03:43 UTC as a safety net against bloat. This is a non-blocking plain `VACUUM`; run `VACUUM FULL` manually during a maintenance window if you need to reclaim disk from indexes/table bloat.
+
 ## Notes
 
 - There are no explicit foreign keys between these tables; relationships are logical/application-level.

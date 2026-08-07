@@ -92,7 +92,20 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 WantedBy=multi-user.target
 EOF
 
-# 6. Enable and start the service
+# 6. Install nightly Postgres vacuum/analyze cron job.
+#    Hot tables churn quickly; autovacuum handles most of it, but a
+#    daily explicit VACUUM ANALYZE is a cheap safety net against bloat.
+CRON_FILE="/etc/cron.d/horstreporter-vacuum"
+echo "Installing nightly vacuum cron to $CRON_FILE..."
+cat <<'EOF' > "$CRON_FILE"
+# Nightly catch-up vacuum/analyze for HorstReporter hot tables.
+# Runs as postgres; low-traffic time (03:43 UTC).  Uses plain VACUUM ANALYZE
+# (not VACUUM FULL) so it does not block concurrent ingest/queries.
+43 3 * * * postgres /usr/bin/psql -d dxdata -c "VACUUM (ANALYZE) dx_baseline_target, dx_raw_spots, dx_region_baseline_daily, proplab_cell_buckets, dx_baseline_global, proplab_sw_series;"
+EOF
+chmod 0644 "$CRON_FILE"
+
+# 7. Enable and start the service
 echo "Reloading systemd, enabling and starting $APP_NAME..."
 systemctl daemon-reload
 systemctl enable $APP_NAME
@@ -101,3 +114,4 @@ systemctl restart $APP_NAME
 echo "Installation complete!"
 echo "Check the service status using: systemctl status $APP_NAME"
 echo "You can configure ports and domains in: $DEFAULT_CONFIG"
+echo "Postgres maintenance cron installed in: $CRON_FILE"
