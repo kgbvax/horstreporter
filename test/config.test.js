@@ -45,14 +45,14 @@ describe('loadConfig defensive behavior', () => {
 
     it('does not log an error when #minutes is missing but a saved value exists', () => {
         localStorage.setItem('minutes', '30');
-        document.body.innerHTML = '<input id="target" />';
+        document.body.innerHTML = '<input id="qth" />';
         expect(() => loadConfig()).not.toThrow();
         expect(errSpy).not.toHaveBeenCalled();
     });
 
     it('does not throw or log when form elements are present (target/minutes now store-owned)', () => {
         localStorage.setItem('target', 'JO32');
-        document.body.innerHTML = '<input id="target" /><input id="minutes" />';
+        document.body.innerHTML = '<input id="qth" /><input id="minutes" />';
         expect(() => loadConfig()).not.toThrow();
         expect(errSpy).not.toHaveBeenCalled();
     });

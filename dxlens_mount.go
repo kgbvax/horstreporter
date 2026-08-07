@@ -111,7 +111,7 @@ func (p *dxlensProvider) TargetBucketsMulti(tokens []string) map[string]*dxlens.
 	norm := make([]string, 0, len(tokens))
 	seen := make(map[string]struct{}, len(tokens))
 	for _, t := range tokens {
-		u := normalizeTargetTokenUpper(strings.ToUpper(strings.TrimSpace(t)))
+		u := normalizeQTHTokenUpper(strings.ToUpper(strings.TrimSpace(t)))
 		if u == "" {
 			continue
 		}
@@ -172,7 +172,7 @@ func (p *dxlensProvider) TargetBucketsMulti(tokens []string) map[string]*dxlens.
 		if band == "" {
 			continue
 		}
-		key := baselineTargetKeyFromBase(r.TargetToken, baselineKey(band, r.SlotOfDay, r.DistanceTier, r.SnrTier))
+		key := baselineQthKeyFromBase(r.TargetToken, baselineKey(band, r.SlotOfDay, r.DistanceTier, r.SnrTier))
 		b := &dxlens.Bucket{
 			Band:         band,
 			SlotOfDay:    r.SlotOfDay,
@@ -203,7 +203,7 @@ func (p *dxlensProvider) TargetBuckets(token string) map[string]*dxlens.Bucket {
 	if p == nil || p.engine == nil {
 		return nil
 	}
-	token = normalizeTargetTokenUpper(strings.ToUpper(strings.TrimSpace(token)))
+	token = normalizeQTHTokenUpper(strings.ToUpper(strings.TrimSpace(token)))
 	if token == "" {
 		return nil
 	}
@@ -234,7 +234,7 @@ func (p *dxlensProvider) TargetBuckets(token string) map[string]*dxlens.Bucket {
 		if band == "" {
 			continue
 		}
-		key := baselineTargetKeyFromBase(token, baselineKey(band, r.SlotOfDay, r.DistanceTier, r.SnrTier))
+		key := baselineQthKeyFromBase(token, baselineKey(band, r.SlotOfDay, r.DistanceTier, r.SnrTier))
 		out[key] = &dxlens.Bucket{
 			Band:         band,
 			SlotOfDay:    r.SlotOfDay,
@@ -293,8 +293,8 @@ func buildDxlensSnapshot(e *DxBaselineEngine) *dxlens.Snapshot {
 			Count:        v.Count,
 		}
 	}
-	target := make(map[string]*dxlens.Bucket, len(e.targetBuckets))
-	for k, v := range e.targetBuckets {
+	target := make(map[string]*dxlens.Bucket, len(e.qthBuckets))
+	for k, v := range e.qthBuckets {
 		if v == nil {
 			continue
 		}

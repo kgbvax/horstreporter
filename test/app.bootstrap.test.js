@@ -71,7 +71,7 @@ vi.mock('../static/state.js', () => ({
         eventSource: null,
         renderInterval: null,
         heatLayer: null,
-        targetLayer: null
+        qthLayer: null
     }
 }));
 

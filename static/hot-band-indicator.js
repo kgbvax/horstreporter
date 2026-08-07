@@ -22,7 +22,7 @@ function hexToRgba(hex, alpha) {
     return `rgba(${r},${g},${b},${alpha})`;
 }
 
-export function initHotBandIndicator({ getTarget, getSurroundings, getCurrentBand, onBandSwitch }) {
+export function initHotBandIndicator({ getQth, getSurroundings, getCurrentBand, onBandSwitch }) {
     const container = document.getElementById('hot-band-indicator');
     if (!container) return null;
 
@@ -111,8 +111,8 @@ export function initHotBandIndicator({ getTarget, getSurroundings, getCurrentBan
     }
 
     async function fetchOnce() {
-        const target = (getTarget?.() || '').trim();
-        if (!target) {
+        const qth = (getQth?.() || '').trim();
+        if (!qth) {
             lastRecs = [];
             render();
             return;
@@ -121,7 +121,7 @@ export function initHotBandIndicator({ getTarget, getSurroundings, getCurrentBan
         abortCtl = new AbortController();
 
         const params = new URLSearchParams();
-        params.set('target', target);
+        params.set('qth', qth);
         if (getSurroundings?.()) params.set('surroundings', 'true');
         const current = (getCurrentBand?.() || '').toLowerCase();
         if (current && current !== 'all') params.set('current_band', current);

@@ -71,7 +71,7 @@ vi.mock('../static/state.js', () => ({
         eventSource: null,
         renderInterval: null,
         heatLayer: null,
-        targetLayer: null
+        qthLayer: null
     }
 }));
 
@@ -83,7 +83,7 @@ function setupDom() {
         <button id="show-sidebar"></button>
 
         <form id="fetch-form"></form>
-        <input id="target" value="JO32" />
+        <input id="qth" value="JO32" />
         <input id="minutes" value="15" />
         <input id="ssb-min-db" value="0" />
         <input id="cw-min-db" value="-15" />
@@ -253,9 +253,9 @@ describe('app.js DK3JF mode behavior', () => {
         expect(localStorage.getItem('dk3jfModeEnabled')).toBe('false');
     });
 
-    it('automatically starts retrieving data on load when a target is remembered', async () => {
-        localStorage.setItem('target', 'W1AW');
-        document.getElementById('target').value = 'W1AW';
+    it('automatically starts retrieving data on load when a qth is remembered', async () => {
+        localStorage.setItem('qth', 'W1AW');
+        document.getElementById('qth').value = 'W1AW';
 
         await importAppFresh();
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -263,7 +263,7 @@ describe('app.js DK3JF mode behavior', () => {
         const submitBtn = document.getElementById('btn-submit');
         expect(submitBtn.dataset.mode).toBe('stop');
         expect(submitBtn.innerHTML).toContain('fa-stop');
-        expect(document.getElementById('stream-status').innerHTML).toContain('Connecting to Target: W1AW');
+        expect(document.getElementById('stream-status').innerHTML).toContain('Connecting to QTH: W1AW');
     });
 
 });

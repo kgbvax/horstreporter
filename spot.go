@@ -38,24 +38,24 @@ func reporterLocatorForMessage(m MQTTMessage) string {
 }
 
 // matchCall checks for an exact callsign match, or a match with common prefix/suffix modifiers (e.g., W1AW/P, DL/W1AW)
-func matchCall(spotCall, target string) bool {
-	if spotCall == target {
+func matchCall(spotCall, qth string) bool {
+	if spotCall == qth {
 		return true
 	}
-	if strings.HasPrefix(spotCall, target+"/") {
+	if strings.HasPrefix(spotCall, qth+"/") {
 		return true
 	}
-	if strings.HasSuffix(spotCall, "/"+target) {
+	if strings.HasSuffix(spotCall, "/"+qth) {
 		return true
 	}
-	if strings.Contains(spotCall, "/"+target+"/") {
+	if strings.Contains(spotCall, "/"+qth+"/") {
 		return true
 	}
 	return false
 }
 
 func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
-	if len(client.targets) == 0 && !client.areaActive {
+	if len(client.qthSet) == 0 && !client.areaActive {
 		return Spot{}, false
 	}
 
@@ -65,7 +65,7 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 	isSender := false
 	isReceiver := false
 
-	for _, t := range client.targets {
+	for _, t := range client.qthSet {
 		if matchCall(sc, t) || (isLocator(t) && sl != "" && strings.HasPrefix(sl, t)) {
 			isSender = true
 		}
@@ -86,7 +86,7 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 	}
 
 	if logLevel == "DEBUG" {
-		logDebug("Targets '%v' | Evaluating Spot -> SC:%s RC:%s SL:%s RL:%s | isSender:%v isReceiver:%v", client.targets, sc, rc, sl, rl, isSender, isReceiver)
+		logDebug("QTH '%v' | Evaluating Spot -> SC:%s RC:%s SL:%s RL:%s | isSender:%v isReceiver:%v", client.qthSet, sc, rc, sl, rl, isSender, isReceiver)
 	}
 
 	if !isSender && !isReceiver {
@@ -105,7 +105,7 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 
 	if remoteLocator == "" {
 		if logLevel == "DEBUG" {
-			logDebug("Targets '%v' matched as %s, but remote locator is empty. Dropping spot.", client.targets, relation)
+			logDebug("QTH '%v' matched as %s, but remote locator is empty. Dropping spot.", client.qthSet, relation)
 		}
 		return Spot{}, false
 	}
@@ -117,7 +117,7 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 	}
 
 	if logLevel == "DEBUG" {
-		logDebug("Targets '%v' matched successfully! Mapped to Remote Locator: %s", client.targets, remoteLocator)
+		logDebug("QTH '%v' matched successfully! Mapped to Remote Locator: %s", client.qthSet, remoteLocator)
 	}
 
 	return Spot{
@@ -188,7 +188,7 @@ func getSquaresWithinRings(locator string, rings int) []string {
 	return res
 }
 
-// getSurroundingSquares returns the target square and its 8 neighbours.
+// getSurroundingSquares returns the qth square and its 8 neighbours.
 func getSurroundingSquares(locator string) []string {
 	return getSquaresWithinRings(locator, 1)
 }

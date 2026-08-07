@@ -28,19 +28,23 @@ The transmission mode of a Spot. The PSK Reporter ingest keeps only the FT8 and 
 
 ## Location & targeting
 
+### QTH
+The operator's own station — the point-of-view for all analysis (live spot matching, DX scoring, hot-band alerts, the map's projection center). Entered as a callsign or as a Maidenhead locator in the QTH field at the top of the UI; the engine derives the QTH locator (via QRZ/cty.dat for callsigns) from it. "Target" is overloaded in ham radio — it can mean the DX station being chased or the operator's own station. We call the latter QTH to keep the meanings distinct; the DX being worked is just the remote station in a Spot.
+*Avoid:* target (deprecated in code/API as of the QTH rename; `?target=` is no longer accepted — use `?qth=`).
+
 ### Locator
 A Maidenhead grid locator — the compact alphanumeric encoding of a station's position (e.g. JO32, FN31AB) used throughout instead of latitude/longitude.
-*Avoid:* grid, QTH locator.
+*Avoid:* grid.
 
 Precision varies by length: a 2-char field, a 4-char square, a 6-char subsquare. The 4-char square (2° longitude × 1° latitude) is the standard working resolution for matching, mapping and clustering. Some baseline keys collapse a square further to its 2×2 block anchor so neighbouring squares aggregate together.
 
 
 ### Surroundings
-An option that expands a Locator Target to also include its eight neighbouring grid squares, widening coverage when a single square is too sparse. Applies only when the Target is a valid Locator.
+An option that expands a Locator QTH to also include its eight neighbouring grid squares, widening coverage when a single square is too sparse. Applies only when the QTH is a valid Locator.
 *Avoid:* adjacent squares (UI label only).
 
 ### Area of interest
-A configurable-size region around a home square (a ring radius in grid-square space) that matches any Spot whose Sender or Receiver falls inside it. Additive to Target matching, it backs region-wide feeds rather than single-station tracking.
+A configurable-size region around a home square (a ring radius in grid-square space) that matches any Spot whose Sender or Receiver falls inside it. Additive to QTH matching, it backs region-wide feeds rather than single-station tracking.
 
 ## DX cluster
 
@@ -48,7 +52,7 @@ A configurable-size region around a home square (a ring radius in grid-square sp
 A long-distance contact or station — the distant end of a path worth chasing. The whole product orients around surfacing DX opportunity; a path counts as DX-grade once it is long enough to be intercontinental rather than local or regional.
 
 ### DX-cluster spot
-A Spot sourced from a traditional DX-cluster feed rather than PSK Reporter. Unlike PSK Reporter spots (locator-only, Target-filtered), these carry the spotted station's callsign, frequency, comment, and enriched country/operator metadata, and feed operator tools such as the Chase Queue.
+A Spot sourced from a traditional DX-cluster feed rather than PSK Reporter. Unlike PSK Reporter spots (locator-only, QTH-filtered), these carry the spotted station's callsign, frequency, comment, and enriched country/operator metadata, and feed operator tools such as the Chase Queue.
 
 ### Spotter
 The station that posted a DX-cluster spot — the DX-cluster analogue of a Receiver. The spotted station itself is the "DX call".
@@ -59,15 +63,15 @@ The country or territory a callsign belongs to under the ARRL DXCC list — reso
 ## DX condition scoring
 
 ### DX Potential Score
-A 0–100 estimate of how worthwhile a band looks right now for the Target, produced by comparing current viable activity against a historical Baseline for the same context. Surfaced per-band and as an overall roll-up. It is a probability hint, not a guarantee — always confirmed on-air.
+A 0–100 estimate of how worthwhile a band looks right now for the QTH, produced by comparing current viable activity against a historical Baseline for the same context. Surfaced per-band and as an overall roll-up. It is a probability hint, not a guarantee — always confirmed on-air.
 
 ### Baseline
 The historical model of normal band activity that current conditions are scored against, accumulated continuously from observed spots and exposed with depth metadata (history span and event count) so a reader can judge how trustworthy a comparison is.
 
-A baseline bucket is one aggregated count keyed by the context a spot occurred in: Band, Slot-of-day, Distance tier, and SNR tier. Three scopes of bucket are kept, and scoring falls back through them in order: **target-specific** (the operator's own callsign or locator block), then **regional** (the operator's DXPulse region), then **global** (all reporters worldwide). The regional tier gives operators with thin target history a baseline scoped to their part of the world instead of the global average, so "unusual opening" detection is accurate for their location.
+A baseline bucket is one aggregated count keyed by the context a spot occurred in: Band, Slot-of-day, Distance tier, and SNR tier. Three scopes of bucket are kept, and scoring falls back through them in order: **qth-specific** (the operator's own callsign or locator block), then **regional** (the operator's DXPulse region), then **global** (all reporters worldwide). The regional tier gives operators with thin qth history a baseline scoped to their part of the world instead of the global average, so "unusual opening" detection is accurate for their location.
 
 ### Operator region
-The DXPulse region (EU, NA, SA, AS, OC, …) the operator is inferred to be in, used to key the regional baseline tier. Derived per Evaluate call: a locator target maps directly; a callsign target is resolved via QRZ to a locator, then falls back to the DXCC entity centroid from cty.dat. When neither is available the regional tier is skipped and scoring falls back target → global.
+The DXPulse region (EU, NA, SA, AS, OC, …) the operator is inferred to be in, used to key the regional baseline tier. Derived per Evaluate call: a locator QTH maps directly; a callsign QTH is resolved via QRZ to a locator, then falls back to the DXCC entity centroid from cty.dat. When neither is available the regional tier is skipped and scoring falls back qth → global.
 
 ### Slot-of-day
 A 30-minute window of the UTC day (48 per day) used as the time dimension of a Baseline bucket. Day-of-week is intentionally collapsed — propagation patterns repeat daily, not weekly — so all observations for the same slot across days aggregate together.
@@ -92,7 +96,7 @@ The short-term direction of a band's recent activity — rising, falling, or sta
 
  
 ### Hot bands
-A recommender that surfaces a few bands worth attention right now for the Target, each tagged by why: a "surprise" opening on a normally quiet band, a "dx_surge" of unusually long paths, or a "rising" trend. Bands the operator is already on are suppressed.
+A recommender that surfaces a few bands worth attention right now for the QTH, each tagged by why: a "surprise" opening on a normally quiet band, a "dx_surge" of unusually long paths, or a "rising" trend. Bands the operator is already on are suppressed.
 
 ## Operator tooling
 

@@ -4,7 +4,7 @@
 
 The **DX Potential** panel helps answer one question:
 
-> *Which bands are most likely worth trying right now from this target?*
+> *Which bands are most likely worth trying right now from this qth?*
 
 Use it as a **decision aid**, not an oracle.
 
@@ -45,10 +45,10 @@ The engine compares **current viable activity** against a **historical baseline*
 
 ### 1) Input and filtering
 
-For the selected target (plus optional surrounding locator squares):
+For the selected qth (plus optional surrounding locator squares):
 
 - use spots inside the selected time window,
-- keep matched target-related paths,
+- keep matched qth-related paths,
 - deduplicate near-duplicates in short time buckets,
 - reject spots below `CW Min dB` for DX potential computations.
 
@@ -70,9 +70,9 @@ Baseline buckets are keyed by context such as:
 - slot-of-day (30-minute UTC window),
 - distance tier,
 - SNR tier,
-- in three scopes: **target-specific** (your own callsign or locator block), **regional** (your DXPulse region — EU, NA, AS, …), and **global** (all reporters worldwide).
+- in three scopes: **qth-specific** (your own callsign or locator block), **regional** (your DXPulse region — EU, NA, AS, …), and **global** (all reporters worldwide).
 
-Scoring falls back through the tiers: your own history first, then your region's, then the global average. The regional tier matters when your target has little history of its own (a rare callsign, a new operator): instead of comparing against the whole world, the engine compares against what's typical for your part of the world, so "unusual opening" alerts are accurate for your location. Your region is derived from your target — a locator maps directly, a callsign is resolved via QRZ and then falls back to the DXCC entity centroid.
+Scoring falls back through the tiers: your own history first, then your region's, then the global average. The regional tier matters when your qth has little history of its own (a rare callsign, a new operator): instead of comparing against the whole world, the engine compares against what's typical for your part of the world, so "unusual opening" alerts are accurate for your location. Your region is derived from your qth — a locator maps directly, a callsign is resolved via QRZ and then falls back to the DXCC entity centroid.
 
 This makes comparisons time-aware and location-aware instead of global-only.
 

@@ -17,7 +17,7 @@ func TestEvaluateRegionCounts(t *testing.T) {
 	}
 
 	now := int64(1700000000)
-	// Target is in EU (JO62qm). Remote stations in four regions.
+	// QTH is in EU (JO62qm). Remote stations in four regions.
 	history := []MQTTMessage{
 		{RP: -10, T: now, SC: "DL1ABC", SL: "JO62QM", RC: "G0ABC", RL: "JO50AA", B: "20m", MD: "FT8"},
 		{RP: -12, T: now, SC: "DL1ABC", SL: "JO62QM", RC: "G0DEF", RL: "JO50AB", B: "20m", MD: "FT8"},
@@ -194,14 +194,14 @@ func TestEvaluateRegionalBaselineFallback(t *testing.T) {
 		t.Fatalf("expected 20m in response")
 	}
 	// The target (JO62qm block anchor) has its own target-specific history
-	// (we observed 50 spots where SL=JO62QM), so TargetBaselineUsed should be
+	// (we observed 50 spots where SL=JO62QM), so QTHBaselineUsed should be
 	// true. This test confirms the regional wiring doesn't break the target
 	// path. A separate test with a target that has NO history would exercise
 	// the regional fallback directly — but that requires a target token that
 	// never appeared in the observed spots, which is hard to construct without
 	// manipulating the bucket maps directly. The three-tier helpers are
 	// unit-testable directly; this integration test guards the wiring.
-	if !b20.TargetBaselineUsed && !b20.RegionalBaselineUsed {
+	if !b20.QTHBaselineUsed && !b20.RegionalBaselineUsed {
 		t.Errorf("expected target or regional baseline used, got neither")
 	}
 }
@@ -228,8 +228,8 @@ func TestBaselineActivityForBandRegionalFallback(t *testing.T) {
 		t.Errorf("regional fallback: act=%v targetUsed=%v regionUsed=%v, want region", act, targetUsed, regionUsed)
 	}
 
-	// Target has data → target wins over region.
-	target[baselineTargetKey("DL1ABC", "20m", 10, 2, 1)] = &baselineBucket{Count: 30}
+	// QTH has data → target wins over region.
+	target[baselineQthKey("DL1ABC", "20m", 10, 2, 1)] = &baselineBucket{Count: 30}
 	act, targetUsed, regionUsed = baselineActivityForBand(global, target, region, "EU", []string{"DL1ABC"}, "20m", 10, 60*24*30)
 	if !targetUsed || regionUsed {
 		t.Errorf("target wins: act=%v targetUsed=%v regionUsed=%v, want target", act, targetUsed, regionUsed)

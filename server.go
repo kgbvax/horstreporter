@@ -69,11 +69,11 @@ type squareDetailsResponse struct {
 const maxAreaRings = 30
 
 func streamHandler(w http.ResponseWriter, r *http.Request) {
-	target, surroundings := resolveTargetQuery(r)
+	qth, surroundings := resolveQTHQuery(r)
 	minutesStr := r.URL.Query().Get("minutes")
 
-	if target == "" {
-		http.Error(w, "target required", http.StatusBadRequest)
+	if qth == "" {
+		http.Error(w, "qth required", http.StatusBadRequest)
 		return
 	}
 
@@ -86,26 +86,26 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	historySeconds := int64(minutes * 60)
 
-	var targets []string
-	if surroundings && isLocator(target) {
-		targets = getSurroundingSquares(target)
+	var qthSet []string
+	if surroundings && isLocator(qth) {
+		qthSet = getSurroundingSquares(qth)
 	} else {
-		targets = []string{target}
+		qthSet = []string{qth}
 	}
 
 	client := &Client{
-		targets: targets,
-		send:    make(chan Spot, 10000), // Buffer to handle initial history dump
+		qthSet: qthSet,
+		send:   make(chan Spot, 10000), // Buffer to handle initial history dump
 	}
 
-	// Optional configurable "area of interest": rings>0 with a locator target
-	// matches any sender/receiver within `rings` grid-squares of the target,
+	// Optional configurable "area of interest": rings>0 with a locator qth
+	// matches any sender/receiver within `rings` grid-squares of the qth,
 	// for region feeds (e.g. horstprop). Read-only; default behaviour unchanged.
-	if rings := parseIntDefault(r.URL.Query().Get("rings"), 0); rings > 0 && isLocator(target) {
+	if rings := parseIntDefault(r.URL.Query().Get("rings"), 0); rings > 0 && isLocator(qth) {
 		if rings > maxAreaRings {
 			rings = maxAreaRings
 		}
-		if cx, cy, ok := locatorSquareXY(target); ok {
+		if cx, cy, ok := locatorSquareXY(qth); ok {
 			client.areaActive = true
 			client.areaX, client.areaY, client.areaRings = cx, cy, rings
 		}
@@ -131,7 +131,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	hub.clients[client] = true
 	streamAccounting.startSession()
-	logInfo("New client stream started for targets: %v (History: %d mins)", targets, minutes)
+	logInfo("New client stream started for qth: %v (History: %d mins)", qthSet, minutes)
 
 	idx := sort.Search(len(hub.history), func(i int) bool {
 		return hub.history[i].T >= cutoff
@@ -158,7 +158,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 			close(client.send)
 		}
 		hub.Unlock()
-		logInfo("Client stream closed for targets: %v", targets)
+		logInfo("Client stream closed for qth: %v", qthSet)
 	}()
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -208,7 +208,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func squareDetailsHandler(w http.ResponseWriter, r *http.Request) {
-	target, surroundings := resolveTargetQuery(r)
+	qth, surroundings := resolveQTHQuery(r)
 	locator := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("locator")))
 	if locator == "" {
 		http.Error(w, "locator required", http.StatusBadRequest)
@@ -243,22 +243,22 @@ func squareDetailsHandler(w http.ResponseWriter, r *http.Request) {
 	copy(historyCopy, hub.history[idx:])
 	hub.RUnlock()
 
-	resp := buildSquareDetailsResponse(target, surroundings, locator, minutes, minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands, historyCopy, now)
+	resp := buildSquareDetailsResponse(qth, surroundings, locator, minutes, minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands, historyCopy, now)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-func resolveTargetQuery(r *http.Request) (string, bool) {
-	target := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("target")))
+func resolveQTHQuery(r *http.Request) (string, bool) {
+	qth := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("qth")))
 	surroundings := r.URL.Query().Get("surroundings") == "true"
-	if target == "" {
+	if qth == "" {
 		if call := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("callsign"))); call != "" {
-			target = call
+			qth = call
 		} else if loc := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("locator"))); loc != "" {
-			target = loc
+			qth = loc
 		}
 	}
-	return target, surroundings
+	return qth, surroundings
 }
 
 func toStreamSpot(spot Spot) streamSpot {
@@ -311,23 +311,23 @@ func bandAllowed(band, selectedBand string, enabledBands map[string]struct{}) bo
 	return ok
 }
 
-func buildSquareDetailsResponse(target string, surroundings bool, locator string, minutes int, minSnrMode string, ssbMinDb, cwMinDb int, selectedBand string, enabledBands map[string]struct{}, history []MQTTMessage, now int64) squareDetailsResponse {
+func buildSquareDetailsResponse(qth string, surroundings bool, locator string, minutes int, minSnrMode string, ssbMinDb, cwMinDb int, selectedBand string, enabledBands map[string]struct{}, history []MQTTMessage, now int64) squareDetailsResponse {
 	resp := squareDetailsResponse{
 		Locator:    locator,
 		BandCounts: make(map[string]int),
 		TopReports: []squareDetailReport{},
 	}
 
-	if target == "" || locator == "" {
+	if qth == "" || locator == "" {
 		return resp
 	}
 
-	targets := []string{target}
-	if surroundings && isLocator(target) {
-		targets = getSurroundingSquares(target)
+	qthSet := []string{qth}
+	if surroundings && isLocator(qth) {
+		qthSet = getSurroundingSquares(qth)
 	}
 
-	client := &Client{targets: targets}
+	client := &Client{qthSet: qthSet}
 	cutoff := now - int64(minutes*60)
 	seenPairs := make(map[string]struct{})
 	var sumSNR int
@@ -482,17 +482,17 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
-	target := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("target")))
-	if target == "" {
+	qth := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("qth")))
+	if qth == "" {
 		if call := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("callsign"))); call != "" {
-			target = call
+			qth = call
 		} else if loc := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("locator"))); loc != "" {
-			target = loc
+			qth = loc
 		}
 	}
 
-	if target == "" {
-		http.Error(w, "target required", http.StatusBadRequest)
+	if qth == "" {
+		http.Error(w, "qth required", http.StatusBadRequest)
 		return
 	}
 
@@ -526,7 +526,7 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 	hub.RUnlock()
 
 	resp := dxConditionsResponse{
-		Target:           target,
+		QTH:              qth,
 		Surroundings:     surroundings,
 		WindowMinutes:    minutes,
 		CwMinDb:          cwMinDb,
@@ -543,7 +543,7 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dxBaseline != nil {
-		resp = dxBaseline.Evaluate(target, surroundings, minutes, cwMinDb, historyCopy, now)
+		resp = dxBaseline.Evaluate(qth, surroundings, minutes, cwMinDb, historyCopy, now)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -551,9 +551,9 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
-	target, surroundings := resolveTargetQuery(r)
-	if target == "" {
-		http.Error(w, "target required", http.StatusBadRequest)
+	qth, surroundings := resolveQTHQuery(r)
+	if qth == "" {
+		http.Error(w, "qth required", http.StatusBadRequest)
 		return
 	}
 
@@ -587,7 +587,7 @@ func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
 	hub.RUnlock()
 
 	resp := hotBandsResponse{
-		Target:           target,
+		QTH:              qth,
 		Surroundings:     surroundings,
 		CurrentBand:      currentBand,
 		CurrentSlotOfDay: utcSlotOfDay(now),
@@ -596,7 +596,7 @@ func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dxBaseline != nil {
-		resp = dxBaseline.HotBands(target, surroundings, minutes, cwMinDb, currentBand, historyCopy, now)
+		resp = dxBaseline.HotBands(qth, surroundings, minutes, cwMinDb, currentBand, historyCopy, now)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

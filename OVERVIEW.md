@@ -125,7 +125,7 @@ The agent runs locally — it communicates directly from your browser to your sh
 ## Typical Use Cases
 
 **Before a contest or DXpedition**
-Open DXPulse and set your target locator. Check the anomaly matrix against the contest bands — see at a glance if 15 m is running unusually well to North America, or if 10 m to Japan is in an exceptional opening.
+Open DXPulse and set your qth locator. Check the anomaly matrix against the contest bands — see at a glance if 15 m is running unusually well to North America, or if 10 m to Japan is in an exceptional opening.
 
 **During casual operating**
 Keep HorstReporter open alongside your logging software. The map updates automatically; when a new region lights up on a band you haven't tried yet, it's a cue to spin the dial.
@@ -134,7 +134,7 @@ Keep HorstReporter open alongside your logging software. The map updates automat
 The distance vs. SNR chart in the Band Stats panel tells you the reach of your station on each band. Compare a new antenna against your old one by watching how far the scatter plot extends on the distance axis.
 
 **Propagation monitoring without transmitting**
-Use a locator-based target (your grid square) to see what's being heard by reporters in your area, regardless of whether you're transmitting.
+Use a locator-based qth (your grid square) to see what's being heard by reporters in your area, regardless of whether you're transmitting.
 
 **Remote monitoring**
 HorstReporter is a single web page served from a small Go binary. It runs comfortably on a Raspberry Pi or a home server, and you can access it from any browser on your local network.
@@ -144,11 +144,11 @@ HorstReporter is a single web page served from a small Go binary. It runs comfor
 ## Getting Started
 
 1. Open HorstReporter in your browser.
-2. Type your callsign **or** your 4- or 6-character Maidenhead locator into the target field (e.g. `DL1ABC` or `JO42`). Use the location button to auto-fill your locator from the browser's GPS.
+2. Type your callsign **or** your 4- or 6-character Maidenhead locator into the qth field (e.g. `DL1ABC` or `JO42`). Use the location button to auto-fill your locator from the browser's GPS.
 3. Select the bands you want to watch.
 4. The map starts populating within seconds as live reports arrive.
 
-All your settings (target, bands, projection, thresholds, time window) are saved automatically in the browser and restored on your next visit.
+All your settings (qth, bands, projection, thresholds, time window) are saved automatically in the browser and restored on your next visit.
 
 ---
 
@@ -182,7 +182,7 @@ Replay the past 24 hours of propagation as a time-lapse. Useful for post-contest
 Display current solar flux (SFI), sunspot number (SSN), and K-index directly in the interface. When the K-index spikes, it's immediately visible alongside the degraded propagation on the map.
 
 **Personalised baseline** ✅
-The baseline now has three tiers: your own target history, your **regional** baseline (operators in your DXPulse region — EU, NA, AS, …), and the global average. Scoring falls back through the tiers, so operators with thin target history get a baseline scoped to their part of the world instead of the global average — giving more accurate "unusual opening" alerts for your specific location. Always on; no setup needed.
+The baseline now has three tiers: your own qth history, your **regional** baseline (operators in your DXPulse region — EU, NA, AS, …), and the global average. Scoring falls back through the tiers, so operators with thin qth history get a baseline scoped to their part of the world instead of the global average — giving more accurate "unusual opening" alerts for your specific location. Always on; no setup needed.
 
 ### Longer-term
 

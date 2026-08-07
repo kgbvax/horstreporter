@@ -16,14 +16,14 @@ if (host) app = new App({ target: host });
 
 // If app.js was loaded with ?capture=1, it parsed the URL into a capture config
 // and exposed it here. Seed the Svelte store from those values BEFORE mounting
-// the control components so URL-driven projection/style/target/etc. are not
+// the control components so URL-driven projection/style/qth/etc. are not
 // clobbered by store defaults or persisted localStorage state.
 const captureConfig = typeof window !== 'undefined' ? window.__horstCaptureConfig : null;
 if (captureConfig?.enabled) {
     const cfg = captureConfig;
     uiStore.update((s) => {
         const next = { ...s };
-        if (cfg.target != null) next.target = String(cfg.target);
+        if (cfg.target != null) next.qth = String(cfg.target);
         if (Number.isFinite(cfg.minutes) && cfg.minutes >= 1) next.minutes = Math.min(60, cfg.minutes);
         if (cfg.minSnrMode === 'ssb' || cfg.minSnrMode === 'cw' || cfg.minSnrMode === 'none') next.minSnr = cfg.minSnrMode;
         if (Number.isFinite(cfg.ssbMinDb)) next.ssbMinDb = cfg.ssbMinDb;
@@ -68,6 +68,7 @@ if (styleHost) new MapStyle({ target: styleHost });
 
 // Legacy localStorage seeding: only applied when there is no capture config so
 // normal reloads keep the user's last UI state, while capture URLs win.
+// One-time migration: the legacy 'target' key is now 'qth'.
 if (!captureConfig?.enabled) {
     const savedProjection = localStorage.getItem('mapProjection');
     if (savedProjection === 'mercator' || savedProjection === 'azimuthal') {
@@ -81,18 +82,25 @@ if (!captureConfig?.enabled) {
     if (savedCountry !== null) {
         uiStore.update((s) => ({ ...s, countryColoring: savedCountry === 'true' }));
     }
-    const savedTarget = localStorage.getItem('target');
-    if (savedTarget) uiStore.update((s) => ({ ...s, target: savedTarget }));
+    // Migrate from the legacy 'target' key to 'qth' on first load; otherwise
+    // use the current 'qth' key.
+    const legacyTarget = localStorage.getItem('target');
+    if (legacyTarget) {
+        localStorage.setItem('qth', legacyTarget);
+        localStorage.removeItem('target');
+    }
+    const savedQth = localStorage.getItem('qth');
+    if (savedQth) uiStore.update((s) => ({ ...s, qth: savedQth }));
     const savedDx = localStorage.getItem('showDXClusterSpots');
     if (savedDx !== null) uiStore.update((s) => ({ ...s, showDxcluster: savedDx === 'true' }));
 }
 
-// External vanilla writers set the target via the store so the input stays in
-// sync; readers still read #target.value directly.
-window.__horstSetTarget = (v) => uiStore.update((s) => ({ ...s, target: v == null ? '' : String(v) }));
+// External vanilla writers set the qth via the store so the input stays in
+// sync; readers still read #qth.value directly.
+window.__horstSetQTH = (v) => uiStore.update((s) => ({ ...s, qth: v == null ? '' : String(v) }));
 
-const targetHost = document.getElementById('target-root');
-if (targetHost) new TargetInput({ target: targetHost });
+const qthHost = document.getElementById('qth-root');
+if (qthHost) new TargetInput({ target: qthHost });
 const projHost = document.getElementById('projection-group');
 if (projHost) new Projection({ target: projHost });
 

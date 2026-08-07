@@ -42,7 +42,7 @@ type hotBandRecommendation struct {
 }
 
 type hotBandsResponse struct {
-	Target           string                  `json:"target"`
+	QTH              string                  `json:"qth"`
 	Surroundings     bool                    `json:"surroundings"`
 	CurrentBand      string                  `json:"current_band"`
 	CurrentSlotOfDay int                     `json:"current_slot_of_day"`
@@ -55,12 +55,12 @@ type hotBandsResponse struct {
 // hotBandsMaxResults recommendations sorted by priority then by class-specific
 // rank. An empty recommendations slice is a valid response — the frontend
 // hides the indicator in that case.
-func (e *DxBaselineEngine) HotBands(target string, surroundings bool, minutes int, cwMinDb int, currentBand string, history []MQTTMessage, now int64) hotBandsResponse {
-	cond := e.Evaluate(target, surroundings, minutes, cwMinDb, history, now)
+func (e *DxBaselineEngine) HotBands(qth string, surroundings bool, minutes int, cwMinDb int, currentBand string, history []MQTTMessage, now int64) hotBandsResponse {
+	cond := e.Evaluate(qth, surroundings, minutes, cwMinDb, history, now)
 	currentBand = normalizeBand(currentBand)
 
 	resp := hotBandsResponse{
-		Target:           cond.Target,
+		QTH:              cond.QTH,
 		Surroundings:     cond.Surroundings,
 		CurrentBand:      currentBand,
 		CurrentSlotOfDay: cond.CurrentSlotOfDay,
@@ -69,17 +69,17 @@ func (e *DxBaselineEngine) HotBands(target string, surroundings bool, minutes in
 		Recommendations:  []hotBandRecommendation{},
 	}
 
-	if cond.Target == "" || len(cond.Bands) == 0 {
+	if cond.QTH == "" || len(cond.Bands) == 0 {
 		return resp
 	}
 
-	// Baseline p90 distance lookup is target-scoped, so we need the same
-	// block-anchored target list that Evaluate uses internally.
-	targets := []string{cond.Target}
-	if cond.Surroundings && isLocator(cond.Target) {
-		targets = getSurroundingSquares(cond.Target)
+	// Baseline p90 distance lookup is qth-scoped, so we need the same
+	// block-anchored qth set that Evaluate uses internally.
+	qthSet := []string{cond.QTH}
+	if cond.Surroundings && isLocator(cond.QTH) {
+		qthSet = getSurroundingSquares(cond.QTH)
 	}
-	baselineTargets := normalizeTargetsForBaseline(targets)
+	qthBaselineSet := normalizeQTHSetForBaseline(qthSet)
 
 	trustedBaseline := cond.BaselineHistoryM >= hotBandsMinHistoryMinutes
 
@@ -107,18 +107,18 @@ func (e *DxBaselineEngine) HotBands(target string, surroundings bool, minutes in
 			continue
 		}
 
-		baseP90, baseUsed := e.lookupBaselineP90(baselineTargets, cond.OperatorRegion, b.Band, cond.CurrentSlotOfDay)
+		baseP90, baseUsed := e.lookupBaselineP90(qthBaselineSet, cond.OperatorRegion, b.Band, cond.CurrentSlotOfDay)
 		distRatio := 0.0
 		if baseP90 > 0 {
 			distRatio = b.P90DistanceKm / baseP90
 		}
 
 		// classify, in priority order — first match wins.
-		// The surprise/dx_surge gates accept either a target-specific OR a
+		// The surprise/dx_surge gates accept either a qth-specific OR a
 		// regional baseline — a regional baseline gives operators with thin
-		// target history the same "unusual opening" detection as those with
-		// rich target history.
-		baselineScoped := b.TargetBaselineUsed || b.RegionalBaselineUsed
+		// qth history the same "unusual opening" detection as those with
+		// rich qth history.
+		baselineScoped := b.QTHBaselineUsed || b.RegionalBaselineUsed
 		switch {
 		case baselineScoped && trustedBaseline &&
 			b.BaselineActivity > 0 && b.BaselineActivity <= hotBandsSurpriseBaselineMx &&
@@ -193,28 +193,28 @@ func (e *DxBaselineEngine) HotBands(target string, surroundings bool, minutes in
 	return resp
 }
 
-func (e *DxBaselineEngine) lookupBaselineP90(targets []string, operatorRegion, band string, slot int) (float64, bool) {
+func (e *DxBaselineEngine) lookupBaselineP90(qthSet []string, operatorRegion, band string, slot int) (float64, bool) {
 	if e == nil {
 		return 0, false
 	}
 	e.mu.RLock()
 	st := e.store
-	var globalCopy, targetCopy, regionCopy map[string]*baselineBucket
+	var globalCopy, qthCopy, regionCopy map[string]*baselineBucket
 	if st == nil {
 		globalCopy = cloneBuckets(e.buckets)
-		targetCopy = cloneBuckets(e.targetBuckets)
+		qthCopy = cloneBuckets(e.qthBuckets)
 		regionCopy = cloneBuckets(e.regionalBuckets)
 	}
 	e.mu.RUnlock()
 
 	if st != nil {
-		km, used, _, err := st.baselineP90DistanceForBand(targets, operatorRegion, band, slot)
+		km, used, _, err := st.baselineP90DistanceForBand(qthSet, operatorRegion, band, slot)
 		if err != nil {
 			return 0, false
 		}
 		return km, used
 	}
-	km, used, _ := baselineP90DistanceForBand(globalCopy, targetCopy, regionCopy, operatorRegion, targets, band, slot)
+	km, used, _ := baselineP90DistanceForBand(globalCopy, qthCopy, regionCopy, operatorRegion, qthSet, band, slot)
 	return km, used
 }
 

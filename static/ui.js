@@ -49,18 +49,18 @@ function initAutoLocateCoachmark() {
         'autoLocateCoachmarkDismissedAt',
         'autoLocateCoachmarkReappearDays'
     ];
-    const targetInput = document.getElementById('target');
+    const qthInput = document.getElementById('qth');
     const geoButton = document.getElementById('btn-geo');
     const fetchForm = document.getElementById('fetch-form');
     const controls = document.getElementById('controls');
 
-    if (!geoButton || !targetInput || !fetchForm) return;
+    if (!geoButton || !qthInput || !fetchForm) return;
 
     // Explicitly disable any legacy TTL-based reappearance behavior.
     LEGACY_REAPPEAR_KEYS.forEach((key) => localStorage.removeItem(key));
 
-    const hasExistingTarget = !!localStorage.getItem('target');
-    if (hasExistingTarget || localStorage.getItem(DISMISS_KEY) === 'true') {
+    const hasExistingQth = !!localStorage.getItem('qth');
+    if (hasExistingQth || localStorage.getItem(DISMISS_KEY) === 'true') {
         return;
     }
 
@@ -80,7 +80,7 @@ function initAutoLocateCoachmark() {
         }
         window.removeEventListener('resize', positionCoachmark);
         controls?.removeEventListener('scroll', positionCoachmark);
-        fetchForm.removeEventListener('submit', onTargetSubmit, true);
+        fetchForm.removeEventListener('submit', onQthSubmit, true);
     };
 
     const positionCoachmark = () => {
@@ -113,14 +113,14 @@ function initAutoLocateCoachmark() {
         }
     };
 
-    const onTargetSubmit = () => {
-        const target = targetInput.value.trim();
-        if (target) {
+    const onQthSubmit = () => {
+        const qth = qthInput.value.trim();
+        if (qth) {
             dismiss();
         }
     };
 
-    fetchForm.addEventListener('submit', onTargetSubmit, true);
+    fetchForm.addEventListener('submit', onQthSubmit, true);
     window.addEventListener('resize', positionCoachmark);
     controls?.addEventListener('scroll', positionCoachmark);
 
@@ -225,18 +225,18 @@ export function attachUITooltipEvents() {
     }
 
     // Great-circle bearing from the target square (station) to the hovered
-    // square center, e.g. " 302°". Empty when the target isn't a valid
-    // locator (the field also accepts callsigns) or hovers the target itself.
+    // square center, e.g. " 302°". Empty when the qth isn't a valid
+    // locator (the field also accepts callsigns) or hovers the qth itself.
     function hoverSquareAzimuthText(hoverLocator) {
-        const target = document.getElementById('target')?.value?.trim()?.toUpperCase() || '';
+        const qth = document.getElementById('qth')?.value?.trim()?.toUpperCase() || '';
         const locatorRe = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/;
-        if (!locatorRe.test(target) || !locatorRe.test(hoverLocator)) return '';
-        if (target === hoverLocator) return '';
-        const targetBounds = locatorToBounds(target);
+        if (!locatorRe.test(qth) || !locatorRe.test(hoverLocator)) return '';
+        if (qth === hoverLocator) return '';
+        const qthBounds = locatorToBounds(qth);
         const hoverBounds = locatorToBounds(hoverLocator);
-        if (!targetBounds || !hoverBounds) return '';
+        if (!qthBounds || !hoverBounds) return '';
         const center = (b) => [(b[0][0] + b[1][0]) / 2, (b[0][1] + b[1][1]) / 2];
-        const [tLat, tLng] = center(targetBounds);
+        const [tLat, tLng] = center(qthBounds);
         const [hLat, hLng] = center(hoverBounds);
         const bearing = Math.round(initialBearingDeg(tLat, tLng, hLat, hLng)) % 360;
         return ` ${bearing}°`;
@@ -280,7 +280,7 @@ export function attachUITooltipEvents() {
 
     function buildHoverRequestKey(params) {
         return [
-            params.target,
+            params.qth,
             params.locator,
             params.minutes,
             params.surroundings ? '1' : '0',
@@ -293,7 +293,7 @@ export function attachUITooltipEvents() {
     }
 
     function getHoverParams(locator) {
-        const target = document.getElementById('target')?.value?.trim()?.toUpperCase() || '';
+        const qth = document.getElementById('qth')?.value?.trim()?.toUpperCase() || '';
         const minutes = parseInt(document.getElementById('minutes')?.value || '15', 10) || 15;
         const minSnrMode = getMinSnrMode();
         const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
@@ -303,7 +303,7 @@ export function attachUITooltipEvents() {
         const surroundings = document.getElementById('surroundings')?.checked === true;
 
         return {
-            target,
+            qth,
             locator,
             minutes,
             minSnrMode,
@@ -316,7 +316,7 @@ export function attachUITooltipEvents() {
     }
 
     async function fetchHoverDetails(params, requestKey) {
-        if (!params.target) {
+        if (!params.qth) {
             hideTooltip();
             return;
         }
@@ -328,7 +328,7 @@ export function attachUITooltipEvents() {
         const seq = ++hoverRequestSeq;
 
         const query = new URLSearchParams();
-        query.set('target', params.target);
+        query.set('qth', params.qth);
         query.set('locator', params.locator);
         query.set('minutes', String(params.minutes));
         if (params.surroundings) query.set('surroundings', 'true');
@@ -368,7 +368,7 @@ export function attachUITooltipEvents() {
         updateHoverSquareHighlight(loc);
 
         const params = getHoverParams(loc);
-        if (!params.target) {
+        if (!params.qth) {
             hideTooltip();
             return;
         }

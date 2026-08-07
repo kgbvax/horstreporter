@@ -121,7 +121,7 @@ func TestMatchAndCreateSpot(t *testing.T) {
 	}
 
 	t.Run("Match by Sender Callsign", func(t *testing.T) {
-		client := &Client{targets: []string{"W1AW"}}
+		client := &Client{qthSet: []string{"W1AW"}}
 		spot, ok := matchAndCreateSpot(client, msg, now)
 		if !ok {
 			t.Fatal("expected spot to match")
@@ -138,7 +138,7 @@ func TestMatchAndCreateSpot(t *testing.T) {
 	})
 
 	t.Run("Match by Sender Locator", func(t *testing.T) {
-		client := &Client{targets: []string{"FN31"}}
+		client := &Client{qthSet: []string{"FN31"}}
 		spot, ok := matchAndCreateSpot(client, msg, now)
 		if !ok {
 			t.Fatal("expected spot to match target locator FN31")
@@ -169,7 +169,7 @@ func TestStreamHandlerIntegration(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(streamHandler))
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "?target=W1AW")
+	resp, err := http.Get(server.URL + "?qth=W1AW")
 	if err != nil {
 		t.Fatalf("Failed to make request: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestMatchAndCreateSpotEdgeCases(t *testing.T) {
 	now := int64(200000)
 
 	t.Run("No targets configured", func(t *testing.T) {
-		client := &Client{targets: []string{}}
+		client := &Client{qthSet: []string{}}
 		_, ok := matchAndCreateSpot(client, MQTTMessage{}, now)
 		if ok {
 			t.Fatal("expected no match when client has no targets")
@@ -523,7 +523,7 @@ func TestMatchAndCreateSpotEdgeCases(t *testing.T) {
 	})
 
 	t.Run("Receiver-side match uses sender locator", func(t *testing.T) {
-		client := &Client{targets: []string{"K1JT"}}
+		client := &Client{qthSet: []string{"K1JT"}}
 		msg := MQTTMessage{
 			SC: "W1AW",
 			RC: "K1JT",
@@ -545,7 +545,7 @@ func TestMatchAndCreateSpotEdgeCases(t *testing.T) {
 	})
 
 	t.Run("Drops match when remote locator is empty", func(t *testing.T) {
-		client := &Client{targets: []string{"W1AW"}}
+		client := &Client{qthSet: []string{"W1AW"}}
 		msg := MQTTMessage{
 			SC: "W1AW",
 			RC: "K1JT",
@@ -564,7 +564,7 @@ func TestMatchAndCreateSpotEdgeCases(t *testing.T) {
 	})
 
 	t.Run("Future timestamps clamp age to zero", func(t *testing.T) {
-		client := &Client{targets: []string{"W1AW"}}
+		client := &Client{qthSet: []string{"W1AW"}}
 		msg := MQTTMessage{
 			SC: "W1AW",
 			RC: "K1JT",
@@ -680,7 +680,7 @@ func TestSquareDetailsHandlerAggregatesHoverDetails(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(squareDetailsHandler))
 		defer server.Close()
 
-		resp, err := http.Get(server.URL + "?target=W1AW&locator=FN20&minutes=15&min_snr_mode=cw&cw_min_db=-15&selected_band=all&enabled_bands=20m,40m")
+		resp, err := http.Get(server.URL + "?qth=W1AW&locator=FN20&minutes=15&min_snr_mode=cw&cw_min_db=-15&selected_band=all&enabled_bands=20m,40m")
 		if err != nil {
 			t.Fatalf("Failed to make request: %v", err)
 		}
@@ -718,7 +718,7 @@ func TestStreamHandlerMaxClientsCapacity(t *testing.T) {
 		hub.clients[&Client{send: make(chan Spot, 1)}] = true
 		hub.Unlock()
 
-		req := httptest.NewRequest(http.MethodGet, "/api/stream?target=W1AW", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/stream?qth=W1AW", nil)
 		rec := httptest.NewRecorder()
 
 		streamHandler(rec, req)
@@ -806,7 +806,7 @@ func TestCaptureSnapshotHandlerReturnsFilteredSpots(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(captureSnapshotHandler))
 		defer server.Close()
 
-		url := server.URL + "?target=W1AW&snapshot_at=" + strconv.FormatInt(now, 10) + "&minutes=15&min_snr_mode=ssb&ssb_min_db=-6&selected_band=20m&enabled_bands=20m&include_dxcluster=false"
+		url := server.URL + "?qth=W1AW&snapshot_at=" + strconv.FormatInt(now, 10) + "&minutes=15&min_snr_mode=ssb&ssb_min_db=-6&selected_band=20m&enabled_bands=20m&include_dxcluster=false"
 		resp, err := http.Get(url)
 		if err != nil {
 			t.Fatalf("Failed to make request: %v", err)
@@ -822,8 +822,8 @@ func TestCaptureSnapshotHandlerReturnsFilteredSpots(t *testing.T) {
 			t.Fatalf("failed to decode payload: %v", err)
 		}
 
-		if payload.Target != "W1AW" {
-			t.Fatalf("expected target W1AW, got %q", payload.Target)
+		if payload.QTH != "W1AW" {
+			t.Fatalf("expected target W1AW, got %q", payload.QTH)
 		}
 		if payload.Count != 1 {
 			t.Fatalf("expected 1 filtered spot, got %d", payload.Count)
@@ -906,7 +906,7 @@ func TestDxConditionsHandlerReturnsScoredPayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(dxConditionsHandler))
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "?target=W1AW&minutes=15")
+	resp, err := http.Get(server.URL + "?qth=W1AW&minutes=15")
 	if err != nil {
 		t.Fatalf("Failed to make request: %v", err)
 	}
@@ -921,8 +921,8 @@ func TestDxConditionsHandlerReturnsScoredPayload(t *testing.T) {
 		t.Fatalf("failed to decode payload: %v", err)
 	}
 
-	if payload["target"] != "W1AW" {
-		t.Fatalf("expected target W1AW, got %v", payload["target"])
+	if payload["qth"] != "W1AW" {
+		t.Fatalf("expected qth W1AW, got %v", payload["qth"])
 	}
 
 	if _, ok := payload["overall_score"].(float64); !ok {
@@ -988,7 +988,7 @@ func TestPairsForBandSlot(t *testing.T) {
 		{Band: "40m", Slot: 3}:  {{DistanceTier: 2, SnrTier: 1, Count: 9}},
 	}
 
-	// Target wins when present → used=true, target pairs. (region=nil → regionUsed=false)
+	// QTH wins when present → used=true, target pairs. (region=nil → regionUsed=false)
 	p, used, usedRegion := pairsForBandSlot(target, nil, global, "20m", 10)
 	if !used || usedRegion || len(p) != 1 || p[0].Count != 50 {
 		t.Fatalf("20m/10: expected target(50) used=true regionUsed=false, got %v used=%v regionUsed=%v", p, used, usedRegion)
@@ -1325,9 +1325,9 @@ func TestDxBaselinePersistenceTracksHistorySpan(t *testing.T) {
 }
 
 func TestServerHelperFunctions(t *testing.T) {
-	t.Run("resolveTargetQuery honors compatibility params and surroundings", func(t *testing.T) {
+	t.Run("resolveQTHQuery honors compatibility params and surroundings", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/stream?callsign=w1aw&surroundings=true", nil)
-		target, surroundings := resolveTargetQuery(req)
+		target, surroundings := resolveQTHQuery(req)
 		if target != "W1AW" {
 			t.Fatalf("expected W1AW target, got %q", target)
 		}

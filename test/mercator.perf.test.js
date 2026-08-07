@@ -19,7 +19,7 @@ import { writePerfScenarioReport } from './perf-report.js';
 
 function setupDom(style = 'grid-snr') {
     document.body.innerHTML = `
-        <input id="target" value="JO32" />
+        <input id="qth" value="JO32" />
         <input id="ssb-min-db" value="0" />
         <input id="cw-min-db" value="-15" />
         <input id="auto-zoom" type="checkbox" />

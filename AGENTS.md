@@ -1,7 +1,7 @@
 # HorstReporter AI Agent Instructions
 
 ## Project snapshot
-- HorstReporter is a **single Go binary** that ingests PSK Reporter MQTT traffic, filters spots for a target, and serves a static browser UI.
+- HorstReporter is a **single Go binary** that ingests PSK Reporter MQTT traffic, filters spots for an operator's QTH, and serves a static browser UI.
 - Backend entry point: `main.go`.
 - Frontend entry point: `static/app.js`.
 - Frontend stack: plain ES modules + static assets (Leaflet/Bootstrap/Turf), **no React/Vue build pipeline**.
@@ -30,15 +30,15 @@
 
 ## API endpoints and important behavior
 - `/api/stream` (SSE)
-  - Primary query param: `target`.
-  - Backward compatibility: falls back to `callsign`/`locator` if `target` is missing.
+  - Primary query param: `qth`.
+  - Backward compatibility: falls back to `callsign`/`locator` if `qth` is missing.
   - `minutes`: defaults to 15, capped at 60.
-  - `surroundings=true`: expands target to neighboring squares **only when target is a valid locator**.
+  - `surroundings=true`: expands qth to neighboring squares **only when qth is a valid locator**.
   - At max client pressure, returns SSE event `server_error` with human-readable message.
 - `/api/stats` (JSON)
   - Returns `active_connections`, `history_size`, `history_minutes`, `history_size_kb`.
 - `/api/dx_conditions` (JSON)
-  - Accepts `target`, `minutes`, `surroundings`, `cw_min_db`.
+  - Accepts `qth`, `minutes`, `surroundings`, `cw_min_db`.
   - Returns current DX score/condition with confidence, best bands, per-band details, and baseline depth metadata.
 
 ## Frontend visualization modes

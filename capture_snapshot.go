@@ -10,7 +10,7 @@ import (
 )
 
 type captureSnapshotResponse struct {
-	Target       string       `json:"target"`
+	QTH          string       `json:"qth"`
 	Surroundings bool         `json:"surroundings"`
 	SnapshotAt   int64        `json:"snapshot_at"`
 	WindowMin    int          `json:"window_minutes"`
@@ -20,9 +20,9 @@ type captureSnapshotResponse struct {
 }
 
 func captureSnapshotHandler(w http.ResponseWriter, r *http.Request) {
-	target, surroundings := resolveTargetQuery(r)
-	if target == "" {
-		http.Error(w, "target required", http.StatusBadRequest)
+	qth, surroundings := resolveQTHQuery(r)
+	if qth == "" {
+		http.Error(w, "qth required", http.StatusBadRequest)
 		return
 	}
 
@@ -58,11 +58,11 @@ func captureSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 		includeRbn = strings.EqualFold(raw, "true") || raw == "1"
 	}
 
-	targets := []string{target}
-	if surroundings && isLocator(target) {
-		targets = getSurroundingSquares(target)
+	qthSet := []string{qth}
+	if surroundings && isLocator(qth) {
+		qthSet = getSurroundingSquares(qth)
 	}
-	client := &Client{targets: targets}
+	client := &Client{qthSet: qthSet}
 
 	cutoff := snapshotAt - int64(windowMinutes*60)
 
@@ -119,7 +119,7 @@ func captureSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	resp := captureSnapshotResponse{
-		Target:       target,
+		QTH:          qth,
 		Surroundings: surroundings,
 		SnapshotAt:   snapshotAt,
 		WindowMin:    windowMinutes,

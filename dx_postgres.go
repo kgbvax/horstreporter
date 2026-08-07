@@ -21,13 +21,13 @@ const (
 type dxPostgresStore struct {
 	pool *pgxpool.Pool
 
-	mu                   sync.Mutex
-	pendingGlobal        map[baselineGlobalKey]baselineDelta
-	pendingTarget        map[baselineTargetDeltaKey]baselineDelta
-	pendingRegion        map[dxPulseRegionBaselineDailyKey]int64
+	mu                    sync.Mutex
+	pendingGlobal         map[baselineGlobalKey]baselineDelta
+	pendingTarget         map[baselineTargetDeltaKey]baselineDelta
+	pendingRegion         map[dxPulseRegionBaselineDailyKey]int64
 	pendingRegionBaseline map[regionBaselineKey]baselineDelta
-	pendingCount         int
-	pendingRawSpots      []rawSpotRow
+	pendingCount          int
+	pendingRawSpots       []rawSpotRow
 
 	flushCh   chan struct{}
 	stopCh    chan struct{}
@@ -316,7 +316,7 @@ func dedupeTargetTokens(targetTokens [4]string) []string {
 	seen := make(map[string]struct{}, len(targetTokens))
 	out := make([]string, 0, len(targetTokens))
 	for i := range targetTokens {
-		t := normalizeTargetTokenUpper(targetTokens[i])
+		t := normalizeQTHTokenUpper(targetTokens[i])
 		if t == "" {
 			continue
 		}
@@ -742,10 +742,10 @@ func (s *dxPostgresStore) ensureDxBaselineRegion(ctx context.Context) error {
 			}
 			agg[regionBaselineKey{
 				ObserverRegion: r,
-				Band:            nb,
-				SlotOfDay:       slot,
-				DistanceTier:    distTier,
-				SnrTier:         snrt,
+				Band:           nb,
+				SlotOfDay:      slot,
+				DistanceTier:   distTier,
+				SnrTier:        snrt,
 			}]++
 		}
 		processed++
@@ -880,10 +880,10 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 		}
 		rk := regionBaselineKey{
 			ObserverRegion: r,
-			Band:            band,
-			SlotOfDay:       slotOfDay,
-			DistanceTier:    distTier,
-			SnrTier:         snrTier,
+			Band:           band,
+			SlotOfDay:      slotOfDay,
+			DistanceTier:   distTier,
+			SnrTier:        snrTier,
 		}
 		rd := s.pendingRegionBaseline[rk]
 		rd.Count += 1

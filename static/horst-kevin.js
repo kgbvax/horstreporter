@@ -205,7 +205,7 @@ function uiPack(lang) {
 
 // ── main ────────────────────────────────────────────────────────────────────
 
-export function initHorstKevin({ getTarget, getSurroundings, getCurrentBand, onBandSwitch }) {
+export function initHorstKevin({ getQth, getSurroundings, getCurrentBand, onBandSwitch }) {
     const stage = document.getElementById('horst-kevin');
     if (!stage) return null;
 
@@ -474,8 +474,8 @@ export function initHorstKevin({ getTarget, getSurroundings, getCurrentBand, onB
 
     async function fetchOnce() {
         if (demoMode) return; // demo drives the engine itself
-        const target = (getTarget?.() || '').trim();
-        if (!target) {
+        const qth = (getQth?.() || '').trim();
+        if (!qth) {
             tracked.clear();
             setMood();
             renderPanel();
@@ -485,7 +485,7 @@ export function initHorstKevin({ getTarget, getSurroundings, getCurrentBand, onB
         abortCtl = new AbortController();
 
         const params = new URLSearchParams();
-        params.set('target', target);
+        params.set('qth', qth);
         if (getSurroundings?.()) params.set('surroundings', 'true');
         const current = (getCurrentBand?.() || '').toLowerCase();
         if (current && current !== 'all') params.set('current_band', current);

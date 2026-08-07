@@ -33,13 +33,15 @@ Related contracts documented elsewhere:
 
 ## Conventions
 
-- **Target resolution**: endpoints taking a station context accept
-  `target` | `callsign` | `locator` query params (checked in that order).
+- **QTH resolution**: endpoints taking a station context accept
+  `qth` | `callsign` | `locator` query params (checked in that order).
   Values are uppercased. A callsign needs a locator enrichment to resolve to
-  coordinates. Where required, a missing/unresolvable target → `400`.
+  coordinates. Where required, a missing/unresolvable qth → `400`.
+  (The QTH is the operator's own station, the point-of-view for all analysis;
+  the older `target` param name is no longer accepted.)
 - **`minutes`**: window size in minutes; invalid or ≤ 0 resets to the
   default; capped at a per-endpoint maximum.
-- **`surroundings`**: `"true"` expands a locator target to the 3×3 block of
+- **`surroundings`**: `"true"` expands a locator qth to the 3×3 block of
   grid squares around it.
 
 ## Core endpoints
@@ -48,9 +50,9 @@ Related contracts documented elsewhere:
 
 Server-sent events: initial history dump, then live spots.
 
-Params: `target` (required), `minutes` (default 15, max 60), `surroundings`,
+Params: `qth` (required), `minutes` (default 15, max 60), `surroundings`,
 `rings` (int, 0..30 — area-of-interest: any sender/receiver within N grid
-squares of a locator target; 0 disables; used by horstprop's region feed).
+squares of a locator qth; 0 disables; used by horstprop's region feed).
 
 Response `text/event-stream`, CORS `*`. Frames:
 
@@ -76,18 +78,18 @@ Same window semantics as `/api/stream` but a single JSON response, sorted
 deterministically (age, locator, band, snr desc, reporter locator). Used for
 server-driven frame capture.
 
-Params: `target` (required), `snapshot_at` (unix seconds, default now; bad
+Params: `qth` (required), `snapshot_at` (unix seconds, default now; bad
 value → 400), `minutes` (default 15, max 720), `surroundings`,
 `min_snr_mode` (`"ssb"`|`"cw"`), `ssb_min_db` (default 0), `cw_min_db`
 (default -15), `selected_band`, `enabled_bands` (CSV), `include_dxcluster`
 (default true), `include_rbn` (default true).
 
-Response: `{target, surroundings, snapshot_at, window_minutes, generated_at,
+Response: `{qth, surroundings, snapshot_at, window_minutes, generated_at,
 count, spots: [<stream spot shape>]}`.
 
 ### `GET /api/dx_conditions` — DX baseline scoring per band
 
-Params: `target` (required), `minutes` (default 20, max 180), `cw_min_db`
+Params: `qth` (required), `minutes` (default 20, max 180), `cw_min_db`
 (default -15), `surroundings`.
 
 Response: top-level `overall_score`, `confidence`, `status`, `condition`,
@@ -98,13 +100,13 @@ per band with ~38 fields — activity (`current_links`, `unique_links`,
 `repeat_ratio`, `spots_per_minute`, unique station/grid counts), geometry
 (`avg/median/max/p90_distance_km`, `long_haul_ratio`, `dx_ratio`), signal
 (`avg_snr`, `median_snr`, `peak_snr`, `p90_snr`), baseline comparison
-(`baseline_activity`, `target_baseline_used`, `regional_baseline_used`,
-`baseline_activity_by_slot`, `baseline_slot_used_by_target`,
+(`baseline_activity`, `qth_baseline_used`, `regional_baseline_used`,
+`baseline_activity_by_slot`, `baseline_slot_used_by_qth`,
 `baseline_slot_used_by_region`), `dominant_direction`, `azimuth_sectors`,
 `region_counts`, trend + `sparkline`, `activity_by_bin`.
 
 Baseline tier selection is per-band and per-slot: a band/slot with
-target-specific history uses it (`target_baseline_used: true`); otherwise it
+qth-specific history uses it (`qth_baseline_used: true`); otherwise it
 falls back to the operator's regional baseline
 (`regional_baseline_used: true`); otherwise to the global baseline (both
 false). The regional baseline is always-on when Postgres is available and is
@@ -115,7 +117,7 @@ unavailable. No caching; window data from the in-memory rolling history.
 
 ### `GET /api/hot_bands` — unusual-activity band alerts
 
-Params: `target` (required), `surroundings`, `minutes` (default 20,
+Params: `qth` (required), `surroundings`, `minutes` (default 20,
 max 180), `cw_min_db`, `current_band`.
 
 Response: `{…, recommendations: [{band, kind ("surprise"|"dx_surge"|"rising"),
@@ -126,7 +128,7 @@ baseline_p90_distance_km?, distance_ratio?, trend, trend_delta, status}]}`.
 ### `GET /api/square_details` — one grid square's reports
 
 Params: `locator` (required, valid Maidenhead or 400), plus the same context
-filters as capture (`target`, `surroundings`, `minutes` default 15 max 60,
+filters as capture (`qth`, `surroundings`, `minutes` default 15 max 60,
 SNR modes/floors, `selected_band`, `enabled_bands`).
 
 Response: `{locator, count, min_snr, max_snr, avg_snr, best_band,
@@ -194,11 +196,11 @@ the first snapshot builds.
 - `GET /dxlens/api/v1/meta` — snapshot metadata (`version`, event/bucket
   counts, coverage flags).
 - `GET /dxlens/api/v1/heatmap` — band × slot-of-day activity heatmap.
-  Params: `target` (locator; omit = global), `surroundings`, `mode`
-  (`"typical"` default | `"recent_24h"` | `"compare"`). Per-target results
+  Params: `qth` (locator; omit = global), `surroundings`, `mode`
+  (`"typical"` default | `"recent_24h"` | `"compare"`). Per-qth results
   cached 5 min; global 60 s; prewarmed at startup.
 - `GET /dxlens/api/v1/region_calendar` — region × slot matrix. Params:
-  `band`, `target`?, `surroundings`. `source` is `"stats"` (30-day
+  `band`, `qth`?, `surroundings`. `source` is `"stats"` (30-day
   statistics: p25/p50/p75/…) or `"events"`.
 - `GET /dxlens/api/v1/now` — what's hot in a 30-min slot. Params: `slot`
   (0-47, default current) or legacy `hour` (0-23).

@@ -128,12 +128,12 @@ export function updateBandLab(options = {}) {
     const cardsEl = document.getElementById('band-lab-cards');
     if (!summaryEl || !cardsEl) return;
 
-    const target = String(document.getElementById('target')?.value || '').trim().toUpperCase();
+    const qth = String(document.getElementById('qth')?.value || '').trim().toUpperCase();
     const minutes = getBandLabLookbackMinutes();
     const surroundings = document.getElementById('surroundings')?.checked === true;
 
-    if (!target) {
-        summaryEl.innerHTML = '<div class="text-muted">Enter a target to inspect band conditions.</div>';
+    if (!qth) {
+        summaryEl.innerHTML = '<div class="text-muted">Enter a qth to inspect band conditions.</div>';
         cardsEl.innerHTML = '';
         return;
     }
@@ -141,18 +141,18 @@ export function updateBandLab(options = {}) {
     const filtered = filterSpots(state.liveSpots, minutes);
     const grouped = groupSpotsByBand(filtered);
     const requestSeq = ++runtime.updateSeq;
-    const requestKey = `${target}|${minutes}|${surroundings ? 1 : 0}`;
+    const requestKey = `${qth}|${minutes}|${surroundings ? 1 : 0}`;
     const hasFreshDx = runtime.dxCache && runtime.dxCacheKey === requestKey;
 
     // Render immediately from live spots to avoid a blank panel while dx_conditions loads.
     renderSummary(summaryEl, { loading: !hasFreshDx });
-    renderBandCards(cardsEl, grouped, target, minutes);
+    renderBandCards(cardsEl, grouped, qth, minutes);
 
-    void ensureDxConditions(target, minutes, surroundings).then(() => {
+    void ensureDxConditions(qth, minutes, surroundings).then(() => {
         // Ignore stale async responses after newer updates were scheduled.
         if (!runtime.enabled || requestSeq !== runtime.updateSeq) return;
         renderSummary(summaryEl);
-        renderBandCards(cardsEl, grouped, target, minutes);
+        renderBandCards(cardsEl, grouped, qth, minutes);
     });
 }
 
@@ -248,16 +248,16 @@ function renderSummary(summaryEl, options = {}) {
     `;
 }
 
-function renderBandCards(cardsEl, grouped, target, minutes) {
+function renderBandCards(cardsEl, grouped, qth, minutes) {
     const bands = Array.from(grouped.keys()).sort((a, b) => compareBand(a, b));
     if (bands.length === 0) {
         cardsEl.innerHTML = '<div class="text-muted small">No reports match current filters.</div>';
         return;
     }
 
-    const targetCenter = getTargetCenter(target);
+    const qthCenter = getQthCenter(qth);
     const dxBands = toBandMetricMap(runtime.dxCache);
-    const globalDistanceCapKm = targetCenter ? getGlobalDistanceCapKm(grouped, targetCenter) : null;
+    const globalDistanceCapKm = qthCenter ? getGlobalDistanceCapKm(grouped, qthCenter) : null;
     const allBandCounts = bands.map((band) => (grouped.get(band) || []).length);
     const totalReportsAllBands = allBandCounts.reduce((sum, n) => sum + n, 0);
     const maxReportsSingleBand = Math.max(0, ...allBandCounts);
@@ -281,7 +281,7 @@ function renderBandCards(cardsEl, grouped, target, minutes) {
                     <div class="band-lab-chart-block">
                         <div class="band-lab-chart-title">Distance vs SNR</div>
                         <canvas id="band-lab-scatter-${safeBand}" width="230" height="120"></canvas>
-                        ${targetCenter ? '' : '<div class="band-lab-chart-note">Distance plot needs locator target (e.g. JO32).</div>'}
+                        ${qthCenter ? '' : '<div class="band-lab-chart-note">Distance plot needs locator qth (e.g. JO32).</div>'}}
                     </div>
                     <div class="band-lab-chart-block">
                         <div class="band-lab-chart-title">Reports over time + baseline</div>
@@ -296,23 +296,23 @@ function renderBandCards(cardsEl, grouped, target, minutes) {
         const safeBand = sanitizeBandId(band);
         const points = grouped.get(band) || [];
         drawActivityChart(document.getElementById(`band-lab-activity-${safeBand}`), points, dxBands.get(band), minutes);
-        drawScatterChart(document.getElementById(`band-lab-scatter-${safeBand}`), points, targetCenter, band, globalDistanceCapKm);
+        drawScatterChart(document.getElementById(`band-lab-scatter-${safeBand}`), points, qthCenter, band, globalDistanceCapKm);
     }
 }
 
 // Robust axis cap for the distance axis: the p95 of every report's distance
-// from the target across all bands, NOT the raw max. A single antipodean spot
+// from the qth across all bands, NOT the raw max. A single antipodean spot
 // would otherwise set the axis max for every band's scatter and compress the
 // whole population against the left edge. p95 trims extreme outliers while
 // keeping the bulk; the score baseline already uses p90 server-side, so this
 // is consistent in spirit. Floored at 500 km so tiny populations still get a
 // readable axis. Points beyond the cap are clamped to the edge and marked
 // (see drawScatterChart), never silently dropped.
-function getGlobalDistanceCapKm(grouped, targetCenter) {
+function getGlobalDistanceCapKm(grouped, qthCenter) {
     const distances = [];
     for (const points of grouped.values()) {
         for (const point of points) {
-            const d = haversineKm(targetCenter.lat, targetCenter.lng, Number(point.lat), Number(point.lng));
+            const d = haversineKm(qthCenter.lat, qthCenter.lng, Number(point.lat), Number(point.lng));
             if (Number.isFinite(d)) distances.push(d);
         }
     }
@@ -322,9 +322,9 @@ function getGlobalDistanceCapKm(grouped, targetCenter) {
     return Number.isFinite(cap) ? Math.max(500, cap) : 500;
 }
 
-function getTargetCenter(target) {
-    if (!/^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(target)) return null;
-    const bounds = locatorToBounds(target);
+function getQthCenter(qth) {
+    if (!/^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(qth)) return null;
+    const bounds = locatorToBounds(qth);
     if (!bounds) return null;
     return {
         lat: (bounds[0][0] + bounds[1][0]) / 2,
@@ -332,14 +332,14 @@ function getTargetCenter(target) {
     };
 }
 
-// Pure: turn spots + target center into scatter samples + axis ranges, or null
+// Pure: turn spots + qth center into scatter samples + axis ranges, or null
 // when there is no usable distance data. Extracted from drawScatterChart so the
 // math is unit-testable without a canvas.
-export function computeScatterData(points, targetCenter, globalDistanceCapKm) {
-    if (!targetCenter || !points || points.length === 0) return null;
+export function computeScatterData(points, qthCenter, globalDistanceCapKm) {
+    if (!qthCenter || !points || points.length === 0) return null;
     const samples = points
         .map((p) => ({
-            d: haversineKm(targetCenter.lat, targetCenter.lng, Number(p.lat), Number(p.lng)),
+            d: haversineKm(qthCenter.lat, qthCenter.lng, Number(p.lat), Number(p.lng)),
             s: Number(p.snr || 0)
         }))
         .filter((v) => Number.isFinite(v.d) && Number.isFinite(v.s));
@@ -356,7 +356,7 @@ export function computeScatterData(points, targetCenter, globalDistanceCapKm) {
     return { samples, maxDist, minSnr, maxSnr, snrRange };
 }
 
-function drawScatterChart(canvas, points, targetCenter, band, globalDistanceCapKm) {
+function drawScatterChart(canvas, points, qthCenter, band, globalDistanceCapKm) {
     const prepared = prepareCanvas(canvas, 230, 120);
     if (!prepared) return;
     const { ctx, w, h } = prepared;
@@ -369,7 +369,7 @@ function drawScatterChart(canvas, points, targetCenter, band, globalDistanceCapK
     const pal = chartPalette();
     drawChartFrame(ctx, pad, pw, ph, pal);
 
-    const data = computeScatterData(points, targetCenter, globalDistanceCapKm);
+    const data = computeScatterData(points, qthCenter, globalDistanceCapKm);
     if (!data) {
         drawNoData(ctx, w, h, 'no distance data', pal);
         return;
@@ -499,7 +499,7 @@ export function utcSlotOfDayFromMs(timestampMs) {
 // Shape:
 //   binRates[i]               — spots/min in bin i (i=0 oldest, i=11 newest)
 //   baselineRatesPerBin[i]    — historical spots/min for the slot containing bin i's centre
-//   baselineTargetUsedPerBin[i] — true when the per-slot target baseline was used
+//   baselineQthUsedPerBin[i] — true when the per-slot qth baseline was used
 //   yMax                       — y-axis upper bound in spots/min
 //   binMinutes                 — width of one bin in minutes
 //   sloChanges                 — bin indices where the slot index changed vs the previous bin
@@ -537,12 +537,12 @@ export function computeActivityChartData(points, bandMetrics, minutes, nowMs) {
     }
 
     const baselineBySlot = Array.isArray(bandMetrics?.baseline_activity_by_slot) ? bandMetrics.baseline_activity_by_slot : [];
-    const slotUsedByTarget = Array.isArray(bandMetrics?.baseline_slot_used_by_target) ? bandMetrics.baseline_slot_used_by_target : [];
+    const slotUsedByQth = Array.isArray(bandMetrics?.baseline_slot_used_by_qth) ? bandMetrics.baseline_slot_used_by_qth : [];
     const currentSlotBaselineRate = Math.max(0, Number(bandMetrics?.baseline_activity || 0));
-    const currentSlotTargetUsed = bandMetrics?.target_baseline_used === true;
+    const currentSlotQthUsed = bandMetrics?.qth_baseline_used === true;
 
     const baselineRatesPerBin = new Array(ACTIVITY_BINS).fill(0);
-    const baselineTargetUsedPerBin = new Array(ACTIVITY_BINS).fill(false);
+    const baselineQthUsedPerBin = new Array(ACTIVITY_BINS).fill(false);
     const slotChanges = [];
     let prevSlot = -1;
     for (let i = 0; i < ACTIVITY_BINS; i++) {
@@ -557,7 +557,7 @@ export function computeActivityChartData(points, bandMetrics, minutes, nowMs) {
             const v = Number(baselineBySlot[slot]);
             if (Number.isFinite(v) && v > 0) {
                 rate = v;
-                used = Boolean(slotUsedByTarget[slot]);
+                used = Boolean(slotUsedByQth[slot]);
             }
         }
         // Fallback: if the per-slot array didn't carry data, fall back to the
@@ -565,10 +565,10 @@ export function computeActivityChartData(points, bandMetrics, minutes, nowMs) {
         // that haven't returned the new field yet).
         if (rate === 0 && baselineBySlot.length === 0 && currentSlotBaselineRate > 0) {
             rate = currentSlotBaselineRate;
-            used = currentSlotTargetUsed;
+            used = currentSlotQthUsed;
         }
         baselineRatesPerBin[i] = rate;
-        baselineTargetUsedPerBin[i] = used;
+        baselineQthUsedPerBin[i] = used;
         if (i === 0) {
             prevSlot = slot;
         } else if (slot !== prevSlot) {
@@ -584,7 +584,7 @@ export function computeActivityChartData(points, bandMetrics, minutes, nowMs) {
     return {
         binRates,
         baselineRatesPerBin,
-        baselineTargetUsedPerBin,
+        baselineQthUsedPerBin,
         yMax,
         binMinutes,
         slotChanges,
@@ -612,7 +612,7 @@ function drawActivityChart(canvas, points, bandMetrics, minutes) {
     drawChartFrame(ctx, pad, pw, ph, pal);
 
     const data = computeActivityChartData(points, bandMetrics, minutes, Date.now());
-    const { binRates, baselineRatesPerBin, baselineTargetUsedPerBin, yMax } = data;
+    const { binRates, baselineRatesPerBin, baselineQthUsedPerBin, yMax } = data;
 
     // Faint horizontal gridlines at 0, half, full.
     ctx.strokeStyle = hexToRgba(pal.grid, 0.2);
@@ -642,7 +642,7 @@ function drawActivityChart(canvas, points, bandMetrics, minutes) {
     const renderBaselineSegment = (startIdx, endIdx) => {
         const rate = baselineRatesPerBin[startIdx];
         if (!(rate > 0)) return null;
-        const used = baselineTargetUsedPerBin[startIdx];
+        const used = baselineQthUsedPerBin[startIdx];
         const x0 = pad.l + startIdx * barWidth;
         const x1 = pad.l + (endIdx + 1) * barWidth;
         const yRaw = pad.t + ph - (rate / yMax) * ph;
@@ -658,7 +658,7 @@ function drawActivityChart(canvas, points, bandMetrics, minutes) {
     for (let i = 1; i <= ACTIVITY_BINS; i++) {
         const slotChange = i === ACTIVITY_BINS
             || baselineRatesPerBin[i] !== baselineRatesPerBin[i - 1]
-            || baselineTargetUsedPerBin[i] !== baselineTargetUsedPerBin[i - 1];
+            || baselineQthUsedPerBin[i] !== baselineQthUsedPerBin[i - 1];
         if (!slotChange) continue;
         const seg = renderBaselineSegment(runStart, i - 1);
         // Vertical connector between adjacent segments at a slot boundary.
@@ -918,8 +918,8 @@ function escapeHtml(value) {
         .replaceAll("'", '&#39;');
 }
 
-async function ensureDxConditions(target, minutes, surroundings) {
-    const key = `${target}|${minutes}|${surroundings ? 1 : 0}`;
+async function ensureDxConditions(qth, minutes, surroundings) {
+    const key = `${qth}|${minutes}|${surroundings ? 1 : 0}`;
     const now = Date.now();
 
     if (runtime.dxCache && runtime.dxCacheKey === key && (now - runtime.lastDxFetchAt) < DX_FETCH_INTERVAL_MS) {
@@ -939,7 +939,7 @@ async function ensureDxConditions(target, minutes, surroundings) {
     runtime.dxInFlight = (async () => {
         try {
             const params = new URLSearchParams();
-            params.set('target', target);
+            params.set('qth', qth);
             params.set('minutes', String(minutes));
             if (surroundings) params.set('surroundings', 'true');
 

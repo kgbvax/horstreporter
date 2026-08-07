@@ -8,7 +8,7 @@ import { writable } from 'svelte/store';
 const PERSIST_KEY = 'horst-ui-state';
 
 const defaults = {
-    target: '',
+    qth: '',
     minutes: 15,
     minSnr: 'ssb',
     ssbMinDb: 0,
@@ -25,7 +25,16 @@ const defaults = {
 function loadInitial() {
     try {
         const raw = localStorage.getItem(PERSIST_KEY);
-        if (raw) return { ...defaults, ...JSON.parse(raw) };
+        if (raw) {
+            const saved = { ...defaults, ...JSON.parse(raw) };
+            // One-time migration: the legacy 'target' field name is now 'qth'.
+            if (saved.target !== undefined && saved.qth === undefined) {
+                saved.qth = saved.target;
+                delete saved.target;
+                localStorage.setItem(PERSIST_KEY, JSON.stringify(saved));
+            }
+            return saved;
+        }
     } catch (_) { /* corrupt/absent -> defaults */ }
     return { ...defaults };
 }

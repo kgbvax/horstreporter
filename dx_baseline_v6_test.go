@@ -35,7 +35,7 @@ func TestLocatorBlockToken(t *testing.T) {
 func TestNormalizeTargetsForBaselineCollapsesAndDedupes(t *testing.T) {
 	// User typed JO32 with surroundings → 9 squares spanning 4 blocks.
 	in := []string{"JO21", "JO22", "JO23", "JO31", "JO32", "JO33", "JO41", "JO42", "JO43"}
-	got := normalizeTargetsForBaseline(in)
+	got := normalizeQTHSetForBaseline(in)
 	want := map[string]bool{"JO20": true, "JO22": true, "JO40": true, "JO42": true}
 	if len(got) != len(want) {
 		t.Fatalf("got %d blocks (%v), want %d (%v)", len(got), got, len(want), want)
@@ -49,7 +49,7 @@ func TestNormalizeTargetsForBaselineCollapsesAndDedupes(t *testing.T) {
 
 func TestNormalizeTargetsForBaselinePassesCallsigns(t *testing.T) {
 	in := []string{"DK3JF", "W1AW", "DK3JF"} // duplicate callsign
-	got := normalizeTargetsForBaseline(in)
+	got := normalizeQTHSetForBaseline(in)
 	if len(got) != 2 {
 		t.Fatalf("got %v, want exactly 2 deduped callsigns", got)
 	}
@@ -65,7 +65,7 @@ func TestNormalizeTargetTokenUpperLocatorAndCallsign(t *testing.T) {
 	}{
 		// 4-char locators collapse to 2×2 blocks. The helper expects
 		// already-upper-cased input; case-folding happens in the caller
-		// (normalizeTargetToken).
+		// (normalizeQTHToken).
 		{"JO32", "JO22"},
 		{"FN31", "FN20"},
 		// 6-char locators still match isLocator and collapse to a 4-char block.
@@ -78,9 +78,9 @@ func TestNormalizeTargetTokenUpperLocatorAndCallsign(t *testing.T) {
 		{"X", "X"},
 	}
 	for _, c := range cases {
-		got := normalizeTargetTokenUpper(c.in)
+		got := normalizeQTHTokenUpper(c.in)
 		if got != c.want {
-			t.Errorf("normalizeTargetTokenUpper(%q) = %q, want %q", c.in, got, c.want)
+			t.Errorf("normalizeQTHTokenUpper(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
@@ -152,16 +152,16 @@ func TestLegacyV5SnapshotLoadCollapsesSource4AndBlocks(t *testing.T) {
 		t.Errorf("global bucket count = %v, want 12 (7+5)", e.buckets[gk])
 	}
 
-	if got := len(e.targetBuckets); got != 2 {
+	if got := len(e.qthBuckets); got != 2 {
 		t.Fatalf("target buckets after load = %d, want 2 (JO22 merged + W1AW)", got)
 	}
-	jo22Key := baselineTargetKeyFromBase("JO22", baselineKey("20m", 10, 0, 0))
-	if e.targetBuckets[jo22Key] == nil || e.targetBuckets[jo22Key].Count != 5 {
-		t.Errorf("JO22 block target = %v, want count 5 (3+2)", e.targetBuckets[jo22Key])
+	jo22Key := baselineQthKeyFromBase("JO22", baselineKey("20m", 10, 0, 0))
+	if e.qthBuckets[jo22Key] == nil || e.qthBuckets[jo22Key].Count != 5 {
+		t.Errorf("JO22 block target = %v, want count 5 (3+2)", e.qthBuckets[jo22Key])
 	}
-	w1awKey := baselineTargetKeyFromBase("W1AW", baselineKey("20m", 10, 0, 0))
-	if e.targetBuckets[w1awKey] == nil || e.targetBuckets[w1awKey].Count != 11 {
-		t.Errorf("W1AW target = %v, want count 11", e.targetBuckets[w1awKey])
+	w1awKey := baselineQthKeyFromBase("W1AW", baselineKey("20m", 10, 0, 0))
+	if e.qthBuckets[w1awKey] == nil || e.qthBuckets[w1awKey].Count != 11 {
+		t.Errorf("W1AW target = %v, want count 11", e.qthBuckets[w1awKey])
 	}
 }
 

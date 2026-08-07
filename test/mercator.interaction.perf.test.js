@@ -72,7 +72,7 @@ vi.mock('../static/state.js', () => ({
         eventSource: null,
         renderInterval: null,
         heatLayer: null,
-        targetLayer: null,
+        qthLayer: null,
         lastMercatorInteractionAt: 0,
         lastMercatorAutoZoomAt: 0
     }
@@ -111,7 +111,7 @@ function setupDom() {
         <button id="show-sidebar"></button>
 
         <form id="fetch-form"></form>
-        <input id="target" value="JO32" />
+        <input id="qth" value="JO32" />
         <input id="minutes" value="15" />
         <input id="ssb-min-db" value="0" />
         <input id="cw-min-db" value="-15" />

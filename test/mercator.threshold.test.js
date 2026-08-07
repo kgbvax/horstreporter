@@ -27,7 +27,7 @@ let geoJsonCalls;
 function setupDom({ minSnr = 'ssb', ssbMinDb = 0, cwMinDb = -15, focusBand = '', enabled = ['20m', '15m'] } = {}) {
     const enabledHtml = enabled.map(b => `<input type="checkbox" class="band-enable" value="${b}" checked />`).join('');
     document.body.innerHTML = `
-        <input id="target" value="JO32" />
+        <input id="qth" value="JO32" />
         <input id="ssb-min-db" value="${ssbMinDb}" />
         <input id="cw-min-db" value="${cwMinDb}" />
         <input id="auto-zoom" type="checkbox" />

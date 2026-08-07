@@ -1278,11 +1278,11 @@ function drawDxSpotHighlight(ctx, width, height) {
 function drawTargetHighlight(ctx, width, height) {
     if (typeof document === 'undefined') return;
 
-    const rawTarget = document.getElementById('target')?.value?.trim()?.toUpperCase() || '';
-    const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(rawTarget);
+    const rawQth = document.getElementById('qth')?.value?.trim()?.toUpperCase() || '';
+    const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(rawQth);
     if (!isLocator) return;
 
-    const bounds = locatorToBounds(rawTarget);
+    const bounds = locatorToBounds(rawQth);
     if (!bounds) return;
 
     const lat0 = bounds[0][0];
@@ -1290,7 +1290,7 @@ function drawTargetHighlight(ctx, width, height) {
     const lat1 = bounds[1][0];
     const lng1 = bounds[1][1];
 
-    if (rawTarget.length === 4) {
+    if (rawQth.length === 4) {
         const corners = [
             [lat0, lng0],
             [lat1, lng0],

@@ -50,10 +50,10 @@ func TestBaselineActivityForBandAllSlotsTargetWins(t *testing.T) {
 	targets := []string{"JO22"}
 
 	// Two slots populated under target token: slot 24 (count 30), slot 25 (count 60).
-	target[baselineTargetKey("JO22", band, 24, 2, 2)] = &baselineBucket{
+	target[baselineQthKey("JO22", band, 24, 2, 2)] = &baselineBucket{
 		Band: band, SlotOfDay: 24, DistanceTier: 2, SnrTier: 2, Count: 30,
 	}
-	target[baselineTargetKey("JO22", band, 25, 2, 2)] = &baselineBucket{
+	target[baselineQthKey("JO22", band, 25, 2, 2)] = &baselineBucket{
 		Band: band, SlotOfDay: 25, DistanceTier: 2, SnrTier: 2, Count: 60,
 	}
 
@@ -98,7 +98,7 @@ func TestBaselineActivityForBandAllSlotsFallsBackPerSlot(t *testing.T) {
 	targets := []string{"JO22"}
 
 	// Slot 24: target has 30, global has 999 (ignored — target wins).
-	target[baselineTargetKey("JO22", band, 24, 2, 2)] = &baselineBucket{
+	target[baselineQthKey("JO22", band, 24, 2, 2)] = &baselineBucket{
 		Band: band, SlotOfDay: 24, Count: 30,
 	}
 	global[baselineKey(band, 24, 2, 2)] = &baselineBucket{
@@ -130,7 +130,7 @@ func TestBaselineActivityForBandAllSlotsFallsBackPerSlot(t *testing.T) {
 func TestBaselineActivityForBandAllSlotsHistoryScaling(t *testing.T) {
 	const band = "20m"
 	target := map[string]*baselineBucket{}
-	target[baselineTargetKey("JO22", band, 12, 2, 2)] = &baselineBucket{
+	target[baselineQthKey("JO22", band, 12, 2, 2)] = &baselineBucket{
 		Band: band, SlotOfDay: 12, Count: 210,
 	}
 	rates, used, _ := baselineActivityForBandAllSlots(nil, target, nil, "", []string{"JO22"}, band, 7*24*60)

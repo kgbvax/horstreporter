@@ -102,8 +102,8 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 
 Canonical reference: `docs/api.md` (includes response shapes, caches, and explicit exclusions).
 
-- `GET /api/stream` — SSE; params: `target`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `target`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed)
-- `GET /api/dx_conditions` — DX score/conditions per band; params: `target`, `minutes`, `surroundings`, `cw_min_db`
+- `GET /api/stream` — SSE; params: `qth`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `qth`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed)
+- `GET /api/dx_conditions` — DX score/conditions per band; params: `qth`, `minutes`, `surroundings`, `cw_min_db`
 - `GET /api/stats` — active connections, history size/minutes
 - `GET /api/capture_snapshot` — deterministic filtered spot snapshot for server-driven frame capture
 - `GET /dxlens/` — DXLens module UI (reads HorstReporter's in-memory baseline via adapter)

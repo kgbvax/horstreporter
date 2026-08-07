@@ -109,7 +109,7 @@ function parseCaptureConfig() {
     const enabled = parseBoolParam(params.get('capture'), false) || params.get('mode') === 'capture';
     if (!enabled) return null;
 
-    const target = (params.get('target') || 'JO32').trim().toUpperCase();
+    const qth = (params.get('qth') || 'JO32').trim().toUpperCase();
     const minutes = Math.max(1, Math.min(720, Number.parseInt(params.get('minutes') || '15', 10) || 15));
     const snapshotAt = Number.parseInt(params.get('snapshot_at') || '', 10);
 
@@ -122,7 +122,7 @@ function parseCaptureConfig() {
 
     return {
         enabled: true,
-        target,
+        qth,
         minutes,
         snapshotAt: Number.isFinite(snapshotAt) ? snapshotAt : null,
         surroundings: parseBoolParam(params.get('surroundings'), false),
@@ -582,7 +582,7 @@ async function fetchSnapshotFrame(config, snapshotAt) {
     if (!config?.enabled) return { spots: [] };
 
     const params = new URLSearchParams();
-    params.set('target', config.target);
+    params.set('qth', config.qth);
     params.set('minutes', String(config.minutes));
     params.set('surroundings', config.surroundings ? 'true' : 'false');
     params.set('min_snr_mode', config.minSnrMode);
@@ -702,12 +702,12 @@ function syncSoftPauseWithVisibility() {
     }
 }
 
-function getActiveTargetCenter() {
-    const rawTarget = document.getElementById('target')?.value?.trim()?.toUpperCase() || '';
-    const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(rawTarget);
+function getActiveQthCenter() {
+    const rawQth = document.getElementById('qth')?.value?.trim()?.toUpperCase() || '';
+    const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(rawQth);
     if (!isLocator) return null;
 
-    const bounds = locatorToBounds(rawTarget);
+    const bounds = locatorToBounds(rawQth);
     if (!bounds) return null;
 
     const lat = (bounds[0][0] + bounds[1][0]) / 2;
@@ -734,7 +734,7 @@ export function setChaseQueueHighlight(spot) {
 
     const station = (typeof getOpModeStation === 'function' && isOpModeActive()) ? getOpModeStation() : null;
     const origin = station || (() => {
-        const c = getActiveTargetCenter();
+        const c = getActiveQthCenter();
         return c ? { lat: c[0], lng: c[1] } : null;
     })();
 
@@ -771,8 +771,8 @@ export function clearChaseQueueHighlight() {
     if (isAzimuthEnabled()) scheduleRender();
 }
 
-function syncProjectionCenterToActiveTarget() {
-    const targetCenter = getActiveTargetCenter();
+function syncProjectionCenterToActiveQth() {
+    const targetCenter = getActiveQthCenter();
     if (!targetCenter) return;
 
     const projection = currentProjection();
@@ -785,7 +785,7 @@ function syncProjectionCenterToActiveTarget() {
     scheduleRender();
 }
 
-function maybeAutoStartSavedTarget() {
+function maybeAutoStartSavedQth() {
     if (captureConfig?.enabled) {
         return;
     }
@@ -793,20 +793,20 @@ function maybeAutoStartSavedTarget() {
         return;
     }
 
-    const savedTarget = localStorage.getItem('target')?.trim()?.toUpperCase();
-    const targetInput = document.getElementById('target');
-    if (!savedTarget || !targetInput) {
+    const savedQth = localStorage.getItem('qth')?.trim()?.toUpperCase();
+    const qthInput = document.getElementById('qth');
+    if (!savedQth || !qthInput) {
         return;
     }
 
     // Ensure the input is populated from storage even if another init step missed it.
-    if (!targetInput.value?.trim()) {
-        window.__horstSetTarget?.(savedTarget);
-        targetInput.value = savedTarget;
+    if (!qthInput.value?.trim()) {
+        window.__horstSetQTH?.(savedQth);
+        qthInput.value = savedQth;
     }
 
-    const targetValue = targetInput.value?.trim()?.toUpperCase();
-    if (!targetValue) {
+    const qthValue = qthInput.value?.trim()?.toUpperCase();
+    if (!qthValue) {
         return;
     }
 
@@ -828,7 +828,7 @@ function maybeAutoStartSavedTarget() {
 
     // If submit wiring was not yet active at this moment, retry shortly.
     setTimeout(() => {
-        maybeAutoStartSavedTarget();
+        maybeAutoStartSavedQth();
     }, 50);
 }
 
@@ -857,7 +857,7 @@ function syncProjectionOptionVisibility(projection) {
 async function applyProjectionMode(projection) {
     syncStyleAvailabilityForProjection(projection);
     syncProjectionOptionVisibility(projection);
-    const targetCenter = getActiveTargetCenter();
+    const targetCenter = getActiveQthCenter();
 
     if (projection === 'azimuthal') {
         await loadAzimuthWorldGeoJson();
@@ -882,8 +882,8 @@ async function applyProjectionMode(projection) {
 function applyCaptureConfigToControls(config) {
     if (!config?.enabled) return;
 
-    const targetEl = document.getElementById('target');
-    if (targetEl) window.__horstSetTarget?.(config.target);
+    const qthEl = document.getElementById('qth');
+    if (qthEl) window.__horstSetQTH?.(config.qth);
 
     const minutesEl = document.getElementById('minutes');
     if (minutesEl) {
@@ -959,7 +959,7 @@ async function runCaptureBootstrap(config) {
     }
 
     const params = new URLSearchParams();
-    params.set('target', config.target);
+    params.set('qth', config.qth);
     params.set('minutes', String(config.minutes));
     params.set('surroundings', config.surroundings ? 'true' : 'false');
     params.set('min_snr_mode', config.minSnrMode);
@@ -1065,16 +1065,16 @@ export function attachMapEvents() {
         finishMercatorInteraction();
     });
 
-    const setTargetAndRestart = (locator) => {
-        if (!locator) return;
-        const targetInput = document.getElementById('target');
-        if (!targetInput) return;
+	const setQthAndRestart = (locator) => {
+		if (!locator) return;
+		const qthInput = document.getElementById('qth');
+		if (!qthInput) return;
 
-        window.__horstSetTarget?.(locator);
-        const btnSubmit = document.getElementById('btn-submit');
-        if (btnSubmit) setSubmitMode(btnSubmit, 'go'); // Force a clean restart
-        document.getElementById('fetch-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
-    };
+		window.__horstSetQTH?.(locator);
+		const btnSubmit = document.getElementById('btn-submit');
+		if (btnSubmit) setSubmitMode(btnSubmit, 'go'); // Force a clean restart
+		document.getElementById('fetch-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+	};
 
     const CLICK_TO_DBLCLICK_DELAY_MS = 260;
     let pendingMercatorSingleClickTimer = null;
@@ -1123,7 +1123,7 @@ export function attachMapEvents() {
 
         clearPendingMercatorSingleClick();
         const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, 4);
-        setTargetAndRestart(loc);
+        setQthAndRestart(loc);
     });
 
     const azimuthCanvas = document.getElementById('azimuth-canvas');
@@ -1164,7 +1164,7 @@ export function attachMapEvents() {
         if (!point) return;
 
         const loc = latLngToLocator(point.lat, point.lng, 4);
-        setTargetAndRestart(loc);
+        setQthAndRestart(loc);
     });
 }
 
@@ -1183,7 +1183,7 @@ if (captureConfig?.enabled) {
     // style radios so legend visibility syncs on first show.
     setTimeout(initGridSnrLegend, 0);
     window.__horstApplyProjection = applyProjectionMode;
-    window.__horstTargetInput = syncProjectionCenterToActiveTarget;
+    window.__horstQthInput = syncProjectionCenterToActiveQth;
     initMap(initialCenter, initialZoom);
     initAzimuthCanvas();
     attachProjectionGestureZoomEvents();
@@ -1201,7 +1201,7 @@ if (captureConfig?.enabled) {
     const projRadio = document.querySelector(`input[name="projection-select"][value="${initialProjection}"]`);
     if (projRadio) projRadio.checked = true;
     await applyProjectionMode(initialProjection);
-    syncProjectionCenterToActiveTarget();
+    syncProjectionCenterToActiveQth();
 
     const dxccToggle = document.getElementById('show-dxcc-labels');
     if (dxccToggle) dxccToggle.checked = dxccLabelsEnabled;
@@ -1220,14 +1220,14 @@ if (captureConfig?.enabled) {
         },
     });
     hotBandIndicator = initHotBandIndicator({
-        getTarget: () => document.getElementById('target')?.value?.trim()?.toUpperCase() || '',
+        getQth: () => document.getElementById('qth')?.value?.trim()?.toUpperCase() || '',
         getSurroundings: () => Boolean(document.getElementById('surroundings')?.checked),
         getCurrentBand: () => getSelectedBand(),
         onBandSwitch: switchToBand,
     });
     if (HORST_KEVIN_ENABLED) {
         horstKevin = initHorstKevin({
-            getTarget: () => document.getElementById('target')?.value?.trim()?.toUpperCase() || '',
+            getQth: () => document.getElementById('qth')?.value?.trim()?.toUpperCase() || '',
             getSurroundings: () => Boolean(document.getElementById('surroundings')?.checked),
             getCurrentBand: () => getSelectedBand(),
             onBandSwitch: switchToBand,
@@ -1252,7 +1252,7 @@ if (captureConfig?.enabled) {
     }
 
     appReadyForAutoStart = true;
-    maybeAutoStartSavedTarget();
+    maybeAutoStartSavedQth();
 })();
 
 function updateCurrentBandDisplay() {
@@ -1387,8 +1387,8 @@ window.addEventListener('keydown', (e) => {
     }
 });
 
-document.getElementById('target')?.addEventListener('input', () => {
-    syncProjectionCenterToActiveTarget();
+document.getElementById('qth')?.addEventListener('input', () => {
+    syncProjectionCenterToActiveQth();
 });
 document.getElementById('cycle-time')?.addEventListener('input', (e) => {
     const val = document.getElementById('cycle-time-val');
@@ -1547,9 +1547,9 @@ document.getElementById('btn-geo')?.addEventListener('click', () => {
         (position) => {
             // Pre-fill with a 4-character locator (square)
             const loc = latLngToLocator(position.coords.latitude, position.coords.longitude, 4);
-            const targetEl = document.getElementById('target');
-            if (targetEl) window.__horstSetTarget?.(loc);
-            localStorage.setItem('target', loc);
+            const qthEl = document.getElementById('qth');
+            if (qthEl) window.__horstSetQTH?.(loc);
+            localStorage.setItem('qth', loc);
             btn.innerHTML = originalText;
             btn.disabled = false;
             
@@ -1570,10 +1570,10 @@ document.getElementById('btn-geo')?.addEventListener('click', () => {
 document.getElementById('btn-center')?.addEventListener('click', () => {
     if (!map) return;
 
-    const target = document.getElementById('target')?.value.trim().toUpperCase() || '';
-    const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(target);
+    const qth = document.getElementById('qth')?.value.trim().toUpperCase() || '';
+    const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(qth);
     if (isLocator) {
-        const bounds = locatorToBounds(target);
+        const bounds = locatorToBounds(qth);
         if (bounds) {
             const lat = (bounds[0][0] + bounds[1][0]) / 2;
             const lng = (bounds[0][1] + bounds[1][1]) / 2;
@@ -1584,7 +1584,7 @@ document.getElementById('btn-center')?.addEventListener('click', () => {
                 map.setView([lat, lng], map.getZoom());
             }
         }
-    } else if (target) {
+    } else if (qth) {
         alert('Cannot center: Please provide a valid Maidenhead locator.');
     }
 });
@@ -1594,7 +1594,7 @@ document.getElementById('btn-cycle')?.addEventListener('click', () => {
     else startBandCycle();
 });
 
-document.getElementById('target')?.addEventListener('keydown', (e) => {
+document.getElementById('qth')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
         e.preventDefault();
         const btnSubmit = document.getElementById('btn-submit');
@@ -1625,9 +1625,9 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         }
         clearDxClusterMarkers();
         resetRenderFingerprint();
-        if (state.targetLayer) {
-            map.removeLayer(state.targetLayer);
-            state.targetLayer = null;
+        if (state.qthLayer) {
+            map.removeLayer(state.qthLayer);
+            state.qthLayer = null;
         }
 
         setSubmitMode(btnSubmit, 'go');
@@ -1638,22 +1638,22 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         return;
     }
 
-    const target = document.getElementById('target')?.value.trim().toUpperCase() || '';
+    const qth = document.getElementById('qth')?.value.trim().toUpperCase() || '';
     const minutes = document.getElementById('minutes')?.value || 15;
 
-    if (!target) {
+    if (!qth) {
         alert('Please provide a Callsign or Locator.');
         return;
     }
 
-    localStorage.setItem('target', target);
+    localStorage.setItem('qth', qth);
     localStorage.setItem('minutes', minutes);
 
-    console.log(`Starting live stream for target: '${target}'`);
+    console.log(`Starting live stream for qth: '${qth}'`);
 
     if (state.eventSource) state.eventSource.close();
     if (state.renderInterval) clearInterval(state.renderInterval);
-    
+
     state.liveSpots = [];
     if (state.heatLayer) {
         map.removeLayer(state.heatLayer);
@@ -1662,16 +1662,16 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
     clearDxClusterMarkers();
     resetRenderFingerprint();
 
-    if (state.targetLayer) {
-        map.removeLayer(state.targetLayer);
-        state.targetLayer = null;
+    if (state.qthLayer) {
+        map.removeLayer(state.qthLayer);
+        state.qthLayer = null;
     }
 
-    const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(target);
+    const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(qth);
     if (isLocator) {
         let lat = null, lng = null;
-        let bounds = locatorToBounds(target);
-        
+        let bounds = locatorToBounds(qth);
+
         if (bounds) {
             lat = (bounds[0][0] + bounds[1][0]) / 2;
             lng = (bounds[0][1] + bounds[1][1]) / 2;
@@ -1681,29 +1681,29 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         }
 
         if (currentProjection() !== 'azimuthal') {
-            if (target.length === 4 && bounds) {
-                state.targetLayer = L.rectangle(bounds, { color: '#ff0000', weight: 3, fillOpacity: 0.1, interactive: false }).addTo(map);
-            } else if (target.length >= 6 && bounds) {
+            if (qth.length === 4 && bounds) {
+                state.qthLayer = L.rectangle(bounds, { color: '#ff0000', weight: 3, fillOpacity: 0.1, interactive: false }).addTo(map);
+            } else if (qth.length >= 6 && bounds) {
                 const crossIcon = L.divIcon({
                     html: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" stroke="red" stroke-width="4" fill="none" stroke-linecap="round"><line x1="4" y1="4" x2="20" y2="20"></line><line x1="20" y1="4" x2="4" y2="20"></line></svg>',
-                    className: 'target-cross',
+                    className: 'qth-cross',
                     iconSize: [24, 24],
                     iconAnchor: [12, 12]
                 });
-                state.targetLayer = L.marker([lat, lng], { icon: crossIcon, interactive: false }).addTo(map);
+                state.qthLayer = L.marker([lat, lng], { icon: crossIcon, interactive: false }).addTo(map);
             }
         }
     }
 
     const params = new URLSearchParams();
-    params.append('target', target);
+    params.append('qth', qth);
     if (minutes) params.append('minutes', minutes);
     if (document.getElementById('surroundings')?.checked) {
         params.append('surroundings', 'true');
     }
 
     const statusEl = document.getElementById('stream-status');
-    const currentSub = `Target: ${target}`;
+    const currentSub = `QTH: ${qth}`;
     let totalReceived = 0;
     let lastStatusUpdate = 0;
     statusEl.innerHTML = `Status: Connecting to ${currentSub}...`;
@@ -1831,7 +1831,7 @@ window.addEventListener('pageshow', syncSoftPauseWithVisibility);
 window.addEventListener('focus', syncSoftPauseWithVisibility);
 
 // Fallback pass in case autostart check happened before submit wiring was ready.
-maybeAutoStartSavedTarget();
+maybeAutoStartSavedQth();
 syncSoftPauseWithVisibility();
 
 // Sync opmode controls visibility (initOpMode may have set checkbox from localStorage)
