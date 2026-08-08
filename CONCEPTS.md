@@ -57,6 +57,9 @@ A Spot sourced from a traditional DX-cluster feed rather than PSK Reporter. Unli
 ### Spotter
 The station that posted a DX-cluster spot — the DX-cluster analogue of a Receiver. The spotted station itself is the "DX call".
 
+### WSPR
+A Weak Signal Propagation Reporter spot — a one-way beacon transmission (a low-power transmitter heard by a receiver) ingested from the wspr.live ClickHouse feed. WSPR is a **propagation reference**: beacons run continuously at low power, so WSPR shows whether a path is open at all even when nobody is actively operating (the gap FT8 leaves on dead bands, off-peak hours, and during contests). WSPR SNR is on the same 2500 Hz scale as FT8 but stations transmit at wildly varying power (0.1–100 W+), so raw SNR conflates station capability with propagation — WSPR is therefore kept **out** of the FT8-calibrated conditions baseline (like RBN) and feeds the live stream, activity chart, and a per-band "path open" viability floor instead.
+
 ### DXCC entity
 The country or territory a callsign belongs to under the ARRL DXCC list — resolved from a callsign-prefix table with an online lookup fallback, and attached to DX-cluster spots as country name and ISO code. The unit most awards and "wanted" decisions are counted in.
 

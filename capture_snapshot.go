@@ -57,6 +57,10 @@ func captureSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("include_rbn")); raw != "" {
 		includeRbn = strings.EqualFold(raw, "true") || raw == "1"
 	}
+	includeWspr := true
+	if raw := strings.TrimSpace(r.URL.Query().Get("include_wspr")); raw != "" {
+		includeWspr = strings.EqualFold(raw, "true") || raw == "1"
+	}
 
 	qthSet := []string{qth}
 	if surroundings && isLocator(qth) {
@@ -86,6 +90,9 @@ func captureSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if !includeRbn && strings.EqualFold(spot.SourceType, "rbn") {
+			continue
+		}
+		if !includeWspr && strings.EqualFold(spot.SourceType, "wspr") {
 			continue
 		}
 

@@ -1113,10 +1113,13 @@ func legacyConditionFromStatus(status string, score float64) string {
 // FT8-calibrated conditions accumulator must exclude. RBN CW/RTTY dB is on a different SNR
 // scale than PSKReporter FT8 SNR (docs/horstprop.md), so feeding it to classifyMode / the
 // per-band snr and distance stats would corrupt them (strong CW would mislabel a band
-// "ssb"; +20 dB would create phantom high snr_tier rows). FT8/FT4 (PSKReporter), "" (legacy
-// / unset), and "DXCLUSTER" (a source marker, not a real mode — RP=0, already counted in
-// the baseline today) stay in; any other real mode (CW, RTTY, PSK*, SSB, AM, FM, DIGI, …)
-// is excluded. Only RBN produces those real non-FT8 modes today.
+// "ssb"; +20 dB would create phantom high snr_tier rows). WSPR is likewise excluded: its SNR
+// is on the same 2500 Hz scale as FT8 but WSPR stations transmit at wildly varying power
+// (0.1–100 W+), so raw SNR conflates station capability with propagation. FT8/FT4
+// (PSKReporter), "" (legacy / unset), and "DXCLUSTER" (a source marker, not a real mode —
+// RP=0, already counted in the baseline today) stay in; any other real mode (CW, RTTY, PSK*,
+// SSB, AM, FM, DIGI, WSPR, …) is excluded. Only RBN and WSPR produce those real non-FT8
+// modes today.
 func isNonConditionsMode(md string) bool {
 	switch strings.ToUpper(strings.TrimSpace(md)) {
 	case "", "FT8", "FT4", "DXCLUSTER":

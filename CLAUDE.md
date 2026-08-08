@@ -20,6 +20,8 @@ DXCLUSTER_USERNAME=<yourcall> DXCLUSTER_PASSWORD=<password> \
 # activity chart/live stream during CW/SSB contests when FT8 thins out. Minimal scope:
 # activity + live only, kept out of the FT8-SNR conditions baseline (rbn.go).
 #   go run . -dev -port 8080 -rbn-enable -rbn-callsign <yourcall>
+# Optional WSPR ingest — wspr.live ClickHouse HTTP poller (reference-only, like RBN):
+#   go run . -dev -port 8080 -wspr-enable
 
 # Run local operator agent
 go run ./cmd/horstoperator-agent -listen 127.0.0.1:9955 -station-locator JO62qm
@@ -73,6 +75,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `dx_postgres.go` — Postgres persistence for raw spots and baseline
 - `dxcluster.go` — optional DX cluster TCP ingest
 - `rbn.go` — optional RBN (Reverse Beacon Network) CW/RTTY raw telnet ingest; `source_type='rbn'`, activity + live only (kept out of the FT8-SNR baseline)
+- `wspr.go` — optional WSPR ingest (wspr.live ClickHouse HTTP poller); `source_type='wspr'`, reference-only (kept out of the FT8-SNR baseline, like RBN)
 - `opmode.go` — operator mode endpoint wiring (browser calls local agent directly; backend never proxies)
 - `dxlens_mount.go` — mounts the `dxlens` sibling module at `/dxlens/`
 - `dx_cellfeed.go` — `CellBucketFeed`: midpoint-cell bucket accumulator + 60s persistence tick + retention pruning (writes `proplab_cell_buckets` for pathscope; all that remains of the removed Propagation Lab)

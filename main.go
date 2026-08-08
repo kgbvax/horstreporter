@@ -206,6 +206,10 @@ func main() {
 	rbnCallsign := flag.String("rbn-callsign", "", "Callsign sent at the RBN relay's \"enter your call\" prompt (required-in-practice to get a spot stream; no password/auth). Falls back to env RBN_CALLSIGN")
 	rbnReconnectSeconds := flag.Int("rbn-reconnect-seconds", 15, "Delay before reconnecting to RBN after disconnect")
 	rbnVerbose := flag.Bool("rbn-verbose", false, "Enable verbose RBN connection logging")
+	wsprEnable := flag.Bool("wspr-enable", false, "Enable optional WSPR ingest (wspr.live ClickHouse HTTP interface)")
+	wsprEndpoint := flag.String("wspr-endpoint", "https://db1.wspr.live", "WSPR ClickHouse HTTP endpoint (base URL)")
+	wsprPollSeconds := flag.Int("wspr-poll-seconds", 60, "Seconds between WSPR polls (wspr.live rate-limits to ~20 req/min)")
+	wsprVerbose := flag.Bool("wspr-verbose", false, "Enable verbose WSPR polling logs")
 	ctyPath := flag.String("cty-path", os.Getenv("CTY_DAT_PATH"), "Path to AD1C cty.dat for DX-cluster country/flag labelling (empty disables)")
 	qrzUsernameFlag := flag.String("qrz-username", "", "QRZ username for optional callsign->locator enrichment")
 	qrzPasswordFlag := flag.String("qrz-password", "", "QRZ password for optional callsign->locator enrichment")
@@ -329,8 +333,8 @@ func main() {
 	go startMQTT()
 
 	// QRZ callsign->locator enrichment + cty.dat DXCC resolver are shared by the optional
-	// DX-cluster and RBN ingests; construct once when either is enabled.
-	if *dxClusterEnable || *rbnEnable {
+	// DX-cluster, RBN and WSPR ingests; construct once when any is enabled.
+	if *dxClusterEnable || *rbnEnable || *wsprEnable {
 		qrzUsername := strings.TrimSpace(*qrzUsernameFlag)
 		qrzPassword := strings.TrimSpace(*qrzPasswordFlag)
 		if qrzUsername == "" {
@@ -395,6 +399,17 @@ func main() {
 				Callsign:       rbnCall,
 				Resolver:       resolver,
 				CtyResolver:    ctyResolver,
+			})
+		}
+
+		if *wsprEnable {
+			go startWSPRIngest(wsprConfig{
+				Enabled:     true,
+				Endpoint:    strings.TrimSpace(*wsprEndpoint),
+				PollSeconds: *wsprPollSeconds,
+				Verbose:     *wsprVerbose,
+				Resolver:    resolver,
+				CtyResolver: ctyResolver,
 			})
 		}
 	}

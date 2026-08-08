@@ -65,8 +65,9 @@ data: {}
 ```
 
 Spot fields: `lat`, `lng` float; `snr` int; `ageSeconds`; `locator`;
-`reporterLocator` (omitempty); `sourceType` (`""`|`"dxcluster"`|`"rbn"`);
-`band`; `sender`, `receiver` (only for DX-cluster spots).
+`reporterLocator` (omitempty); `sourceType`
+(`""`|`"dxcluster"`|`"rbn"`|`"wspr"`); `band`; `sender`, `receiver` (only
+for DX-cluster spots).
 
 Overflow beyond `-max-clients` (default 150) → an `event: server_error`
 frame, not an HTTP error. With `-compress` and `Accept-Encoding: gzip` the
@@ -147,8 +148,8 @@ with freq ≤ 0 skipped. Requires DX cluster ingest to be enabled.
 ### `GET /api/stats` — server counters
 
 No params. Active connections, hub history size/minutes/KB, session totals
-and byte accounting, DX baseline event counts, DX-cluster ingest counters.
-The de-facto health endpoint.
+and byte accounting, DX baseline event counts, DX-cluster / RBN / WSPR ingest
+counters. The de-facto health endpoint.
 
 ### `GET /api/opmode/status` — operator-mode wiring info
 

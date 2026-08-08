@@ -427,6 +427,8 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	hub.RUnlock()
 	started, completed, active, bytesTotal, avgBytes := streamAccounting.snapshot()
 	dxConnAttempts, dxConnected, dxLinesSeen, dxParsed, dxPersisted, dxForwarded, dxDroppedNoLoc := dxClusterAccounting.snapshot()
+	rbnAttempts, rbnConnected, rbnLinesSeen, rbnParsed, rbnPersisted, rbnForwarded, rbnDroppedNoLoc := rbnAccounting.snapshot()
+	wsprAttempts, wsprFailures, wsprRowsSeen, wsprParsed, wsprPersisted, wsprForwarded, wsprDroppedNoLoc := wsprAccounting.snapshot()
 	dxBaselineEventCount := 0
 	dxBaselineHistoryMinutes := 0
 	if dxBaseline != nil {
@@ -454,6 +456,20 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		DxClusterPersisted   int64   `json:"dxcluster_persisted_spots"`
 		DxClusterForwarded   int64   `json:"dxcluster_live_forwarded"`
 		DxClusterDroppedLoc  int64   `json:"dxcluster_dropped_no_locator"`
+		RbnConnAttempt       int64   `json:"rbn_connect_attempts"`
+		RbnConnected         int64   `json:"rbn_connected_sessions"`
+		RbnLinesSeen         int64   `json:"rbn_lines_seen"`
+		RbnParsed            int64   `json:"rbn_parsed_spots"`
+		RbnPersisted         int64   `json:"rbn_persisted_spots"`
+		RbnForwarded         int64   `json:"rbn_live_forwarded"`
+		RbnDroppedLoc        int64   `json:"rbn_dropped_no_locator"`
+		WsprPollAttempts     int64   `json:"wspr_poll_attempts"`
+		WsprPollFailures     int64   `json:"wspr_poll_failures"`
+		WsprRowsSeen         int64   `json:"wspr_rows_seen"`
+		WsprParsed           int64   `json:"wspr_parsed_spots"`
+		WsprPersisted        int64   `json:"wspr_persisted_spots"`
+		WsprForwarded        int64   `json:"wspr_live_forwarded"`
+		WsprDroppedLoc       int64   `json:"wspr_dropped_no_locator"`
 	}{
 		ActiveConnections:    numClients,
 		HistorySize:          historySize,
@@ -475,6 +491,20 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		DxClusterPersisted:   dxPersisted,
 		DxClusterForwarded:   dxForwarded,
 		DxClusterDroppedLoc:  dxDroppedNoLoc,
+		RbnConnAttempt:       rbnAttempts,
+		RbnConnected:         rbnConnected,
+		RbnLinesSeen:         rbnLinesSeen,
+		RbnParsed:            rbnParsed,
+		RbnPersisted:         rbnPersisted,
+		RbnForwarded:         rbnForwarded,
+		RbnDroppedLoc:        rbnDroppedNoLoc,
+		WsprPollAttempts:     wsprAttempts,
+		WsprPollFailures:     wsprFailures,
+		WsprRowsSeen:         wsprRowsSeen,
+		WsprParsed:           wsprParsed,
+		WsprPersisted:        wsprPersisted,
+		WsprForwarded:        wsprForwarded,
+		WsprDroppedLoc:       wsprDroppedNoLoc,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

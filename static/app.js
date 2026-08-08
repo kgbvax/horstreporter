@@ -645,12 +645,14 @@ function currentProjection() {
 function getRenderableMapSpots(spots) {
     const showDXClusterSpots = document.getElementById('show-dxcluster-spots')?.checked !== false;
     const showRbnSpots = document.getElementById('show-rbn-spots')?.checked !== false;
-    if (showDXClusterSpots && showRbnSpots) return spots;
+    const showWsprSpots = document.getElementById('show-wspr-spots')?.checked !== false;
+    if (showDXClusterSpots && showRbnSpots && showWsprSpots) return spots;
 
     return spots.filter((spot) => {
         const src = String(spot?.sourceType || '').toLowerCase();
         if (!showDXClusterSpots && src === 'dxcluster') return false;
         if (!showRbnSpots && src === 'rbn') return false;
+        if (!showWsprSpots && src === 'wspr') return false;
         return true;
     });
 }
@@ -1196,6 +1198,7 @@ if (captureConfig?.enabled) {
     updateDxccLabelsEnabled(dxccLabelsEnabled);
     await updateDk3jfMode(dk3jfModeEnabled);
     initRbnSpotsToggle();
+    initWsprSpotsToggle();
 
     const initialProjection = captureConfig?.enabled ? captureConfig.projection : savedProjection;
     const projRadio = document.querySelector(`input[name="projection-select"][value="${initialProjection}"]`);
@@ -1447,6 +1450,34 @@ document.getElementById('show-rbn-spots')?.addEventListener('change', (e) => {
     try {
         const url = new URL(location.href);
         url.searchParams.set('include_rbn', visible ? 'true' : 'false');
+        history.replaceState(null, '', url.toString());
+    } catch (_) { /* location not available */ }
+    scheduleRender();
+});
+
+// --- WSPR live-map toggle ----------------------------------------------------
+// Filters sourceType==='wspr' spots out of the live map when unchecked.
+// Default: show. Persisted to localStorage and the include_wspr URL param.
+// WSPR only reaches the live map when the receiver locator is valid, so this
+// is a no-op until WSPR is enabled upstream (-wspr-enable).
+function initWsprSpotsToggle() {
+    const el = document.getElementById('show-wspr-spots');
+    if (!el) return;
+    const fromUrl = new URLSearchParams(location.search).get('include_wspr');
+    if (fromUrl === 'true' || fromUrl === '1') el.checked = true;
+    else if (fromUrl === 'false' || fromUrl === '0') el.checked = false;
+    else {
+        const stored = localStorage.getItem('wsprSpotsVisible');
+        if (stored === 'false') el.checked = false;
+    }
+}
+
+document.getElementById('show-wspr-spots')?.addEventListener('change', (e) => {
+    const visible = e.target.checked;
+    localStorage.setItem('wsprSpotsVisible', visible ? 'true' : 'false');
+    try {
+        const url = new URL(location.href);
+        url.searchParams.set('include_wspr', visible ? 'true' : 'false');
         history.replaceState(null, '', url.toString());
     } catch (_) { /* location not available */ }
     scheduleRender();

@@ -270,12 +270,20 @@ function renderBandCards(cardsEl, grouped, qth, minutes) {
             totalReportsAllBands,
             maxReportsSingleBand
         });
+        // WSPR path-open indicator: is any WSPR beacon path being heard on
+        // this band right now? WSPR is a propagation reference — it shows the
+        // path is open even when FT8 is quiet (off-peak, contests, dead bands).
+        const wsprOpen = points.some((p) => String(p?.sourceType || '').toLowerCase() === 'wspr');
+        const wsprBadge = wsprOpen
+            ? '<span class="band-lab-wspr-open" title="WSPR beacon path open (propagation reference)">WSPR path open</span>'
+            : '';
 
         return `
             <div class="band-lab-card" style="border-left-color: ${bandColors[band] || '#999'};">
                 <div class="band-lab-card-head">
                     <span class="band-lab-band">${escapeHtml(`${band} - ${rec}`)}</span>
                     <span class="band-lab-meta">${formatNumber(count)} reports</span>
+                    ${wsprBadge}
                 </div>
                 <div class="band-lab-card-charts">
                     <div class="band-lab-chart-block">

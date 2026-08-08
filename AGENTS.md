@@ -8,6 +8,7 @@
 
 ## Current core behavior
 - MQTT ingest subscribes to `pskr/filter/v2/#`, reconstructs omitted fields from topic segments, and currently keeps **FT8/FT4** reports.
+- Optional ingests: **DX-cluster** (TCP), **RBN** (CW/RTTY telnet), **WSPR** (wspr.live ClickHouse HTTP poller). RBN and WSPR are reference-only — they feed the live stream + activity chart but are kept out of the FT8-calibrated conditions baseline (`isNonConditionsMode`).
 - Streaming API pushes filtered spots over SSE.
 - History is retained in-memory (rolling window, pruned periodically) and used both for initial stream backfill and stats.
 - Optional DX baseline engine tracks historical band conditions and serves current DX potential scoring.
