@@ -26,48 +26,41 @@ Used for `dx_raw_spots.spot_geom geometry(Point, 4326)` plus a GiST index.
 
 ### `dx_baseline_global`
 
-Global baseline buckets (not target-specific).
+Global baseline buckets (all reporters worldwide).
 
 | Column | Type | Null | Notes |
 |---|---|---|---|
 | `band` | `TEXT` | NOT NULL | Normalized band token (`20m`, `40m`, etc.) |
 | `slot_of_day` | `INTEGER` | NOT NULL | UTC slot bucket |
-| `source4` | `TEXT` | NOT NULL | 4-char source grid |
 | `distance_tier` | `INTEGER` | NOT NULL | Distance tier bucket |
 | `snr_tier` | `INTEGER` | NOT NULL | SNR tier bucket |
 | `count` | `BIGINT` | NOT NULL | Number of observations |
 
 Primary key:
 
-- `(band, slot_of_day, source4, distance_tier, snr_tier)`
-
-Indexes:
-
-- `idx_dx_baseline_global_band_slot` on `(band, slot_of_day)`
+- `(band, slot_of_day, distance_tier, snr_tier)`
 
 ---
 
-### `dx_baseline_target`
+### `dx_baseline_cluster`
 
-Target-specific baseline buckets.
+Grid-cluster baseline buckets — the middle tier of the cluster → global
+fallback. Keyed by the 6×6 Maidenhead-square cluster anchor (e.g. `JN68`).
+Replaces the removed per-callsign `dx_baseline_target` and 11-region
+`dx_baseline_region` tables (v8).
 
 | Column | Type | Null | Notes |
 |---|---|---|---|
-| `target_token` | `TEXT` | NOT NULL | Normalized target token (callsign/grid tokens) |
+| `cluster_anchor` | `TEXT` | NOT NULL | 6×6 grid-cluster anchor locator |
 | `band` | `TEXT` | NOT NULL | Band token |
 | `slot_of_day` | `INTEGER` | NOT NULL | UTC slot bucket |
-| `source4` | `TEXT` | NOT NULL | 4-char source grid |
 | `distance_tier` | `INTEGER` | NOT NULL | Distance tier bucket |
 | `snr_tier` | `INTEGER` | NOT NULL | SNR tier bucket |
 | `count` | `BIGINT` | NOT NULL | Number of observations |
 
 Primary key:
 
-- `(target_token, band, slot_of_day, source4, distance_tier, snr_tier)`
-
-Indexes:
-
-- `idx_dx_baseline_target_token_band_slot` on `(target_token, band, slot_of_day)`
+- `(cluster_anchor, band, slot_of_day, distance_tier, snr_tier)`
 
 ---
 
@@ -254,7 +247,7 @@ Hot tables get per-table autovacuum overrides applied by `dxPostgresStore.initSc
 
 | Table | vacuum scale | vacuum threshold | analyze scale | analyze threshold | Notes |
 |---|---|---|---|---|---|
-| `dx_baseline_target` | 0.01 | 50 000 | 0.005 | 50 000 | heavy churn from baseline updates |
+| `dx_baseline_cluster` | 0.01 | 50 000 | 0.005 | 50 000 | heavy churn from baseline updates |
 | `dx_baseline_global` | 0.02 | 20 000 | 0.01 | 20 000 | smaller table, more frequent vacuum |
 | `dx_region_baseline_daily` | 0.01 | 50 000 | 0.005 | 50 000 | daily aggregates, many HOT updates |
 | `dx_raw_spots` | 0.05 | default | 0.02 | default | insert-only raw event stream |
