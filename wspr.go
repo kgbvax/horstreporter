@@ -240,6 +240,7 @@ func handleWSPRSpot(s wsprSpot, now int64, cfg wsprConfig) {
 	if m.SC == "" || m.RC == "" {
 		return
 	}
+	wsprAccounting.parsedSpots.Add(1)
 
 	// Persist unconditionally so the count-based activity chart benefits even
 	// when QRZ is off. WSPR does NOT call DxBaselineEngine.Observe: its SNR is
