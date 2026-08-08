@@ -585,13 +585,14 @@ func (s *dxPostgresStore) ensureDxPulseRegionBaseline(ctx context.Context) error
 	return nil
 }
 
-// ensureDxBaselineRegion backfills the dx_baseline_region table from
+// ensureDxBaselineCluster backfills the dx_baseline_cluster table from
 // dx_raw_spots on the first startup after the table is created. Mirrors
 // ensureDxPulseRegionBaseline: if the table already has rows, it's a no-op;
 // otherwise it scans dx_raw_spots in ascending spot_time order, recomputes
-// the (observer_region, band, slot_of_day, distance_tier, snr_tier) bucket key
-// for each spot (deriving region, slot, dist tier, snr tier from the locators
-// and signal_report_db), and batches upserts. Guards against re-running via a
+// the (cluster_anchor, band, slot_of_day, distance_tier, snr_tier) bucket key
+// for each spot (deriving the cluster anchor, slot, dist tier, snr tier from
+// the locators and signal_report_db), and batches upserts. Guards against
+// re-running via a
 // dx_meta key so a restart after a partial backfill doesn't redo the scan.
 func (s *dxPostgresStore) ensureDxBaselineCluster(ctx context.Context) error {
 	var baselineExists bool
@@ -1366,7 +1367,7 @@ func (s *dxPostgresStore) baselineStatsUncached(now int64) (int, int, int, error
 	_ = s.pool.QueryRow(ctx, `
 		SELECT
 			COALESCE((SELECT SUM(reltuples)::bigint FROM pg_class
-				WHERE relname IN ('dx_baseline_global', 'dx_baseline_target')), 0),
+				WHERE relname IN ('dx_baseline_global', 'dx_baseline_cluster')), 0),
 			COALESCE((SELECT reltuples::bigint FROM pg_class
 				WHERE relname = 'dx_raw_spots'), 0)
 	`).Scan(&bucketCount, &eventCount)
@@ -1739,9 +1740,9 @@ func (s *dxPostgresStore) typicalTargetBucketsMulti(tokens []string) ([]typicalM
 	return out, rows.Err()
 }
 
-// typicalTargetBuckets returns the long-term target-token-scoped bucket
-// aggregate from dx_baseline_target for a single target token. Used to give
-// target-filtered rose queries the full historical picture instead of just
+// typicalTargetBuckets returns the long-term cluster-anchor-scoped bucket
+// aggregate from dx_baseline_cluster for a single cluster anchor. Used to give
+// cluster-filtered rose queries the full historical picture instead of just
 // the in-memory accumulation since restart.
 //
 // The bitmap-heap-scan on a 50 GB table takes ~minute on cold cache; the

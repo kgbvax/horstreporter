@@ -252,9 +252,9 @@ func (e *DxBaselineEngine) EnablePostgres(dsn string) error {
 		st.Close()
 		return err
 	}
-	// Backfill the regional baseline (dx_baseline_region) from dx_raw_spots so
-	// the three-tier fallback (target → region → global) has data immediately
-	// after the table is created, rather than accumulating over the first day.
+	// Backfill the grid-cluster baseline (dx_baseline_cluster) from dx_raw_spots
+	// so the two-tier fallback (cluster → global) has data immediately after the
+	// table is created, rather than accumulating over the first day.
 	// No-op once the table has rows; async so it doesn't delay the HTTP listener.
 	go func() {
 		if err := st.ensureDxBaselineCluster(context.Background()); err != nil {
