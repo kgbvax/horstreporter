@@ -66,7 +66,7 @@ describe('computeActivityChartData', () => {
         const used = new Array(48).fill(true);
         const data = computeActivityChartData(
             [],
-            { baseline_activity_by_slot: baselineBySlot, baseline_slot_used_by_qth: used },
+            { baseline_activity_by_slot: baselineBySlot, baseline_slot_used_by_cluster: used },
             120,
             nowMidnightMs,
         );
@@ -74,14 +74,14 @@ describe('computeActivityChartData', () => {
         const expected = [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4];
         for (let i = 0; i < 12; i++) {
             expect(data.baselineRatesPerBin[i]).toBeCloseTo(expected[i], 6);
-            expect(data.baselineQthUsedPerBin[i]).toBe(true);
+            expect(data.baselineClusterUsedPerBin[i]).toBe(true);
         }
         expect(data.slotChanges).toEqual([3, 6, 9]);
         // yMax driven by the largest baseline (4.0) × 1.1.
         expect(data.yMax).toBeCloseTo(4.4, 6);
     });
 
-    it('marks a per-slot fallback when baseline_slot_used_by_qth[slot] is false', () => {
+    it('marks a per-slot fallback when baseline_slot_used_by_cluster[slot] is false', () => {
         // nowMs = 00:16 UTC → a 15m window covers 00:01..00:16, entirely in slot 0.
         const nowSlot0Ms = 16 * 60 * 1000;
         const baselineBySlot = new Array(48).fill(0);
@@ -89,23 +89,23 @@ describe('computeActivityChartData', () => {
         const used = new Array(48).fill(false);
         const data = computeActivityChartData(
             [],
-            { baseline_activity_by_slot: baselineBySlot, baseline_slot_used_by_qth: used },
+            { baseline_activity_by_slot: baselineBySlot, baseline_slot_used_by_cluster: used },
             15,
             nowSlot0Ms,
         );
         expect(data.baselineRatesPerBin.every((r) => r === 0.5)).toBe(true);
-        expect(data.baselineQthUsedPerBin.every((u) => u === false)).toBe(true);
+        expect(data.baselineClusterUsedPerBin.every((u) => u === false)).toBe(true);
     });
 
     it('falls back to baseline_activity when by_slot array is absent (older backend)', () => {
         const data = computeActivityChartData(
             [],
-            { baseline_activity: 1.5, qth_baseline_used: true },
+            { baseline_activity: 1.5, cluster_baseline_used: true },
             15,
             nowMidnightMs,
         );
         expect(data.baselineRatesPerBin.every((r) => r === 1.5)).toBe(true);
-        expect(data.baselineQthUsedPerBin.every((u) => u === true)).toBe(true);
+        expect(data.baselineClusterUsedPerBin.every((u) => u === true)).toBe(true);
     });
 
     it('prefers backend activity_by_bin over live-spot counts when present', () => {

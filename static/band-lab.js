@@ -499,7 +499,7 @@ export function utcSlotOfDayFromMs(timestampMs) {
 // Shape:
 //   binRates[i]               — spots/min in bin i (i=0 oldest, i=11 newest)
 //   baselineRatesPerBin[i]    — historical spots/min for the slot containing bin i's centre
-//   baselineQthUsedPerBin[i] — true when the per-slot qth baseline was used
+//   baselineClusterUsedPerBin[i] — true when the per-slot qth baseline was used
 //   yMax                       — y-axis upper bound in spots/min
 //   binMinutes                 — width of one bin in minutes
 //   sloChanges                 — bin indices where the slot index changed vs the previous bin
@@ -537,12 +537,12 @@ export function computeActivityChartData(points, bandMetrics, minutes, nowMs) {
     }
 
     const baselineBySlot = Array.isArray(bandMetrics?.baseline_activity_by_slot) ? bandMetrics.baseline_activity_by_slot : [];
-    const slotUsedByQth = Array.isArray(bandMetrics?.baseline_slot_used_by_qth) ? bandMetrics.baseline_slot_used_by_qth : [];
+    const slotUsedByCluster = Array.isArray(bandMetrics?.baseline_slot_used_by_cluster) ? bandMetrics.baseline_slot_used_by_cluster : [];
     const currentSlotBaselineRate = Math.max(0, Number(bandMetrics?.baseline_activity || 0));
-    const currentSlotQthUsed = bandMetrics?.qth_baseline_used === true;
+    const currentSlotClusterUsed = bandMetrics?.cluster_baseline_used === true;
 
     const baselineRatesPerBin = new Array(ACTIVITY_BINS).fill(0);
-    const baselineQthUsedPerBin = new Array(ACTIVITY_BINS).fill(false);
+    const baselineClusterUsedPerBin = new Array(ACTIVITY_BINS).fill(false);
     const slotChanges = [];
     let prevSlot = -1;
     for (let i = 0; i < ACTIVITY_BINS; i++) {
@@ -557,7 +557,7 @@ export function computeActivityChartData(points, bandMetrics, minutes, nowMs) {
             const v = Number(baselineBySlot[slot]);
             if (Number.isFinite(v) && v > 0) {
                 rate = v;
-                used = Boolean(slotUsedByQth[slot]);
+                used = Boolean(slotUsedByCluster[slot]);
             }
         }
         // Fallback: if the per-slot array didn't carry data, fall back to the
@@ -565,10 +565,10 @@ export function computeActivityChartData(points, bandMetrics, minutes, nowMs) {
         // that haven't returned the new field yet).
         if (rate === 0 && baselineBySlot.length === 0 && currentSlotBaselineRate > 0) {
             rate = currentSlotBaselineRate;
-            used = currentSlotQthUsed;
+            used = currentSlotClusterUsed;
         }
         baselineRatesPerBin[i] = rate;
-        baselineQthUsedPerBin[i] = used;
+        baselineClusterUsedPerBin[i] = used;
         if (i === 0) {
             prevSlot = slot;
         } else if (slot !== prevSlot) {
@@ -584,7 +584,7 @@ export function computeActivityChartData(points, bandMetrics, minutes, nowMs) {
     return {
         binRates,
         baselineRatesPerBin,
-        baselineQthUsedPerBin,
+        baselineClusterUsedPerBin,
         yMax,
         binMinutes,
         slotChanges,
@@ -612,7 +612,7 @@ function drawActivityChart(canvas, points, bandMetrics, minutes) {
     drawChartFrame(ctx, pad, pw, ph, pal);
 
     const data = computeActivityChartData(points, bandMetrics, minutes, Date.now());
-    const { binRates, baselineRatesPerBin, baselineQthUsedPerBin, yMax } = data;
+    const { binRates, baselineRatesPerBin, baselineClusterUsedPerBin, yMax } = data;
 
     // Faint horizontal gridlines at 0, half, full.
     ctx.strokeStyle = hexToRgba(pal.grid, 0.2);
@@ -642,7 +642,7 @@ function drawActivityChart(canvas, points, bandMetrics, minutes) {
     const renderBaselineSegment = (startIdx, endIdx) => {
         const rate = baselineRatesPerBin[startIdx];
         if (!(rate > 0)) return null;
-        const used = baselineQthUsedPerBin[startIdx];
+        const used = baselineClusterUsedPerBin[startIdx];
         const x0 = pad.l + startIdx * barWidth;
         const x1 = pad.l + (endIdx + 1) * barWidth;
         const yRaw = pad.t + ph - (rate / yMax) * ph;
@@ -658,7 +658,7 @@ function drawActivityChart(canvas, points, bandMetrics, minutes) {
     for (let i = 1; i <= ACTIVITY_BINS; i++) {
         const slotChange = i === ACTIVITY_BINS
             || baselineRatesPerBin[i] !== baselineRatesPerBin[i - 1]
-            || baselineQthUsedPerBin[i] !== baselineQthUsedPerBin[i - 1];
+            || baselineClusterUsedPerBin[i] !== baselineClusterUsedPerBin[i - 1];
         if (!slotChange) continue;
         const seg = renderBaselineSegment(runStart, i - 1);
         // Vertical connector between adjacent segments at a slot boundary.

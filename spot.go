@@ -188,6 +188,63 @@ func getSquaresWithinRings(locator string, rings int) []string {
 	return res
 }
 
+// gridClusterSide is the side length (in grid squares) of a Grid cluster —
+// the geographic unit the scoring baseline is keyed on. 6×6 squares spans
+// 12° longitude × 6° latitude: small enough to distinguish US East Coast from
+// West Coast, large enough that hundreds of reporters contribute in populated
+// areas so the baseline reaches statistical significance. Clusters tile the
+// globe's 180×180 grid into 30×30 = 900 units.
+const gridClusterSide = 6
+
+// locatorClusterAnchor returns the anchor square of the 6×6 Grid cluster
+// containing the given locator. The anchor is the cluster's top-left (NW)
+// square in grid coordinates, computed by flooring each square coordinate
+// down to the nearest multiple of gridClusterSide — e.g. JO62 and JO73 both
+// anchor to JN68. Coordinates are clamped to the 180-grid (edges near 180
+// fold into the last partial cluster). ok=false for non-locators; the caller
+// skips the cluster tier in that case.
+func locatorClusterAnchor(locator string) (string, bool) {
+	x, y, ok := locatorSquareXY(locator)
+	if !ok {
+		return "", false
+	}
+	ax := (x / gridClusterSide) * gridClusterSide
+	ay := (y / gridClusterSide) * gridClusterSide
+	// Clamp to the valid grid — squares near 180 fold into the last cluster.
+	if ax > 180-gridClusterSide {
+		ax = 180 - gridClusterSide
+	}
+	if ay > 180-gridClusterSide {
+		ay = 180 - gridClusterSide
+	}
+	return squareXYToLocator(ax, ay), true
+}
+
+// getSquaresInCluster returns the 36 grid squares of the 6×6 Grid cluster
+// containing the locator, in row-major order (NW to SE). A non-locator is
+// returned unchanged (mirroring getSquaresWithinRings).
+func getSquaresInCluster(locator string) []string {
+	cx, cy, ok := locatorSquareXY(locator)
+	if !ok {
+		return []string{locator}
+	}
+	ax := (cx / gridClusterSide) * gridClusterSide
+	ay := (cy / gridClusterSide) * gridClusterSide
+	if ax > 180-gridClusterSide {
+		ax = 180 - gridClusterSide
+	}
+	if ay > 180-gridClusterSide {
+		ay = 180 - gridClusterSide
+	}
+	var res []string
+	for dy := 0; dy < gridClusterSide; dy++ {
+		for dx := 0; dx < gridClusterSide; dx++ {
+			res = append(res, squareXYToLocator(ax+dx, ay+dy))
+		}
+	}
+	return res
+}
+
 // getSurroundingSquares returns the qth square and its 8 neighbours.
 func getSurroundingSquares(locator string) []string {
 	return getSquaresWithinRings(locator, 1)
@@ -223,4 +280,47 @@ func locatorToLatLng(locator string) (float64, float64) {
 		lat += 5.0
 	}
 	return lat, lng
+}
+
+// latLngToLocator converts a lat/lng point to a Maidenhead locator of the
+// given precision (2 chars = field, 4 chars = square). Used to derive a
+// cluster anchor from the DXCC entity centroid when QRZ has no locator for
+// a callsign QTH. precision=0 defaults to 4.
+func latLngToLocator(lat, lng float64, precision int) string {
+	if precision <= 0 {
+		precision = 4
+	}
+	// Clamp to the valid Maidenhead grid.
+	if lat < -90 {
+		lat = -90
+	}
+	if lat > 90 {
+		lat = 90
+	}
+	if lng < -180 {
+		lng = -180
+	}
+	if lng > 180 {
+		lng = 180
+	}
+	fieldLng := int((lng + 180) / 20)
+	fieldLat := int((lat + 90) / 10)
+	if fieldLng >= 18 {
+		fieldLng = 17
+	}
+	if fieldLat >= 18 {
+		fieldLat = 17
+	}
+	if precision == 2 {
+		return string([]byte{byte('A' + fieldLng), byte('A' + fieldLat)})
+	}
+	x := float64(fieldLng)*10 + ((lng + 180 - float64(fieldLng)*20) / 2)
+	y := float64(fieldLat)*10 + ((lat + 90 - float64(fieldLat)*10) / 1)
+	if x >= 100 {
+		x = 99
+	}
+	if y >= 100 {
+		y = 99
+	}
+	return squareXYToLocator(int(x), int(y))
 }

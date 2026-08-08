@@ -93,23 +93,23 @@ Params: `qth` (required), `minutes` (default 20, max 180), `cw_min_db`
 (default -15), `surroundings`.
 
 Response: top-level `overall_score`, `confidence`, `status`, `condition`,
-`trend`, `operator_region` (the inferred DXPulse region used for the regional
+`trend`, `qth_cluster` (the inferred DXPulse region used for the regional
 baseline tier; `""` when unresolvable), plus recommendation lists `best_bands`,
 `recommended_bands`, `worst_bands`, `avoid_bands`; and `bands[]`, one object
 per band with ~38 fields — activity (`current_links`, `unique_links`,
 `repeat_ratio`, `spots_per_minute`, unique station/grid counts), geometry
 (`avg/median/max/p90_distance_km`, `long_haul_ratio`, `dx_ratio`), signal
 (`avg_snr`, `median_snr`, `peak_snr`, `p90_snr`), baseline comparison
-(`baseline_activity`, `qth_baseline_used`, `regional_baseline_used`,
-`baseline_activity_by_slot`, `baseline_slot_used_by_qth`,
-`baseline_slot_used_by_region`), `dominant_direction`, `azimuth_sectors`,
+(`baseline_activity`, `cluster_baseline_used`, ``,
+`baseline_activity_by_slot`, `baseline_slot_used_by_cluster`,
+``), `dominant_direction`, `azimuth_sectors`,
 `region_counts`, trend + `sparkline`, `activity_by_bin`.
 
 Baseline tier selection is per-band and per-slot: a band/slot with
-qth-specific history uses it (`qth_baseline_used: true`); otherwise it
-falls back to the operator's regional baseline
-(`regional_baseline_used: true`); otherwise to the global baseline (both
-false). The regional baseline is always-on when Postgres is available and is
+qth-specific history uses it (`cluster_baseline_used: true`); otherwise it
+falls back to the operator.s grid-cluster baseline
+(`: true`); otherwise to the global baseline (both
+false). The cluster baseline is always-on when Postgres is available and is
 backfilled from `dx_raw_spots` on first startup after the table is created.
 
 Degrades to an empty "Poor" skeleton when the Postgres baseline is

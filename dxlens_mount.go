@@ -103,17 +103,22 @@ func (p *dxlensProvider) TargetBucketsMulti(tokens []string) map[string]*dxlens.
 	if p == nil || p.engine == nil || len(tokens) == 0 {
 		return nil
 	}
-	// Normalise each token through the same path observe()/initSchema use,
-	// so 4-char locators collapse to their 2×2 block anchor (e.g. JO32→JO22)
-	// and PG's storage shape (block-anchored tokens only) actually matches
-	// the queried token set. Without this, "JO32 + surroundings" would query
-	// nine 4-char locators of which only two happen to be block anchors.
+	// Normalise each token to its grid-cluster anchor so PG's storage shape
+	// (cluster-anchored tokens only) matches the queried token set. Without
+	// this, "JO32 + surroundings" would query nine 4-char locators of which
+	// only some happen to be cluster anchors.
 	norm := make([]string, 0, len(tokens))
 	seen := make(map[string]struct{}, len(tokens))
 	for _, t := range tokens {
-		u := normalizeQTHTokenUpper(strings.ToUpper(strings.TrimSpace(t)))
+		u := strings.ToUpper(strings.TrimSpace(t))
 		if u == "" {
 			continue
+		}
+		// Convert locators to their cluster anchor; callsigns pass through
+		// (they won't match cluster-anchored rows, but the heatmap is
+		// locator-driven).
+		if anchor, ok := locatorClusterAnchor(u); ok {
+			u = anchor
 		}
 		if _, dup := seen[u]; dup {
 			continue
@@ -172,7 +177,7 @@ func (p *dxlensProvider) TargetBucketsMulti(tokens []string) map[string]*dxlens.
 		if band == "" {
 			continue
 		}
-		key := baselineQthKeyFromBase(r.TargetToken, baselineKey(band, r.SlotOfDay, r.DistanceTier, r.SnrTier))
+		key := baselineClusterKeyFromBase(r.TargetToken, baselineKey(band, r.SlotOfDay, r.DistanceTier, r.SnrTier))
 		b := &dxlens.Bucket{
 			Band:         band,
 			SlotOfDay:    r.SlotOfDay,
@@ -203,9 +208,13 @@ func (p *dxlensProvider) TargetBuckets(token string) map[string]*dxlens.Bucket {
 	if p == nil || p.engine == nil {
 		return nil
 	}
-	token = normalizeQTHTokenUpper(strings.ToUpper(strings.TrimSpace(token)))
+	token = strings.ToUpper(strings.TrimSpace(token))
 	if token == "" {
 		return nil
+	}
+	// Convert locator to cluster anchor; callsigns pass through.
+	if anchor, ok := locatorClusterAnchor(token); ok {
+		token = anchor
 	}
 
 	now := time.Now()
@@ -234,7 +243,7 @@ func (p *dxlensProvider) TargetBuckets(token string) map[string]*dxlens.Bucket {
 		if band == "" {
 			continue
 		}
-		key := baselineQthKeyFromBase(token, baselineKey(band, r.SlotOfDay, r.DistanceTier, r.SnrTier))
+		key := baselineClusterKeyFromBase(token, baselineKey(band, r.SlotOfDay, r.DistanceTier, r.SnrTier))
 		out[key] = &dxlens.Bucket{
 			Band:         band,
 			SlotOfDay:    r.SlotOfDay,
@@ -293,8 +302,8 @@ func buildDxlensSnapshot(e *DxBaselineEngine) *dxlens.Snapshot {
 			Count:        v.Count,
 		}
 	}
-	target := make(map[string]*dxlens.Bucket, len(e.qthBuckets))
-	for k, v := range e.qthBuckets {
+	target := make(map[string]*dxlens.Bucket, len(e.clusterBuckets))
+	for k, v := range e.clusterBuckets {
 		if v == nil {
 			continue
 		}

@@ -7,94 +7,54 @@ import (
 	"testing"
 )
 
-// TestLocatorBlockToken pins the 2×2-block collapse used to dedup target
-// tokens. Storage is keyed on the even-anchored block so the disk footprint
-// shrinks by ~4× on the locator portion; the read path always queries with
-// a token that's already block-normalised.
-func TestLocatorBlockToken(t *testing.T) {
+// TestLocatorClusterAnchor pins the 6×6 grid-cluster anchor computation.
+// Each locator maps to the bottom-left square of its 6×6 cluster.
+func TestLocatorClusterAnchor(t *testing.T) {
 	cases := []struct {
 		in, want string
+		ok       bool
 	}{
-		{"JO22", "JO22"},
-		{"JO23", "JO22"},
-		{"JO32", "JO22"},
-		{"JO33", "JO22"},
-		{"JO42", "JO42"},
-		{"JO43", "JO42"},
-		{"JO89", "JO88"},
-		{"AA00", "AA00"},
-		{"RR99", "RR88"},
+		{"JO62", "JN68", true},  // Berlin
+		{"JO62QM", "JN68", true}, // 6-char subsquare → same cluster
+		{"FN31", "EM86", true},  // New York
+		{"CM87", "CM46", true},  // San Francisco
+		{"AA00", "AA00", true},  // origin
+		{"W1AW", "", false},     // callsign → not a locator
+		{"", "", false},         // empty
 	}
 	for _, c := range cases {
-		if got := locatorBlockToken(c.in); got != c.want {
-			t.Errorf("locatorBlockToken(%q) = %q, want %q", c.in, got, c.want)
+		got, ok := locatorClusterAnchor(c.in)
+		if ok != c.ok {
+			t.Errorf("locatorClusterAnchor(%q) ok = %v, want %v", c.in, ok, c.ok)
+			continue
+		}
+		if ok && got != c.want {
+			t.Errorf("locatorClusterAnchor(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
 
-func TestNormalizeTargetsForBaselineCollapsesAndDedupes(t *testing.T) {
-	// User typed JO32 with surroundings → 9 squares spanning 4 blocks.
-	in := []string{"JO21", "JO22", "JO23", "JO31", "JO32", "JO33", "JO41", "JO42", "JO43"}
-	got := normalizeQTHSetForBaseline(in)
-	want := map[string]bool{"JO20": true, "JO22": true, "JO40": true, "JO42": true}
-	if len(got) != len(want) {
-		t.Fatalf("got %d blocks (%v), want %d (%v)", len(got), got, len(want), want)
+// TestGetSquaresInCluster returns 36 squares for a valid locator.
+func TestGetSquaresInCluster(t *testing.T) {
+	squares := getSquaresInCluster("JO62")
+	if len(squares) != 36 {
+		t.Fatalf("getSquaresInCluster(JO62) = %d squares, want 36", len(squares))
 	}
-	for _, b := range got {
-		if !want[b] {
-			t.Errorf("unexpected block %q in %v", b, got)
-		}
+	// Non-locator passes through.
+	if got := getSquaresInCluster("W1AW"); len(got) != 1 || got[0] != "W1AW" {
+		t.Errorf("getSquaresInCluster(W1AW) = %v, want [W1AW]", got)
 	}
 }
 
-func TestNormalizeTargetsForBaselinePassesCallsigns(t *testing.T) {
-	in := []string{"DK3JF", "W1AW", "DK3JF"} // duplicate callsign
-	got := normalizeQTHSetForBaseline(in)
-	if len(got) != 2 {
-		t.Fatalf("got %v, want exactly 2 deduped callsigns", got)
-	}
-	// Order is insertion order — DK3JF comes first.
-	if got[0] != "DK3JF" || got[1] != "W1AW" {
-		t.Errorf("got %v, want [DK3JF W1AW]", got)
-	}
-}
-
-func TestNormalizeTargetTokenUpperLocatorAndCallsign(t *testing.T) {
-	cases := []struct {
-		in, want string
-	}{
-		// 4-char locators collapse to 2×2 blocks. The helper expects
-		// already-upper-cased input; case-folding happens in the caller
-		// (normalizeQTHToken).
-		{"JO32", "JO22"},
-		{"FN31", "FN20"},
-		// 6-char locators still match isLocator and collapse to a 4-char block.
-		{"JO32WI", "JO22"},
-		// Callsigns pass through unchanged.
-		{"W1AW", "W1AW"},
-		{"DK3JF", "DK3JF"},
-		// Empty/short inputs pass through.
-		{"", ""},
-		{"X", "X"},
-	}
-	for _, c := range cases {
-		got := normalizeQTHTokenUpper(c.in)
-		if got != c.want {
-			t.Errorf("normalizeQTHTokenUpper(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-// TestLegacyV5SnapshotLoadCollapsesSource4AndBlocks writes a synthetic v5
-// snapshot to disk with two source4 variants and two locator tokens that
-// share a 2×2 block, then loads it through DxBaselineEngine.Load and checks
-// that the in-memory maps reflect the merged v6 shape.
-func TestLegacyV5SnapshotLoadCollapsesSource4AndBlocks(t *testing.T) {
+// TestLegacyV5SnapshotLoadCollapsesSource4 writes a synthetic v5 snapshot
+// with source4 in the key, then loads it and checks that the global buckets
+// merge correctly. (The per-call and 11-region tiers were removed in v8;
+// legacy target_buckets/regional_buckets are discarded — the cluster tier
+// is rebuilt from dx_raw_spots on startup.)
+func TestLegacyV5SnapshotLoadCollapsesSource4(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dx_baseline.json")
 
-	// Old shape: source4 in the key. Two distinct source4 values collide on
-	// the same (band, slot, dist, snr) tuple after v6 collapse — counts sum.
 	legacy := map[string]any{
 		"version":  5,
 		"saved_at": int64(1700000000),
@@ -110,24 +70,12 @@ func TestLegacyV5SnapshotLoadCollapsesSource4AndBlocks(t *testing.T) {
 				"source4": "JO32", "count": 5,
 			},
 		},
-		// Two locator target tokens that share the same 2×2 block (JO22)
-		// must merge after the v6 block-collapse, AND collapse their source4.
+		// Legacy target_buckets are discarded in v8 (per-call tier removed).
 		"target_buckets": map[string]any{
 			"JO32|20m|10|0|0|JN58": map[string]any{
 				"band": "20m", "slot_of_day": 10,
 				"distance_tier": 0, "snr_tier": 0,
 				"source4": "JN58", "count": 3,
-			},
-			"JO33|20m|10|0|0|JN58": map[string]any{
-				"band": "20m", "slot_of_day": 10,
-				"distance_tier": 0, "snr_tier": 0,
-				"source4": "JN58", "count": 2,
-			},
-			// Callsign target token: passes through unchanged.
-			"W1AW|20m|10|0|0|JN58": map[string]any{
-				"band": "20m", "slot_of_day": 10,
-				"distance_tier": 0, "snr_tier": 0,
-				"source4": "JN58", "count": 11,
 			},
 		},
 	}
@@ -151,25 +99,15 @@ func TestLegacyV5SnapshotLoadCollapsesSource4AndBlocks(t *testing.T) {
 	if e.buckets[gk] == nil || e.buckets[gk].Count != 12 {
 		t.Errorf("global bucket count = %v, want 12 (7+5)", e.buckets[gk])
 	}
-
-	if got := len(e.qthBuckets); got != 2 {
-		t.Fatalf("target buckets after load = %d, want 2 (JO22 merged + W1AW)", got)
-	}
-	jo22Key := baselineQthKeyFromBase("JO22", baselineKey("20m", 10, 0, 0))
-	if e.qthBuckets[jo22Key] == nil || e.qthBuckets[jo22Key].Count != 5 {
-		t.Errorf("JO22 block target = %v, want count 5 (3+2)", e.qthBuckets[jo22Key])
-	}
-	w1awKey := baselineQthKeyFromBase("W1AW", baselineKey("20m", 10, 0, 0))
-	if e.qthBuckets[w1awKey] == nil || e.qthBuckets[w1awKey].Count != 11 {
-		t.Errorf("W1AW target = %v, want count 11", e.qthBuckets[w1awKey])
+	// Legacy target_buckets are discarded in v8.
+	if len(e.clusterBuckets) != 0 {
+		t.Errorf("qthBuckets should be empty (per-call tier removed), got %d", len(e.clusterBuckets))
 	}
 }
 
-// TestSaveProducesV6Snapshot asserts the engine writes the current snapshot
-// version on save, and that the persisted JSON has no source4 field on its
-// buckets. (Version bumped to 7 when regional_buckets were added; the
-// source4 invariant is still the v6 contract this test guards.)
-func TestSaveProducesV6Snapshot(t *testing.T) {
+// TestSaveProducesV8Snapshot asserts the engine writes version 8 on save,
+// and that the persisted JSON has no source4 field on its buckets.
+func TestSaveProducesV8Snapshot(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dx_baseline.json")
 
@@ -189,11 +127,9 @@ func TestSaveProducesV6Snapshot(t *testing.T) {
 	if err := json.Unmarshal(raw, &snap); err != nil {
 		t.Fatalf("parse saved file: %v", err)
 	}
-	if v, ok := snap["version"].(float64); !ok || int(v) != 7 {
-		t.Errorf("snapshot version = %v, want 7", snap["version"])
+	if v, ok := snap["version"].(float64); !ok || int(v) != 8 {
+		t.Errorf("snapshot version = %v, want 8", snap["version"])
 	}
-	// regional_buckets may be omitted (omitempty) when empty — that's fine;
-	// Load handles nil. Only assert presence when non-empty.
 	// The first bucket should not have a source4 field.
 	buckets, _ := snap["buckets"].(map[string]any)
 	for _, b := range buckets {

@@ -208,7 +208,7 @@ func TestHotBandsHeuristicGating(t *testing.T) {
 					Score:              60,
 					SpotsPerMinute:     tc.live,
 					BaselineActivity:   tc.baseAct,
-					QTHBaselineUsed: true,
+					ClusterBaselineUsed: true,
 					P90DistanceKm:      tc.liveP90,
 					Trend:              tc.trend,
 					TrendDelta:         tc.trendDel,
@@ -261,11 +261,11 @@ func classifyHotBandsForTest(cond dxConditionsResponse, currentBand string, base
 			distRatio = b.P90DistanceKm / bp
 		}
 		switch {
-		case b.QTHBaselineUsed && trustedBaseline &&
+		case b.ClusterBaselineUsed && trustedBaseline &&
 			b.BaselineActivity > 0 && b.BaselineActivity <= hotBandsSurpriseBaselineMx &&
 			ratio >= hotBandsSurpriseRatio:
 			out = append(out, hotBandRecommendation{Band: b.Band, Kind: "surprise", Priority: "high"})
-		case b.QTHBaselineUsed && trustedBaseline && bpUsed && bp > 0 &&
+		case b.ClusterBaselineUsed && trustedBaseline && bpUsed && bp > 0 &&
 			distRatio >= hotBandsDxSurgeRatio && b.P90DistanceKm >= hotBandsDxSurgeMinDistKm:
 			out = append(out, hotBandRecommendation{Band: b.Band, Kind: "dx_surge", Priority: "normal"})
 		case b.Trend == "rising" && b.TrendDelta >= hotBandsMinTrendDelta &&

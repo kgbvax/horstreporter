@@ -73,14 +73,8 @@ func (e *DxBaselineEngine) HotBands(qth string, surroundings bool, minutes int, 
 		return resp
 	}
 
-	// Baseline p90 distance lookup is qth-scoped, so we need the same
-	// block-anchored qth set that Evaluate uses internally.
-	qthSet := []string{cond.QTH}
-	if cond.Surroundings && isLocator(cond.QTH) {
-		qthSet = getSurroundingSquares(cond.QTH)
-	}
-	qthBaselineSet := normalizeQTHSetForBaseline(qthSet)
-
+	// Baseline p90 distance lookup is cluster-scoped; the cluster anchor is
+	// already derived inside Evaluate and surfaced as cond.OperatorCluster.
 	trustedBaseline := cond.BaselineHistoryM >= hotBandsMinHistoryMinutes
 
 	recs := make([]hotBandRecommendation, 0, len(cond.Bands))
@@ -107,18 +101,17 @@ func (e *DxBaselineEngine) HotBands(qth string, surroundings bool, minutes int, 
 			continue
 		}
 
-		baseP90, baseUsed := e.lookupBaselineP90(qthBaselineSet, cond.OperatorRegion, b.Band, cond.CurrentSlotOfDay)
+		baseP90, baseUsed := e.lookupBaselineP90(cond.OperatorCluster, b.Band, cond.CurrentSlotOfDay)
 		distRatio := 0.0
 		if baseP90 > 0 {
 			distRatio = b.P90DistanceKm / baseP90
 		}
 
 		// classify, in priority order — first match wins.
-		// The surprise/dx_surge gates accept either a qth-specific OR a
-		// regional baseline — a regional baseline gives operators with thin
-		// qth history the same "unusual opening" detection as those with
-		// rich qth history.
-		baselineScoped := b.QTHBaselineUsed || b.RegionalBaselineUsed
+		// The surprise/dx_surge gates accept the cluster baseline — a cluster
+		// baseline gives operators with thin qth history the same "unusual
+		// opening" detection as those with rich qth history.
+		baselineScoped := b.ClusterBaselineUsed
 		switch {
 		case baselineScoped && trustedBaseline &&
 			b.BaselineActivity > 0 && b.BaselineActivity <= hotBandsSurpriseBaselineMx &&
@@ -193,28 +186,27 @@ func (e *DxBaselineEngine) HotBands(qth string, surroundings bool, minutes int, 
 	return resp
 }
 
-func (e *DxBaselineEngine) lookupBaselineP90(qthSet []string, operatorRegion, band string, slot int) (float64, bool) {
+func (e *DxBaselineEngine) lookupBaselineP90(operatorCluster, band string, slot int) (float64, bool) {
 	if e == nil {
 		return 0, false
 	}
 	e.mu.RLock()
 	st := e.store
-	var globalCopy, qthCopy, regionCopy map[string]*baselineBucket
+	var globalCopy, clusterCopy map[string]*baselineBucket
 	if st == nil {
 		globalCopy = cloneBuckets(e.buckets)
-		qthCopy = cloneBuckets(e.qthBuckets)
-		regionCopy = cloneBuckets(e.regionalBuckets)
+		clusterCopy = cloneBuckets(e.clusterBuckets)
 	}
 	e.mu.RUnlock()
 
 	if st != nil {
-		km, used, _, err := st.baselineP90DistanceForBand(qthSet, operatorRegion, band, slot)
+		km, used, err := st.baselineP90DistanceForBand(operatorCluster, band, slot)
 		if err != nil {
 			return 0, false
 		}
 		return km, used
 	}
-	km, used, _ := baselineP90DistanceForBand(globalCopy, qthCopy, regionCopy, operatorRegion, qthSet, band, slot)
+	km, used := baselineP90DistanceForBand(globalCopy, clusterCopy, operatorCluster, band, slot)
 	return km, used
 }
 

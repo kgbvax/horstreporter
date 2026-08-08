@@ -145,7 +145,7 @@ func TestEvaluateConcurrentObserveRace(t *testing.T) {
 // TestEvaluateRegionalBaselineFallback verifies the three-tier baseline
 // fallback (target → region → global) in the in-memory path. A locator target
 // with NO target-specific history but rich regional history should surface
-// RegionalBaselineUsed=true and a non-zero BaselineActivity.
+// ClusterBaselineUsed=true and a non-zero BaselineActivity.
 func TestEvaluateRegionalBaselineFallback(t *testing.T) {
 	dir := t.TempDir()
 	e := newDxBaselineEngine(filepath.Join(dir, "dx_baseline.json"))
@@ -176,11 +176,12 @@ func TestEvaluateRegionalBaselineFallback(t *testing.T) {
 		{RP: -10, T: now, SC: "DL1ABC", SL: "JO62QM", RC: "W1AW", RL: "FN31AA", B: "20m", MD: "FT8"},
 	}, now)
 
-	if resp.OperatorRegion == "" {
-		t.Fatalf("expected OperatorRegion for locator target JO62qm, got empty")
+	if resp.OperatorCluster == "" {
+		t.Fatalf("expected OperatorCluster for locator qth JO62qm, got empty")
 	}
-	if resp.OperatorRegion != "EU" {
-		t.Errorf("OperatorRegion = %q, want EU", resp.OperatorRegion)
+	// JO62qm → cluster anchor JN68
+	if resp.OperatorCluster != "JN68" {
+		t.Errorf("OperatorCluster = %q, want JN68", resp.OperatorCluster)
 	}
 
 	var b20 dxBandCondition
@@ -194,44 +195,36 @@ func TestEvaluateRegionalBaselineFallback(t *testing.T) {
 		t.Fatalf("expected 20m in response")
 	}
 	// The target (JO62qm block anchor) has its own target-specific history
-	// (we observed 50 spots where SL=JO62QM), so QTHBaselineUsed should be
+	// (we observed 50 spots where SL=JO62QM), so ClusterBaselineUsed should be
 	// true. This test confirms the regional wiring doesn't break the target
 	// path. A separate test with a target that has NO history would exercise
 	// the regional fallback directly — but that requires a target token that
 	// never appeared in the observed spots, which is hard to construct without
 	// manipulating the bucket maps directly. The three-tier helpers are
 	// unit-testable directly; this integration test guards the wiring.
-	if !b20.QTHBaselineUsed && !b20.RegionalBaselineUsed {
+	if !b20.ClusterBaselineUsed {
 		t.Errorf("expected target or regional baseline used, got neither")
 	}
 }
 
-// TestBaselineActivityForBandRegionalFallback unit-tests the three-tier
-// fallback directly: a target with no history, a region with history, and a
-// global with history — the region should win.
-func TestBaselineActivityForBandRegionalFallback(t *testing.T) {
+// TestBaselineActivityForBandClusterFallback unit-tests the two-tier
+// fallback directly: no cluster → global fallback; cluster has data →
+// cluster wins.
+func TestBaselineActivityForBandClusterFallback(t *testing.T) {
 	global := map[string]*baselineBucket{}
-	target := map[string]*baselineBucket{}
-	region := map[string]*baselineBucket{}
+	cluster := map[string]*baselineBucket{}
 
-	// No target, no region → global fallback.
+	// No cluster → global fallback.
 	global[baselineKey("20m", 10, 2, 1)] = &baselineBucket{Count: 100}
-	act, targetUsed, regionUsed := baselineActivityForBand(global, target, region, "", []string{"RARE"}, "20m", 10, 60*24*30)
-	if targetUsed || regionUsed || act == 0 {
-		t.Errorf("global fallback: act=%v targetUsed=%v regionUsed=%v, want global", act, targetUsed, regionUsed)
+	act, clusterUsed := baselineActivityForBand(global, cluster, "", "20m", 10, 60*24*30)
+	if clusterUsed || act == 0 {
+		t.Errorf("global fallback: act=%v clusterUsed=%v, want global", act, clusterUsed)
 	}
 
-	// No target, region has data, operatorRegion set → regional fallback.
-	region[baselineRegionKey("EU", "20m", 10, 2, 1)] = &baselineBucket{Count: 50}
-	act, targetUsed, regionUsed = baselineActivityForBand(global, target, region, "EU", []string{"RARE"}, "20m", 10, 60*24*30)
-	if targetUsed || !regionUsed || act == 0 {
-		t.Errorf("regional fallback: act=%v targetUsed=%v regionUsed=%v, want region", act, targetUsed, regionUsed)
-	}
-
-	// QTH has data → target wins over region.
-	target[baselineQthKey("DL1ABC", "20m", 10, 2, 1)] = &baselineBucket{Count: 30}
-	act, targetUsed, regionUsed = baselineActivityForBand(global, target, region, "EU", []string{"DL1ABC"}, "20m", 10, 60*24*30)
-	if !targetUsed || regionUsed {
-		t.Errorf("target wins: act=%v targetUsed=%v regionUsed=%v, want target", act, targetUsed, regionUsed)
+	// Cluster has data, operatorCluster set → cluster wins.
+	cluster[baselineClusterKey("JN68", "20m", 10, 2, 1)] = &baselineBucket{Count: 50}
+	act, clusterUsed = baselineActivityForBand(global, cluster, "JN68", "20m", 10, 60*24*30)
+	if !clusterUsed || act == 0 {
+		t.Errorf("cluster fallback: act=%v clusterUsed=%v, want cluster", act, clusterUsed)
 	}
 }
