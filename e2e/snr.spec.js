@@ -149,6 +149,18 @@ test('qth input persists, rehydrates, and external setter updates it', async ({ 
     await expect(page.locator('#qth')).toHaveValue('FN31');
 });
 
+test('legacy target key migrates to qth on load', async ({ page }) => {
+    // Simulate an existing user who has the old 'target' key from before
+    // the QTH rename. The app should migrate it to 'qth' and populate the
+    // input field without requiring a click on Go.
+    await page.evaluate(() => {
+        localStorage.removeItem('qth');
+        localStorage.setItem('target', 'JO42');
+    });
+    await page.reload();
+    await expect(page.locator('#qth')).toHaveValue('JO42');
+});
+
 test('dx-cluster defaults on; external setter syncs it', async ({ page }) => {
     await expect(page.locator('#show-dxcluster-spots')).toBeChecked();
     await page.evaluate(() => window.__horstSetDxcluster(false));

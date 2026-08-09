@@ -593,17 +593,6 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     opacity: 0.82;
 }
 
-.band-lab-wspr-open {
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: #0a7d3c;
-    background: rgba(10, 125, 60, 0.12);
-    border: 1px solid rgba(10, 125, 60, 0.35);
-    border-radius: 4px;
-    padding: 1px 6px;
-    white-space: nowrap;
-}
-
 /* WSPR Band × Region matrix panel */
 .wspr-matrix-window {
     position: absolute;

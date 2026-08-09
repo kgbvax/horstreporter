@@ -798,7 +798,20 @@ function maybeAutoStartSavedQth() {
         return;
     }
 
-    const savedQth = localStorage.getItem('qth')?.trim()?.toUpperCase();
+    // Read the saved QTH. Fall back to the legacy 'target' key (pre-QTH-rename)
+    // and migrate it inline, because the Svelte-bundle migration in main.js
+    // runs AFTER app.js (module load order) — without this fallback, existing
+    // users with a saved 'target' locator would see an empty field and no
+    // autostart.
+    let savedQth = localStorage.getItem('qth')?.trim()?.toUpperCase();
+    if (!savedQth) {
+        const legacy = localStorage.getItem('target')?.trim()?.toUpperCase();
+        if (legacy) {
+            savedQth = legacy;
+            localStorage.setItem('qth', legacy);
+            localStorage.removeItem('target');
+        }
+    }
     const qthInput = document.getElementById('qth');
     if (!savedQth || !qthInput) {
         return;
