@@ -530,6 +530,30 @@ function drawDxClusterSpots(ctx, width, height, filteredSpots) {
     ctx.globalAlpha = 1;
 }
 
+function drawWsprSpots(ctx, width, height, filteredSpots) {
+    const wsprSpots = filteredSpots.filter((spot) => String(spot?.sourceType || '').toLowerCase() === 'wspr');
+    for (const spot of wsprSpots) {
+        const p = projectToCanvas(spot.lat, spot.lng, width, height);
+        if (!p) continue;
+        // Distinct style: small teal/cyan filled dot with a thin dashed ring.
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#17a2b8';
+        ctx.globalAlpha = 0.5;
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+        ctx.strokeStyle = '#0d6efd';
+        ctx.lineWidth = 0.8;
+        ctx.globalAlpha = 0.7;
+        ctx.setLineDash([2, 2]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+    ctx.globalAlpha = 1;
+}
+
 export function selectProminentDxccLabels(featureCollection, center, options = {}) {
     const features = featureCollection?.features || [];
     const maxLabels = Number(options.maxLabels ?? 28);
@@ -1717,6 +1741,7 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
         }
         state.hiddenGridSquaresCount = hiddenSquares;
         drawDxClusterSpots(ctx, width, height, filteredSpots);
+    drawWsprSpots(ctx, width, height, filteredSpots);
         ctx.globalAlpha = 1;
         return;
     }
@@ -1748,6 +1773,7 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
         }
         state.hiddenGridSquaresCount = 0;
         drawDxClusterSpots(ctx, width, height, filteredSpots);
+    drawWsprSpots(ctx, width, height, filteredSpots);
         ctx.globalAlpha = 1;
         return;
     }
@@ -1766,6 +1792,7 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
         ctx.fill();
     }
     drawDxClusterSpots(ctx, width, height, filteredSpots);
+    drawWsprSpots(ctx, width, height, filteredSpots);
     ctx.globalAlpha = 1;
 }
 

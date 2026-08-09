@@ -4,9 +4,10 @@ import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineL
 import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, getAzimuthCenter, setAzimuthEnabled, setAzimuthDragging, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled, getAzimuthLatLngFromClientPoint, getAzimuthHiddenGridSquaresCount, setAzimuthDxSpotHighlight } from './azimuth-runtime.js';
 import { initUI, attachUITooltipEvents, initGridSnrLegend } from './ui.js';
 import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
+import { initWsprMatrix, updateWsprMatrix } from './wspr-matrix.js';
 import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initHorstKevin } from './horst-kevin.js';
-import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, resetRenderFingerprint } from './renderers.js';
+import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
@@ -50,6 +51,7 @@ function applyBandChange() {
     localStorage.setItem('selectedBand', getSelectedBand());
     updateCurrentBandDisplay();
     updateBandLab({ force: true });
+    updateWsprMatrix();
     scheduleRender();
     hotBandIndicator?.rerender();
     hotBandIndicator?.refresh();
@@ -694,6 +696,7 @@ function resumeFromSoftPause() {
 
     scheduleRender();
     updateBandLab({ force: true });
+    updateWsprMatrix();
 }
 
 function syncSoftPauseWithVisibility() {
@@ -1222,6 +1225,12 @@ if (captureConfig?.enabled) {
             if (isAzimuthEnabled()) scheduleRender();
         },
     });
+    initWsprMatrix({
+        onLayoutChange: () => {
+            if (map) map.invalidateSize();
+            if (isAzimuthEnabled()) scheduleRender();
+        },
+    });
     hotBandIndicator = initHotBandIndicator({
         getQth: () => document.getElementById('qth')?.value?.trim()?.toUpperCase() || '',
         getSurroundings: () => Boolean(document.getElementById('surroundings')?.checked),
@@ -1317,6 +1326,7 @@ export function scheduleRender() {
             lastRenderTime = Date.now();
             state.renderPending = false;
             updateBandLab();
+            updateWsprMatrix();
         });
     }, delay);
 }
@@ -1655,6 +1665,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
             state.heatLayer = null;
         }
         clearDxClusterMarkers();
+        clearWsprMarkers();
         resetRenderFingerprint();
         if (state.qthLayer) {
             map.removeLayer(state.qthLayer);
@@ -1666,6 +1677,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         if (status) status.innerHTML = 'Status: Not subscribed';
         setFaviconColor('#6c757d');
         updateBandLab({ force: true });
+    updateWsprMatrix();
         return;
     }
 

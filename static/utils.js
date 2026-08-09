@@ -722,3 +722,80 @@ export function getMercatorDxccLabelsEnabled() {
     if (toggle) return toggle.checked;
     return localStorage.getItem('mercatorDxccLabelsEnabled') === 'true';
 }
+
+// --- WSPR region classification + cluster anchor ---
+
+// locatorToLatLngJS converts a Maidenhead locator to (lat, lng).
+// Mirrors Go's spot.go:locatorToLatLng. Returns null for invalid locators.
+export function locatorToLatLngJS(locator) {
+    if (!locator || typeof locator !== 'string') return null;
+    locator = locator.toUpperCase().trim();
+    if (locator.length < 2) return null;
+    let lng = (locator.charCodeAt(0) - 65) * 20 - 180;
+    let lat = (locator.charCodeAt(1) - 65) * 10 - 90;
+    if (locator.length >= 4) {
+        lng += Number(locator[2]) * 2;
+        lat += Number(locator[3]) * 1;
+        if (locator.length >= 6) {
+            lng += (locator.charCodeAt(4) - 65) * (5 / 60) + (5 / 120);
+            lat += (locator.charCodeAt(5) - 65) * (2.5 / 60) + (2.5 / 120);
+        } else {
+            lng += 1.0;
+            lat += 0.5;
+        }
+    } else {
+        lng += 10.0;
+        lat += 5.0;
+    }
+    return { lat, lng };
+}
+
+// DXPulse region bounding-box classifier — mirrors Go's dx_regions.go:48-83.
+// Order matters: sub-regions tested before their containing continent.
+// Returns one of: EU, NA, SA, AF, AS, OC, AN, JA, VK, KH6, CAR, or '' for unknown.
+export function regionForLocator(loc) {
+    const ll = locatorToLatLngJS(loc);
+    if (!ll) return '';
+    return regionForLatLng(ll.lat, ll.lng);
+}
+
+export function regionForLatLng(lat, lng) {
+    if (lat <= -60) return 'AN';
+    if (lat >= 30 && lat <= 46 && lng >= 128 && lng <= 146) return 'JA';
+    if (lat >= 18 && lat <= 29 && lng >= -161 && lng <= -154) return 'KH6';
+    if (lat >= 10 && lat <= 25 && lng >= -85 && lng <= -60) return 'CAR';
+    if (lat >= -50 && lat <= -10 && lng >= 110 && lng <= 180) return 'VK';
+    if (lat >= 35 && lat <= 72 && lng >= -15 && lng <= 45) return 'EU';
+    if (lat >= -40 && lat <= 37 && lng >= -20 && lng <= 55) return 'AF';
+    if (lat >= 15 && lat <= 84 && lng >= -170 && lng <= -50) return 'NA';
+    if (lat >= -60 && lat < 15 && lng >= -90 && lng <= -30) return 'SA';
+    if (lat >= 0 && lat <= 78 && lng >= 40 && lng <= 180) return 'AS';
+    if (lat >= -50 && lat <= 30 && (lng >= 130 || lng <= -130)) return 'OC';
+    return '';
+}
+
+// DXPulse region display order (matches Go's dxPulseAllRegions).
+export const WSPR_REGIONS = ['EU', 'NA', 'SA', 'AF', 'AS', 'JA', 'OC', 'VK', 'KH6', 'CAR', 'AN'];
+
+// Grid cluster anchor — mirrors Go's spot.go:locatorClusterAnchor.
+// Floors the grid-square coordinates to multiples of 6 (the cluster side).
+// Returns the 4-char anchor locator, or null for non-locators.
+export function locatorClusterAnchorJS(loc) {
+    if (!loc || typeof loc !== 'string') return null;
+    loc = loc.toUpperCase().trim();
+    if (loc.length < 4) return null;
+    if (loc[0] < 'A' || loc[0] > 'R' || loc[1] < 'A' || loc[1] > 'R') return null;
+    if (loc[2] < '0' || loc[2] > '9' || loc[3] < '0' || loc[3] > '9') return null;
+    const x = (loc.charCodeAt(0) - 65) * 10 + Number(loc[2]);
+    const y = (loc.charCodeAt(1) - 65) * 10 + Number(loc[3]);
+    const side = 6;
+    let ax = Math.floor(x / side) * side;
+    let ay = Math.floor(y / side) * side;
+    if (ax > 180 - side) ax = 180 - side;
+    if (ay > 180 - side) ay = 180 - side;
+    const c1 = String.fromCharCode(65 + Math.floor(ax / 10));
+    const c2 = String.fromCharCode(65 + Math.floor(ay / 10));
+    const c3 = String.fromCharCode(48 + (ax % 10));
+    const c4 = String.fromCharCode(48 + (ay % 10));
+    return c1 + c2 + c3 + c4;
+}

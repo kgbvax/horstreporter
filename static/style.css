@@ -604,6 +604,79 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     white-space: nowrap;
 }
 
+/* WSPR Band × Region matrix panel */
+.wspr-matrix-window {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    max-width: 480px;
+    height: 100%;
+    background: var(--panel-bg, rgba(33, 37, 41, 0.96));
+    color: var(--panel-fg, #dee2e6);
+    z-index: 1100;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+}
+
+.wspr-matrix-window.is-hidden {
+    display: none;
+}
+
+.wspr-matrix-window-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.wspr-matrix-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+}
+
+.wspr-matrix-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.72rem;
+}
+
+.wspr-matrix-table th {
+    padding: 3px 4px;
+    text-align: center;
+    font-weight: 600;
+    color: rgba(222, 226, 230, 0.7);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.wspr-matrix-table td {
+    padding: 3px 4px;
+    text-align: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.wspr-matrix-band {
+    font-weight: 600;
+    text-align: left;
+    padding-left: 6px;
+}
+
+.wspr-matrix-cell {
+    color: #fff;
+    font-weight: 600;
+    border-radius: 3px;
+}
+
+.wspr-matrix-cell-empty {
+    color: transparent;
+}
+
 .band-lab-card-charts {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

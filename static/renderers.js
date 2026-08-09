@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, hexToRgba, pillTextColor } from './utils.js';
+import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, hexToRgba, pillTextColor, regionForLocator } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTimer } from './perf.js';
 
 let lastRenderFingerprint = '';
@@ -95,14 +95,18 @@ function buildDxClusterHoverHtml(spot) {
 function splitSpotSources(spots) {
     const regularSpots = [];
     const dxClusterSpots = [];
+    const wsprSpots = [];
     spots.forEach((spot) => {
-        if (String(spot?.sourceType || '').toLowerCase() === 'dxcluster') {
+        const src = String(spot?.sourceType || '').toLowerCase();
+        if (src === 'dxcluster') {
             dxClusterSpots.push(spot);
+        } else if (src === 'wspr') {
+            wsprSpots.push(spot);
         } else {
             regularSpots.push(spot);
         }
     });
-    return { regularSpots, dxClusterSpots };
+    return { regularSpots, dxClusterSpots, wsprSpots };
 }
 
 // DX cluster markers live in their own layer (state.dxClusterLayer), NOT in
@@ -173,6 +177,78 @@ function renderDxClusterMarkers(dxClusterSpots) {
     });
 }
 
+// --- WSPR beacon markers (region-scoped, distinct style) --------------------
+// WSPR spots are a global propagation reference. They're drawn as a separate
+// layer (like DX-cluster) with a distinct visual style (smaller, teal/cyan
+// fill with dashed border) so they're clearly separable from regular spots
+// and DX-cluster markers. Region-scoped: only WSPR paths where either end is
+// in the operator's DXPulse region are shown, keeping the map relevant.
+let wsprMarkerFingerprint = '';
+
+export function clearWsprMarkers() {
+    wsprMarkerFingerprint = '';
+    if (state.wsprLayer && map) {
+        map.removeLayer(state.wsprLayer);
+    }
+    state.wsprLayer = null;
+}
+
+function syncWsprMarkers(spots) {
+    const { wsprSpots } = splitSpotSources(spots);
+    if (wsprSpots.length === 0) {
+        if (state.wsprLayer) clearWsprMarkers();
+        return;
+    }
+
+    // Region-scope: only show WSPR paths where either end is in the
+    // operator's region (derived from the QTH locator). If the QTH is a
+    // callsign (no locator), skip the region filter and show all WSPR.
+    const qthEl = document.getElementById('qth');
+    const qthVal = qthEl?.value?.trim()?.toUpperCase() || '';
+    const operatorRegion = regionForLocator(qthVal);
+    const scopedSpots = operatorRegion
+        ? wsprSpots.filter((s) =>
+            regionForLocator(s.locator) === operatorRegion ||
+            regionForLocator(s.reporterLocator) === operatorRegion)
+        : wsprSpots;
+
+    const fingerprint = scopedSpots
+        .map((s) => `${s.locator}|${s.reporterLocator}|${s.band}|${s.snr}`)
+        .join(';');
+    if (fingerprint === wsprMarkerFingerprint && state.wsprLayer) return;
+    clearWsprMarkers();
+    wsprMarkerFingerprint = fingerprint;
+    if (scopedSpots.length === 0) return;
+    state.wsprLayer = L.layerGroup().addTo(map);
+    incrementPerfCounter('mercator.layers.added', 1);
+    renderWsprMarkers(scopedSpots);
+}
+
+function renderWsprMarkers(wsprSpots) {
+    if (!Array.isArray(wsprSpots) || wsprSpots.length === 0 || !state.wsprLayer) return;
+
+    wsprSpots.forEach((spot) => {
+        if (!Number.isFinite(spot.lat) || !Number.isFinite(spot.lng)) return;
+        // Distinct style: small teal/cyan dots with a thin dashed border.
+        const marker = L.circleMarker([spot.lat, spot.lng], {
+            color: '#0d6efd',
+            fillColor: '#17a2b8',
+            radius: 3,
+            weight: 1,
+            opacity: 0.7,
+            fillOpacity: 0.5,
+            dashArray: '3,2',
+            interactive: true,
+            bubblingMouseEvents: false
+        }).addTo(state.wsprLayer);
+
+        marker.bindTooltip(
+            `<strong>WSPR beacon</strong><br>Band: ${escapeHtml(spot.band || '—')}<br>SNR: ${Number.isFinite(Number(spot.snr)) ? spot.snr + ' dB' : '—'}<br>TX: ${escapeHtml(spot.locator || '—')}<br>RX: ${escapeHtml(spot.reporterLocator || '—')}`,
+            { direction: 'top', offset: [0, -4], opacity: 0.9, sticky: true }
+        );
+    });
+}
+
 export function updateMapVisualization(spots, maxMinutes) {
     if (!map) return;
 
@@ -222,6 +298,7 @@ export function updateMapVisualization(spots, maxMinutes) {
     // DX cluster markers: persistent layer, rebuilt only when the cluster
     // spot set changes — hovering must not flicker on every heatLayer rebuild.
     syncDxClusterMarkers(spots);
+    syncWsprMarkers(spots);
 
     if (document.getElementById('auto-zoom')?.checked) {
         const now = Date.now();
