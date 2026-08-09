@@ -157,9 +157,13 @@ describe('mercator perf harness', () => {
             }
         });
         expect(snapshot.metrics['mercator.render.total_ms'].medianMs).toBeLessThan(900);
-        expect(snapshot.counters['mercator.layers.added']).toBeGreaterThanOrEqual(6);
-        expect(snapshot.counters['mercator.layers.removed']).toBeGreaterThanOrEqual(5);
-        expect(snapshot.counters['mercator.render.style.grid_snr']).toBeGreaterThanOrEqual(3);
-        expect(snapshot.counters['mercator.render.style.active_area']).toBeGreaterThanOrEqual(3);
+        // The rendered-state fingerprint (grid-snr) + active-area rebuild
+        // debounce skip redundant rebuilds: the same spot set only builds each
+        // style's layer once, so a style-switch burst no longer tears down and
+        // recreates the layer on every iteration.
+        expect(snapshot.counters['mercator.layers.added']).toBeGreaterThanOrEqual(2);
+        expect(snapshot.counters['mercator.layers.removed']).toBeGreaterThanOrEqual(1);
+        expect(snapshot.counters['mercator.render.style.grid_snr']).toBeGreaterThanOrEqual(1);
+        expect(snapshot.counters['mercator.render.style.active_area']).toBeGreaterThanOrEqual(1);
     });
 });

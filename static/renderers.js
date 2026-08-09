@@ -1,9 +1,20 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, hexToRgba, pillTextColor, regionForLocator } from './utils.js';
+import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, hexToRgba, pillTextColor, regionForLocatorCached } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTimer } from './perf.js';
 
-let lastRenderFingerprint = '';
+// Rendered-state fingerprint for the grid-snr heat layer. Unlike the old
+// spot-list fingerprint (spots.length + first/last ageSeconds — which changes
+// on every arriving spot and every 5s prune), this keys on the actual squares
+// and their appearance, so a new spot that doesn't change any square's
+// dominant band or quantized opacity doesn't tear down and rebuild the layer.
+let lastGridFingerprint = '';
+// Debounce for the active-area rebuild: turf.clustersDbscan is O(n²), so the
+// layer is rebuilt at most this often even when spots are streaming in.
+const ACTIVE_AREA_REBUILD_INTERVAL_MS = 2000;
+// Cap on the per-band point count fed to the O(n²) DBSCAN. Strongest-SNR
+// points are kept for clustering; the rest are drawn as dots.
+const MAX_ACTIVE_AREA_CLUSTER_POINTS = 300;
 
 // Canvas renderer for the Mercator Grid-SNR / Active-Area non-interactive
 // polygon overlays. SVG re-projects every path on each zoomend; with many
@@ -46,22 +57,12 @@ function buildFilterCtx() {
     };
 }
 
-function buildRenderFingerprint(spots, filterCtx, style, maxMinutes) {
-    // ageSeconds mutates every prune tick (app.js += 5 every 5s), so the
-    // fingerprint changes even when the spot count is stable. The streamSpot
-    // payload has no T field (server.go streamSpot), so the old `?.T` reads
-    // were always undefined and the fingerprint collapsed to length only,
-    // freezing the map at steady state.
-    const spotKey = `${spots.length}:${spots[0]?.ageSeconds ?? ''}:${spots[spots.length - 1]?.ageSeconds ?? ''}`;
-    const filterKey = `${filterCtx.minSnrMode}:${filterCtx.ssbMinDb}:${filterCtx.cwMinDb}:${filterCtx.selectedBand}:${[...filterCtx.enabledBands].sort().join(',')}:${style}:${maxMinutes ?? ''}`;
-    return `${spotKey}|${filterKey}`;
-}
-
 // resetRenderFingerprint forces the next render to rebuild the heat layer even
 // if the spot set looks identical. Called on stream stop and projection switch
 // so a restarted/cleared stream always redraws.
 export function resetRenderFingerprint() {
-    lastRenderFingerprint = '';
+    lastGridFingerprint = '';
+    state.lastActiveAreaRebuildAt = 0;
 }
 
 function escapeHtml(value) {
@@ -119,17 +120,24 @@ let dxClusterMarkerFingerprint = '';
 
 export function clearDxClusterMarkers() {
     dxClusterMarkerFingerprint = '';
+    // The layer's markers are being torn down; their mouseout won't fire, so
+    // clear the hover-suppression flag here or the grid tooltip would stay
+    // suppressed after the markers are gone.
+    state.dxClusterHoverActive = false;
     if (state.dxClusterLayer && map) {
         map.removeLayer(state.dxClusterLayer);
     }
     state.dxClusterLayer = null;
 }
 
-function syncDxClusterMarkers(spots) {
-    const { dxClusterSpots } = splitSpotSources(spots);
-    const fingerprint = dxClusterSpots
-        .map((s) => `${s.locator}|${s.band}|${s.sender}|${s.receiver}|${s.reporterLocator}|${s.lat}|${s.lng}`)
-        .join(';');
+function syncDxClusterMarkers(dxClusterSpots) {
+    // O(1) fingerprint: spots are appended at the end and pruned from the
+    // front (never mutated in place), so the first/last spots capture every
+    // set change without building a giant join string every frame.
+    const first = dxClusterSpots[0];
+    const last = dxClusterSpots[dxClusterSpots.length - 1];
+    const key = (s) => s ? `${s.locator}|${s.band}|${s.sender}|${s.receiver}|${s.reporterLocator}|${s.lat}|${s.lng}` : '';
+    const fingerprint = `${dxClusterSpots.length}:${key(first)}:${key(last)}`;
     if (fingerprint === dxClusterMarkerFingerprint && state.dxClusterLayer) return;
     clearDxClusterMarkers();
     dxClusterMarkerFingerprint = fingerprint;
@@ -193,8 +201,7 @@ export function clearWsprMarkers() {
     state.wsprLayer = null;
 }
 
-function syncWsprMarkers(spots) {
-    const { wsprSpots } = splitSpotSources(spots);
+function syncWsprMarkers(wsprSpots) {
     if (wsprSpots.length === 0) {
         if (state.wsprLayer) clearWsprMarkers();
         return;
@@ -203,18 +210,21 @@ function syncWsprMarkers(spots) {
     // Region-scope: only show WSPR paths where either end is in the
     // operator's region (derived from the QTH locator). If the QTH is a
     // callsign (no locator), skip the region filter and show all WSPR.
+    // regionForLocatorCached memoizes per locator (locators repeat heavily).
     const qthEl = document.getElementById('qth');
     const qthVal = qthEl?.value?.trim()?.toUpperCase() || '';
-    const operatorRegion = regionForLocator(qthVal);
+    const operatorRegion = regionForLocatorCached(qthVal);
     const scopedSpots = operatorRegion
         ? wsprSpots.filter((s) =>
-            regionForLocator(s.locator) === operatorRegion ||
-            regionForLocator(s.reporterLocator) === operatorRegion)
+            regionForLocatorCached(s.locator) === operatorRegion ||
+            regionForLocatorCached(s.reporterLocator) === operatorRegion)
         : wsprSpots;
 
-    const fingerprint = scopedSpots
-        .map((s) => `${s.locator}|${s.reporterLocator}|${s.band}|${s.snr}`)
-        .join(';');
+    // O(1) fingerprint (first/last spot) — see syncDxClusterMarkers.
+    const first = scopedSpots[0];
+    const last = scopedSpots[scopedSpots.length - 1];
+    const key = (s) => s ? `${s.locator}|${s.reporterLocator}|${s.band}|${s.snr}` : '';
+    const fingerprint = `${scopedSpots.length}:${key(first)}:${key(last)}`;
     if (fingerprint === wsprMarkerFingerprint && state.wsprLayer) return;
     clearWsprMarkers();
     wsprMarkerFingerprint = fingerprint;
@@ -255,50 +265,64 @@ export function updateMapVisualization(spots, maxMinutes) {
     const perfEnabled = isPerfProfilingEnabled();
     const renderTimer = startPerfTimer();
 
-    state.dxClusterHoverActive = false;
+    // NOTE: do NOT reset state.dxClusterHoverActive here. It is set by the
+    // DX-cluster marker's mouseover and cleared by its mouseout (and by
+    // clearDxClusterMarkers when the layer is torn down). Resetting it on every
+    // render re-enabled the grid-square hover tooltip while the pointer was
+    // still over a cluster marker, causing tooltip flicker/overlap.
 
     // Item 3: read all filter/style state once
     const checkedStyleRadio = document.querySelector('input[name="style-select"]:checked');
     const style = checkedStyleRadio ? checkedStyleRadio.value : 'grid-snr';
     const filterCtx = buildFilterCtx();
 
-    // Item 1: skip layer rebuild when spots and filters are unchanged
-    const fingerprint = buildRenderFingerprint(spots, filterCtx, style, maxMinutes);
-    const skipRebuild = fingerprint === lastRenderFingerprint && state.heatLayer !== null;
+    // Split spot sources once per render (was 3x: renderGridSnr,
+    // syncDxClusterMarkers, syncWsprMarkers each re-split the full array).
+    const { regularSpots, dxClusterSpots, wsprSpots } = splitSpotSources(spots);
 
-    if (!skipRebuild) {
-        lastRenderFingerprint = fingerprint;
-
-        if (state.heatLayer) {
-            map.removeLayer(state.heatLayer);
-            incrementPerfCounter('mercator.layers.removed', 1);
+    if (style === 'active-area') {
+        // turf.clustersDbscan is O(n²), so bound the rebuild with a debounce
+        // (the layer is kept as-is between rebuilds) and a per-band point cap
+        // inside renderActiveArea. The marker layers still update every render.
+        const now = Date.now();
+        if (!state.heatLayer || (now - (state.lastActiveAreaRebuildAt || 0)) >= ACTIVE_AREA_REBUILD_INTERVAL_MS) {
+            state.lastActiveAreaRebuildAt = now;
+            if (state.heatLayer) {
+                map.removeLayer(state.heatLayer);
+                incrementPerfCounter('mercator.layers.removed', 1);
+            }
+            incrementPerfCounter('mercator.render.style.active_area', 1);
+            const activeBands = renderActiveArea(regularSpots, maxMinutes, filterCtx);
+            const bandLabelTimer = startPerfTimer();
+            updateBandLabels(spots, filterCtx, activeBands);
+            endPerfTimer('mercator.band_labels.total_ms', bandLabelTimer);
         }
-
-        let activeBands;
-        switch (style) {
-            case 'grid-snr':
-                incrementPerfCounter('mercator.render.style.grid_snr', 1);
-                activeBands = renderGridSnr(spots, maxMinutes, filterCtx);
-                break;
-            case 'active-area':
-                incrementPerfCounter('mercator.render.style.active_area', 1);
-                activeBands = renderActiveArea(spots, maxMinutes, filterCtx);
-                break;
-            default:
-                incrementPerfCounter('mercator.render.style.grid_snr', 1);
-                activeBands = renderGridSnr(spots, maxMinutes, filterCtx);
+    } else {
+        // grid-snr: the aggregate is O(n) but cheap; the L.geoJSON layer
+        // creation is the expensive part. Fingerprint the RENDERED state
+        // (squares + dominant band + quantized opacity) so a new spot that
+        // doesn't change any square's appearance doesn't tear down and rebuild
+        // the layer on every 40ms render.
+        const gridState = aggregateGridSquares(regularSpots, filterCtx);
+        const gridFingerprint = buildGridFingerprint(gridState.squareData, filterCtx);
+        if (gridFingerprint !== lastGridFingerprint || !state.heatLayer) {
+            lastGridFingerprint = gridFingerprint;
+            if (state.heatLayer) {
+                map.removeLayer(state.heatLayer);
+                incrementPerfCounter('mercator.layers.removed', 1);
+            }
+            incrementPerfCounter('mercator.render.style.grid_snr', 1);
+            renderGridSquares(gridState.squareData, filterCtx);
+            const bandLabelTimer = startPerfTimer();
+            updateBandLabels(spots, filterCtx, gridState.activeBands);
+            endPerfTimer('mercator.band_labels.total_ms', bandLabelTimer);
         }
-
-        // Item 6: pass pre-computed activeBands to avoid re-scanning spots
-        const bandLabelTimer = startPerfTimer();
-        updateBandLabels(spots, filterCtx, activeBands);
-        endPerfTimer('mercator.band_labels.total_ms', bandLabelTimer);
     }
 
     // DX cluster markers: persistent layer, rebuilt only when the cluster
     // spot set changes — hovering must not flicker on every heatLayer rebuild.
-    syncDxClusterMarkers(spots);
-    syncWsprMarkers(spots);
+    syncDxClusterMarkers(dxClusterSpots);
+    syncWsprMarkers(wsprSpots);
 
     if (document.getElementById('auto-zoom')?.checked) {
         const now = Date.now();
@@ -436,16 +460,15 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
     });
 }
 
-function renderGridSnr(spots, maxMinutes, filterCtx) {
-    const timer = startPerfTimer();
-    state.heatLayer = L.layerGroup().addTo(map);
-    incrementPerfCounter('mercator.layers.added', 1);
-
-    // Item 3: use passed filterCtx instead of re-reading DOM
+// Aggregate filtered spots into grid squares. O(n) but cheap; the expensive
+// part is the L.geoJSON layer creation, which is gated separately by
+// buildGridFingerprint so a new spot that doesn't change any square's
+// appearance doesn't tear down and rebuild the layer.
+function aggregateGridSquares(regularSpots, filterCtx) {
     const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands } = filterCtx;
-    const { regularSpots } = splitSpotSources(spots);
     const squareData = {};
     const res = getGridResolution();
+    const activeBands = new Set();
     const aggregateTimer = startPerfTimer();
 
     // Filter first, then aggregate: the snrs list (which drives a square's
@@ -474,12 +497,42 @@ function renderGridSnr(spots, maxMinutes, filterCtx) {
         squareData[loc].visibleCount++;
         squareData[loc].bands[spot.band] = (squareData[loc].bands[spot.band] || 0) + 1;
         squareData[loc].snrs.push(Number(spot.snr));
+        activeBands.add(spot.band);
     });
     endPerfTimer('mercator.grid.aggregate_ms', aggregateTimer);
+    return { squareData, activeBands };
+}
+
+// Fingerprint of the grid's RENDERED state: the filter key plus, per square,
+// its locator, dominant band, and quantized opacity. Stable across new spots
+// that don't change any square's appearance, so the heat layer is only rebuilt
+// when what's on screen actually changes.
+function buildGridFingerprint(squareData, filterCtx) {
+    const filterKey = `${filterCtx.minSnrMode}:${filterCtx.ssbMinDb}:${filterCtx.cwMinDb}:${filterCtx.selectedBand}:${[...filterCtx.enabledBands].sort().join(',')}`;
+    const parts = [];
+    for (const loc in squareData) {
+        const entry = squareData[loc];
+        if (entry.visibleCount <= 0 || entry.count <= 0) continue;
+        let dominantBand = 'all', maxCount = 0;
+        for (const b in entry.bands) {
+            if (entry.bands[b] > maxCount) { maxCount = entry.bands[b]; dominantBand = b; }
+        }
+        const opacity = gridSnrOpacity(topQuartileMean(entry.snrs)).toFixed(2);
+        parts.push(`${loc}:${dominantBand}:${opacity}`);
+    }
+    parts.sort();
+    return `${filterKey}|${parts.join('|')}`;
+}
+
+// Create the grid-snr heat layer from a pre-computed aggregate. The caller
+// (updateMapVisualization) gates this on buildGridFingerprint, so it only runs
+// when the rendered state actually changed.
+function renderGridSquares(squareData, filterCtx) {
+    const timer = startPerfTimer();
+    state.heatLayer = L.layerGroup().addTo(map);
+    incrementPerfCounter('mercator.layers.added', 1);
 
     const drawTimer = startPerfTimer();
-    // Item 6: collect activeBands during draw to avoid re-scanning in updateBandLabels
-    const activeBands = new Set();
     // Item 2: accumulate GeoJSON features, then add as a single layer call
     const gridFeatures = [];
 
@@ -498,7 +551,6 @@ function renderGridSnr(spots, maxMinutes, filterCtx) {
                 maxCount = squareData[loc].bands[b];
                 dominantBand = b;
             }
-            activeBands.add(b);
         }
 
         let color = bandColors[dominantBand] || bandColors['all'];
@@ -537,17 +589,15 @@ function renderGridSnr(spots, maxMinutes, filterCtx) {
     endPerfTimer('mercator.grid.draw_ms', drawTimer);
     endPerfTimer('mercator.grid.total_ms', timer);
     incrementPerfCounter('mercator.grid.rectangles_added', gridFeatures.length);
-    return activeBands;
 }
 
-function renderActiveArea(spots, maxMinutes, filterCtx) {
+function renderActiveArea(regularSpots, maxMinutes, filterCtx) {
     const timer = startPerfTimer();
     state.heatLayer = L.layerGroup().addTo(map);
     incrementPerfCounter('mercator.layers.added', 1);
 
     // Item 3: use passed filterCtx instead of re-reading DOM
     const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands } = filterCtx;
-    const { regularSpots } = splitSpotSources(spots);
     let maxClusterDist = parseInt(document.getElementById('cluster-distance')?.value, 10);
     if (isNaN(maxClusterDist) || maxClusterDist < 100) maxClusterDist = 500;
 
@@ -565,11 +615,13 @@ function renderActiveArea(spots, maxMinutes, filterCtx) {
             pointsByBand[spot.band] = [];
             seenCoordsByBand[spot.band] = new Set();
         }
-        
+
         const coordKey = `${spot.lng},${spot.lat}`;
         if (!seenCoordsByBand[spot.band].has(coordKey)) {
             seenCoordsByBand[spot.band].add(coordKey);
-            pointsByBand[spot.band].push(turf.point([spot.lng, spot.lat]));
+            // Carry the SNR so the DBSCAN input can be capped to the strongest
+            // points (see MAX_ACTIVE_AREA_CLUSTER_POINTS).
+            pointsByBand[spot.band].push(turf.point([spot.lng, spot.lat], { snr: Number(spot.snr) || 0 }));
         }
     });
     endPerfTimer('mercator.active_area.aggregate_ms', aggregateTimer);
@@ -579,13 +631,27 @@ function renderActiveArea(spots, maxMinutes, filterCtx) {
     const clusterTimer = startPerfTimer();
 
     for (const band in pointsByBand) {
-        const pts = pointsByBand[band];
+        const allPts = pointsByBand[band];
         const color = bandColors[band] || bandColors['all'];
-        
+
+        // Cap the DBSCAN input: turf.clustersDbscan is O(n²), so a band with
+        // thousands of points would take hundreds of ms. Keep the strongest-SNR
+        // points for clustering; the capped-out points are drawn as dots below
+        // so no spots are lost.
+        let pts = allPts;
+        let cappedOut = [];
+        if (allPts.length > MAX_ACTIVE_AREA_CLUSTER_POINTS) {
+            pts = allPts.slice()
+                .sort((a, b) => (b.properties?.snr || 0) - (a.properties?.snr || 0))
+                .slice(0, MAX_ACTIVE_AREA_CLUSTER_POINTS);
+            const cappedSet = new Set(pts);
+            cappedOut = allPts.filter((p) => !cappedSet.has(p));
+        }
+
         if (pts.length >= 3) {
             const fc = turf.featureCollection(pts);
             const clustered = turf.clustersDbscan(fc, maxClusterDist, { units: 'kilometers', minPoints: 3 });
-            
+
             const clusters = {};
             const isolatedPts = [];
 
@@ -640,6 +706,13 @@ function renderActiveArea(spots, maxMinutes, filterCtx) {
                 markersAdded += 1;
             });
         }
+
+        // Capped-out points (weaker SNR) are drawn as dots so the view still
+        // shows them, just not as cluster regions.
+        cappedOut.forEach(p => {
+            addSpotMarker(p, color);
+            markersAdded += 1;
+        });
     }
 
     // DX cluster markers are managed separately (syncDxClusterMarkers) so

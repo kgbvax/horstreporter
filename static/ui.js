@@ -42,6 +42,9 @@ export function initGridSnrLegend() {
     syncLegend();
 }
 
+let autoLocateCoachmarkRetries = 0;
+const AUTO_LOCATE_COACHMARK_MAX_RETRIES = 200; // ~10s at 50ms
+
 function initAutoLocateCoachmark() {
     const DISMISS_KEY = 'autoLocateCoachmarkDismissed';
     const LEGACY_REAPPEAR_KEYS = [
@@ -54,7 +57,17 @@ function initAutoLocateCoachmark() {
     const fetchForm = document.getElementById('fetch-form');
     const controls = document.getElementById('controls');
 
-    if (!geoButton || !qthInput || !fetchForm) return;
+    // The #qth input is created by the Svelte bundle (dist/horst-ui.js), which
+    // loads after app.js. If it hasn't mounted yet, retry shortly (mirrors
+    // maybeAutoStartSavedQth's retry for the same element). Bounded so a failed
+    // bundle load can't spin forever.
+    if (!geoButton || !qthInput || !fetchForm) {
+        if (autoLocateCoachmarkRetries < AUTO_LOCATE_COACHMARK_MAX_RETRIES) {
+            autoLocateCoachmarkRetries += 1;
+            setTimeout(initAutoLocateCoachmark, 50);
+        }
+        return;
+    }
 
     // Explicitly disable any legacy TTL-based reappearance behavior.
     LEGACY_REAPPEAR_KEYS.forEach((key) => localStorage.removeItem(key));
@@ -279,7 +292,13 @@ export function attachUITooltipEvents() {
     }
 
     function buildHoverRequestKey(params) {
+        // Bucket the key by wall-clock time so the cache naturally expires:
+        // spot counts change as spots arrive and age out, and without a time
+        // component the cached payload would be served forever for unchanged
+        // filter params. 30s is plenty fresh for a hover preview.
+        const timeBucket = Math.floor(Date.now() / 30000);
         return [
+            timeBucket,
             params.qth,
             params.locator,
             params.minutes,

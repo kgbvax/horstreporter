@@ -8,6 +8,15 @@ const MAX_VISIBLE_C = Math.PI - 0.02;
 const DXCC_SHOW_ALL_ZOOM_THRESHOLD = 5.0;
 const AZIMUTH_SCALE_CLEARANCE_PX = 12;
 const GRAYLINE_RECOMPUTE_MIN_INTERVAL_MS = 320;
+// The active-area density field (Gaussian KDE + contour fill) is the most
+// expensive per-frame azimuth computation (~40ms at 20k spots). It's rebuilt
+// at most this often; between rebuilds the cached field is reused, so the
+// density view lags at most ~1s behind the live spots.
+const DENSITY_FIELD_REBUILD_INTERVAL_MS = 1000;
+// During a drag, reuse the last world-layer canvas briefly so a fast drag
+// (which moves >0.1 deg/frame, past the 1-decimal drag key precision) doesn't
+// re-project ~100k world.geojson vertices on every frame.
+const WORLD_LAYER_DRAG_REUSE_MS = 200;
 // Active-area density field: the field is a Gaussian KDE of report count, so a
 // single spot peaks at density ~1.0 and a cluster peaks higher. Contour
 // thresholds therefore double as the min-count gate: a lone spot (peak < PRESENCE)
@@ -113,7 +122,13 @@ const state = {
     },
     worldLayerCache: {
         key: '',
-        canvas: null
+        canvas: null,
+        at: 0
+    },
+    densityFieldCache: {
+        key: '',
+        field: null,
+        at: 0
     },
     hiddenGridSquaresCount: 0,
     isDragging: false,
@@ -476,39 +491,28 @@ function countryFillForFeature(feature, theme) {
     return countryFillForKey(featureKey(feature), theme);
 }
 
-function collectGridSquares(spots, resolution, visibleSpots = spots) {
+function collectGridSquares(visibleSpots, resolution) {
+    // Single pass over the filter-passing spots. The old two-pass version
+    // first created entries for ALL spots (including filtered-out ones) and
+    // then deleted the empty ones — a redundant O(n) pass over the full array
+    // on every frame.
     const squareData = {};
-    spots.forEach(spot => {
+    visibleSpots.forEach(spot => {
         if (String(spot?.sourceType || '').toLowerCase() === 'dxcluster') return;
         let loc = (spot.locator || '').substring(0, resolution);
         if (loc.length < resolution) loc = (spot.locator || '').substring(0, 4);
         if (loc.length < 4) return;
         if (!squareData[loc]) squareData[loc] = { visibleCount: 0, bands: {}, snrs: [] };
-    });
-
-    visibleSpots.forEach(spot => {
-        if (String(spot?.sourceType || '').toLowerCase() === 'dxcluster') return;
-        let loc = (spot.locator || '').substring(0, resolution);
-        if (loc.length < resolution) loc = (spot.locator || '').substring(0, 4);
-        if (loc.length < 4 || !squareData[loc]) return;
         squareData[loc].visibleCount += 1;
         squareData[loc].bands[spot.band] = (squareData[loc].bands[spot.band] || 0) + 1;
         // Reachability model: only filter-passing spots feed the square score
         // (matches the Mercator filter-first contract, commit 589d9a8).
         squareData[loc].snrs.push(Number(spot.snr));
     });
-
-    Object.keys(squareData).forEach((loc) => {
-        if (squareData[loc].visibleCount <= 0) {
-            delete squareData[loc];
-        }
-    });
-
     return squareData;
 }
 
-function drawDxClusterSpots(ctx, width, height, filteredSpots) {
-    const dxClusterSpots = filteredSpots.filter((spot) => String(spot?.sourceType || '').toLowerCase() === 'dxcluster');
+function drawDxClusterSpots(ctx, width, height, dxClusterSpots) {
     for (const spot of dxClusterSpots) {
         const p = projectToCanvas(spot.lat, spot.lng, width, height);
         if (!p) continue;
@@ -530,8 +534,7 @@ function drawDxClusterSpots(ctx, width, height, filteredSpots) {
     ctx.globalAlpha = 1;
 }
 
-function drawWsprSpots(ctx, width, height, filteredSpots) {
-    const wsprSpots = filteredSpots.filter((spot) => String(spot?.sourceType || '').toLowerCase() === 'wspr');
+function drawWsprSpots(ctx, width, height, wsprSpots) {
     for (const spot of wsprSpots) {
         const p = projectToCanvas(spot.lat, spot.lng, width, height);
         if (!p) continue;
@@ -847,6 +850,15 @@ function drawWorldCached(ctx, width, height, plan) {
         return;
     }
 
+    // During a drag the key changes every frame (fast drags move past the
+    // 1-decimal drag precision), so reuse the last layer canvas briefly to
+    // avoid re-projecting ~100k world.geojson vertices per frame.
+    if (state.isDragging && state.worldLayerCache.canvas &&
+        (Date.now() - (state.worldLayerCache.at || 0)) < WORLD_LAYER_DRAG_REUSE_MS) {
+        ctx.drawImage(state.worldLayerCache.canvas, 0, 0, width, height);
+        return;
+    }
+
     let layerCanvas = state.worldLayerCache.canvas;
     if (!layerCanvas) {
         if (typeof OffscreenCanvas !== 'undefined') {
@@ -875,6 +887,7 @@ function drawWorldCached(ctx, width, height, plan) {
 
     state.worldLayerCache.key = cacheKey;
     state.worldLayerCache.canvas = layerCanvas;
+    state.worldLayerCache.at = Date.now();
     ctx.drawImage(layerCanvas, 0, 0, width, height);
 }
 
@@ -974,7 +987,12 @@ function drawGrayline(ctx, width, height) {
     const twilightFill = hexToRgb(state.theme === 'dark' ? '#9a8371' : '#b08b72');
     const nightFill = hexToRgb(state.theme === 'dark' ? '#01050a' : '#182534');
     const maxDim = Math.max(width, height);
-    const sampleScale = Math.max(0.2, Math.min(0.4, 900 / Math.max(1, maxDim)));
+    // Bound the sample count: each sample runs an inverse projection + solar
+    // calc (~0.15µs), so a 1920x1080 canvas at the old 0.4 scale was ~332k
+    // samples (~50ms) per recompute. Targeting ~300px on the long edge keeps
+    // the recompute ~6x cheaper (~8ms) — the grayline is a soft overlay, so
+    // the slightly coarser sample grid is visually acceptable.
+    const sampleScale = Math.max(0.12, Math.min(0.4, 300 / Math.max(1, maxDim)));
     const sampleWidth = Math.max(1, Math.round(width * sampleScale));
     const sampleHeight = Math.max(1, Math.round(height * sampleScale));
     const sampleImageData = overlayCtx.createImageData(sampleWidth, sampleHeight);
@@ -1707,6 +1725,18 @@ function fillAzimuthContours(ctx, field) {
 }
 
 function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClusterDist) {
+    // Split once so drawDxClusterSpots/drawWsprSpots don't each re-filter the
+    // full array (two extra O(n) passes per frame).
+    const dxClusterSpots = [];
+    const wsprSpots = [];
+    const regularSpots = [];
+    for (const spot of filteredSpots) {
+        const src = String(spot?.sourceType || '').toLowerCase();
+        if (src === 'dxcluster') dxClusterSpots.push(spot);
+        else if (src === 'wspr') wsprSpots.push(spot);
+        else regularSpots.push(spot);
+    }
+
     if (style === 'grid-snr') {
         const squares = gridSquares || collectGridSquares(filteredSpots, getGridResolution());
         let hiddenSquares = 0;
@@ -1740,8 +1770,8 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
             ctx.fill();
         }
         state.hiddenGridSquaresCount = hiddenSquares;
-        drawDxClusterSpots(ctx, width, height, filteredSpots);
-    drawWsprSpots(ctx, width, height, filteredSpots);
+        drawDxClusterSpots(ctx, width, height, dxClusterSpots);
+    drawWsprSpots(ctx, width, height, wsprSpots);
         ctx.globalAlpha = 1;
         return;
     }
@@ -1755,7 +1785,20 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
         const minDim = Math.min(width, height);
         const step = Math.max(8, Math.min(16, Math.round(minDim / 95)));
         const radius = step * 3;
-        const field = buildAzimuthDensityField(filteredSpots, width, height, step, radius);
+        // Rebuild the KDE field at most ~1x/sec (it's the most expensive
+        // per-frame azimuth computation). The key captures the projection so a
+        // pan/zoom still triggers a rebuild, but the time gate bounds the cost
+        // during active traffic and fast drags alike.
+        const densityKey = `${width}x${height}:${state.center[0].toFixed(1)}:${state.center[1].toFixed(1)}:${state.zoom.toFixed(1)}`;
+        const now = Date.now();
+        let field = null;
+        const densityCached = state.densityFieldCache;
+        if (densityCached && (now - densityCached.at) < DENSITY_FIELD_REBUILD_INTERVAL_MS) {
+            field = densityCached.field;
+        } else {
+            field = buildAzimuthDensityField(filteredSpots, width, height, step, radius);
+            state.densityFieldCache = { key: densityKey, field, at: now };
+        }
         fillAzimuthContours(ctx, field);
         if (field) {
             const { cols, step: fs, x0, y0, density, pts } = field;
@@ -1772,16 +1815,15 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
             }
         }
         state.hiddenGridSquaresCount = 0;
-        drawDxClusterSpots(ctx, width, height, filteredSpots);
-    drawWsprSpots(ctx, width, height, filteredSpots);
+        drawDxClusterSpots(ctx, width, height, dxClusterSpots);
+    drawWsprSpots(ctx, width, height, wsprSpots);
         ctx.globalAlpha = 1;
         return;
     }
 
     state.hiddenGridSquaresCount = 0;
 
-    for (const spot of filteredSpots) {
-        if (String(spot?.sourceType || '').toLowerCase() === 'dxcluster') continue;
+    for (const spot of regularSpots) {
         const p = projectToCanvas(spot.lat, spot.lng, width, height);
         if (!p) continue;
         const color = bandColors[spot.band] || bandColors.all;
@@ -1791,8 +1833,8 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
         ctx.globalAlpha = 0.8;
         ctx.fill();
     }
-    drawDxClusterSpots(ctx, width, height, filteredSpots);
-    drawWsprSpots(ctx, width, height, filteredSpots);
+    drawDxClusterSpots(ctx, width, height, dxClusterSpots);
+    drawWsprSpots(ctx, width, height, wsprSpots);
     ctx.globalAlpha = 1;
 }
 
@@ -1843,7 +1885,7 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
     if (profile) profile.filterEnd = nowMs();
 
     if (profile) profile.gridStart = nowMs();
-    const gridSquares = resolvedStyle === 'grid-snr' ? collectGridSquares(spots, getGridResolution(), filteredSpots) : null;
+    const gridSquares = resolvedStyle === 'grid-snr' ? collectGridSquares(filteredSpots, getGridResolution()) : null;
     if (profile) profile.gridEnd = nowMs();
 
     const width = canvas.clientWidth || 1;

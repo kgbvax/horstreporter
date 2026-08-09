@@ -638,11 +638,15 @@ export function getGridResolution() {
 // keeps sparse-but-strong squares visible.
 export function topQuartileMean(snrs) {
     if (!snrs || snrs.length === 0) return NaN;
-    const sorted = [...snrs].map(Number).filter(Number.isFinite).sort((a, b) => b - a);
+    // Callers push Number(spot.snr), so values are already numbers; a single
+    // filter pass drops any non-finite values without the extra spread/map
+    // allocations (3 -> 1 per square, called on every heat-layer rebuild).
+    const sorted = snrs.filter((v) => Number.isFinite(Number(v))).sort((a, b) => b - a);
     if (sorted.length === 0) return NaN;
     const k = Math.max(1, Math.ceil(sorted.length / 4));
-    const top = sorted.slice(0, k);
-    return top.reduce((sum, v) => sum + v, 0) / top.length;
+    let sum = 0;
+    for (let i = 0; i < k; i++) sum += sorted[i];
+    return sum / k;
 }
 
 // Continuous opacity ramp for a square score (dB), anchored to keep today's
@@ -757,6 +761,22 @@ export function regionForLocator(loc) {
     const ll = locatorToLatLngJS(loc);
     if (!ll) return '';
     return regionForLatLng(ll.lat, ll.lng);
+}
+
+// Memoized regionForLocator for hot per-frame paths (WSPR marker scoping, the
+// WSPR matrix). Locators repeat heavily across spots, so the cache turns the
+// per-spot locator parse + classification into an O(1) lookup. Bounded so a
+// pathological locator flood can't grow it unboundedly.
+const regionForLocatorCache = new Map();
+export function regionForLocatorCached(loc) {
+    if (!loc) return '';
+    let r = regionForLocatorCache.get(loc);
+    if (r === undefined) {
+        r = regionForLocator(loc);
+        regionForLocatorCache.set(loc, r);
+        if (regionForLocatorCache.size > 20000) regionForLocatorCache.clear();
+    }
+    return r;
 }
 
 export function regionForLatLng(lat, lng) {

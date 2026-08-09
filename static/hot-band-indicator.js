@@ -1,4 +1,4 @@
-import { bandColors } from './utils.js';
+import { bandColors, getEnabledBands } from './utils.js';
 
 const POLL_INTERVAL_MS = 30_000;
 const STALE_TIMEOUT_MS = 2 * 60_000;
@@ -40,7 +40,12 @@ export function initHotBandIndicator({ getQth, getSurroundings, getCurrentBand, 
 
     function render() {
         const current = (getCurrentBand?.() || '').toLowerCase();
-        const visible = lastRecs.filter(r => r && r.band && r.band !== current);
+        // The backend recommends bands without knowing the client's enabled-band
+        // checkboxes, so a pill for a disabled band would render but its click
+        // would no-op in switchToBand. Filter those out so every visible pill
+        // is actionable.
+        const enabled = getEnabledBands();
+        const visible = lastRecs.filter(r => r && r.band && r.band !== current && enabled.has(r.band));
         if (!visible.length) {
             container.classList.add('is-hidden');
             container.replaceChildren();
