@@ -879,13 +879,31 @@ function syncProjectionOptionVisibility(projection) {
     if (azimuthCtrls) azimuthCtrls.style.display = projection === 'azimuthal' ? 'block' : 'none';
 }
 
+// Monotonic sequence token for applyProjectionMode: each call bumps it, and
+// every call re-checks it after its awaits so a superseded call (a newer
+// projection toggle, or a click during initial load) can't flip the runtime
+// state to a projection the user no longer selected.
+let projectionApplySeq = 0;
+
 async function applyProjectionMode(projection) {
+    const seq = ++projectionApplySeq;
+
+    // A mercator zoom/pan interaction may still be in flight when the user
+    // switches projection. Its zoomend/moveend handler early-returns on the
+    // projection change (attachMapEvents), so without this reset the
+    // mercatorInteractionActive flag would stay stuck true and freeze every
+    // mercator render until the next pan/zoom. Clear both flags here so the
+    // deferred-render path can never be left armed across a projection switch.
+    state.mercatorInteractionActive = false;
+    state.mercatorRenderDeferred = false;
+
     syncStyleAvailabilityForProjection(projection);
     syncProjectionOptionVisibility(projection);
     const targetCenter = getActiveQthCenter();
 
     if (projection === 'azimuthal') {
         await loadAzimuthWorldGeoJson();
+        if (seq !== projectionApplySeq) return; // superseded by a newer toggle
         setAzimuthEnabled(true);
         setAzimuthTheme(document.body.getAttribute('data-theme') || 'light');
         setAzimuthZoom(azimuthZoom);
@@ -901,6 +919,7 @@ async function applyProjectionMode(projection) {
     syncAzimuthZoomOutHint();
     if (map) map.invalidateSize();
     await syncMercatorOverlays(true);
+    if (seq !== projectionApplySeq) return; // superseded by a newer toggle
     scheduleRender();
 }
 
@@ -1039,7 +1058,18 @@ export function attachMapEvents() {
     };
 
     const finishMercatorInteraction = () => {
-        if (currentProjection() !== 'mercator') return;
+        if (currentProjection() !== 'mercator') {
+            // Projection changed mid-interaction: the zoomend/moveend that would
+            // normally reset the flag can't arm the settle timer, so reset the
+            // interaction state directly. (applyProjectionMode also does this;
+            // this covers any path that changes the projection without it.)
+            state.mercatorInteractionActive = false;
+            if (state.mercatorRenderDeferred) {
+                state.mercatorRenderDeferred = false;
+                scheduleRender();
+            }
+            return;
+        }
 
         if (mercatorInteractionSettleTimerId) {
             clearTimeout(mercatorInteractionSettleTimerId);
@@ -1879,10 +1909,13 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         if (state.softPaused) return;
 
         if (state.liveSpots.length > 0) {
-            const streamMaxAge = (parseInt(minutes, 10) || 15) * 60;
-            const bandLabMaxAge = getBandLabLookbackMinutes() * 60;
-            const maxAge = Math.max(streamMaxAge, bandLabMaxAge);
-            state.liveSpots.forEach(s => s.ageSeconds += 5); 
+            // Read the live Max Spot Age slider value rather than the `minutes`
+            // captured at stream start: the slider only triggers a re-render
+            // (Range.svelte), it does not restart the stream, so the prune must
+            // follow the current control. This also keeps the prune consistent
+            // with resumeFromSoftPause, which reads the live value.
+            const maxAge = getCurrentMaxSpotAgeSeconds();
+            state.liveSpots.forEach(s => s.ageSeconds += 5);
             state.liveSpots = state.liveSpots.filter(s => s.ageSeconds <= maxAge);
             scheduleRender();
         }

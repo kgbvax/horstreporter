@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { regionForLocator, WSPR_REGIONS, bandColors } from './utils.js';
+import { regionForLocatorCached, WSPR_REGIONS, bandColors } from './utils.js';
 
 // wspr-matrix.js — band × region matrix panel showing which bands have WSPR
 // paths open to which world regions right now. Aggregates state.liveSpots
@@ -17,6 +17,9 @@ const runtime = {
     enabled: false,
     lastUpdateAt: 0,
     onLayoutChange: null,
+    // Fingerprint of the last rendered matrix; the table DOM is only rebuilt
+    // when the band × region counts actually change.
+    lastMatrixKey: '',
 };
 
 export function initWsprMatrix({ onLayoutChange } = {}) {
@@ -64,7 +67,7 @@ export function updateWsprMatrix() {
     // Aggregate WSPR spots by band × region.
     // Each WSPR path contributes to both the transmitter's region and the
     // receiver's region — a path between EU and NA lights both the EU and NA
-    // cells for that band.
+    // cells for that band. regionForLocatorCached memoizes per locator.
     const matrix = new Map(); // band -> Map<region, count>
     for (const spot of state.liveSpots) {
         if (String(spot?.sourceType || '').toLowerCase() !== 'wspr') continue;
@@ -72,8 +75,8 @@ export function updateWsprMatrix() {
         if (!band || !BAND_ORDER.includes(band)) continue;
         if (!matrix.has(band)) matrix.set(band, new Map());
         const bandMap = matrix.get(band);
-        const txRegion = regionForLocator(spot.locator);
-        const rxRegion = regionForLocator(spot.reporterLocator);
+        const txRegion = regionForLocatorCached(spot.locator);
+        const rxRegion = regionForLocatorCached(spot.reporterLocator);
         if (txRegion) bandMap.set(txRegion, (bandMap.get(txRegion) || 0) + 1);
         if (rxRegion && rxRegion !== txRegion) bandMap.set(rxRegion, (bandMap.get(rxRegion) || 0) + 1);
     }
@@ -81,9 +84,17 @@ export function updateWsprMatrix() {
     // Render the grid: rows = bands, columns = 11 regions.
     const activeBands = BAND_ORDER.filter((b) => matrix.has(b));
     if (activeBands.length === 0) {
+        runtime.lastMatrixKey = '';
         body.innerHTML = '<div class="text-muted small">No WSPR paths open in the current window.</div>';
         return;
     }
+
+    // Skip the DOM rebuild when the band × region counts are unchanged.
+    const matrixKey = activeBands
+        .map((b) => `${b}:${Array.from(matrix.get(b).entries()).sort().map(([r, c]) => `${r}${c}`).join('')}`)
+        .join('|');
+    if (matrixKey === runtime.lastMatrixKey) return;
+    runtime.lastMatrixKey = matrixKey;
 
     const maxCount = Math.max(...Array.from(matrix.values()).flatMap((m) => Array.from(m.values())), 1);
 

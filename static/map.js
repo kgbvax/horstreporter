@@ -13,6 +13,10 @@ let worldGeoJsonData = null;
 let worldGeoJsonPromise = null;
 let currentCountryLayerTheme = null;
 let currentGraylineLayerKey = null;
+// Monotonic revision for syncMercatorCountryLayer: a call that awaits the
+// world.geojson fetch must not add its layer if a newer call superseded it
+// (e.g. the user toggled country coloring off while the fetch was in flight).
+let countrySyncRevision = 0;
 
 // Canvas renderer for the non-interactive country-fill layer (world.geojson,
 // ~242 polygons / ~99k points). SVG re-projects every one of those points on
@@ -314,6 +318,7 @@ function buildMercatorGraylineDataUrl(theme, subsolarPoint) {
 export async function syncMercatorCountryLayer(options = {}) {
     if (!map) return;
 
+    const revision = ++countrySyncRevision;
     const enabled = options.enabled ?? getCountryColoringEnabled();
     const force = options.force === true;
     const theme = document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
@@ -330,6 +335,12 @@ export async function syncMercatorCountryLayer(options = {}) {
     removeCountryLayer();
 
     const geoJson = await loadWorldGeoJson();
+    // A newer call superseded this one while the fetch was in flight (e.g. the
+    // user toggled country coloring off, or a theme switch re-synced). Don't
+    // add a layer the user no longer wants, and don't orphan a second layer.
+    if (revision !== countrySyncRevision) {
+        return;
+    }
     currentCountryLayer = L.geoJSON(geoJson, {
         pane: 'country-fill-pane',
         renderer: getCountryCanvasRenderer(),

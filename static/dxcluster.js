@@ -46,6 +46,17 @@ const trimComment = (c) => (c || '')
   .replace(/\s{2,}/g, ' ')
   .trim();
 
+// Escape HTML metacharacters before interpolating attacker-influenced fields
+// (DX-cluster comments, callsigns, operator names) into innerHTML. Cluster
+// comments are free text from any ham on the network, so they must never be
+// injected raw.
+const escapeHtml = (v) => String(v ?? '')
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;')
+  .replaceAll("'", '&#39;');
+
 // parseMode reads the mode from the spotter's comment when present (e.g.
 // "FT8 -12dB", "CW UP", "599 SSB"). Cluster spots carry no mode field and we
 // deliberately do NOT guess it from frequency for display — that's band-map
@@ -482,23 +493,23 @@ function renderRow(s) {
   el.className = 'cq-row w-' + (wi.cls || 'none');
   el.style.setProperty('--cq-spine', bandColor(s.band));
 
-  const badge = wi.label ? `<span class="cq-fbadge ${wi.cls}">${wi.label}</span>` : '<span></span>';
+  const badge = wi.label ? `<span class="cq-fbadge ${wi.cls}">${escapeHtml(wi.label)}</span>` : '<span></span>';
   el.innerHTML = `
     <div class="cq-f1">
       <button class="cq-star" tabindex="-1">${starSvg(isStar(s.dx_call))}</button>
-      <span class="cq-c">${s.dx_call}</span>
+      <span class="cq-c">${escapeHtml(s.dx_call)}</span>
       ${badge}
       <span></span>
     </div>
     <div class="cq-f2">
       <span></span>
-      <span class="cq-d bandc" style="color:${bandColor(s.band)}">${s.band}</span>
-      <span class="cq-d">${mode}</span>
+      <span class="cq-d bandc" style="color:${bandColor(s.band)}">${escapeHtml(s.band)}</span>
+      <span class="cq-d">${escapeHtml(mode)}</span>
       <span class="cq-d r">${dist ? dist + ' km' : ''}</span>
       <span class="cq-bar g-${dec}"><i style="width:${fill}%"></i></span>
       <span class="cq-age">${fmtAge(s.age_seconds)}</span>
     </div>
-    ${comment ? `<div class="cq-cmt" title="${comment}">${comment}</div>` : ''}
+    ${comment ? `<div class="cq-cmt" title="${escapeHtml(comment)}">${escapeHtml(comment)}</div>` : ''}
     <div class="cq-detail"></div>`;
   if (sc && sc.reason) el.title = sc.reason;
 
@@ -510,9 +521,9 @@ function renderRow(s) {
   // Detail strip: operator · country · mode · frequency — comment, + rig actions.
   const detail = el.querySelector('.cq-detail');
   const bits = [];
-  if (s.op_name) bits.push(`<span class="k">${s.op_name}</span>`);
-  if (s.country) bits.push(s.country);
-  if (mode) bits.push(mode);
+  if (s.op_name) bits.push(`<span class="k">${escapeHtml(s.op_name)}</span>`);
+  if (s.country) bits.push(escapeHtml(s.country));
+  if (mode) bits.push(escapeHtml(mode));
   bits.push(`${fmtFreq(s.freq_khz)} MHz`);
   if (dir) bits.push(`beam ${dir}`); // direction lives here now (dropped from the row)
   detail.innerHTML = bits.join('<span class="sep">·</span>'); // comment now shown on its own always-visible line

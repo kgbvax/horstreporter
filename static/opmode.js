@@ -430,6 +430,13 @@ async function runControlAction(actionName, fn, options = {}) {
     try {
         setStatus(`${actionName}...`);
         await fn();
+    } catch (err) {
+        // A failed command must not leave a phantom pending-target line on the
+        // map. The preview is only meaningful while the beam is actually
+        // turning toward it; on failure it would persist until a poll happened
+        // to see the antenna within 20° of a target that was never commanded.
+        clearPendingTargetPreview();
+        throw err;
     } finally {
         opModeState.commandInFlight = false;
         if (!preserveTargetPreview) {

@@ -33,7 +33,14 @@ const runtime = {
     dxInFlight: null,
     dxInFlightKey: '',
     dxAbortController: null,
-    onLayoutChange: null
+    onLayoutChange: null,
+    // Dirty-check state: skip the full pipeline when neither the spot set nor
+    // the filters changed since the last update.
+    lastSpotFingerprint: '',
+    lastFilterFingerprint: '',
+    // The band set the card DOM was last built for; the DOM (and its canvases)
+    // is only rebuilt when this changes.
+    lastBandKey: ''
 };
 
 export function initBandLab(options = {}) {
@@ -138,7 +145,18 @@ export function updateBandLab(options = {}) {
         return;
     }
 
-    const filtered = filterSpots(state.liveSpots, minutes);
+    // Dirty-check: skip the whole pipeline when neither the spot set nor the
+    // filters changed since the last update (quiet periods between spot bursts).
+    const spots = state.liveSpots;
+    const spotFingerprint = `${spots.length}:${spots[0]?.ageSeconds ?? ''}:${spots[spots.length - 1]?.ageSeconds ?? ''}`;
+    const filterFingerprint = `${qth}|${minutes}|${surroundings ? 1 : 0}|${getMinSnrMode()}|${document.getElementById('ssb-min-db')?.value || '0'}|${document.getElementById('cw-min-db')?.value || '-15'}|${getSelectedBand()}|${Array.from(getEnabledBands()).sort().join(',')}`;
+    if (!force && spotFingerprint === runtime.lastSpotFingerprint && filterFingerprint === runtime.lastFilterFingerprint) {
+        return;
+    }
+    runtime.lastSpotFingerprint = spotFingerprint;
+    runtime.lastFilterFingerprint = filterFingerprint;
+
+    const filtered = filterSpots(spots, minutes);
     const grouped = groupSpotsByBand(filtered);
     const requestSeq = ++runtime.updateSeq;
     const requestKey = `${qth}|${minutes}|${surroundings ? 1 : 0}`;
@@ -148,12 +166,16 @@ export function updateBandLab(options = {}) {
     renderSummary(summaryEl, { loading: !hasFreshDx });
     renderBandCards(cardsEl, grouped, qth, minutes);
 
-    void ensureDxConditions(qth, minutes, surroundings).then(() => {
-        // Ignore stale async responses after newer updates were scheduled.
-        if (!runtime.enabled || requestSeq !== runtime.updateSeq) return;
-        renderSummary(summaryEl);
-        renderBandCards(cardsEl, grouped, qth, minutes);
-    });
+    // When the dx cache is already fresh, the second render is fully redundant
+    // (identical data) — skip it.
+    if (!hasFreshDx) {
+        void ensureDxConditions(qth, minutes, surroundings).then(() => {
+            // Ignore stale async responses after newer updates were scheduled.
+            if (!runtime.enabled || requestSeq !== runtime.updateSeq) return;
+            renderSummary(summaryEl);
+            renderBandCards(cardsEl, grouped, qth, minutes);
+        });
+    }
 }
 
 function filterSpots(spots, minutes) {
@@ -251,52 +273,62 @@ function renderSummary(summaryEl, options = {}) {
 function renderBandCards(cardsEl, grouped, qth, minutes) {
     const bands = Array.from(grouped.keys()).sort((a, b) => compareBand(a, b));
     if (bands.length === 0) {
+        runtime.lastBandKey = '';
         cardsEl.innerHTML = '<div class="text-muted small">No reports match current filters.</div>';
         return;
     }
 
     const qthCenter = getQthCenter(qth);
     const dxBands = toBandMetricMap(runtime.dxCache);
-    const globalDistanceCapKm = qthCenter ? getGlobalDistanceCapKm(grouped, qthCenter) : null;
+    // Compute the qth→spot distance once and reuse it in both the axis cap and
+    // every band's scatter chart (was 2x per band per update).
+    const distanceCache = qthCenter ? computeDistanceCache(grouped, qthCenter) : null;
+    const globalDistanceCapKm = qthCenter ? getGlobalDistanceCapKm(grouped, qthCenter, distanceCache) : null;
     const allBandCounts = bands.map((band) => (grouped.get(band) || []).length);
     const totalReportsAllBands = allBandCounts.reduce((sum, n) => sum + n, 0);
     const maxReportsSingleBand = Math.max(0, ...allBandCounts);
 
-    cardsEl.innerHTML = bands.map((band) => {
-        const points = grouped.get(band) || [];
-        const safeBand = sanitizeBandId(band);
-        const count = points.length;
-        const rec = buildBandRecommendation(band, points, dxBands.get(band), {
-            totalReportsAllBands,
-            maxReportsSingleBand
-        });
+    // Only rebuild the card DOM (and its <canvas> elements) when the band set
+    // changes; otherwise redraw the charts in place, reusing the canvases.
+    const bandKey = bands.join(',');
+    if (bandKey !== runtime.lastBandKey) {
+        runtime.lastBandKey = bandKey;
+        cardsEl.innerHTML = bands.map((band) => {
+            const points = grouped.get(band) || [];
+            const safeBand = sanitizeBandId(band);
+            const count = points.length;
+            const rec = buildBandRecommendation(band, points, dxBands.get(band), {
+                totalReportsAllBands,
+                maxReportsSingleBand
+            });
 
-        return `
-            <div class="band-lab-card" style="border-left-color: ${bandColors[band] || '#999'};">
-                <div class="band-lab-card-head">
-                    <span class="band-lab-band">${escapeHtml(`${band} - ${rec}`)}</span>
-                    <span class="band-lab-meta">${formatNumber(count)} reports</span>
-                </div>
-                <div class="band-lab-card-charts">
-                    <div class="band-lab-chart-block">
-                        <div class="band-lab-chart-title">Distance vs SNR</div>
-                        <canvas id="band-lab-scatter-${safeBand}" width="230" height="120"></canvas>
-                        ${qthCenter ? '' : '<div class="band-lab-chart-note">Distance plot needs locator qth (e.g. JO32).</div>'}}
+            return `
+                <div class="band-lab-card" style="border-left-color: ${bandColors[band] || '#999'};">
+                    <div class="band-lab-card-head">
+                        <span class="band-lab-band">${escapeHtml(`${band} - ${rec}`)}</span>
+                        <span class="band-lab-meta">${formatNumber(count)} reports</span>
                     </div>
-                    <div class="band-lab-chart-block">
-                        <div class="band-lab-chart-title">Reports over time + baseline</div>
-                        <canvas id="band-lab-activity-${safeBand}" width="230" height="120"></canvas>
+                    <div class="band-lab-card-charts">
+                        <div class="band-lab-chart-block">
+                            <div class="band-lab-chart-title">Distance vs SNR</div>
+                            <canvas id="band-lab-scatter-${safeBand}" width="230" height="120"></canvas>
+                            ${qthCenter ? '' : '<div class="band-lab-chart-note">Distance plot needs locator qth (e.g. JO32).</div>'}
+                        </div>
+                        <div class="band-lab-chart-block">
+                            <div class="band-lab-chart-title">Reports over time + baseline</div>
+                            <canvas id="band-lab-activity-${safeBand}" width="230" height="120"></canvas>
+                        </div>
                     </div>
                 </div>
-            </div>
-        `;
-    }).join('');
+            `;
+        }).join('');
+    }
 
     for (const band of bands) {
         const safeBand = sanitizeBandId(band);
         const points = grouped.get(band) || [];
         drawActivityChart(document.getElementById(`band-lab-activity-${safeBand}`), points, dxBands.get(band), minutes);
-        drawScatterChart(document.getElementById(`band-lab-scatter-${safeBand}`), points, qthCenter, band, globalDistanceCapKm);
+        drawScatterChart(document.getElementById(`band-lab-scatter-${safeBand}`), points, qthCenter, band, globalDistanceCapKm, distanceCache);
     }
 }
 
@@ -308,11 +340,25 @@ function renderBandCards(cardsEl, grouped, qth, minutes) {
 // is consistent in spirit. Floored at 500 km so tiny populations still get a
 // readable axis. Points beyond the cap are clamped to the edge and marked
 // (see drawScatterChart), never silently dropped.
-function getGlobalDistanceCapKm(grouped, qthCenter) {
+// Precompute the qth→spot haversine distance once per update so both
+// getGlobalDistanceCapKm and computeScatterData reuse it instead of each doing
+// a full O(n) trig pass (4x total per update before this dedup).
+function computeDistanceCache(grouped, qthCenter) {
+    const cache = new Map();
+    for (const points of grouped.values()) {
+        for (const point of points) {
+            if (cache.has(point)) continue;
+            cache.set(point, haversineKm(qthCenter.lat, qthCenter.lng, Number(point.lat), Number(point.lng)));
+        }
+    }
+    return cache;
+}
+
+function getGlobalDistanceCapKm(grouped, qthCenter, distanceCache) {
     const distances = [];
     for (const points of grouped.values()) {
         for (const point of points) {
-            const d = haversineKm(qthCenter.lat, qthCenter.lng, Number(point.lat), Number(point.lng));
+            const d = distanceCache ? distanceCache.get(point) : haversineKm(qthCenter.lat, qthCenter.lng, Number(point.lat), Number(point.lng));
             if (Number.isFinite(d)) distances.push(d);
         }
     }
@@ -335,11 +381,11 @@ function getQthCenter(qth) {
 // Pure: turn spots + qth center into scatter samples + axis ranges, or null
 // when there is no usable distance data. Extracted from drawScatterChart so the
 // math is unit-testable without a canvas.
-export function computeScatterData(points, qthCenter, globalDistanceCapKm) {
+export function computeScatterData(points, qthCenter, globalDistanceCapKm, distanceCache) {
     if (!qthCenter || !points || points.length === 0) return null;
     const samples = points
         .map((p) => ({
-            d: haversineKm(qthCenter.lat, qthCenter.lng, Number(p.lat), Number(p.lng)),
+            d: distanceCache ? distanceCache.get(p) : haversineKm(qthCenter.lat, qthCenter.lng, Number(p.lat), Number(p.lng)),
             s: Number(p.snr || 0)
         }))
         .filter((v) => Number.isFinite(v.d) && Number.isFinite(v.s));
@@ -356,7 +402,7 @@ export function computeScatterData(points, qthCenter, globalDistanceCapKm) {
     return { samples, maxDist, minSnr, maxSnr, snrRange };
 }
 
-function drawScatterChart(canvas, points, qthCenter, band, globalDistanceCapKm) {
+function drawScatterChart(canvas, points, qthCenter, band, globalDistanceCapKm, distanceCache) {
     const prepared = prepareCanvas(canvas, 230, 120);
     if (!prepared) return;
     const { ctx, w, h } = prepared;
@@ -369,7 +415,7 @@ function drawScatterChart(canvas, points, qthCenter, band, globalDistanceCapKm) 
     const pal = chartPalette();
     drawChartFrame(ctx, pad, pw, ph, pal);
 
-    const data = computeScatterData(points, qthCenter, globalDistanceCapKm);
+    const data = computeScatterData(points, qthCenter, globalDistanceCapKm, distanceCache);
     if (!data) {
         drawNoData(ctx, w, h, 'no distance data', pal);
         return;
@@ -959,11 +1005,16 @@ async function ensureDxConditions(qth, minutes, surroundings) {
             }
             return runtime.dxCache;
         } finally {
+            // Only clear the in-flight tracking when THIS request is still the
+            // current one. If a newer request (different key) took over while
+            // this one was aborted, its finally must not clobber the newer
+            // request's tracking — otherwise a subsequent call with the newer
+            // key would fail to dedupe and start a duplicate fetch.
             if (runtime.dxAbortController === controller) {
                 runtime.dxAbortController = null;
+                runtime.dxInFlight = null;
+                runtime.dxInFlightKey = '';
             }
-            runtime.dxInFlight = null;
-            runtime.dxInFlightKey = '';
         }
     })();
 
