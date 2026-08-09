@@ -140,13 +140,13 @@ test('country-coloring defaults on, toggles off, fires hook', async ({ page }) =
     await expect(page.locator('#show-country-coloring')).not.toBeChecked();
 });
 
-test('target input persists, rehydrates, and external setter updates it', async ({ page }) => {
-    await page.fill('#target', 'JO32');
-    await expect(page.locator('#target')).toHaveValue('JO32');
+test('qth input persists, rehydrates, and external setter updates it', async ({ page }) => {
+    await page.fill('#qth', 'JO32');
+    await expect(page.locator('#qth')).toHaveValue('JO32');
     await page.reload();
-    await expect(page.locator('#target')).toHaveValue('JO32');
-    await page.evaluate(() => window.__horstSetTarget('FN31'));
-    await expect(page.locator('#target')).toHaveValue('FN31');
+    await expect(page.locator('#qth')).toHaveValue('JO32');
+    await page.evaluate(() => window.__horstSetQTH('FN31'));
+    await expect(page.locator('#qth')).toHaveValue('FN31');
 });
 
 test('dx-cluster defaults on; external setter syncs it', async ({ page }) => {
