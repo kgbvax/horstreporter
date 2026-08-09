@@ -152,17 +152,19 @@ func startWSPRIngest(cfg wsprConfig) {
 	}
 }
 
-// fetchWSPRSpots queries the last ~120s of in-scope WSPR spots and feeds them
+// fetchWSPRSpots queries the last ~300s of in-scope WSPR spots and feeds them
 // through the same pipeline as RBN: persist to dx_raw_spots, then broadcast
 // live-usable spots to the hub.
 func fetchWSPRSpots(client *http.Client, endpoint string, cfg wsprConfig) {
 	wsprAccounting.pollAttempts.Add(1)
 
-	// Build the ClickHouse query. Filter by time (last 120s) and in-scope
-	// bands so the query stays fast (the DB is optimized for time+band).
+	// Build the ClickHouse query. WSPR transmits on 2-minute even/odd cycles,
+	// so a 300s (5 min) lookback catches 2-3 cycles per poll. Filter by
+	// in-scope bands so the query stays fast (the DB is optimized for
+	// time+band).
 	bandList := "1,3,5,7,10,14,18,21,24,28,50,70,144"
 	q := "SELECT time, band, rx_sign, rx_loc, tx_sign, tx_loc, distance, frequency, power, snr " +
-		"FROM wspr.rx WHERE time > now() - 120 AND band IN (" + bandList + ") FORMAT JSON"
+		"FROM wspr.rx WHERE time > now() - 300 AND band IN (" + bandList + ") FORMAT JSON"
 	u := endpoint + "/?query=" + url.QueryEscape(q)
 
 	req, err := http.NewRequest(http.MethodGet, u, nil)
@@ -260,7 +262,12 @@ func handleWSPRSpot(s wsprSpot, now int64, cfg wsprConfig) {
 		return
 	}
 
-	hub.broadcastMsg(m)
+	// WSPR is a global propagation reference — broadcast to ALL connected
+	// clients regardless of their QTH. Unlike FT8/DX-cluster/RBN (which are
+	// QTH-filtered because they involve the operator's own station), WSPR
+	// beacons show "is the band open at all?" for any path worldwide. The
+	// client-side show-wspr-spots toggle lets users hide them if too busy.
+	hub.broadcastWSPRToAll(m)
 	wsprAccounting.forwardedSpots.Add(1)
 }
 
