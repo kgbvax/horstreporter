@@ -812,8 +812,15 @@ function maybeAutoStartSavedQth() {
             localStorage.removeItem('target');
         }
     }
+    if (!savedQth) {
+        return;
+    }
+
+    // The #qth input element is created by the Svelte bundle (dist/horst-ui.js),
+    // which loads AFTER app.js. If it hasn't mounted yet, retry shortly.
     const qthInput = document.getElementById('qth');
-    if (!savedQth || !qthInput) {
+    if (!qthInput) {
+        setTimeout(() => { maybeAutoStartSavedQth(); }, 50);
         return;
     }
 
