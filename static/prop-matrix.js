@@ -227,8 +227,8 @@ function renderCell(band, region, cell) {
     if (!cell) {
         return `<td class="prop-matrix-cell-empty" data-band="${escapeHtml(band)}" data-region="${escapeHtml(region)}" role="button" tabindex="0"></td>`;
     }
-    const pOpen = clamp01(Number(cell.pOpen ?? 0));
-    const expectedCount = Number(cell.expectedCount ?? 0);
+    const pOpen = clamp01(Number(cell.p_open ?? 0));
+    const expectedCount = Number(cell.expected_count ?? 0);
     const confidence = clamp01(Number(cell.confidence ?? 0));
     const surge = Boolean(cell.surge);
 
@@ -274,7 +274,7 @@ function cellKey(band, region) {
 function fingerprintCells(map) {
     const out = [];
     for (const [k, c] of map.entries()) {
-        out.push(`${k}:${Number(c?.pOpen ?? 0).toFixed(3)}:${Number(c?.expectedCount ?? 0).toFixed(1)}:${c.surge ? 1 : 0}`);
+        out.push(`${k}:${Number(c?.p_open ?? 0).toFixed(3)}:${Number(c?.expected_count ?? 0).toFixed(1)}:${c.surge ? 1 : 0}`);
     }
     return out.sort().join('|');
 }

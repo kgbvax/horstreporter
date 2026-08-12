@@ -263,6 +263,7 @@ func main() {
 	pushVAPIDPrivateKeyFlag := flag.String("push-vapid-private-key", "", "VAPID private key (base64url) for signing Web Push messages. Falls back to env PUSH_VAPID_PRIVATE_KEY. Generate with `go run github.com/SherClockHolmes/webpush-go` or the scripts/generate-vapid-keys.sh helper.")
 	pushVAPIDPublicKeyFlag := flag.String("push-vapid-public-key", "", "VAPID public key (base64url) served at /api/push/vapid-public-key for the browser subscription flow. Falls back to env PUSH_VAPID_PUBLIC_KEY.")
 	pushVAPIDSubscriberFlag := flag.String("push-vapid-subscriber", "", "mailto: URL in the VAPID JWT (identifies the sending server to the push service). Defaults to mailto:horstreporter@example.com.")
+	pushTrustedProxyCIDRFlag := flag.String("push-trusted-proxy-cidr", "", "Comma-separated CIDR ranges of trusted TLS-terminating proxies whose X-Forwarded-For header is honored for push rate-limiting (e.g. \"10.0.0.0/8,172.16.0.0/12\"). When unset, X-Forwarded-For is NOT trusted and the client IP is taken from RemoteAddr — this prevents spoofed-XFF rate-limit bypass. Only applies when -push-enable is set.")
 	flag.Parse()
 
 	// Override logLevel from flag if provided
@@ -319,6 +320,14 @@ func main() {
 		logInfo("Web Push requested via -push-enable but VAPID keys are missing — push disabled (set PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
 	} else {
 		logInfo("Web Push disabled (-push-enable not set)")
+	}
+	// Configure the trusted-proxy allowlist for X-Forwarded-For handling
+	// in push rate-limiting. Without this, XFF is never trusted, so a
+	// spoofed X-Forwarded-For header cannot rotate the rate-limit key.
+	if *pushTrustedProxyCIDRFlag != "" {
+		if err := setPushTrustedProxies(strings.Split(*pushTrustedProxyCIDRFlag, ",")); err != nil {
+			log.Fatalf("invalid -push-trusted-proxy-cidr: %v", err)
+		}
 	}
 
 	// Resolve the Postgres DSN: explicit flag wins (for ad-hoc/dev), then the

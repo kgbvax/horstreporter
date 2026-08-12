@@ -61,11 +61,16 @@ function mockFetchOnce(payload, ok = true) {
 }
 
 function makeCell(band, region, { pOpen = 0.8, expectedCount = 12, confidence = 0.8, surge = false } = {}) {
+    // NOTE: the returned cell mirrors the BACKEND JSON shape (snake_case),
+    // not the camelCase of the options arg. This is deliberate so the test
+    // exercises the real field names the renderer reads (cell.p_open /
+    // cell.expected_count) — a camelCase cell here would mask a
+    // backend/frontend naming mismatch.
     return {
         band,
         region,
-        pOpen,
-        expectedCount,
+        p_open: pOpen,
+        expected_count: expectedCount,
         confidence,
         surge,
     };

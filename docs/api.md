@@ -172,10 +172,16 @@ Response:
   live spots) are still emitted with a low-confidence (0.15) prior so
   the frontend can render the full 11-region grid.
 - `surge` is present only when the cell's live rate z-scores above the
-  region-level baseline (Postgres `regionCalendarStats` for the current
-  slot, or a memory-fallback trailing 6h baseline). Suppressed when the
-  baseline has fewer than 30 samples (PG) / 10 sub-windows (memory), or
-  when the baseline stddev is zero.
+  memory-fallback baseline: per-15-minute sub-window unique-sender rates
+  across a trailing 6h window that excludes the live nowcast window, in the
+  same units/scope (operator-local unique senders/hour) as the live rate.
+  (The Postgres `regionCalendarStats` climatology is a global, raw
+  per-30-min count in different units/scope and is NOT used for the z-score;
+  it is still used as the nowcast prior. A per-operator unique-sender PG
+  baseline would be needed to restore a PG-backed surge z-score.)
+  Suppressed for sparse cells (no live spots), when the baseline has fewer
+  than 10 covered sub-windows (`propIntelSurgeMinSamplesMem`), or when the
+  baseline stddev is zero.
 - When at least one cell surges, the engine fans out Web Push
   notifications to matching subscriptions asynchronously (see
   `/api/push/*`); the push send never blocks this response.

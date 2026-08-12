@@ -281,6 +281,11 @@ func validatePushSubscription(sub *pushSubscription) error {
 	if err != nil || u.Scheme != "https" {
 		return errPushInvalid("endpoint must be an HTTPS URL")
 	}
+	// A parsed URL can still be hostless (e.g. "https:///path"), which would
+	// later produce a malformed push send with no destination host.
+	if u.Host == "" {
+		return errPushInvalid("endpoint missing host")
+	}
 	if strings.TrimSpace(sub.Keys.P256dh) == "" {
 		return errPushInvalid("missing keys.p256dh")
 	}

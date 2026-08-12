@@ -623,3 +623,49 @@ func TestPropIntelSurgeSparseCellFallback(t *testing.T) {
 		t.Errorf("expected surge via sparse-cell memory fallback; got nil (live=%.1f/h)", cell.ExpectedCount)
 	}
 }
+
+// TestPropIntelSurgePartialCoverageNoFalsePositive guards the effectiveStart
+// data-coverage clamp in memorySurgeBaselines (the #6 fix). In production
+// hub.history retains only ~60 min (main.go) while the surge baseline window
+// is 6 h, so the clamp is ALWAYS active: most of the 6 h window has no
+// retained spots. The baseline must be computed over only the covered
+// sub-windows — otherwise the uncovered sub-windows are synthesized as
+// zero activity, deflating the mean and inflating the z-score so nearly any
+// live activity falsely surges (and fires Web Push, which cannot be un-sent).
+//
+// This test simulates 60-min retention: baseline spots exist only in the 4
+// most-recent baseline sub-windows, each at the SAME rate as the live window
+// (no real surge). With the clamp, totalSubs reflects the 4 covered
+// sub-windows (below propIntelSurgeMinSamplesMem=10) → no surge. Reverting
+// the clamp (totalSubs = full 23 sub-windows, 19 of them synthetic zeros)
+// deflates the mean to ~2.8/h and inflates z to ~2.13 → false surge → this
+// test fails. The existing surge tests all build a full 6 h history via
+// addBaselineSubs, so none exercise the clamp — this one does.
+func TestPropIntelSurgePartialCoverageNoFalsePositive(t *testing.T) {
+	now := int64(1700000000)
+	remoteLoc := "JO40" // EU
+	// Live: 4 unique senders in 15 min → 16/h.
+	history := addLiveSpots(nil, now, "10m", remoteLoc, 4)
+	// Baseline: ONLY the 4 most-recent baseline sub-windows (simulating
+	// 60-min hub.history retention), each at 4 senders → 16/h, matching the
+	// live rate. There is no real surge — live equals the recent baseline.
+	subSec := int64(15 * 60)
+	for s := 0; s < 4; s++ {
+		t := now - int64(15*60) - int64(s+1)*subSec + subSec/2
+		for j := 0; j < 4; j++ {
+			call := "BASE" + string(rune('A'+s)) + string(rune('a'+j))
+			history = append(history, MQTTMessage{
+				RP: -8, T: t, SC: call, SL: remoteLoc, RC: "DL1A", RL: "JO62", B: "10m", MD: "FT8", Source: "rbn",
+			})
+		}
+	}
+	e := &propIntelEngine{}
+	resp := e.Evaluate("JO62", false, 15, -15, history, now, 2.0)
+	cell := findCell(t, resp, "10m", "EU")
+	if cell == nil {
+		t.Fatalf("expected 10m/EU cell")
+	}
+	if cell.Surge != nil {
+		t.Errorf("expected NO surge for partial-coverage baseline matching live rate (effectiveStart clamp); got z=%v", cell.Surge.ZScore)
+	}
+}

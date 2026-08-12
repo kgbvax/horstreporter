@@ -55,10 +55,12 @@ const (
 	// query parameter on /api/prop_intel. Per-band/region overrides are
 	// deferred to v2.
 	propIntelSurgeZThreshold = 2.0
-	// propIntelSurgeMinSamples is the minimum baseline sample count for the
-	// z-score to be statistically meaningful. Below this, the stddev is too
-	// noisy (rare band/region combos) and surge detection is suppressed for
-	// the cell. Applied to the PG `regionCalendarStats.SampleDays`. See U2.
+	// propIntelSurgeMinSamples is the minimum baseline sample count for a
+	// PG-backed z-score to be statistically meaningful. Reserved for a
+	// future per-operator unique-sender PG baseline (the global raw
+	// regionCalendarStats baseline was removed from the surge z-score —
+	// see detectSurges). Currently unused; the memory-fallback surge uses
+	// propIntelSurgeMinSamplesMem instead. See U2.
 	propIntelSurgeMinSamples = 30
 	// propIntelSurgeMinSamplesMem is the memory-fallback analogue: the
 	// minimum number of 15-min sub-windows in the trailing 6h baseline for
@@ -255,10 +257,16 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		// Clamp the nowcast rate against the region baseline mean when the
 		// baseline exists and is much higher than the live rate — this is a
 		// mild regulariser, not a cap: a live burst above baseline is allowed.
-		if base, ok := regionBaseline[regionBaselineKey{key.band, key.region, slot}]; ok && base.Mean > nowcastRate {
-			// Blend: 70% live, 30% baseline prior when live is thin.
-			if uniqueSenders < propIntelMinSendersHighConf {
-				nowcastRate = 0.7*nowcastRate + 0.3*base.Mean
+		// Guarded by uniqueSenders > 0: a cell with no live senders (e.g.
+		// locator-only spots whose callsign did not resolve) must keep
+		// nowcastRate = 0, otherwise the blend fabricates a nonzero rate
+		// (0.3*base.Mean) for a zero-sender cell and misreports p_open.
+		if uniqueSenders > 0 {
+			if base, ok := regionBaseline[regionBaselineKey{key.band, key.region, slot}]; ok && base.Mean > nowcastRate {
+				// Blend: 70% live, 30% baseline prior when live is thin.
+				if uniqueSenders < propIntelMinSendersHighConf {
+					nowcastRate = 0.7*nowcastRate + 0.3*base.Mean
+				}
 			}
 		}
 
@@ -318,7 +326,7 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 	if threshold <= 0 {
 		threshold = propIntelSurgeZThreshold
 	}
-	detectSurges(cells, qth, surroundings, cwMinDb, history, now, threshold, regionBaseline)
+	detectSurges(cells, qth, surroundings, history, now, threshold, minutes)
 
 	resp.Cells = cells
 
@@ -573,49 +581,66 @@ func regionDisplayName(code string) string {
 }
 
 // detectSurges flags per-(band × region) cells whose live nowcast rate
-// z-scores above the region-level baseline. Mutates `cells` in place by
+// z-scores above the memory-fallback baseline. Mutates `cells` in place by
 // setting cell.Surge for flagged cells.
 //
-// The baseline rate and stddev come from two sources, in order:
-//  1. PG-backed: `regionBaseline` (regionCalendarStats) for the current slot.
-//     Suppressed when the cell has fewer than propIntelSurgeMinSamples samples
-//     — a stddev from very few samples is statistically meaningless for rare
-//     band/region combinations (U2 minimum-sample guard).
-//  2. Memory fallback: a trailing propIntelSurgeBaselineWindowMin-minute rate
-//     computed from the history window, excluding the live 15-minute nowcast
-//     window so the surge signal does not contaminate the baseline. The
-//     baseline stddev is derived from per-15-minute sub-window rates across
-//     the trailing baseline window.
+// The baseline is the memory-fallback trailing baseline only: per-15-min
+// sub-window unique-sender rates across a trailing window that excludes the
+// live nowcast window, in the SAME units (unique senders / hour) and scope
+// (operator-local) as the live rate. The Postgres regionCalendarStats
+// baseline is intentionally NOT used for the z-score: it is a global, raw
+// (non-deduplicated) per-30-min-slot climatology in different units and
+// scope than the operator-local unique-sender live rate, so comparing them
+// produced false negatives (the global count dwarfs the local rate) and,
+// for sparse cells, false positives. The PG baseline is still used as the
+// nowcast prior in Evaluate (sparse cells and the live-rate blend).
+// Restoring a PG-backed surge z-score needs a per-operator unique-sender
+// baseline (future work). See KTD3/U2.
 //
 // z = (live_rate − baseline_rate) / baseline_stddev. A zero stddev yields no
 // surge (guard against division by zero; the baseline has no variance to
-// compare against). A cell is flagged when z ≥ threshold.
+// compare against). A cell is flagged when z ≥ threshold. Sparse cells (no
+// live spots → empty Sources) and cells with no live rate are skipped: a
+// cell with zero live senders cannot surge. The minimum-sample guard
+// (propIntelSurgeMinSamplesMem) suppresses cells whose baseline has too few
+// sub-windows to trust the stddev.
 func detectSurges(
 	cells []propIntelCell,
 	qth string,
 	surroundings bool,
-	cwMinDb int,
 	history []MQTTMessage,
 	now int64,
 	threshold float64,
-	regionBaseline map[regionBaselineKey]regionCalendarStatRow,
+	nowcastWindowMin int,
 ) {
 	if threshold <= 0 {
 		threshold = propIntelSurgeZThreshold
 	}
-	slot := utcSlotOfDay(now)
-	nowcastWindowMin := propIntelNowcastWindowMin
+	if nowcastWindowMin <= 0 {
+		nowcastWindowMin = propIntelNowcastWindowMin
+	}
 
-	// Pre-compute the memory-fallback baseline per (band × region) from the
-	// trailing 6-hour window excluding the live 15-minute window. Each
-	// 15-minute sub-window contributes one rate sample; the baseline rate is
-	// the mean and the baseline stddev is the sample standard deviation of
-	// those sub-window rates. The live window (now-15m..now) is excluded so
-	// the surge signal does not contaminate the baseline (U2 requirement).
+	// Memory-fallback baseline per (band × region) from the trailing
+	// window excluding the live nowcast window. Each 15-minute sub-window
+	// contributes one rate sample; the baseline rate is the mean and the
+	// baseline stddev is the sample standard deviation of those rates.
+	// The live window [now-nowcastWindowMin, now) is excluded so the surge
+	// signal does not contaminate the baseline (U2 requirement). NOTE: the
+	// exclusion uses the request's nowcast window, not a hardcoded 15min,
+	// so a wider request (minutes>15) does not leak live signal into the
+	// baseline.
 	memBaselines := memorySurgeBaselines(history, qth, surroundings, now, nowcastWindowMin)
 
 	for i := range cells {
 		c := &cells[i]
+		// Sparse cells (baseline prior only, no live spots) have empty
+		// Sources — they cannot surge (zero live senders). Skip them
+		// before any z-score: a sparse cell's ExpectedCount is the PG
+		// baseline mean (a global raw per-30-min count) in different
+		// units than the memory baseline, which would false-positive.
+		if len(c.Sources) == 0 {
+			continue
+		}
 		// Only cells with a nonzero nowcast rate can surge — a zero-rate
 		// cell has nothing to surge above.
 		if c.ExpectedCount <= 0 {
@@ -623,14 +648,12 @@ func detectSurges(
 		}
 		liveRate := c.ExpectedCount
 
-		var baseRate, baseStd float64
-		if row, ok := regionBaseline[regionBaselineKey{c.Band, c.Region, slot}]; ok && row.SampleDays >= propIntelSurgeMinSamples {
-			baseRate = row.Mean
-			baseStd = row.StdDev
-		} else if mb, ok := memBaselines[propIntelCellKey{c.Band, c.Region}]; ok && mb.n >= propIntelSurgeMinSamplesMem {
-			baseRate = mb.mean
-			baseStd = mb.stddev
+		mb, ok := memBaselines[propIntelCellKey{c.Band, c.Region}]
+		if !ok || mb.n < propIntelSurgeMinSamplesMem {
+			continue
 		}
+		baseRate := mb.mean
+		baseStd := mb.stddev
 
 		// Guard against stddev=0: the baseline has no variance to compare
 		// against, so a z-score is undefined. Treat as no surge (U2).
@@ -702,10 +725,9 @@ func memorySurgeBaselines(
 		return nil
 	}
 	// Sub-window granularity matches the nowcast slot (15 min). A 6h
-	// baseline yields ~23 sub-window samples. The PG baseline counts days
-	// (propIntelSurgeMinSamples=30 days); the memory fallback counts
-	// 15-min slots, which carry far less evidence each, so the guard uses
-	// propIntelSurgeMinSamplesMem (lower) — see detectSurges for the gate.
+	// baseline yields ~23 sub-window samples. Each 15-min slot carries
+	// far less evidence than a full calendar day, so the minimum-sample
+	// guard uses propIntelSurgeMinSamplesMem (lower) — see detectSurges.
 	subWindowSec := int64(propIntelNowcastSlotMin * 60)
 	if subWindowSec <= 0 {
 		subWindowSec = 900
@@ -719,10 +741,23 @@ func memorySurgeBaselines(
 		subs map[int64]*subAcc
 	}
 	acc := make(map[propIntelCellKey]*cellSubs)
+	// Track the oldest retained spot that falls inside the baseline window.
+	// history may not cover the full baselineWindowMin (hub.history retention
+	// is shorter), so sub-windows before the oldest retained spot have NO
+	// data — synthesizing them as zero-activity would inflate the sample
+	// count with synthetic zeros, deflate the mean, and let a few real
+	// sub-windows look like a surge. effectiveStart (below) clamps the
+	// baseline window to the actual data coverage.
+	var oldestInRange int64
+	haveOldest := false
 
 	for _, m := range history {
 		if m.T < baselineStart || m.T >= nowcastCutoff {
 			continue
+		}
+		if !haveOldest || m.T < oldestInRange {
+			oldestInRange = m.T
+			haveOldest = true
 		}
 		band := normalizeBand(m.B)
 		if band == "" || !bandInScope(band) {
@@ -762,21 +797,53 @@ func memorySurgeBaselines(
 	if subHours <= 0 {
 		subHours = 0.25
 	}
-	// Total number of sub-windows in the baseline window. Each sub-window
-	// (including zero-activity ones) counts as one sample — a flat baseline
-	// with half its sub-windows empty still has nonzero variance when the
-	// other half is active, and the minimum-sample guard must see the empty
-	// sub-windows too (otherwise a sparse baseline inflates n with only the
-	// active sub-windows and misrepresents its statistical weight).
-	totalSubs := int((nowcastCutoff - baselineStart) / subWindowSec)
+	// effectiveStart clamps the baseline window's left edge to the actual
+	// data coverage. If history does not cover the full baselineWindowMin
+	// (e.g., hub.history retention is shorter, or the band/region simply had
+	// no spots early in the window), sub-windows before the oldest retained
+	// spot have no data. Counting them as zero-activity samples would
+	// deflate the mean and let a few real sub-windows look like a surge.
+	// effectiveStart is the oldest retained spot's time floored to its
+	// sub-window boundary, never earlier than baselineStart. If no spots
+	// were retained at all, fall back to the full window (acc is empty, so
+	// the loop below produces nothing anyway).
+	effectiveStart := baselineStart
+	if haveOldest {
+		floored := oldestInRange - (oldestInRange-baselineStart)%subWindowSec
+		if floored > effectiveStart {
+			effectiveStart = floored
+		}
+	}
+	if effectiveStart >= nowcastCutoff {
+		return out
+	}
+	// Number of sub-windows actually covered by data: [effectiveStart,
+	// nowcastCutoff). Each sub-window (including zero-activity ones within
+	// the covered range) counts as one sample — a flat baseline with half
+	// its covered sub-windows empty still has nonzero variance when the
+	// other half is active, and the minimum-sample guard must see the
+	// empty sub-windows too (otherwise a sparse baseline inflates n with
+	// only the active sub-windows and misrepresents its statistical weight).
+	totalSubs := int((nowcastCutoff - effectiveStart) / subWindowSec)
 	if totalSubs < 1 {
 		totalSubs = 1
 	}
+	// startOffset is the sub-window index (relative to baselineStart) where
+	// data coverage begins. Sub-indices in cell.subs were computed against
+	// baselineStart, so we iterate from startOffset (not 0) to avoid counting
+	// pre-coverage sub-windows as synthetic zeros.
+	startOffset := int64(0)
+	if haveOldest {
+		startOffset = (effectiveStart - baselineStart) / subWindowSec
+		if startOffset < 0 {
+			startOffset = 0
+		}
+	}
 	for key, cell := range acc {
 		rates := make([]float64, 0, totalSubs)
-		// Iterate sub-window indices 0..totalSubs-1; missing entries are
-		// zero-activity sub-windows and contribute rate 0.
-		for idx := int64(0); idx < int64(totalSubs); idx++ {
+		// Iterate the covered sub-window indices; missing entries within the
+		// covered range are zero-activity sub-windows and contribute rate 0.
+		for idx := startOffset; idx < startOffset+int64(totalSubs); idx++ {
 			sa, ok := cell.subs[idx]
 			if !ok {
 				rates = append(rates, 0)
@@ -865,13 +932,14 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 	engine := propIntel
 	resp := engine.Evaluate(qth, surroundings, minutes, cwMinDb, historyCopy, now, surgeThreshold)
 
-	// Count surges flagged by detectSurges so /api/stats can report the
-	// surge-detection rate (U6). A single request may flag more than one
-	// (band × region) cell; each flagged cell increments the counter.
-	for i := range resp.Cells {
-		if resp.Cells[i].Surge != nil {
-			propIntelAccounting.surgesDetected.Add(1)
-		}
+	// Count one surge-detection event per request (not per cell) so the
+	// prop_intel.surges_detected counter mirrors push.surges_detected,
+	// which NotifySurges increments once per request (U6). A single request
+	// may flag several (band × region) cells; counting per request keeps
+	// the two counters on the same granularity so a surge-to-push
+	// conversion rate is meaningful.
+	if surgePresent(resp.Cells) {
+		propIntelAccounting.surgesDetected.Add(1)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

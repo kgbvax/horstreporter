@@ -30,12 +30,13 @@ import (
 // call; the response status is configurable via status field. A 0
 // status acts like a transport error (returns 0 + nil).
 type mockPushSend struct {
-	mu        sync.Mutex
-	payloads  []pushSurgePayload
-	subs      []*pushSubscription
-	status    int
-	failWith  error
-	goneOnIdx int // when >0, return 410 Gone on this send index (1-based)
+	mu         sync.Mutex
+	payloads   []pushSurgePayload
+	subs       []*pushSubscription
+	status     int
+	failWith   error
+	goneOnIdx  int // when >0, return goneStatus on this send index (1-based)
+	goneStatus int // status to return at goneOnIdx; 0 defaults to 410 Gone
 }
 
 func (m *mockPushSend) send(ctx context.Context, sub *pushSubscription, payload []byte) (int, error) {
@@ -54,7 +55,10 @@ func (m *mockPushSend) send(ctx context.Context, sub *pushSubscription, payload 
 		status = http.StatusCreated
 	}
 	if m.goneOnIdx > 0 && idx == m.goneOnIdx {
-		status = http.StatusGone
+		status = m.goneStatus
+		if status == 0 {
+			status = http.StatusGone
+		}
 	}
 	return status, nil
 }
@@ -110,6 +114,20 @@ func makeSub(endpoint string, prefs map[string]bool) *pushSubscription {
 		Preferences: prefs,
 		CreatedAt:   time.Now(),
 	}
+}
+
+// equalStringSlices reports whether two string slices are equal in length
+// and element order. Used to assert FIFO order is preserved.
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestPushStoreSubscribeAndRetrieve(t *testing.T) {
@@ -511,15 +529,21 @@ func TestPushReSubscribeIdempotent(t *testing.T) {
 	newTestPushStore(t, mock)
 
 	endpoint := "https://fcm.googleapis.com/fcm/resub"
-	// First subscription: all=true.
+	other := "https://fcm.googleapis.com/fcm/other"
+	// First subscription: all=true. Then a second, distinct endpoint so the
+	// FIFO order has more than one entry to permute.
 	pushStore.add(makeSub(endpoint, map[string]bool{"all": true}))
-	original := pushStore.snapshot()[0]
+	pushStore.add(makeSub(other, map[string]bool{"all": true}))
+	// snapshot() iterates a map (random order), so look up by endpoint
+	// rather than relying on slice index.
+	original := findSubByEndpoint(pushStore.snapshot(), endpoint)
+	orderBefore := append([]string(nil), pushStore.order...)
 	// Re-POST with different preferences (idempotent update): 10m:CAR only.
 	pushStore.add(makeSub(endpoint, map[string]bool{"10m:CAR": true}))
-	if got := pushStore.size(); got != 1 {
-		t.Errorf("size after re-subscribe = %d, want 1 (idempotent)", got)
+	if got := pushStore.size(); got != 2 {
+		t.Errorf("size after re-subscribe = %d, want 2 (idempotent)", got)
 	}
-	updated := pushStore.snapshot()[0]
+	updated := findSubByEndpoint(pushStore.snapshot(), endpoint)
 	if updated.Preferences["all"] {
 		t.Errorf("re-subscribe should have overwritten preferences; 'all' still true")
 	}
@@ -530,6 +554,24 @@ func TestPushReSubscribeIdempotent(t *testing.T) {
 	if !original.CreatedAt.Equal(updated.CreatedAt) {
 		t.Errorf("re-subscribe changed CreatedAt (FIFO order should be preserved)")
 	}
+	// FIFO order must be unchanged: re-subscribing an existing endpoint must
+	// NOT append it to the tail (which would move it to the front of
+	// eviction). The order slice should be identical to before.
+	if got, want := pushStore.order, orderBefore; !equalStringSlices(got, want) {
+		t.Errorf("re-subscribe changed FIFO order: got %v, want %v", got, want)
+	}
+}
+
+// findSubByEndpoint returns the subscription with the given endpoint from a
+// snapshot, or nil. snapshot() iterates a map in random order, so callers
+// must look up by endpoint rather than assuming a slice position.
+func findSubByEndpoint(subs []*pushSubscription, endpoint string) *pushSubscription {
+	for _, s := range subs {
+		if s.Endpoint == endpoint {
+			return s
+		}
+	}
+	return nil
 }
 
 func TestPushSendRemovesSubscriptionOnGone(t *testing.T) {
@@ -546,6 +588,26 @@ func TestPushSendRemovesSubscriptionOnGone(t *testing.T) {
 	// The 410 Gone response should have removed the subscription.
 	if pushStore.has(endpoint) {
 		t.Errorf("expected subscription removed after 410 Gone")
+	}
+}
+
+// TestPushSendRemovesSubscriptionOn404 mirrors the 410 case for a 404
+// response. RFC 8030 treats 404 the same as 410 for subscription validity:
+// the endpoint is no longer valid and must be removed so the store does
+// not keep retrying a dead endpoint.
+func TestPushSendRemovesSubscriptionOn404(t *testing.T) {
+	resetPushStoreForTest()
+	defer resetPushStoreForTest()
+	mock := &mockPushSend{goneOnIdx: 1, goneStatus: http.StatusNotFound}
+	newTestPushStore(t, mock)
+
+	endpoint := "https://fcm.googleapis.com/fcm/notfound"
+	pushStore.add(makeSub(endpoint, map[string]bool{"all": true}))
+	pushStore.NotifySurges([]propIntelCell{
+		{Band: "10m", Region: "CAR", Surge: &SurgeInfo{ZScore: 7.0, Label: "x"}},
+	}, "")
+	if pushStore.has(endpoint) {
+		t.Errorf("expected subscription removed after 404 Not Found")
 	}
 }
 
@@ -574,6 +636,7 @@ func TestPushValidateSubscription(t *testing.T) {
 		{"valid", &pushSubscription{Endpoint: "https://x/y", Keys: pushSubscriptionKeys{Auth: "a", P256dh: "p"}}, true},
 		{"missing endpoint", &pushSubscription{Endpoint: "", Keys: pushSubscriptionKeys{Auth: "a", P256dh: "p"}}, false},
 		{"http endpoint", &pushSubscription{Endpoint: "http://x/y", Keys: pushSubscriptionKeys{Auth: "a", P256dh: "p"}}, false},
+		{"hostless https endpoint", &pushSubscription{Endpoint: "https:///fcm/x", Keys: pushSubscriptionKeys{Auth: "a", P256dh: "p"}}, false},
 		{"missing p256dh", &pushSubscription{Endpoint: "https://x/y", Keys: pushSubscriptionKeys{Auth: "a", P256dh: ""}}, false},
 		{"missing auth", &pushSubscription{Endpoint: "https://x/y", Keys: pushSubscriptionKeys{Auth: "", P256dh: "p"}}, false},
 	}
@@ -613,30 +676,71 @@ func TestPushMatches(t *testing.T) {
 }
 
 func TestPushClientIPFromRequest(t *testing.T) {
-	cases := []struct {
-		name string
-		xff  string
-		ra   string
-		want string
-	}{
-		{"XFF single", "1.2.3.4", "5.6.7.8:9", "1.2.3.4"},
-		{"XFF multiple", "1.2.3.4, 9.8.7.6", "5.6.7.8:9", "1.2.3.4"},
-		{"no XFF, RemoteAddr with port", "", "5.6.7.8:9", "5.6.7.8"},
-		{"no XFF, RemoteAddr without port", "", "5.6.7.8", "5.6.7.8"},
-		{"empty", "", "", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
-			if tc.xff != "" {
-				req.Header.Set("X-Forwarded-For", tc.xff)
-			}
-			req.RemoteAddr = tc.ra
-			if got := clientIPFromRequest(req); got != tc.want {
-				t.Errorf("clientIPFromRequest() = %q, want %q", got, tc.want)
-			}
-		})
-	}
+	// Save/restore the global trusted-proxy allowlist so this test does not
+	// leak state into others.
+	orig := pushTrustedProxies
+	defer func() { pushTrustedProxies = orig }()
+	pushTrustedProxies = nil
+
+	// Without a trusted-proxy allowlist, X-Forwarded-For must NEVER be
+	// honored — otherwise a client could spoof it to rotate the rate-limit
+	// key. The client IP comes from RemoteAddr.
+	t.Run("no trusted proxies: XFF ignored", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Forwarded-For", "1.2.3.4")
+		req.RemoteAddr = "5.6.7.8:9"
+		if got := clientIPFromRequest(req); got != "5.6.7.8" {
+			t.Errorf("clientIPFromRequest() = %q, want 5.6.7.8 (XFF must be ignored)", got)
+		}
+	})
+
+	// With a trusted proxy matching the direct peer, XFF is honored
+	// (leftmost entry).
+	t.Run("trusted proxy: XFF honored", func(t *testing.T) {
+		if err := setPushTrustedProxies([]string{"10.0.0.0/8"}); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { pushTrustedProxies = nil }()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Forwarded-For", "1.2.3.4, 9.8.7.6")
+		req.RemoteAddr = "10.0.0.1:9"
+		if got := clientIPFromRequest(req); got != "1.2.3.4" {
+			t.Errorf("clientIPFromRequest() = %q, want 1.2.3.4", got)
+		}
+	})
+
+	// XFF from a peer NOT in the trusted allowlist is ignored (the peer is
+	// a direct client, not a proxy, so its XFF is untrusted/spoofed).
+	t.Run("untrusted peer: XFF ignored", func(t *testing.T) {
+		if err := setPushTrustedProxies([]string{"10.0.0.0/8"}); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { pushTrustedProxies = nil }()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Forwarded-For", "1.2.3.4")
+		req.RemoteAddr = "8.8.8.8:9"
+		if got := clientIPFromRequest(req); got != "8.8.8.8" {
+			t.Errorf("clientIPFromRequest() = %q, want 8.8.8.8 (untrusted XFF ignored)", got)
+		}
+	})
+
+	// No XFF at all: always fall back to RemoteAddr, port stripped.
+	t.Run("no XFF, RemoteAddr with port", func(t *testing.T) {
+		pushTrustedProxies = nil
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "5.6.7.8:9"
+		if got := clientIPFromRequest(req); got != "5.6.7.8" {
+			t.Errorf("clientIPFromRequest() = %q, want 5.6.7.8", got)
+		}
+	})
+
+	// setPushTrustedProxies rejects bad CIDRs.
+	t.Run("bad CIDR rejected", func(t *testing.T) {
+		if err := setPushTrustedProxies([]string{"not-a-cidr"}); err == nil {
+			t.Errorf("setPushTrustedProxies(bad) = nil, want error")
+		}
+		pushTrustedProxies = nil
+	})
 }
 
 // TestPushSurgePresent guards the goroutine-skip helper in prop_intel.go.

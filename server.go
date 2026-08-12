@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -149,21 +150,67 @@ func pushSubscriptionStatusHandler(w http.ResponseWriter, r *http.Request) {
 	}{Registered: pushStore.has(endpoint)})
 }
 
-// clientIPFromRequest extracts the client IP for rate limiting. Honors
-// X-Forwarded-For (first entry) when present (production runs behind a
-// TLS-terminating proxy), falling back to RemoteAddr. Strips the port.
-func clientIPFromRequest(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if idx := strings.IndexByte(xff, ','); idx >= 0 {
-			return strings.TrimSpace(xff[:idx])
+// pushTrustedProxies is the allowlist of CIDR ranges whose
+// X-Forwarded-For header is trusted for push rate-limiting. When empty,
+// X-Forwarded-For is never honored — the client IP is taken from RemoteAddr.
+// This prevents a client from spoofing X-Forwarded-For to rotate the
+// rate-limit key and bypass the per-IP subscribe cap. Configured via
+// -push-trusted-proxy-cidr (main.go) and only meaningful when push is enabled.
+var pushTrustedProxies []*net.IPNet
+
+// setPushTrustedProxies parses a list of CIDR strings into the trusted-proxy
+// allowlist. Invalid CIDRs return an error (fatal at startup). An empty list
+// (or all-empty entries) clears the allowlist, disabling XFF trust.
+func setPushTrustedProxies(cidrs []string) error {
+	var nets []*net.IPNet
+	for _, c := range cidrs {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
 		}
-		return strings.TrimSpace(xff)
+		_, ipnet, err := net.ParseCIDR(c)
+		if err != nil {
+			return fmt.Errorf("bad CIDR %q: %w", c, err)
+		}
+		nets = append(nets, ipnet)
 	}
-	host := r.RemoteAddr
-	if idx := strings.LastIndexByte(host, ':'); idx >= 0 {
-		host = host[:idx]
+	pushTrustedProxies = nets
+	return nil
+}
+
+// remoteAddrHost strips the port from r.RemoteAddr and returns the host
+// (IP literal). Works for both "host:port" and "[ipv6]:port".
+func remoteAddrHost(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
 	}
-	return strings.TrimSpace(host)
+	return host
+}
+
+// clientIPFromRequest extracts the client IP for rate limiting. It honors
+// X-Forwarded-For (leftmost entry) ONLY when the direct TCP peer (RemoteAddr)
+// is in the configured trusted-proxy allowlist (pushTrustedProxies); otherwise
+// it uses RemoteAddr. This prevents spoofed X-Forwarded-For from rotating the
+// rate-limit key when the server is reachable directly. Strips the port.
+func clientIPFromRequest(r *http.Request) string {
+	peer := remoteAddrHost(r)
+	if len(pushTrustedProxies) > 0 {
+		if ip := net.ParseIP(peer); ip != nil {
+			for _, n := range pushTrustedProxies {
+				if n.Contains(ip) {
+					if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+						if idx := strings.IndexByte(xff, ','); idx >= 0 {
+							return strings.TrimSpace(xff[:idx])
+						}
+						return strings.TrimSpace(xff)
+					}
+					break
+				}
+			}
+		}
+	}
+	return peer
 }
 
 type countingResponseWriter struct {
