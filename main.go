@@ -273,6 +273,11 @@ func main() {
 	logInfo("DX postgres DSN source: %s", dsnSource(*dxPostgresDSN))
 
 	dxBaseline = newDxBaselineEngine(strings.TrimSpace(*dxBaselineFile))
+	// Wire the prop_intel engine to the same baseline so it can reuse the
+	// per-band sparkline (forecast slope) and the Postgres store
+	// (regionCalendarStats). Set up early so the handler always has a baseline
+	// reference even if EnablePostgres fails below.
+	propIntel.baseline = dxBaseline
 	// Wire the DXCC cty.dat resolver into the baseline engine so the regional
 	// baseline can derive the operator's region for callsign targets (QRZ
 	// locator → region; fallback to DXCC entity centroid → region). The cty
@@ -438,6 +443,7 @@ func main() {
 	appMux.HandleFunc("/api/stats", statsHandler)
 	appMux.HandleFunc("/api/dx_conditions", dxConditionsHandler)
 	appMux.HandleFunc("/api/hot_bands", hotBandsHandler)
+	appMux.HandleFunc("/api/prop_intel", propIntelHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
 	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)
 	appMux.HandleFunc("/api/opmode/status", opModeStatusHandler)
