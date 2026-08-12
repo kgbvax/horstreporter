@@ -54,6 +54,8 @@ function buildFilterCtx() {
         cwMinDb: parseInt(document.getElementById('cw-min-db')?.value || '-15', 10),
         selectedBand: getSelectedBand(),
         enabledBands: getEnabledBands(),
+        filterBand: state.drillDownBand || '',
+        filterRegion: state.drillDownRegion || '',
     };
 }
 
@@ -464,8 +466,8 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
 // part is the L.geoJSON layer creation, which is gated separately by
 // buildGridFingerprint so a new spot that doesn't change any square's
 // appearance doesn't tear down and rebuild the layer.
-function aggregateGridSquares(regularSpots, filterCtx) {
-    const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands } = filterCtx;
+export function aggregateGridSquares(regularSpots, filterCtx) {
+    const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands, filterBand, filterRegion } = filterCtx;
     const squareData = {};
     const res = getGridResolution();
     const activeBands = new Set();
@@ -485,6 +487,10 @@ function aggregateGridSquares(regularSpots, filterCtx) {
         if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
         if (!enabledBands.has(spot.band)) return;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return;
+        // Drill-down filter (U4): when a matrix cell was clicked, restrict to
+        // that band × region. Empty string means no drill-down filter.
+        if (filterBand && spot.band !== filterBand) return;
+        if (filterRegion && regionForLocatorCached(spot.locator) !== filterRegion) return;
 
         let loc = spot.locator.substring(0, res);
         if (loc.length < res) loc = spot.locator.substring(0, 4); // Fallback if data is sparse
@@ -508,7 +514,7 @@ function aggregateGridSquares(regularSpots, filterCtx) {
 // that don't change any square's appearance, so the heat layer is only rebuilt
 // when what's on screen actually changes.
 function buildGridFingerprint(squareData, filterCtx) {
-    const filterKey = `${filterCtx.minSnrMode}:${filterCtx.ssbMinDb}:${filterCtx.cwMinDb}:${filterCtx.selectedBand}:${[...filterCtx.enabledBands].sort().join(',')}`;
+    const filterKey = `${filterCtx.minSnrMode}:${filterCtx.ssbMinDb}:${filterCtx.cwMinDb}:${filterCtx.selectedBand}:${[...filterCtx.enabledBands].sort().join(',')}:${filterCtx.filterBand || ''}:${filterCtx.filterRegion || ''}`;
     const parts = [];
     for (const loc in squareData) {
         const entry = squareData[loc];

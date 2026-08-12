@@ -161,7 +161,7 @@ describe('prop-matrix panel', () => {
 
     it('renders an empty cell when no data is present', () => {
         const html = renderCell('20m', 'AF', null);
-        expect(html).toBe('<td class="prop-matrix-cell-empty"></td>');
+        expect(html).toBe('<td class="prop-matrix-cell-empty" data-band="20m" data-region="AF" role="button" tabindex="0"></td>');
     });
 
     it('low confidence produces a dashed border class', () => {

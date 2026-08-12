@@ -1,4 +1,5 @@
 import { WSPR_REGIONS, bandColors, getEnabledBands } from './utils.js';
+import { state } from './state.js';
 
 // prop-matrix.js — band × region propagation-intelligence matrix panel.
 // Polls the backend `/api/prop_intel` endpoint (built in U1/U2) and renders
@@ -250,11 +251,13 @@ function renderPropMatrix() {
     }
     html += '</tbody></table>';
     body.innerHTML = html;
+
+    attachCellClickHandler(body, bandList, regions, cellsByBandRegion);
 }
 
 function renderCell(band, region, cell) {
     if (!cell) {
-        return '<td class="prop-matrix-cell-empty"></td>';
+        return `<td class="prop-matrix-cell-empty" data-band="${escapeHtml(band)}" data-region="${escapeHtml(region)}" role="button" tabindex="0"></td>`;
     }
     const view = cell[runtime.view] || cell.nowcast || cell;
     const pOpen = clamp01(Number(view.pOpen ?? 0));
@@ -274,7 +277,7 @@ function renderCell(band, region, cell) {
     const badge = expectedCount > 0 ? `<span class="prop-matrix-badge">${roundedCount}</span>` : '';
     const surgeIcon = surge ? '<span class="prop-matrix-surge-icon" title="surge">⚡</span>' : '';
 
-    return `<td class="${classes.join(' ')}" style="background: ${background};" title="${escapeHtml(title)}">${surgeIcon}${badge}</td>`;
+    return `<td class="${classes.join(' ')}" style="background: ${background};" title="${escapeHtml(title)}" data-band="${escapeHtml(band)}" data-region="${escapeHtml(region)}" role="button" tabindex="0">${surgeIcon}${badge}</td>`;
 }
 
 function buildCellTitle(band, region, pOpen, expectedCount, confidence, surge) {
@@ -328,6 +331,55 @@ function escapeHtml(s) {
     });
 }
 
+// --- Drill-down (U4) ------------------------------------------------------
+// Clicking a matrix cell filters the grid-square plot to that band × region.
+// The cell's row index → band, column index → region. Both are stashed in the
+// shared state singleton and a re-render is scheduled via the global hook
+// exported by app.js (window.__horstScheduleRender).
+function attachCellClickHandler(body, bandList, regions, cellsByBandRegion) {
+    body.querySelectorAll('.prop-matrix-cell, .prop-matrix-cell-empty').forEach((td) => {
+        td.addEventListener('click', () => {
+            const band = td.getAttribute('data-band');
+            const region = td.getAttribute('data-region');
+            if (!band || !region) return;
+            // Toggle: clicking the already-active cell clears the drill-down.
+            if (state.drillDownBand === band && state.drillDownRegion === region) {
+                state.drillDownBand = '';
+                state.drillDownRegion = '';
+            } else {
+                state.drillDownBand = band;
+                state.drillDownRegion = region;
+            }
+            updateDrillDownButton();
+            if (typeof window.__horstScheduleRender === 'function') {
+                window.__horstScheduleRender();
+            }
+        });
+    });
+}
+
+// Show/hide the "clear filter" overlay button based on drill-down state.
+export function updateDrillDownButton() {
+    const btn = document.getElementById('drill-down-clear');
+    if (!btn) return;
+    const active = state.drillDownBand !== '' || state.drillDownRegion !== '';
+    btn.style.display = active ? '' : 'none';
+    if (active) {
+        btn.textContent = `Clear filter: ${state.drillDownBand} × ${state.drillDownRegion}`;
+        btn.title = `Grid-square plot filtered to ${state.drillDownBand} × ${state.drillDownRegion}. Click to clear.`;
+    }
+}
+
+// Clear the drill-down filter (called from the overlay button).
+export function clearDrillDown() {
+    state.drillDownBand = '';
+    state.drillDownRegion = '';
+    updateDrillDownButton();
+    if (typeof window.__horstScheduleRender === 'function') {
+        window.__horstScheduleRender();
+    }
+}
+
 // --- Test hooks -----------------------------------------------------------
 // Exported for vitest. These are not part of the public UI API.
 export const __test = {
@@ -347,6 +399,9 @@ export const __test = {
     renderPropMatrix,
     renderCell,
     setPropMatrixVisible,
+    attachCellClickHandler,
+    updateDrillDownButton,
+    clearDrillDown,
     PANEL_ID,
     TOGGLE_ID,
     BODY_ID,

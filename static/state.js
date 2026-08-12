@@ -13,5 +13,7 @@ export const state = {
     lastMercatorAutoZoomAt: 0,
     mercatorInteractionActive: false,
     mercatorRenderDeferred: false,
-    softPaused: false
+    softPaused: false,
+    drillDownBand: '',
+    drillDownRegion: ''
 };
