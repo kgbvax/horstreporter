@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -508,15 +507,4 @@ func pushEndpointHost(endpoint string) string {
 		return "?"
 	}
 	return u.Host
-}
-
-// sortedPushPreferenceKeys returns the preference map's keys sorted,
-// for stable iteration in tests/diagnostics.
-func sortedPushPreferenceKeys(prefs map[string]bool) []string {
-	out := make([]string, 0, len(prefs))
-	for k := range prefs {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

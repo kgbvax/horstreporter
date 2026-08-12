@@ -22,8 +22,9 @@
 // browsers without Web Push.
 
 const SW_PATH = '/sw.js?v=1';
+import { WSPR_REGIONS } from './utils.js';
 const PUSH_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
-const PUSH_REGIONS = ['EU', 'NA', 'SA', 'AF', 'AS', 'OC', 'AN', 'JA', 'VK', 'KH6', 'CAR'];
+const PUSH_REGIONS = WSPR_REGIONS;
 
 function isPushSupported() {
     return ('serviceWorker' in navigator) && ('PushManager' in window);
@@ -326,12 +327,6 @@ export async function initPushUI() {
 
     if (enableCheckbox) enableCheckbox.addEventListener('change', onToggle);
 
-    // "All surges" checkbox: when checked, the per-cell matrix is
-    // disabled (the operator wants every surge). Toggling it re-POSTs
-    // the subscription so the preferences take effect immediately.
-    function matrixEnabled() {
-        return !allCheckbox || !allCheckbox.checked;
-    }
     if (allCheckbox) {
         allCheckbox.addEventListener('change', () => {
             // Disable the matrix checkboxes when "all" is on.

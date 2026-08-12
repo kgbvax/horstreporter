@@ -134,11 +134,6 @@ type propIntelEngine struct {
 	// (regionCalendarStats). May be nil — the engine degrades to a
 	// history-only nowcast with a flat (zero-slope) forecast.
 	baseline *DxBaselineEngine
-	// surgeThreshold is the z-score above which a cell is flagged as a surge.
-	// Defaults to propIntelSurgeZThreshold; the handler overrides it per
-	// request from the `surge_threshold` query parameter. Per-band/region
-	// overrides are deferred to v2. See U2.
-	surgeThreshold float64
 }
 
 // propIntel is the package-level singleton, mirroring dxBaseline. It is wired
@@ -161,9 +156,6 @@ type propIntelCellAcc struct {
 	// sources records which ingest tags contributed, lower-cased and mapped to
 	// the canonical rbn/pskreporter/wspr labels.
 	sources map[string]struct{}
-	// spotCount is the raw (pre-dedup) spot count for the cell, used for the
-	// expected-count rate.
-	spotCount int
 }
 
 // Evaluate computes the per-(band × region) nowcast and 1-hour forecast for the
@@ -184,7 +176,7 @@ type propIntelCellAcc struct {
 //     normalised to rate/hour, and applying it to the nowcast rate.
 //  5. Confidence = f(unique_senders, source_diversity), discounted for the
 //     forecast by sparkline volatility.
-func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, cwMinDb int, history []MQTTMessage, now int64) propIntelResponse {
+func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, cwMinDb int, history []MQTTMessage, now int64, surgeThreshold float64) propIntelResponse {
 	qth = normalizeQTHToken(qth)
 	if minutes <= 0 {
 		minutes = propIntelNowcastWindowMin
@@ -260,7 +252,6 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 			cell.uniqueSenders[remoteCall] = struct{}{}
 		}
 		cell.sources[canonicalSource(m)] = struct{}{}
-		cell.spotCount++
 		bandsSeen[band] = struct{}{}
 	}
 
@@ -389,7 +380,7 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 	// Surge detection runs after the nowcast cells are built. It mutates
 	// cells in place, attaching *SurgeInfo to any cell whose live rate z-scores
 	// above the region-level baseline. See U2.
-	threshold := e.surgeThreshold
+	threshold := surgeThreshold
 	if threshold <= 0 {
 		threshold = propIntelSurgeZThreshold
 	}
@@ -710,10 +701,6 @@ func detectSurges(
 	}
 	slot := utcSlotOfDay(now)
 	nowcastWindowMin := propIntelNowcastWindowMin
-	nowcastHours := float64(nowcastWindowMin) / 60.0
-	if nowcastHours <= 0 {
-		nowcastHours = 0.25
-	}
 
 	// Pre-compute the memory-fallback baseline per (band × region) from the
 	// trailing 6-hour window excluding the live 15-minute window. Each
@@ -733,16 +720,13 @@ func detectSurges(
 		liveRate := c.ExpectedCount
 
 		var baseRate, baseStd float64
-		var usedPG bool
 		if row, ok := regionBaseline[regionBaselineKey{c.Band, c.Region, slot}]; ok && row.SampleDays >= propIntelSurgeMinSamples {
 			baseRate = row.Mean
 			baseStd = row.StdDev
-			usedPG = true
 		} else if mb, ok := memBaselines[propIntelCellKey{c.Band, c.Region}]; ok && mb.n >= propIntelSurgeMinSamplesMem {
 			baseRate = mb.mean
 			baseStd = mb.stddev
 		}
-		_ = usedPG // reserved for future per-source diagnostics
 
 		// Guard against stddev=0: the baseline has no variance to compare
 		// against, so a z-score is undefined. Treat as no surge (U2).
@@ -900,7 +884,7 @@ func memorySurgeBaselines(
 		if len(rates) == 0 {
 			continue
 		}
-		mean := meanFloat(rates)
+		mean := mean(rates)
 		var stddev float64
 		if len(rates) >= 2 {
 			var sumSqDiff float64
@@ -916,18 +900,6 @@ func memorySurgeBaselines(
 	return out
 }
 
-// meanFloat is a small float64 mean helper (the existing `mean` takes
-// []float64 too, but this avoids shadowing surprises in detectSurges' scope).
-func meanFloat(v []float64) float64 {
-	if len(v) == 0 {
-		return 0
-	}
-	var s float64
-	for _, x := range v {
-		s += x
-	}
-	return s / float64(len(v))
-}
 // propIntelHandler is the HTTP handler for /api/prop_intel. It follows the
 // dxConditionsHandler pattern: resolve QTH, parse minutes/cw_min_db/
 // surroundings, snapshot hub.history via binary-search + copy under RLock,
@@ -987,11 +959,7 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 	hub.RUnlock()
 
 	engine := propIntel
-	if engine.baseline == nil {
-		engine.baseline = dxBaseline
-	}
-	engine.surgeThreshold = surgeThreshold
-	resp := engine.Evaluate(qth, surroundings, minutes, cwMinDb, historyCopy, now)
+	resp := engine.Evaluate(qth, surroundings, minutes, cwMinDb, historyCopy, now, surgeThreshold)
 
 	// Count surges flagged by detectSurges so /api/stats can report the
 	// surge-detection rate (U6). A single request may flag more than one

@@ -65,6 +65,7 @@ func pushSubscribeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req pushSubscribeRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 8192)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
@@ -107,6 +108,7 @@ func pushUnsubscribeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req pushUnsubscribeRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 2048)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return

@@ -18,7 +18,7 @@ func TestPropIntelSparseWSPR(t *testing.T) {
 		{RP: -20, T: now - 60, SC: "G0A", SL: "JO30", RC: "DL1A", RL: "JO62", B: "20m", MD: "WSPR", Source: "wspr"},
 		{RP: -22, T: now - 30, SC: "G0B", SL: "JO31", RC: "DL1B", RL: "JO62", B: "20m", MD: "WSPR", Source: "wspr"},
 	}
-	resp := e.Evaluate("JO62", false, 15, -15, history, now)
+	resp := e.Evaluate("JO62", false, 15, -15, history, now, 2.0)
 	cell := findCell(t, resp, "20m", "EU")
 	if cell == nil {
 		t.Fatalf("expected 20m/EU cell")
@@ -47,7 +47,7 @@ func TestPropIntelDenseRBN(t *testing.T) {
 			RP: -10, T: now - int64(i)*30, SC: call, SL: "JO40", RC: "DL1A", RL: "JO62", B: "20m", MD: "CW", Source: "rbn",
 		})
 	}
-	resp := e.Evaluate("JO62", false, 15, -15, history, now)
+	resp := e.Evaluate("JO62", false, 15, -15, history, now, 2.0)
 	cell := findCell(t, resp, "20m", "EU")
 	if cell == nil {
 		t.Fatalf("expected 20m/EU cell")
@@ -97,7 +97,7 @@ func TestPropIntelMultiSource(t *testing.T) {
 		history = append(history, MQTTMessage{RP: -20, T: now - 20, SC: call, SL: "JO43", RC: "DL1A", RL: "JO62", B: "20m", MD: "WSPR", Source: "wspr"})
 	}
 
-	resp := e.Evaluate("JO62", false, 15, -15, history, now)
+	resp := e.Evaluate("JO62", false, 15, -15, history, now, 2.0)
 	cell := findCell(t, resp, "20m", "EU")
 	if cell == nil {
 		t.Fatalf("expected 20m/EU cell")
@@ -138,7 +138,7 @@ func TestPropIntelForecastSlope(t *testing.T) {
 		history = append(history, m)
 		baseline.Observe(m)
 	}
-	resp := e.Evaluate("JO62", false, 60, -15, history, now)
+	resp := e.Evaluate("JO62", false, 60, -15, history, now, 2.0)
 	cell := findCell(t, resp, "20m", "EU")
 	if cell == nil {
 		t.Fatalf("expected 20m/EU cell")
@@ -172,7 +172,7 @@ func TestPropIntelForecastVolatility(t *testing.T) {
 			}
 		}
 	}
-	resp := e.Evaluate("JO62", false, 60, -15, history, now)
+	resp := e.Evaluate("JO62", false, 60, -15, history, now, 2.0)
 	cell := findCell(t, resp, "20m", "EU")
 	if cell == nil {
 		t.Fatalf("expected 20m/EU cell")
@@ -188,7 +188,7 @@ func TestPropIntelForecastVolatility(t *testing.T) {
 func TestPropIntelEmptyHistory(t *testing.T) {
 	e := &propIntelEngine{}
 	now := int64(1700000000)
-	resp := e.Evaluate("JO62", false, 15, -15, nil, now)
+	resp := e.Evaluate("JO62", false, 15, -15, nil, now, 2.0)
 	if len(resp.Cells) != 0 {
 		t.Errorf("expected 0 cells for empty history, got %d", len(resp.Cells))
 	}
@@ -206,13 +206,13 @@ func TestPropIntelQTHResolution(t *testing.T) {
 		{RP: -8, T: now - 30, SC: "DL1ABC", SL: "JO62", RC: "W1AW", RL: "FN31", B: "20m", MD: "FT8"},
 	}
 	// Callsign QTH: W1AW is the receiver, so the remote is the sender (DL1ABC, JO62 → EU).
-	resp := e.Evaluate("W1AW", false, 15, -15, history, now)
+	resp := e.Evaluate("W1AW", false, 15, -15, history, now, 2.0)
 	cell := findCell(t, resp, "20m", "EU")
 	if cell == nil {
 		t.Fatalf("expected 20m/EU cell for callsign QTH W1AW (remote DL1ABC in JO62)")
 	}
 	// Locator QTH: FN31 is the receiver end, remote is JO62 → EU.
-	resp2 := e.Evaluate("FN31", false, 15, -15, history, now)
+	resp2 := e.Evaluate("FN31", false, 15, -15, history, now, 2.0)
 	cell2 := findCell(t, resp2, "20m", "EU")
 	if cell2 == nil {
 		t.Fatalf("expected 20m/EU cell for locator QTH FN31")
@@ -224,7 +224,7 @@ func TestPropIntelQTHResolution(t *testing.T) {
 func TestPropIntelAllRegionsPresent(t *testing.T) {
 	e := &propIntelEngine{}
 	now := int64(1700000000)
-	resp := e.Evaluate("JO62", false, 15, -15, nil, now)
+	resp := e.Evaluate("JO62", false, 15, -15, nil, now, 2.0)
 	want := map[string]bool{
 		"EU": true, "NA": true, "SA": true, "AF": true, "AS": true, "OC": true,
 		"AN": true, "JA": true, "VK": true, "KH6": true, "CAR": true,
@@ -383,7 +383,7 @@ func TestPropIntelRegionsDedup(t *testing.T) {
 		{RP: -8, T: now - 50, SC: "DUAL", SL: "JO40", RC: "DL1A", RL: "JO62", B: "20m", MD: "FT8", Source: "mqtt"},
 		{RP: -8, T: now - 40, SC: "ONLY", SL: "JO41", RC: "DL1A", RL: "JO62", B: "20m", MD: "FT8", Source: "mqtt"},
 	}
-	resp := e.Evaluate("JO62", false, 15, -15, history, now)
+	resp := e.Evaluate("JO62", false, 15, -15, history, now, 2.0)
 	cell := findCell(t, resp, "20m", "EU")
 	if cell == nil {
 		t.Fatalf("expected 20m/EU cell")
@@ -474,7 +474,6 @@ func addBaselineSubs(history []MQTTMessage, now int64, band, remoteLoc string, s
 // stddev 1/hour, live rate 18/hour → z=16.0, surge=true, label contains both
 // band and "Caribbean". Uses the memory-fallback baseline (no PG configured).
 func TestPropIntelSurgeCaribbean(t *testing.T) {
-	e := &propIntelEngine{surgeThreshold: propIntelSurgeZThreshold}
 	now := int64(1700000000)
 	remoteLoc := "EL80" // CAR (lat 20.5, lng -83)
 	// Live window: 4 unique senders in 15min → rate 4/0.25 = 16/h.
@@ -482,7 +481,8 @@ func TestPropIntelSurgeCaribbean(t *testing.T) {
 	// Baseline: 30 sub-windows alternating 0/1 sender → mean rate 2/h,
 	// stddev ≈ 2/h. z = (16-2)/2 = 7.0 ≥ 2.0 → surge.
 	history = addBaselineSubs(history, now, "10m", remoteLoc, 30, 1, true)
-	resp := e.Evaluate("JO62", false, 15, -15, history, now)
+	e := &propIntelEngine{}
+	resp := e.Evaluate("JO62", false, 15, -15, history, now, 2.0)
 	cell := findCell(t, resp, "10m", "CAR")
 	if cell == nil {
 		t.Fatalf("expected 10m/CAR cell")
@@ -502,7 +502,6 @@ func TestPropIntelSurgeCaribbean(t *testing.T) {
 // TestPropIntelSurgeNoSurge verifies the no-surge case: live rate equals
 // baseline → z ≈ 0 → no surge.
 func TestPropIntelSurgeNoSurge(t *testing.T) {
-	e := &propIntelEngine{surgeThreshold: propIntelSurgeZThreshold}
 	now := int64(1700000000)
 	remoteLoc := "JO40" // EU
 	// Live: 2 senders → 8/h.
@@ -523,7 +522,8 @@ func TestPropIntelSurgeNoSurge(t *testing.T) {
 			})
 		}
 	}
-	resp := e.Evaluate("JO62", false, 15, -15, history, now)
+	e := &propIntelEngine{}
+	resp := e.Evaluate("JO62", false, 15, -15, history, now, 2.0)
 	cell := findCell(t, resp, "20m", "EU")
 	if cell == nil {
 		t.Fatalf("expected 20m/EU cell")
@@ -538,7 +538,7 @@ func TestPropIntelSurgeNoSurge(t *testing.T) {
 // zero variance (all sub-windows identical) yields no surge even when the
 // live rate is far above the baseline mean.
 func TestPropIntelSurgeStddevZero(t *testing.T) {
-	e := &propIntelEngine{surgeThreshold: propIntelSurgeZThreshold}
+	e := &propIntelEngine{}
 	now := int64(1700000000)
 	remoteLoc := "JO40" // EU
 	// Live: 12 senders → 48/h.
@@ -546,7 +546,7 @@ func TestPropIntelSurgeStddevZero(t *testing.T) {
 	// Baseline: 30 sub-windows each with 1 sender → rate 4/h consistently.
 	// stddev=0 → suppressed by the guard.
 	history = addBaselineSubs(history, now, "40m", remoteLoc, 30, 1, false)
-	resp := e.Evaluate("JO62", false, 15, -15, history, now)
+	resp := e.Evaluate("JO62", false, 15, -15, history, now, 2.0)
 	cell := findCell(t, resp, "40m", "EU")
 	if cell == nil {
 		t.Fatalf("expected 40m/EU cell")
@@ -561,7 +561,6 @@ func TestPropIntelSurgeStddevZero(t *testing.T) {
 // with n=8 sub-windows (below the n=10 memory-fallback threshold) suppresses
 // surge detection even when the live rate is well above the baseline.
 func TestPropIntelSurgeMinSamples(t *testing.T) {
-	e := &propIntelEngine{surgeThreshold: propIntelSurgeZThreshold}
 	now := int64(1700000000)
 	remoteLoc := "JO40" // EU
 	// Live: 8 senders → 32/h.
@@ -592,7 +591,8 @@ func TestPropIntelSurgeMinSamples(t *testing.T) {
 	// baseline n=23 ≥ 10 → guard passes. The surge may or may not fire
 	// depending on z. To assert suppression, we use a baseline with zero
 	// spots: the cell has no memory baseline entry → no surge.
-	resp := e.Evaluate("JO62", false, 15, -15, history, now)
+	e := &propIntelEngine{}
+	resp := e.Evaluate("JO62", false, 15, -15, history, now, 2.0)
 	cell := findCell(t, resp, "20m", "EU")
 	if cell == nil {
 		t.Fatalf("expected 20m/EU cell")
@@ -604,9 +604,9 @@ func TestPropIntelSurgeMinSamples(t *testing.T) {
 	_ = cell
 
 	// Zero-baseline case: no baseline spots → no memory baseline → no surge.
-	e2 := &propIntelEngine{surgeThreshold: propIntelSurgeZThreshold}
 	history2 := addLiveSpots(nil, now, "20m", remoteLoc, 8)
-	resp2 := e2.Evaluate("JO62", false, 15, -15, history2, now)
+	e2 := &propIntelEngine{}
+	resp2 := e2.Evaluate("JO62", false, 15, -15, history2, now, 2.0)
 	cell2 := findCell(t, resp2, "20m", "EU")
 	if cell2 == nil {
 		t.Fatalf("expected 20m/EU cell (zero baseline)")
@@ -641,9 +641,10 @@ func TestPropIntelSurgeConfigurableThreshold(t *testing.T) {
 		}
 	}
 
+	e := &propIntelEngine{}
+
 	// Default threshold 2.0 → surge expected (z≈3.0 ≥ 2.0).
-	e := &propIntelEngine{surgeThreshold: propIntelSurgeZThreshold}
-	resp := e.Evaluate("JO62", false, 15, -15, history, now)
+	resp := e.Evaluate("JO62", false, 15, -15, history, now, 2.0)
 	cell := findCell(t, resp, "15m", "EU")
 	if cell == nil {
 		t.Fatalf("expected 15m/EU cell")
@@ -653,8 +654,7 @@ func TestPropIntelSurgeConfigurableThreshold(t *testing.T) {
 	}
 
 	// threshold=5.0 → surge suppressed (z≈3.0 < 5.0).
-	e2 := &propIntelEngine{surgeThreshold: 5.0}
-	resp2 := e2.Evaluate("JO62", false, 15, -15, history, now)
+	resp2 := e.Evaluate("JO62", false, 15, -15, history, now, 5.0)
 	cell2 := findCell(t, resp2, "15m", "EU")
 	if cell2 == nil {
 		t.Fatalf("expected 15m/EU cell (threshold=5.0)")
@@ -669,7 +669,7 @@ func TestPropIntelSurgeConfigurableThreshold(t *testing.T) {
 // a spike in the last 15 minutes against a flat 6-hour baseline (excluding
 // the live window) triggers a surge.
 func TestPropIntelSurgeMemoryFallback(t *testing.T) {
-	e := &propIntelEngine{surgeThreshold: propIntelSurgeZThreshold}
+	e := &propIntelEngine{}
 	now := int64(1700000000)
 	remoteLoc := "JO40" // EU
 	// Live: 6 senders → 24/h.
@@ -678,7 +678,7 @@ func TestPropIntelSurgeMemoryFallback(t *testing.T) {
 	// alternating 0/1 sender → mean 2/h, stddev ≈ 2/h.
 	// z = (24-2)/2 = 11 → surge.
 	history = addBaselineSubs(history, now, "10m", remoteLoc, 24, 1, true)
-	resp := e.Evaluate("JO62", false, 15, -15, history, now)
+	resp := e.Evaluate("JO62", false, 15, -15, history, now, 2.0)
 	cell := findCell(t, resp, "10m", "EU")
 	if cell == nil {
 		t.Fatalf("expected 10m/EU cell")
@@ -694,7 +694,6 @@ func TestPropIntelSurgeMemoryFallback(t *testing.T) {
 // triggers a surge. The signal is in the live window, not the excluded
 // baseline.
 func TestPropIntelSurgeSparseCellFallback(t *testing.T) {
-	e := &propIntelEngine{surgeThreshold: propIntelSurgeZThreshold}
 	now := int64(1700000000)
 	remoteLoc := "JO40" // EU
 	// Live: 4 senders → 16/h.
@@ -713,7 +712,8 @@ func TestPropIntelSurgeSparseCellFallback(t *testing.T) {
 			})
 		}
 	}
-	resp := e.Evaluate("JO62", false, 15, -15, history, now)
+	e := &propIntelEngine{}
+	resp := e.Evaluate("JO62", false, 15, -15, history, now, 2.0)
 	cell := findCell(t, resp, "12m", "EU")
 	if cell == nil {
 		t.Fatalf("expected 12m/EU cell")
