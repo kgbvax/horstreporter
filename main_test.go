@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -1524,6 +1525,10 @@ func TestPropIntelIntegration(t *testing.T) {
 	// the memory-fallback baseline treats missing sub-windows as rate 0,
 	// which both lowers the mean and adds variance (helps the stddev > 0
 	// guard).
+	// Production hub.history is always T-sorted (real-time append + front
+	// prune); the handler's sort.Search cutoff and oldest-spot check rely on
+	// that invariant, so sort the fixture to match.
+	sort.Slice(history, func(i, j int) bool { return history[i].T < history[j].T })
 	hub.Lock()
 	hub.history = history
 	hub.Unlock()

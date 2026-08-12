@@ -650,9 +650,32 @@ function getRenderableMapSpots(spots) {
     const showDXClusterSpots = document.getElementById('show-dxcluster-spots')?.checked !== false;
     const showRbnSpots = document.getElementById('show-rbn-spots')?.checked !== false;
     const showWsprSpots = document.getElementById('show-wspr-spots')?.checked !== false;
-    if (showDXClusterSpots && showRbnSpots && showWsprSpots) return spots;
+    const srcFilter = !(showDXClusterSpots && showRbnSpots && showWsprSpots);
+
+    // Render-time age gate using TRUE wall-clock age, not the prune's 5s-stepped
+    // ageSeconds. The prune (state.renderInterval) already reaps over-age spots
+    // out of state.liveSpots, so a same-threshold filter on the stepped value
+    // would be a no-op and the boundary cohort (age within one prune step of
+    // maxAge) would still vanish in a 5s batch at each tick — the "shown then
+    // hidden" flash on reload. By tracking each spot's receive wall-clock time
+    // (__recvMs) and its server-stamped age at receipt (__recvAge), the render
+    // computes a continuous true age and hides spots smoothly as their real
+    // age crosses the cutoff (at whatever render runs between ticks), instead
+    // of a discrete batch drop. The prune keeps reaping memory on its 5s tick.
+    const maxAge = getCurrentMaxSpotAgeSeconds();
+    const now = Date.now();
 
     return spots.filter((spot) => {
+        const recvMs = spot.__recvMs;
+        if (recvMs) {
+            const trueAge = (spot.__recvAge ?? spot.ageSeconds) + (now - recvMs) / 1000;
+            if (trueAge > maxAge) return false;
+        } else if (spot.ageSeconds > maxAge) {
+            // Fallback for spots lacking a receive stamp (e.g. capture-mode
+            // snapshots loaded directly into liveSpots): use the stepped age.
+            return false;
+        }
+        if (!srcFilter) return true;
         const src = String(spot?.sourceType || '').toLowerCase();
         if (!showDXClusterSpots && src === 'dxcluster') return false;
         if (!showRbnSpots && src === 'rbn') return false;
@@ -1838,6 +1861,12 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     state.eventSource.onopen = () => {
         console.log("Connected to live MQTT stream");
+        // On auto-reconnect EventSource re-sends a history dump before live
+        // frames. Reset the loading flag so that dump is also suppressed from
+        // rendering (and the 5s prune is gated) until history_end fires —
+        // otherwise a reconnect paints the dump in chunks mid-stream. Harmless
+        // on the initial connect (historyLoading is already true).
+        historyLoading = true;
         statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: orange;">(Fetching history...)</span> <div class="spinner"></div>`;
         setFaviconColor('#ffa500'); // Orange until data arrives
     };
@@ -1877,6 +1906,13 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         if (state.liveSpots.length >= MAX_LIVE_SPOTS) {
             state.liveSpots.splice(0, state.liveSpots.length - MAX_LIVE_SPOTS + 1);
         }
+        // Stamp receive time for the render-time true-age gate (see
+        // getRenderableMapSpots). __recvAge is the server-stamped age at
+        // receive; __recvMs is the client wall-clock at receive. The prune
+        // mutates ageSeconds (+5/tick) but these stay fixed, so the render
+        // filter computes a continuous true age.
+        spot.__recvMs = Date.now();
+        spot.__recvAge = spot.ageSeconds;
         state.liveSpots.push(spot);
         setFaviconColor('#28a745'); // Green for active receiving
 
@@ -1925,6 +1961,12 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     state.renderInterval = setInterval(() => {
         if (state.softPaused) return;
+        // Don't prune/age during the history dump: the dump delivers many spots
+        // old→new over (potentially) multiple 5s ticks, and pruning mid-dump
+        // both races the in-flight frames and paints a half-loaded grid.
+        // historyLoading is reset to true on reconnect (onopen) for the same
+        // reason, and cleared at history_end.
+        if (historyLoading) return;
 
         if (state.liveSpots.length > 0) {
             // Read the live Max Spot Age slider value rather than the `minutes`

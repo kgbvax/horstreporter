@@ -202,9 +202,9 @@ func TestPropIntelPoissonPOpen(t *testing.T) {
 		want float64
 		eps  float64
 	}{
-		{0, 15, 0, 0.001},              // zero rate → P=0
+		{0, 15, 0, 0.001},                   // zero rate → P=0
 		{1, 15, 1 - math.Exp(-0.25), 0.001}, // λ=0.25 → 1-e^-0.25
-		{4, 15, 1 - math.Exp(-1), 0.001},   // λ=1 → 1-e^-1 ≈ 0.632
+		{4, 15, 1 - math.Exp(-1), 0.001},    // λ=1 → 1-e^-1 ≈ 0.632
 		{10, 15, 1 - math.Exp(-2.5), 0.001}, // λ=2.5 → ≈0.918
 	}
 	for _, tc := range cases {
@@ -625,7 +625,7 @@ func TestPropIntelSurgeSparseCellFallback(t *testing.T) {
 }
 
 // TestPropIntelSurgePartialCoverageNoFalsePositive guards the effectiveStart
-// data-coverage clamp in memorySurgeBaselines (the #6 fix). In production
+// data-coverage clamp in computeSurgeBaselines (the #6 fix). In production
 // hub.history retains only ~60 min (main.go) while the surge baseline window
 // is 6 h, so the clamp is ALWAYS active: most of the 6 h window has no
 // retained spots. The baseline must be computed over only the covered

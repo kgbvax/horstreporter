@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -69,6 +70,17 @@ const (
 	// 15-min granularity yields only ~23 sub-windows — the guard must be
 	// achievable within the fallback window or the fallback is dead code.
 	propIntelSurgeMinSamplesMem = 10
+	// propIntelRegionBaselineCacheTTL is how long the Postgres
+	// regionCalendarStats climatology is served from cache without re-querying.
+	// The result is a 30-day per-(band×region×slot) aggregate whose
+	// percentiles/mean drift negligibly within minutes (only the current day's
+	// row updates, 1 of ~30 in the aggregate), so a short TTL is semantically
+	// safe and removes a full-table analytical query from the hot path. Seconds.
+	propIntelRegionBaselineCacheTTL int64 = 120
+	// propIntelHistoryPoolCap is the initial capacity of pooled scratch slices
+	// used to copy hub.history for evaluation. Buffers grow as needed and are
+	// reused across requests to avoid per-request 300MB+ allocations.
+	propIntelHistoryPoolCap = 1 << 14
 	// propIntelSurgeBaselineWindowMin is the trailing window used to derive a
 	// memory-fallback baseline rate/stddev when no PG store is configured.
 	// Must be wider than the nowcast window so the live signal is excluded.
@@ -120,12 +132,32 @@ type propIntelEngine struct {
 	// (regionCalendarStats). May be nil — the engine degrades to a
 	// history-only nowcast.
 	baseline *DxBaselineEngine
+
+	// Region-baseline climatology cache (#1): the regionCalendarStats result is
+	// a 30-day aggregate that changes slowly, but loadRegionBaselines used to
+	// run the full analytical query on every request. The cache is shared
+	// across requests; the map is read-only after swap so it is returned by
+	// reference. Guarded by baselineCacheMu.
+	baselineCacheMu sync.RWMutex
+	baselineCache   map[regionBaselineKey]regionCalendarStatRow
+	baselineCacheAt int64
 }
 
 // propIntel is the package-level singleton, mirroring dxBaseline. It is wired
 // in main.go alongside dxBaseline so the handler can call it without nil
 // checks (the handler still guards for safety).
 var propIntel = &propIntelEngine{}
+
+// propIntelHistoryPool reuses scratch slices for the per-request hub.history
+// copy (#4): a 1.8M-entry window is ~360MB, and allocating (and GC-ing) that
+// on every request amplifies the cost of the evaluation passes. Buffers grow
+// to fit and are returned after Evaluate, which does not retain the slice.
+var propIntelHistoryPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]MQTTMessage, 0, propIntelHistoryPoolCap)
+		return &b
+	},
+}
 
 // propIntelCellKey indexes a (band × region) accumulator.
 type propIntelCellKey struct {
@@ -197,11 +229,34 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		windowHours = float64(propIntelNowcastWindowMin) / 60.0
 	}
 
-	// Scan the window into per-(band × region) accumulators.
+	// Surge baseline window setup. The nowcast window is [cutoff, now]; the
+	// memory-fallback surge baseline is the trailing window [baselineStart,
+	// cutoff) — it excludes the live nowcast window so the surge signal does
+	// not contaminate the baseline. The two windows partition the retained
+	// history, so one walk over the slice feeds both accumulators: each spot's
+	// band/remote-end/region is computed exactly once instead of the old code's
+	// two full walks (Evaluate + memorySurgeBaselines).
+	baselineWindowMin := propIntelSurgeBaselineWindowMin
+	if baselineWindowMin <= minutes {
+		baselineWindowMin = minutes * 2
+	}
+	baselineStart := now - int64(baselineWindowMin)*60
+	subWindowSec := int64(propIntelNowcastSlotMin * 60)
+	if subWindowSec <= 0 {
+		subWindowSec = 900
+	}
+
+	// Nowcast accumulators and surge-baseline sub-window accumulators, filled in
+	// the single pass below. surgeSubs/oldestBaseline feed computeSurgeBaselines
+	// after the nowcast cells are built.
 	acc := make(map[propIntelCellKey]*propIntelCellAcc)
 	bandsSeen := make(map[string]struct{})
+	surgeSubs := make(map[propIntelCellKey]*surgeCellSubs)
+	var oldestBaseline int64
+	haveOldestBaseline := false
+
 	for _, m := range history {
-		if m.T < cutoff || m.T > now {
+		if m.T > now {
 			continue
 		}
 		band := normalizeBand(m.B)
@@ -219,21 +274,53 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		if region == dxPulseRegionUnknown {
 			continue
 		}
-
 		key := propIntelCellKey{band: band, region: string(region)}
-		cell := acc[key]
-		if cell == nil {
-			cell = &propIntelCellAcc{
-				uniqueSenders: make(map[string]struct{}),
-				sources:       make(map[string]struct{}),
+
+		if m.T >= cutoff {
+			// Nowcast window [cutoff, now]: per-cell unique senders + sources.
+			cell := acc[key]
+			if cell == nil {
+				cell = &propIntelCellAcc{
+					uniqueSenders: make(map[string]struct{}),
+					sources:       make(map[string]struct{}),
+				}
+				acc[key] = cell
 			}
-			acc[key] = cell
+			if remoteCall != "" {
+				cell.uniqueSenders[remoteCall] = struct{}{}
+			}
+			cell.sources[canonicalSource(m)] = struct{}{}
+			bandsSeen[band] = struct{}{}
+			continue
+		}
+
+		// Baseline window [baselineStart, cutoff): per-(cell × sub-window)
+		// unique senders for the surge z-score. Spots older than baselineStart
+		// are out of both windows.
+		if m.T < baselineStart {
+			continue
+		}
+		if !haveOldestBaseline || m.T < oldestBaseline {
+			oldestBaseline = m.T
+			haveOldestBaseline = true
+		}
+		subIdx := (m.T - baselineStart) / subWindowSec
+		if subIdx < 0 {
+			continue
+		}
+		sc := surgeSubs[key]
+		if sc == nil {
+			sc = &surgeCellSubs{subs: make(map[int64]*surgeSubAcc)}
+			surgeSubs[key] = sc
+		}
+		sa := sc.subs[subIdx]
+		if sa == nil {
+			sa = &surgeSubAcc{uniqueSenders: make(map[string]struct{})}
+			sc.subs[subIdx] = sa
 		}
 		if remoteCall != "" {
-			cell.uniqueSenders[remoteCall] = struct{}{}
+			sa.uniqueSenders[remoteCall] = struct{}{}
 		}
-		cell.sources[canonicalSource(m)] = struct{}{}
-		bandsSeen[band] = struct{}{}
 	}
 
 	// In-scope bands list: the bandsInScope order is a map (unordered), so
@@ -319,14 +406,18 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		return cells[i].Region < cells[j].Region
 	})
 
-	// Surge detection runs after the nowcast cells are built. It mutates
-	// cells in place, attaching *SurgeInfo to any cell whose live rate z-scores
-	// above the region-level baseline. See U2.
+	// Surge detection runs after the nowcast cells are built. The baselines
+	// are derived from the surgeSubs accumulators populated in the merged scan
+	// above (no second history walk); computeSurgeBaselines applies the
+	// coverage gate (#3) and the per-(cell × sub-window) stats. detectSurges
+	// then mutates cells in place, attaching *SurgeInfo to any cell whose live
+	// rate z-scores above its baseline. See U2.
 	threshold := surgeThreshold
 	if threshold <= 0 {
 		threshold = propIntelSurgeZThreshold
 	}
-	detectSurges(cells, qth, surroundings, history, now, threshold, minutes)
+	baselines := computeSurgeBaselines(surgeSubs, baselineStart, cutoff, haveOldestBaseline, oldestBaseline, subWindowSec)
+	detectSurges(cells, baselines, threshold)
 
 	resp.Cells = cells
 
@@ -533,23 +624,47 @@ type regionBaselineKey struct {
 // Postgres when a store is configured. Returns an empty map in the no-PG path
 // (the engine then uses the live history rate only).
 func (e *propIntelEngine) loadRegionBaselines(now int64) map[regionBaselineKey]regionCalendarStatRow {
-	out := make(map[regionBaselineKey]regionCalendarStatRow)
 	if e == nil || e.baseline == nil {
-		return out
+		return nil
 	}
+	// Fast path: serve a fresh cache without touching Postgres. The region
+	// calendar is a 30-day climatology whose percentiles/mean drift negligibly
+	// within the TTL window, so one query is shared across many requests. The
+	// cached map is read-only after swap, so it is returned by reference.
+	e.baselineCacheMu.RLock()
+	if e.baselineCache != nil && now-e.baselineCacheAt < propIntelRegionBaselineCacheTTL {
+		cached := e.baselineCache
+		e.baselineCacheMu.RUnlock()
+		return cached
+	}
+	e.baselineCacheMu.RUnlock()
+
 	e.baseline.mu.RLock()
 	st := e.baseline.store
 	e.baseline.mu.RUnlock()
 	if st == nil {
-		return out
+		return nil
 	}
 	rows, err := st.regionCalendarStats(propIntelRegionBaselineDaysBack, now)
 	if err != nil {
-		return out
+		// Don't cache failures. A stale cache is a better prior than none, so
+		// serve it if we have one; otherwise degrade to no baseline.
+		e.baselineCacheMu.RLock()
+		stale := e.baselineCache
+		e.baselineCacheMu.RUnlock()
+		if stale != nil {
+			return stale
+		}
+		return nil
 	}
+	out := make(map[regionBaselineKey]regionCalendarStatRow, len(rows))
 	for _, r := range rows {
 		out[regionBaselineKey{r.Band, r.Region, r.SlotOfDay}] = r
 	}
+	e.baselineCacheMu.Lock()
+	e.baselineCache = out
+	e.baselineCacheAt = now
+	e.baselineCacheMu.Unlock()
 	return out
 }
 
@@ -606,30 +721,26 @@ func regionDisplayName(code string) string {
 // sub-windows to trust the stddev.
 func detectSurges(
 	cells []propIntelCell,
-	qth string,
-	surroundings bool,
-	history []MQTTMessage,
-	now int64,
+	baselines map[propIntelCellKey]memorySurgeBaseline,
 	threshold float64,
-	nowcastWindowMin int,
 ) {
 	if threshold <= 0 {
 		threshold = propIntelSurgeZThreshold
 	}
-	if nowcastWindowMin <= 0 {
-		nowcastWindowMin = propIntelNowcastWindowMin
+	if baselines == nil {
+		return
 	}
 
-	// Memory-fallback baseline per (band × region) from the trailing
-	// window excluding the live nowcast window. Each 15-minute sub-window
-	// contributes one rate sample; the baseline rate is the mean and the
-	// baseline stddev is the sample standard deviation of those rates.
-	// The live window [now-nowcastWindowMin, now) is excluded so the surge
-	// signal does not contaminate the baseline (U2 requirement). NOTE: the
-	// exclusion uses the request's nowcast window, not a hardcoded 15min,
-	// so a wider request (minutes>15) does not leak live signal into the
-	// baseline.
-	memBaselines := memorySurgeBaselines(history, qth, surroundings, now, nowcastWindowMin)
+	// baselines is the memory-fallback trailing baseline precomputed by the
+	// merged history scan in Evaluate (see computeSurgeBaselines): per-15-min
+	// sub-window unique-sender rates across a trailing window that excludes
+	// the live nowcast window, in the SAME units (unique senders / hour) and
+	// scope (operator-local) as the live rate. The live window exclusion uses
+	// the request's nowcast window, not a hardcoded 15min, so a wider request
+	// (minutes>15) does not leak live signal into the baseline. The Postgres
+	// regionCalendarStats baseline is intentionally NOT used for the z-score
+	// (different units/scope; see the U2 note in Evaluate) — it is used as the
+	// nowcast prior.
 
 	for i := range cells {
 		c := &cells[i]
@@ -648,7 +759,7 @@ func detectSurges(
 		}
 		liveRate := c.ExpectedCount
 
-		mb, ok := memBaselines[propIntelCellKey{c.Band, c.Region}]
+		mb, ok := baselines[propIntelCellKey{c.Band, c.Region}]
 		if !ok || mb.n < propIntelSurgeMinSamplesMem {
 			continue
 		}
@@ -682,131 +793,53 @@ type memorySurgeBaseline struct {
 	n      int
 }
 
-// memorySurgeBaselines computes the memory-fallback surge baseline for every
-// (band × region) cell present in the trailing history. The window spans
-// [now - baselineWindowMin, now), and the live nowcast window
-// [now - nowcastWindowMin, now) is excluded so the surge signal does not
-// contaminate the baseline (U2 requirement). The trailing window is divided
-// into 15-minute sub-windows; each sub-window contributes one rate sample
-// (unique senders per hour). The baseline rate is the mean of those samples
-// and the baseline stddev is the sample standard deviation. Cells with
-// fewer than propIntelSurgeMinSamples sub-windows are returned but flagged
-// via n (the caller's minimum-sample guard suppresses them).
-func memorySurgeBaselines(
-	history []MQTTMessage,
-	qth string,
-	surroundings bool,
-	now int64,
-	nowcastWindowMin int,
+// surgeSubAcc and surgeCellSubs are the per-(band × region × sub-window)
+// unique-sender accumulators built during Evaluate's single merged history
+// scan (spots in the baseline window only). They were previously local to
+// memorySurgeBaselines; they are package-level now so Evaluate's scan can
+// populate them in the same pass as the nowcast accumulators, instead of a
+// second full walk of the history slice.
+type surgeSubAcc struct {
+	uniqueSenders map[string]struct{}
+}
+type surgeCellSubs struct {
+	subs map[int64]*surgeSubAcc
+}
+
+// computeSurgeBaselines turns the per-(band × region × sub-window)
+// accumulators built by Evaluate's merged scan into per-cell
+// (mean, stddev, n) baselines. It is the stats half of the old
+// memorySurgeBaselines with the history scan removed (the scan now happens
+// once in Evaluate) and a coverage gate added (#3): at default 60-min
+// hub.history retention the 6h baseline window covers only a few sub-windows
+// — below propIntelSurgeMinSamplesMem — so the z-score is never trustworthy.
+// Rather than run the per-cell stats loop every request only to have every
+// cell suppressed by the minimum-sample guard, return early with no
+// baselines when the covered window is too short. effectiveStart clamps the
+// window's left edge to the actual data coverage (oldest retained baseline
+// spot floored to its sub-window boundary) so pre-coverage sub-windows are
+// not synthesized as zero-activity samples.
+func computeSurgeBaselines(
+	acc map[propIntelCellKey]*surgeCellSubs,
+	baselineStart, nowcastCutoff int64,
+	haveOldest bool, oldestInRange int64,
+	subWindowSec int64,
 ) map[propIntelCellKey]memorySurgeBaseline {
-	if nowcastWindowMin <= 0 {
-		nowcastWindowMin = propIntelNowcastWindowMin
+	out := make(map[propIntelCellKey]memorySurgeBaseline, len(acc))
+	if len(acc) == 0 {
+		return out
 	}
-	baselineWindowMin := propIntelSurgeBaselineWindowMin
-	if baselineWindowMin <= nowcastWindowMin {
-		baselineWindowMin = nowcastWindowMin * 2
-	}
-
-	// Build the QTH match set (mirrors Evaluate's resolver).
-	qth = normalizeQTHToken(qth)
-	if qth == "" {
-		return nil
-	}
-	qthSet := []string{qth}
-	if surroundings && isLocator(qth) {
-		qthSet = getSurroundingSquares(qth)
-	}
-
-	nowcastCutoff := now - int64(nowcastWindowMin)*60
-	baselineStart := now - int64(baselineWindowMin)*60
-	// Trailing baseline window: [baselineStart, nowcastCutoff) — excludes the
-	// live nowcast window so the surge signal is not in the baseline.
-	if baselineStart >= nowcastCutoff {
-		return nil
-	}
-	// Sub-window granularity matches the nowcast slot (15 min). A 6h
-	// baseline yields ~23 sub-window samples. Each 15-min slot carries
-	// far less evidence than a full calendar day, so the minimum-sample
-	// guard uses propIntelSurgeMinSamplesMem (lower) — see detectSurges.
-	subWindowSec := int64(propIntelNowcastSlotMin * 60)
 	if subWindowSec <= 0 {
 		subWindowSec = 900
 	}
-
-	// Per-(band × region × sub-window) unique-sender accumulators.
-	type subAcc struct {
-		uniqueSenders map[string]struct{}
-	}
-	type cellSubs struct {
-		subs map[int64]*subAcc
-	}
-	acc := make(map[propIntelCellKey]*cellSubs)
-	// Track the oldest retained spot that falls inside the baseline window.
-	// history may not cover the full baselineWindowMin (hub.history retention
-	// is shorter), so sub-windows before the oldest retained spot have NO
-	// data — synthesizing them as zero-activity would inflate the sample
-	// count with synthetic zeros, deflate the mean, and let a few real
-	// sub-windows look like a surge. effectiveStart (below) clamps the
-	// baseline window to the actual data coverage.
-	var oldestInRange int64
-	haveOldest := false
-
-	for _, m := range history {
-		if m.T < baselineStart || m.T >= nowcastCutoff {
-			continue
-		}
-		if !haveOldest || m.T < oldestInRange {
-			oldestInRange = m.T
-			haveOldest = true
-		}
-		band := normalizeBand(m.B)
-		if band == "" || !bandInScope(band) {
-			continue
-		}
-		remoteLocator, remoteCall, ok := resolveRemoteEnd(m, qthSet)
-		if !ok {
-			continue
-		}
-		region := dxPulseRegionForLocator(remoteLocator)
-		if region == dxPulseRegionUnknown {
-			continue
-		}
-		// Sub-window index relative to baselineStart: 0, 1, 2, ...
-		subIdx := (m.T - baselineStart) / subWindowSec
-		if subIdx < 0 {
-			continue
-		}
-		key := propIntelCellKey{band: band, region: string(region)}
-		cell := acc[key]
-		if cell == nil {
-			cell = &cellSubs{subs: make(map[int64]*subAcc)}
-			acc[key] = cell
-		}
-		sa := cell.subs[subIdx]
-		if sa == nil {
-			sa = &subAcc{uniqueSenders: make(map[string]struct{})}
-			cell.subs[subIdx] = sa
-		}
-		if remoteCall != "" {
-			sa.uniqueSenders[remoteCall] = struct{}{}
-		}
-	}
-
-	out := make(map[propIntelCellKey]memorySurgeBaseline, len(acc))
 	subHours := float64(subWindowSec) / 3600.0
 	if subHours <= 0 {
 		subHours = 0.25
 	}
-	// effectiveStart clamps the baseline window's left edge to the actual
-	// data coverage. If history does not cover the full baselineWindowMin
-	// (e.g., hub.history retention is shorter, or the band/region simply had
-	// no spots early in the window), sub-windows before the oldest retained
-	// spot have no data. Counting them as zero-activity samples would
-	// deflate the mean and let a few real sub-windows look like a surge.
-	// effectiveStart is the oldest retained spot's time floored to its
-	// sub-window boundary, never earlier than baselineStart. If no spots
-	// were retained at all, fall back to the full window (acc is empty, so
-	// the loop below produces nothing anyway).
+	// effectiveStart: the oldest retained baseline spot floored to its
+	// sub-window boundary, never earlier than baselineStart. Sub-windows before
+	// this have no data; counting them as zeros would deflate the mean and let
+	// a few real sub-windows look like a surge.
 	effectiveStart := baselineStart
 	if haveOldest {
 		floored := oldestInRange - (oldestInRange-baselineStart)%subWindowSec
@@ -818,19 +851,23 @@ func memorySurgeBaselines(
 		return out
 	}
 	// Number of sub-windows actually covered by data: [effectiveStart,
-	// nowcastCutoff). Each sub-window (including zero-activity ones within
-	// the covered range) counts as one sample — a flat baseline with half
-	// its covered sub-windows empty still has nonzero variance when the
-	// other half is active, and the minimum-sample guard must see the
-	// empty sub-windows too (otherwise a sparse baseline inflates n with
-	// only the active sub-windows and misrepresents its statistical weight).
+	// nowcastCutoff). Each sub-window (including zero-activity ones within the
+	// covered range) counts as one sample.
 	totalSubs := int((nowcastCutoff - effectiveStart) / subWindowSec)
 	if totalSubs < 1 {
 		totalSubs = 1
 	}
-	// startOffset is the sub-window index (relative to baselineStart) where
-	// data coverage begins. Sub-indices in cell.subs were computed against
-	// baselineStart, so we iterate from startOffset (not 0) to avoid counting
+	// #3 gate: at default retention the covered baseline window is shorter than
+	// the minimum-sample threshold, so no cell's z-score is trustworthy. Skip
+	// the per-cell stats loop entirely — the surge pass becomes a no-op rather
+	// than dead work on every request. Surge detection is only active when
+	// hub.history retention is long enough to supply a real baseline.
+	if totalSubs < propIntelSurgeMinSamplesMem {
+		return out
+	}
+	// startOffset: the sub-window index (relative to baselineStart) where data
+	// coverage begins. Sub-indices in cell.subs were computed against
+	// baselineStart, so iterate from startOffset (not 0) to avoid counting
 	// pre-coverage sub-windows as synthetic zeros.
 	startOffset := int64(0)
 	if haveOldest {
@@ -849,24 +886,23 @@ func memorySurgeBaselines(
 				rates = append(rates, 0)
 				continue
 			}
-			rate := float64(len(sa.uniqueSenders)) / subHours
-			rates = append(rates, rate)
+			rates = append(rates, float64(len(sa.uniqueSenders))/subHours)
 		}
 		if len(rates) == 0 {
 			continue
 		}
-		mean := mean(rates)
+		meanRate := mean(rates)
 		var stddev float64
 		if len(rates) >= 2 {
 			var sumSqDiff float64
 			for _, r := range rates {
-				d := r - mean
+				d := r - meanRate
 				sumSqDiff += d * d
 			}
 			// Sample standard deviation (n−1 denominator).
 			stddev = math.Sqrt(sumSqDiff / float64(len(rates)-1))
 		}
-		out[key] = memorySurgeBaseline{mean: mean, stddev: stddev, n: len(rates)}
+		out[key] = memorySurgeBaseline{mean: meanRate, stddev: stddev, n: len(rates)}
 	}
 	return out
 }
@@ -912,20 +948,40 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().Unix()
-	cutoff := now - int64(minutes)*60
-	// Copy a wider window than the nowcast when surge detection is active so
-	// the memory-fallback baseline (trailing 6h) is available even when the
-	// requested `minutes` is short. The engine ignores out-of-window spots
-	// for the nowcast; detectSurges uses the extra history for its baseline.
-	baselineCutoff := now - int64(propIntelSurgeBaselineWindowMin)*60
-	if baselineCutoff < cutoff {
-		cutoff = baselineCutoff
-	}
+	nowcastCutoff := now - int64(minutes)*60
+	baselineStart := now - int64(propIntelSurgeBaselineWindowMin)*60
+	// Decide how much history to copy. The nowcast needs [nowcastCutoff, now].
+	// The surge baseline needs the trailing [baselineStart, nowcastCutoff), but
+	// only when the retained history actually covers enough pre-nowcast data to
+	// build a trustworthy baseline (>= propIntelSurgeMinSamplesMem sub-windows).
+	// At default 60-min retention with a short `minutes`, the pre-nowcast data
+	// is far too short, so the engine's coverage gate suppresses the baseline
+	// anyway — copying the 6h window would allocate ~360MB for nothing. Copy
+	// only the nowcast window in that case; widen to the baseline window only
+	// when the oldest retained spot is old enough to matter.
+	copyCutoff := nowcastCutoff
+	minBaselineSec := int64(propIntelSurgeMinSamplesMem) * int64(propIntelNowcastSlotMin*60)
 	hub.RLock()
+	if len(hub.history) > 0 && hub.history[0].T <= nowcastCutoff-minBaselineSec && baselineStart < copyCutoff {
+		copyCutoff = baselineStart
+	}
 	idx := sort.Search(len(hub.history), func(i int) bool {
-		return hub.history[i].T >= cutoff
+		return hub.history[i].T >= copyCutoff
 	})
-	historyCopy := make([]MQTTMessage, len(hub.history)-idx)
+	n := len(hub.history) - idx
+	// Reuse a pooled scratch slice (#4): the window can be ~1.8M entries
+	// (~360MB); allocating and GC-ing that on every request amplifies the cost
+	// of the evaluation pass. The buffer grows to fit and is returned after
+	// Evaluate, which reads the slice but does not retain it (string data lives
+	// in separate heap allocations, so reusing the struct backing array is
+	// safe).
+	bufp := propIntelHistoryPool.Get().(*[]MQTTMessage)
+	if cap(*bufp) < n {
+		*bufp = make([]MQTTMessage, n)
+	} else {
+		*bufp = (*bufp)[:n]
+	}
+	historyCopy := (*bufp)[:n]
 	copy(historyCopy, hub.history[idx:])
 	hub.RUnlock()
 
@@ -944,4 +1000,10 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+	// Return the scratch slice to the pool now that the response is fully
+	// encoded and Evaluate has finished reading it. Evaluate does not retain
+	// historyCopy (it only stores derived strings, whose backing bytes are
+	// independent heap allocations), so the struct backing array is safe to
+	// reuse.
+	propIntelHistoryPool.Put(bufp)
 }

@@ -60,7 +60,8 @@ vi.mock('../static/renderers.js', () => ({
 
 vi.mock('../static/band-lab.js', () => ({
     initBandLab: vi.fn(),
-    updateBandLab: vi.fn()
+    updateBandLab: vi.fn(),
+    getBandLabLookbackMinutes: vi.fn(() => 15)
 }));
 
 vi.mock('../static/state.js', () => ({
