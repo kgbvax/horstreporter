@@ -281,22 +281,6 @@
         </div>
         <div id="band-lab-window-resize" class="band-lab-window-resize" title="Drag to resize width"></div>
     </div>
-    <div id="wspr-matrix-window" class="wspr-matrix-window is-hidden">
-        <div class="wspr-matrix-window-header">
-            <span>WSPR Band × Region</span>
-            <button type="button" class="wspr-matrix-close btn-close btn-close-white" aria-label="Close"></button>
-        </div>
-        <div id="wspr-matrix-body" class="wspr-matrix-body"></div>
-    </div>
-    <div id="prop-matrix-window" class="prop-matrix-window is-hidden">
-        <div class="prop-matrix-window-header">
-            <span>Propagation Intel</span>
-            <div class="prop-matrix-window-header-actions">
-                <button type="button" class="prop-matrix-close btn-close btn-close-white" aria-label="Close"></button>
-            </div>
-        </div>
-        <div id="prop-matrix-body" class="prop-matrix-body"></div>
-    </div>
     <div id="map-stack" class="flex-grow-1 h-100 position-relative">
         <div id="map" class="w-100 h-100"></div>
         <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent position-absolute" style="top: 12px; left: 12px; z-index: 1000;" title="Show Band Stats">Stats</button>
@@ -361,6 +345,24 @@
                     <input type="checkbox" class="hk-desktop" /> <span class="hk-panel-foot-text">let me nag your desktop</span>
                 </label>
             </div>
+        </div>
+        <!-- Propagation Intel + WSPR stats: floating overlay cards docked over
+             the map. Children of #map-stack so they float above #map / #azimuth-canvas. -->
+        <div id="wspr-matrix-window" class="wspr-matrix-window is-hidden">
+            <div class="wspr-matrix-window-header">
+                <span>WSPR Band × Region</span>
+                <button type="button" class="wspr-matrix-close btn-close btn-close-white" aria-label="Close"></button>
+            </div>
+            <div id="wspr-matrix-body" class="wspr-matrix-body"></div>
+        </div>
+        <div id="prop-matrix-window" class="prop-matrix-window is-hidden">
+            <div class="prop-matrix-window-header">
+                <span>Propagation Intel</span>
+                <div class="prop-matrix-window-header-actions">
+                    <button type="button" class="prop-matrix-close btn-close btn-close-white" aria-label="Close"></button>
+                </div>
+            </div>
+            <div id="prop-matrix-body" class="prop-matrix-body"></div>
         </div>
     </div>
     <div id="tooltip"></div>

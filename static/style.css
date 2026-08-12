@@ -593,20 +593,25 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     opacity: 0.82;
 }
 
-/* WSPR Band × Region matrix panel */
+/* WSPR Band × Region matrix panel — floating overlay card docked over the
+   map (top-right). Mirrored by .prop-matrix-window (top-left). */
 .wspr-matrix-window {
     position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    max-width: 480px;
-    height: 100%;
-    background: var(--panel-bg, rgba(33, 37, 41, 0.96));
-    color: var(--panel-fg, #dee2e6);
+    top: 64px;
+    right: 12px;
+    left: auto;
+    width: 380px;
+    max-width: calc(100% - 24px);
+    max-height: calc(100% - 120px);
+    background: color-mix(in srgb, var(--bg-color) 88%, transparent);
+    backdrop-filter: blur(4px);
+    color: var(--text-color);
     z-index: 1100;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--control-border);
+    border-radius: var(--btn-radius, 8px);
+    box-shadow: 0 4px 16px var(--shadow-color);
     overflow: hidden;
 }
 
@@ -621,7 +626,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     padding: 8px 12px;
     font-size: 0.9rem;
     font-weight: 600;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid var(--border-color);
 }
 
 .wspr-matrix-body {
@@ -640,14 +645,14 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     padding: 3px 4px;
     text-align: center;
     font-weight: 600;
-    color: rgba(222, 226, 230, 0.7);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    color: color-mix(in srgb, var(--text-color) 70%, transparent);
+    border-bottom: 1px solid var(--border-color);
 }
 
 .wspr-matrix-table td {
     padding: 3px 4px;
     text-align: center;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid var(--border-color);
 }
 
 .wspr-matrix-band {
@@ -667,20 +672,24 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 }
 
 /* Propagation Intelligence matrix panel (mirrors .wspr-matrix-* layout,
-   adds surge / confidence / badge affordances). */
+   adds surge / confidence / badge affordances). Floating overlay card
+   docked over the map top-left. */
 .prop-matrix-window {
     position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    max-width: 520px;
-    height: 100%;
-    background: var(--panel-bg, rgba(33, 37, 41, 0.96));
-    color: var(--panel-fg, #dee2e6);
+    top: 64px;
+    left: 12px;
+    width: 380px;
+    max-width: calc(100% - 24px);
+    max-height: calc(100% - 120px);
+    background: color-mix(in srgb, var(--bg-color) 88%, transparent);
+    backdrop-filter: blur(4px);
+    color: var(--text-color);
     z-index: 1100;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--control-border);
+    border-radius: var(--btn-radius, 8px);
+    box-shadow: 0 4px 16px var(--shadow-color);
     overflow: hidden;
 }
 
@@ -695,7 +704,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     padding: 8px 12px;
     font-size: 0.9rem;
     font-weight: 600;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid var(--border-color);
 }
 
 .prop-matrix-window-header-actions {
@@ -720,14 +729,14 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     padding: 3px 4px;
     text-align: center;
     font-weight: 600;
-    color: rgba(222, 226, 230, 0.7);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    color: color-mix(in srgb, var(--text-color) 70%, transparent);
+    border-bottom: 1px solid var(--border-color);
 }
 
 .prop-matrix-table td {
     padding: 3px 4px;
     text-align: center;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid var(--border-color);
 }
 
 .prop-matrix-band {
@@ -916,6 +925,21 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
         min-width: 22px;
         min-height: 22px;
         flex-shrink: 0;
+    }
+
+    /* Floating matrix overlay cards: stack near-full-width so they don't cover
+       the whole map side-by-side. #controls is z1200 here, so opening the
+       sidebar still covers the cards (z1100 < z1200). */
+    .prop-matrix-window,
+    .wspr-matrix-window {
+        left: 8px;
+        right: 8px;
+        width: auto;
+        max-width: none;
+        max-height: 38vh;
+    }
+    .wspr-matrix-window {
+        top: calc(64px + 38vh + 8px);
     }
 }
 

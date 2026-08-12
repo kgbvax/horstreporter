@@ -1302,13 +1302,16 @@ if (captureConfig?.enabled) {
     });
     initWsprMatrix({
         onLayoutChange: () => {
-            if (map) map.invalidateSize();
+            // The WSPR matrix is a floating overlay inside #map-stack; toggling
+            // it no longer changes the map container's box, so invalidateSize is
+            // not needed (unlike band-lab, which is docked in-flow). The azimuth
+            // canvas display-swaps with #map and may need a re-render.
             if (isAzimuthEnabled()) scheduleRender();
         },
     });
     initPropMatrix({
         onLayoutChange: () => {
-            if (map) map.invalidateSize();
+            // Same as WSPR: floating overlay, no map resize, just azimuth re-render.
             if (isAzimuthEnabled()) scheduleRender();
         },
     });
