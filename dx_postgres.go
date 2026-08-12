@@ -1809,9 +1809,12 @@ type regionCalendarStatRow struct {
 // last `daysBack` day_indexes (ending at the day_index containing `now`).
 // Aggregates across all target_grid4s (i.e. global view across observers).
 // `today` is the spot count for the current UTC day at that cell.
-func (s *dxPostgresStore) regionCalendarStats(daysBack int, now int64) ([]regionCalendarStatRow, error) {
+func (s *dxPostgresStore) regionCalendarStats(ctx context.Context, daysBack int, now int64) ([]regionCalendarStatRow, error) {
 	if s == nil {
 		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if daysBack <= 0 {
 		daysBack = 30
@@ -1821,9 +1824,6 @@ func (s *dxPostgresStore) regionCalendarStats(daysBack int, now int64) ([]region
 	}
 	today := utcDayIndex(now)
 	dayStart := today - int64(daysBack-1)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
 	rows, err := s.pool.Query(ctx, `
 		WITH daily AS (

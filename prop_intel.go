@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -77,6 +78,20 @@ const (
 	// row updates, 1 of ~30 in the aggregate), so a short TTL is semantically
 	// safe and removes a full-table analytical query from the hot path. Seconds.
 	propIntelRegionBaselineCacheTTL int64 = 120
+	// propIntelRegionBaselineNegCacheTTL bounds how long a failed
+	// regionCalendarStats query is remembered before we retry PG. The prod
+	// baseline query is a 30-day full-table analytical scan that, under load,
+	// can exceed its own timeout — without a negative cache every request
+	// re-pays that timeout (the success-only cache never populates). 30s is a
+	// short enough window that a transiently-slow PG self-heals, but long
+	// enough to keep the hot path off PG. Seconds.
+	propIntelRegionBaselineNegCacheTTL int64 = 30
+	// propIntelRegionBaselineQueryTimeout is the per-query deadline passed into
+	// regionCalendarStats. Kept well under the prop_intel response budget: the
+	// baseline is an optional prior (blend + sparse-cell backfill), not a
+	// correctness input, so a slow PG degrades gracefully to a nowcast-only
+	// response rather than pinning the endpoint to the old 5s timeout.
+	propIntelRegionBaselineQueryTimeout = 1500 * time.Millisecond
 	// propIntelHistoryPoolCap is the initial capacity of pooled scratch slices
 	// used to copy hub.history for evaluation. Buffers grow as needed and are
 	// reused across requests to avoid per-request 300MB+ allocations.
@@ -138,9 +153,10 @@ type propIntelEngine struct {
 	// run the full analytical query on every request. The cache is shared
 	// across requests; the map is read-only after swap so it is returned by
 	// reference. Guarded by baselineCacheMu.
-	baselineCacheMu sync.RWMutex
-	baselineCache   map[regionBaselineKey]regionCalendarStatRow
-	baselineCacheAt int64
+	baselineCacheMu    sync.RWMutex
+	baselineCache      map[regionBaselineKey]regionCalendarStatRow
+	baselineCacheAt    int64
+	baselineCacheErrAt int64 // unix seconds of the last PG failure; 0 when none/valid
 }
 
 // propIntel is the package-level singleton, mirroring dxBaseline. It is wired
@@ -627,17 +643,38 @@ func (e *propIntelEngine) loadRegionBaselines(now int64) map[regionBaselineKey]r
 	if e == nil || e.baseline == nil {
 		return nil
 	}
-	// Fast path: serve a fresh cache without touching Postgres. The region
-	// calendar is a 30-day climatology whose percentiles/mean drift negligibly
-	// within the TTL window, so one query is shared across many requests. The
-	// cached map is read-only after swap, so it is returned by reference.
+	// Fast path (RLock): serve a fresh success cache or a recent negative
+	// cache without touching Postgres. The region calendar is a 30-day
+	// climatology whose percentiles/mean drift negligibly within the TTL
+	// window, so one query is shared across many requests. The cached map is
+	// read-only after swap, so it is returned by reference. The negative
+	// cache prevents a slow/timed-out PG from pinning every request to the
+	// query timeout — without it, a persistently-failing query never populates
+	// the success cache, so the old code re-paid the full timeout every call.
 	e.baselineCacheMu.RLock()
 	if e.baselineCache != nil && now-e.baselineCacheAt < propIntelRegionBaselineCacheTTL {
 		cached := e.baselineCache
 		e.baselineCacheMu.RUnlock()
 		return cached
 	}
+	if e.baselineCache == nil && e.baselineCacheErrAt != 0 && now-e.baselineCacheErrAt < propIntelRegionBaselineNegCacheTTL {
+		e.baselineCacheMu.RUnlock()
+		return nil
+	}
 	e.baselineCacheMu.RUnlock()
+
+	// Slow path: take the exclusive lock so only one goroutine pays the PG
+	// round-trip (and holds a PG connection). Concurrent callers wait, then
+	// pick up the freshly-cached result via the double-check below — this
+	// collapses a poll-burst into a single query instead of a herd.
+	e.baselineCacheMu.Lock()
+	defer e.baselineCacheMu.Unlock()
+	if e.baselineCache != nil && now-e.baselineCacheAt < propIntelRegionBaselineCacheTTL {
+		return e.baselineCache
+	}
+	if e.baselineCache == nil && e.baselineCacheErrAt != 0 && now-e.baselineCacheErrAt < propIntelRegionBaselineNegCacheTTL {
+		return nil
+	}
 
 	e.baseline.mu.RLock()
 	st := e.baseline.store
@@ -645,15 +682,18 @@ func (e *propIntelEngine) loadRegionBaselines(now int64) map[regionBaselineKey]r
 	if st == nil {
 		return nil
 	}
-	rows, err := st.regionCalendarStats(propIntelRegionBaselineDaysBack, now)
+	ctx, cancel := context.WithTimeout(context.Background(), propIntelRegionBaselineQueryTimeout)
+	defer cancel()
+	rows, err := st.regionCalendarStats(ctx, propIntelRegionBaselineDaysBack, now)
 	if err != nil {
-		// Don't cache failures. A stale cache is a better prior than none, so
-		// serve it if we have one; otherwise degrade to no baseline.
-		e.baselineCacheMu.RLock()
-		stale := e.baselineCache
-		e.baselineCacheMu.RUnlock()
-		if stale != nil {
-			return stale
+		// Negative-cache the failure. A stale success cache is a better prior
+		// than none, so serve it if we have one; otherwise degrade to no
+		// baseline — the nowcast is still computed, just without blend/sparse
+		// backfill. The neg-cache TTL bounds how long we serve stale/none
+		// before retrying PG.
+		e.baselineCacheErrAt = now
+		if e.baselineCache != nil {
+			return e.baselineCache
 		}
 		return nil
 	}
@@ -661,10 +701,9 @@ func (e *propIntelEngine) loadRegionBaselines(now int64) map[regionBaselineKey]r
 	for _, r := range rows {
 		out[regionBaselineKey{r.Band, r.Region, r.SlotOfDay}] = r
 	}
-	e.baselineCacheMu.Lock()
 	e.baselineCache = out
 	e.baselineCacheAt = now
-	e.baselineCacheMu.Unlock()
+	e.baselineCacheErrAt = 0
 	return out
 }
 
