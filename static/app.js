@@ -5,6 +5,7 @@ import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzi
 import { initUI, attachUITooltipEvents, initGridSnrLegend } from './ui.js';
 import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
 import { initWsprMatrix, updateWsprMatrix } from './wspr-matrix.js';
+import { initPropMatrix } from './prop-matrix.js';
 import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint } from './renderers.js';
@@ -1276,6 +1277,12 @@ if (captureConfig?.enabled) {
         },
     });
     initWsprMatrix({
+        onLayoutChange: () => {
+            if (map) map.invalidateSize();
+            if (isAzimuthEnabled()) scheduleRender();
+        },
+    });
+    initPropMatrix({
         onLayoutChange: () => {
             if (map) map.invalidateSize();
             if (isAzimuthEnabled()) scheduleRender();
