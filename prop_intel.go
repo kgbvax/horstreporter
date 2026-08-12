@@ -50,6 +50,33 @@ const (
 	propIntelForecastVolatilityDiscount = 0.02
 	// propIntelRegionBaselineDaysBack is the lookback for regionCalendarStats.
 	propIntelRegionBaselineDaysBack = 30
+
+	// Surge-detection thresholds. Mirrors the hot_bands.go threshold-constant
+	// pattern (lines 12–24). The surge detector runs after the nowcast cells are
+	// built and computes a z-score per (band × region) cell against the
+	// region-level baseline. See KTD3 and U2 in the plan.
+	//
+	// propIntelSurgeZThreshold is the default z-score above which a cell is
+	// flagged as a surge. Operator-configurable via the `surge_threshold`
+	// query parameter on /api/prop_intel. Per-band/region overrides are
+	// deferred to v2.
+	propIntelSurgeZThreshold = 2.0
+	// propIntelSurgeMinSamples is the minimum baseline sample count for the
+	// z-score to be statistically meaningful. Below this, the stddev is too
+	// noisy (rare band/region combos) and surge detection is suppressed for
+	// the cell. Applied to the PG `regionCalendarStats.SampleDays`. See U2.
+	propIntelSurgeMinSamples = 30
+	// propIntelSurgeMinSamplesMem is the memory-fallback analogue: the
+	// minimum number of 15-min sub-windows in the trailing 6h baseline for
+	// the z-score to be trustworthy. Lower than the PG guard because each
+	// sub-window carries less evidence than a full day, and a 6h window at
+	// 15-min granularity yields only ~23 sub-windows — the guard must be
+	// achievable within the fallback window or the fallback is dead code.
+	propIntelSurgeMinSamplesMem = 10
+	// propIntelSurgeBaselineWindowMin is the trailing window used to derive a
+	// memory-fallback baseline rate/stddev when no PG store is configured.
+	// Must be wider than the nowcast window so the live signal is excluded.
+	propIntelSurgeBaselineWindowMin = 6 * 60
 )
 
 // propIntelResponse is the JSON envelope returned by /api/prop_intel.
@@ -76,6 +103,18 @@ type propIntelCell struct {
 	Sources       []string           `json:"sources"`
 	Nowcast       propIntelEstimate  `json:"nowcast"`
 	Forecast      propIntelEstimate  `json:"forecast"`
+	// Surge is non-nil when surge detection flagged this cell. nil means no
+	// surge (either below the z-threshold, suppressed by the minimum-sample
+	// guard, or the stddev was zero). See U2.
+	Surge         *SurgeInfo         `json:"surge,omitempty"`
+}
+
+// SurgeInfo carries the surge-detection result for a flagged cell. Mirrors
+// the AE2 acceptance example: z-score against the region-level baseline, plus
+// a human-readable label ("tune to 10m, surge to Caribbean").
+type SurgeInfo struct {
+	ZScore float64 `json:"z_score"`
+	Label  string  `json:"label"`
 }
 
 // propIntelEstimate is the nowcast or forecast sub-object.
@@ -95,6 +134,11 @@ type propIntelEngine struct {
 	// (regionCalendarStats). May be nil — the engine degrades to a
 	// history-only nowcast with a flat (zero-slope) forecast.
 	baseline *DxBaselineEngine
+	// surgeThreshold is the z-score above which a cell is flagged as a surge.
+	// Defaults to propIntelSurgeZThreshold; the handler overrides it per
+	// request from the `surge_threshold` query parameter. Per-band/region
+	// overrides are deferred to v2. See U2.
+	surgeThreshold float64
 }
 
 // propIntel is the package-level singleton, mirroring dxBaseline. It is wired
@@ -341,6 +385,16 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		}
 		return cells[i].Region < cells[j].Region
 	})
+
+	// Surge detection runs after the nowcast cells are built. It mutates
+	// cells in place, attaching *SurgeInfo to any cell whose live rate z-scores
+	// above the region-level baseline. See U2.
+	threshold := e.surgeThreshold
+	if threshold <= 0 {
+		threshold = propIntelSurgeZThreshold
+	}
+	detectSurges(cells, qth, surroundings, cwMinDb, history, now, threshold, regionBaseline)
+
 	resp.Cells = cells
 	return resp
 }
@@ -573,10 +627,289 @@ func (e *propIntelEngine) loadRegionBaselines(now int64) map[regionBaselineKey]r
 	return out
 }
 
+// propIntelRegionDisplayNames maps the 11-region codes to the display names
+// used in surge labels (e.g., "tune to 10m, surge to Caribbean"). The codes
+// follow dxPulseAllRegions; the names follow the operator-facing convention
+// used in the existing WSPR matrix panel.
+var propIntelRegionDisplayNames = map[string]string{
+	"EU":   "Europe",
+	"NA":   "North America",
+	"SA":   "South America",
+	"AF":   "Africa",
+	"AS":   "Asia",
+	"OC":   "Oceania",
+	"AN":   "Antarctica",
+	"JA":   "Japan",
+	"VK":   "Australia",
+	"KH6":  "Hawaii",
+	"CAR":  "Caribbean",
+}
+
+// regionDisplayName returns the display name for a region code, falling back
+// to the code itself if unknown.
+func regionDisplayName(code string) string {
+	if name, ok := propIntelRegionDisplayNames[code]; ok {
+		return name
+	}
+	return code
+}
+
+// detectSurges flags per-(band × region) cells whose live nowcast rate
+// z-scores above the region-level baseline. Mutates `cells` in place by
+// setting cell.Surge for flagged cells.
+//
+// The baseline rate and stddev come from two sources, in order:
+//  1. PG-backed: `regionBaseline` (regionCalendarStats) for the current slot.
+//     Suppressed when the cell has fewer than propIntelSurgeMinSamples samples
+//     — a stddev from very few samples is statistically meaningless for rare
+//     band/region combinations (U2 minimum-sample guard).
+//  2. Memory fallback: a trailing propIntelSurgeBaselineWindowMin-minute rate
+//     computed from the history window, excluding the live 15-minute nowcast
+//     window so the surge signal does not contaminate the baseline. The
+//     baseline stddev is derived from per-15-minute sub-window rates across
+//     the trailing baseline window.
+//
+// z = (live_rate − baseline_rate) / baseline_stddev. A zero stddev yields no
+// surge (guard against division by zero; the baseline has no variance to
+// compare against). A cell is flagged when z ≥ threshold.
+func detectSurges(
+	cells []propIntelCell,
+	qth string,
+	surroundings bool,
+	cwMinDb int,
+	history []MQTTMessage,
+	now int64,
+	threshold float64,
+	regionBaseline map[regionBaselineKey]regionCalendarStatRow,
+) {
+	if threshold <= 0 {
+		threshold = propIntelSurgeZThreshold
+	}
+	slot := utcSlotOfDay(now)
+	nowcastWindowMin := propIntelNowcastWindowMin
+	nowcastHours := float64(nowcastWindowMin) / 60.0
+	if nowcastHours <= 0 {
+		nowcastHours = 0.25
+	}
+
+	// Pre-compute the memory-fallback baseline per (band × region) from the
+	// trailing 6-hour window excluding the live 15-minute window. Each
+	// 15-minute sub-window contributes one rate sample; the baseline rate is
+	// the mean and the baseline stddev is the sample standard deviation of
+	// those sub-window rates. The live window (now-15m..now) is excluded so
+	// the surge signal does not contaminate the baseline (U2 requirement).
+	memBaselines := memorySurgeBaselines(history, qth, surroundings, now, nowcastWindowMin)
+
+	for i := range cells {
+		c := &cells[i]
+		// Only cells with a nonzero nowcast rate can surge — a zero-rate
+		// cell has nothing to surge above.
+		if c.ExpectedCount <= 0 {
+			continue
+		}
+		liveRate := c.ExpectedCount
+
+		var baseRate, baseStd float64
+		var usedPG bool
+		if row, ok := regionBaseline[regionBaselineKey{c.Band, c.Region, slot}]; ok && row.SampleDays >= propIntelSurgeMinSamples {
+			baseRate = row.Mean
+			baseStd = row.StdDev
+			usedPG = true
+		} else if mb, ok := memBaselines[propIntelCellKey{c.Band, c.Region}]; ok && mb.n >= propIntelSurgeMinSamplesMem {
+			baseRate = mb.mean
+			baseStd = mb.stddev
+		}
+		_ = usedPG // reserved for future per-source diagnostics
+
+		// Guard against stddev=0: the baseline has no variance to compare
+		// against, so a z-score is undefined. Treat as no surge (U2).
+		if baseStd <= 0 {
+			continue
+		}
+
+		z := (liveRate - baseRate) / baseStd
+		if z < threshold {
+			continue
+		}
+
+		c.Surge = &SurgeInfo{
+			ZScore: round3(z),
+			Label:  "tune to " + c.Band + ", surge to " + regionDisplayName(c.Region),
+		}
+	}
+}
+
+// memorySurgeBaseline is the memory-fallback baseline (rate + stddev) for a
+// (band × region) cell, derived from per-15-minute sub-window rates across a
+// trailing 6-hour window that excludes the live nowcast window.
+type memorySurgeBaseline struct {
+	mean   float64
+	stddev float64
+	n      int
+}
+
+// memorySurgeBaselines computes the memory-fallback surge baseline for every
+// (band × region) cell present in the trailing history. The window spans
+// [now - baselineWindowMin, now), and the live nowcast window
+// [now - nowcastWindowMin, now) is excluded so the surge signal does not
+// contaminate the baseline (U2 requirement). The trailing window is divided
+// into 15-minute sub-windows; each sub-window contributes one rate sample
+// (unique senders per hour). The baseline rate is the mean of those samples
+// and the baseline stddev is the sample standard deviation. Cells with
+// fewer than propIntelSurgeMinSamples sub-windows are returned but flagged
+// via n (the caller's minimum-sample guard suppresses them).
+func memorySurgeBaselines(
+	history []MQTTMessage,
+	qth string,
+	surroundings bool,
+	now int64,
+	nowcastWindowMin int,
+) map[propIntelCellKey]memorySurgeBaseline {
+	if nowcastWindowMin <= 0 {
+		nowcastWindowMin = propIntelNowcastWindowMin
+	}
+	baselineWindowMin := propIntelSurgeBaselineWindowMin
+	if baselineWindowMin <= nowcastWindowMin {
+		baselineWindowMin = nowcastWindowMin * 2
+	}
+
+	// Build the QTH match set (mirrors Evaluate's resolver).
+	qth = normalizeQTHToken(qth)
+	if qth == "" {
+		return nil
+	}
+	qthSet := []string{qth}
+	if surroundings && isLocator(qth) {
+		qthSet = getSurroundingSquares(qth)
+	}
+
+	nowcastCutoff := now - int64(nowcastWindowMin)*60
+	baselineStart := now - int64(baselineWindowMin)*60
+	// Trailing baseline window: [baselineStart, nowcastCutoff) — excludes the
+	// live nowcast window so the surge signal is not in the baseline.
+	if baselineStart >= nowcastCutoff {
+		return nil
+	}
+	// Sub-window granularity matches the nowcast slot (15 min). A 6h
+	// baseline yields ~23 sub-window samples. The PG baseline counts days
+	// (propIntelSurgeMinSamples=30 days); the memory fallback counts
+	// 15-min slots, which carry far less evidence each, so the guard uses
+	// propIntelSurgeMinSamplesMem (lower) — see detectSurges for the gate.
+	subWindowSec := int64(propIntelNowcastSlotMin * 60)
+	if subWindowSec <= 0 {
+		subWindowSec = 900
+	}
+
+	// Per-(band × region × sub-window) unique-sender accumulators.
+	type subAcc struct {
+		uniqueSenders map[string]struct{}
+	}
+	type cellSubs struct {
+		subs map[int64]*subAcc
+	}
+	acc := make(map[propIntelCellKey]*cellSubs)
+
+	for _, m := range history {
+		if m.T < baselineStart || m.T >= nowcastCutoff {
+			continue
+		}
+		band := normalizeBand(m.B)
+		if band == "" || !bandInScope(band) {
+			continue
+		}
+		remoteLocator, remoteCall, ok := resolveRemoteEnd(m, qthSet)
+		if !ok {
+			continue
+		}
+		region := dxPulseRegionForLocator(remoteLocator)
+		if region == dxPulseRegionUnknown {
+			continue
+		}
+		// Sub-window index relative to baselineStart: 0, 1, 2, ...
+		subIdx := (m.T - baselineStart) / subWindowSec
+		if subIdx < 0 {
+			continue
+		}
+		key := propIntelCellKey{band: band, region: string(region)}
+		cell := acc[key]
+		if cell == nil {
+			cell = &cellSubs{subs: make(map[int64]*subAcc)}
+			acc[key] = cell
+		}
+		sa := cell.subs[subIdx]
+		if sa == nil {
+			sa = &subAcc{uniqueSenders: make(map[string]struct{})}
+			cell.subs[subIdx] = sa
+		}
+		if remoteCall != "" {
+			sa.uniqueSenders[remoteCall] = struct{}{}
+		}
+	}
+
+	out := make(map[propIntelCellKey]memorySurgeBaseline, len(acc))
+	subHours := float64(subWindowSec) / 3600.0
+	if subHours <= 0 {
+		subHours = 0.25
+	}
+	// Total number of sub-windows in the baseline window. Each sub-window
+	// (including zero-activity ones) counts as one sample — a flat baseline
+	// with half its sub-windows empty still has nonzero variance when the
+	// other half is active, and the minimum-sample guard must see the empty
+	// sub-windows too (otherwise a sparse baseline inflates n with only the
+	// active sub-windows and misrepresents its statistical weight).
+	totalSubs := int((nowcastCutoff - baselineStart) / subWindowSec)
+	if totalSubs < 1 {
+		totalSubs = 1
+	}
+	for key, cell := range acc {
+		rates := make([]float64, 0, totalSubs)
+		// Iterate sub-window indices 0..totalSubs-1; missing entries are
+		// zero-activity sub-windows and contribute rate 0.
+		for idx := int64(0); idx < int64(totalSubs); idx++ {
+			sa, ok := cell.subs[idx]
+			if !ok {
+				rates = append(rates, 0)
+				continue
+			}
+			rate := float64(len(sa.uniqueSenders)) / subHours
+			rates = append(rates, rate)
+		}
+		if len(rates) == 0 {
+			continue
+		}
+		mean := meanFloat(rates)
+		var stddev float64
+		if len(rates) >= 2 {
+			var sumSqDiff float64
+			for _, r := range rates {
+				d := r - mean
+				sumSqDiff += d * d
+			}
+			// Sample standard deviation (n−1 denominator).
+			stddev = math.Sqrt(sumSqDiff / float64(len(rates)-1))
+		}
+		out[key] = memorySurgeBaseline{mean: mean, stddev: stddev, n: len(rates)}
+	}
+	return out
+}
+
+// meanFloat is a small float64 mean helper (the existing `mean` takes
+// []float64 too, but this avoids shadowing surprises in detectSurges' scope).
+func meanFloat(v []float64) float64 {
+	if len(v) == 0 {
+		return 0
+	}
+	var s float64
+	for _, x := range v {
+		s += x
+	}
+	return s / float64(len(v))
+}
 // propIntelHandler is the HTTP handler for /api/prop_intel. It follows the
 // dxConditionsHandler pattern: resolve QTH, parse minutes/cw_min_db/
 // surroundings, snapshot hub.history via binary-search + copy under RLock,
-// call the engine, JSON-encode.
+// call the engine, JSON-encode. The `surge_threshold` query parameter
+// overrides the default z-score threshold for surge detection (U2).
 func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 	qth, surroundings := resolveQTHQuery(r)
 	if qth == "" {
@@ -601,12 +934,29 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// surge_threshold overrides the default z-score threshold for this
+	// request. Per-band/region overrides are deferred to v2 (KTD3).
+	surgeThreshold := propIntelSurgeZThreshold
+	if raw := strings.TrimSpace(r.URL.Query().Get("surge_threshold")); raw != "" {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil && v > 0 {
+			surgeThreshold = v
+		}
+	}
+
 	now := time.Now().Unix()
 	cutoff := now - int64(minutes)*60
 	hub.RLock()
 	idx := sort.Search(len(hub.history), func(i int) bool {
 		return hub.history[i].T >= cutoff
 	})
+	// Copy a wider window than the nowcast when surge detection is active so
+	// the memory-fallback baseline (trailing 6h) is available even when the
+	// requested `minutes` is short. The engine ignores out-of-window spots
+	// for the nowcast; detectSurges uses the extra history for its baseline.
+	baselineCutoff := now - int64(propIntelSurgeBaselineWindowMin)*60
+	if baselineCutoff < cutoff {
+		cutoff = baselineCutoff
+	}
 	historyCopy := make([]MQTTMessage, len(hub.history)-idx)
 	copy(historyCopy, hub.history[idx:])
 	hub.RUnlock()
@@ -615,6 +965,7 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 	if engine.baseline == nil {
 		engine.baseline = dxBaseline
 	}
+	engine.surgeThreshold = surgeThreshold
 	resp := engine.Evaluate(qth, surroundings, minutes, cwMinDb, historyCopy, now)
 
 	w.Header().Set("Content-Type", "application/json")
