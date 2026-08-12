@@ -364,8 +364,11 @@ export async function initPushUI() {
     // server has no record (lost the in-memory store on restart),
     // re-POST the subscription. The "push disabled — re-enable"
     // indicator surfaces when the server reports zero records.
+    let reconcileInFlight = false;
     async function reconcileAfterRestart() {
         if (!isPushSupported()) return;
+        if (reconcileInFlight) return;
+        reconcileInFlight = true;
         try {
             const reg = await navigator.serviceWorker.getRegistration();
             if (!reg) return;
@@ -389,7 +392,9 @@ export async function initPushUI() {
                 setStatus('push re-enabled after restart', 'ok');
                 setReEnableIndicator(false);
             }
-        } catch (_) { /* best effort */ }
+        } catch (_) { /* best effort */ } finally {
+            reconcileInFlight = false;
+        }
     }
 
     // Run the reconciliation on init (panel open) and when the tab

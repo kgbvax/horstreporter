@@ -20,10 +20,10 @@ import (
 // the operator's per-(band × region) enable preferences. A re-POST of an
 // existing endpoint updates the preferences in place (idempotent).
 type pushSubscribeRequest struct {
-	Endpoint    string          `json:"endpoint"`
+	Endpoint    string               `json:"endpoint"`
 	Keys        pushSubscriptionKeys `json:"keys"`
-	QTH         string          `json:"qth"`
-	Preferences map[string]bool `json:"preferences"`
+	QTH         string               `json:"qth"`
+	Preferences map[string]bool      `json:"preferences"`
 }
 
 // pushUnsubscribeRequest is the JSON body of POST /api/push/unsubscribe.
@@ -104,7 +104,10 @@ func pushUnsubscribeHandler(w http.ResponseWriter, r *http.Request) {
 	if !pushStore.isEnabled() {
 		// Still accept unsubscriptions when push is disabled so the
 		// browser can clean up its side without a 503.
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			OK bool `json:"ok"`
+		}{OK: true})
 		return
 	}
 	var req pushUnsubscribeRequest
@@ -586,40 +589,40 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	pushSurges, pushSent, pushErrs := pushAccounting.snapshot()
 
 	stats := struct {
-		ActiveConnections    int     `json:"active_connections"`
-		HistorySize          int     `json:"history_size"`
-		HistoryMinutes       int     `json:"history_minutes"`
-		HistoryRetentionMins int     `json:"history_retention_minutes"`
-		HistorySizeKB        int64   `json:"history_size_kb"`
-		SessionsTotal        int64   `json:"sessions_total"`
-		SessionsCompleted    int64   `json:"sessions_completed"`
-		SessionsActive       int64   `json:"sessions_active"`
-		SessionBytesTotal    int64   `json:"session_bytes_total"`
-		SessionBytesAvg      float64 `json:"session_bytes_avg"`
-		DxBaselineEventCount int     `json:"dx_baseline_event_count"`
-		DxBaselineHistoryM   int     `json:"dx_baseline_history_minutes"`
-		DxBaselineMaxEvents  int     `json:"dx_baseline_max_events"`
-		DxClusterConnAttempt int64   `json:"dxcluster_connect_attempts"`
-		DxClusterConnected   int64   `json:"dxcluster_connected_sessions"`
-		DxClusterLinesSeen   int64   `json:"dxcluster_lines_seen"`
-		DxClusterParsed      int64   `json:"dxcluster_parsed_spots"`
-		DxClusterPersisted   int64   `json:"dxcluster_persisted_spots"`
-		DxClusterForwarded   int64   `json:"dxcluster_live_forwarded"`
-		DxClusterDroppedLoc  int64   `json:"dxcluster_dropped_no_locator"`
-		RbnConnAttempt       int64   `json:"rbn_connect_attempts"`
-		RbnConnected         int64   `json:"rbn_connected_sessions"`
-		RbnLinesSeen         int64   `json:"rbn_lines_seen"`
-		RbnParsed            int64   `json:"rbn_parsed_spots"`
-		RbnPersisted         int64   `json:"rbn_persisted_spots"`
-		RbnForwarded         int64   `json:"rbn_live_forwarded"`
-		RbnDroppedLoc        int64   `json:"rbn_dropped_no_locator"`
-		WsprPollAttempts     int64   `json:"wspr_poll_attempts"`
-		WsprPollFailures     int64   `json:"wspr_poll_failures"`
-		WsprRowsSeen         int64   `json:"wspr_rows_seen"`
-		WsprParsed           int64   `json:"wspr_parsed_spots"`
-		WsprPersisted        int64   `json:"wspr_persisted_spots"`
-		WsprForwarded        int64   `json:"wspr_live_forwarded"`
-		WsprDroppedLoc       int64   `json:"wspr_dropped_no_locator"`
+		ActiveConnections    int                  `json:"active_connections"`
+		HistorySize          int                  `json:"history_size"`
+		HistoryMinutes       int                  `json:"history_minutes"`
+		HistoryRetentionMins int                  `json:"history_retention_minutes"`
+		HistorySizeKB        int64                `json:"history_size_kb"`
+		SessionsTotal        int64                `json:"sessions_total"`
+		SessionsCompleted    int64                `json:"sessions_completed"`
+		SessionsActive       int64                `json:"sessions_active"`
+		SessionBytesTotal    int64                `json:"session_bytes_total"`
+		SessionBytesAvg      float64              `json:"session_bytes_avg"`
+		DxBaselineEventCount int                  `json:"dx_baseline_event_count"`
+		DxBaselineHistoryM   int                  `json:"dx_baseline_history_minutes"`
+		DxBaselineMaxEvents  int                  `json:"dx_baseline_max_events"`
+		DxClusterConnAttempt int64                `json:"dxcluster_connect_attempts"`
+		DxClusterConnected   int64                `json:"dxcluster_connected_sessions"`
+		DxClusterLinesSeen   int64                `json:"dxcluster_lines_seen"`
+		DxClusterParsed      int64                `json:"dxcluster_parsed_spots"`
+		DxClusterPersisted   int64                `json:"dxcluster_persisted_spots"`
+		DxClusterForwarded   int64                `json:"dxcluster_live_forwarded"`
+		DxClusterDroppedLoc  int64                `json:"dxcluster_dropped_no_locator"`
+		RbnConnAttempt       int64                `json:"rbn_connect_attempts"`
+		RbnConnected         int64                `json:"rbn_connected_sessions"`
+		RbnLinesSeen         int64                `json:"rbn_lines_seen"`
+		RbnParsed            int64                `json:"rbn_parsed_spots"`
+		RbnPersisted         int64                `json:"rbn_persisted_spots"`
+		RbnForwarded         int64                `json:"rbn_live_forwarded"`
+		RbnDroppedLoc        int64                `json:"rbn_dropped_no_locator"`
+		WsprPollAttempts     int64                `json:"wspr_poll_attempts"`
+		WsprPollFailures     int64                `json:"wspr_poll_failures"`
+		WsprRowsSeen         int64                `json:"wspr_rows_seen"`
+		WsprParsed           int64                `json:"wspr_parsed_spots"`
+		WsprPersisted        int64                `json:"wspr_persisted_spots"`
+		WsprForwarded        int64                `json:"wspr_live_forwarded"`
+		WsprDroppedLoc       int64                `json:"wspr_dropped_no_locator"`
 		PropIntel            *propIntelStatsBlock `json:"prop_intel"`
 		Push                 *pushStatsBlock      `json:"push"`
 	}{

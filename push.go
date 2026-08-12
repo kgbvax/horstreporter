@@ -173,6 +173,14 @@ func (rl *pushIPRateLimiter) allow(ip string) bool {
 	now := time.Now()
 	rl.Lock()
 	defer rl.Unlock()
+	// Opportunistic GC: if the map has grown large, evict expired entries.
+	if len(rl.counts) > 10000 {
+		for k, v := range rl.counts {
+			if now.Sub(v.windowStart) >= time.Hour {
+				delete(rl.counts, k)
+			}
+		}
+	}
 	w, ok := rl.counts[ip]
 	if !ok || now.Sub(w.windowStart) >= time.Hour {
 		rl.counts[ip] = &pushIPRateWindow{windowStart: now, count: 1}
@@ -343,7 +351,7 @@ func (s *pushSubscriptionStore) remove(endpoint string) {
 }
 
 // has reports whether a subscription for the given endpoint is stored.
-// Used by the frontend's re-subscription check (GET /api/push/subscribe).
+// Used by the frontend's re-subscription check (GET /api/push/subscription-status).
 func (s *pushSubscriptionStore) has(endpoint string) bool {
 	s.RLock()
 	defer s.RUnlock()
@@ -392,9 +400,9 @@ func (s *pushSubscription) matches(band, region string) bool {
 // band/region are the machine-readable coordinates for the click-through
 // focus action.
 type pushSurgePayload struct {
-	Band   string `json:"band"`
-	Region string `json:"region"`
-	Label  string `json:"label"`
+	Band   string  `json:"band"`
+	Region string  `json:"region"`
+	Label  string  `json:"label"`
 	ZScore float64 `json:"z_score,omitempty"`
 }
 
@@ -467,11 +475,6 @@ func (s *pushSubscriptionStore) sendPushNotification(sub *pushSubscription, payl
 	ctx, cancel := context.WithTimeout(context.Background(), pushSendTimeout)
 	defer cancel()
 	status, err := sendFunc(ctx, sub, body)
-	// U6: account every send attempt (success or failure) so /api/stats
-	// can report the push send rate. A send is "sent" once the sendFunc
-	// was invoked; transport errors and 5xx/4xx responses still count as
-	// a send attempt and additionally as an error.
-	pushAccounting.pushSent.Add(1)
 	if err != nil {
 		pushAccounting.pushErrors.Add(1)
 		// Redact: log only the endpoint host, not the URL (which
@@ -497,6 +500,7 @@ func (s *pushSubscriptionStore) sendPushNotification(sub *pushSubscription, payl
 		logInfo("push endpoint client error (host=%s, status=%d)", pushEndpointHost(sub.Endpoint), status)
 		return
 	}
+	pushAccounting.pushSent.Add(1)
 }
 
 // pushEndpointHost returns the host of a subscription endpoint URL for

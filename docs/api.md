@@ -137,7 +137,8 @@ request re-derives its cells from a snapshotted history window. See
 
 Params: `qth` (required), `surroundings`, `minutes` (default 15,
 max 180), `cw_min_db` (default -15), `surge_threshold` (float, default
-2.0 — z-score above which a cell is flagged as a surge; per-band/region
+2.0 — z-score above which a cell is flagged as a surge; invalid or <= 0
+values are silently ignored and reset to the default; per-band/region
 overrides are deferred to v2).
 
 Response:
@@ -235,6 +236,18 @@ Request body: `{"endpoint": "https://fcm.googleapis.com/fcm/abc"}`.
 Response: `{"ok": true}`.
 
 Errors: 405 (non-POST), 400 (invalid JSON).
+
+### `GET /api/push/subscription-status` — check subscription state
+
+Checks whether a subscription endpoint is registered server-side. Used by the
+frontend re-subscription-after-restart flow: a `registered: false` response
+triggers a re-POST to `/api/push/subscribe`.
+
+Params: `endpoint` (required, the push service URL).
+
+Response: `{"registered": true|false}`.
+
+Errors: 405 (non-GET), 400 (missing endpoint), 503 (push not configured).
 
 ### `GET /api/square_details` — one grid square's reports
 

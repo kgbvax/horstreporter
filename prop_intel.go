@@ -330,7 +330,14 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 	// push is not configured. cells is a copy owned by this response,
 	// so the goroutine can read it after the handler returns.
 	if hasSurge := surgePresent(cells); hasSurge {
-		go pushStore.NotifySurges(cells, qth)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logInfo("push goroutine panic: %v", r)
+				}
+			}()
+			pushStore.NotifySurges(cells, qth)
+		}()
 	}
 
 	return resp
@@ -543,17 +550,17 @@ func (e *propIntelEngine) loadRegionBaselines(now int64) map[regionBaselineKey]r
 // follow dxPulseAllRegions; the names follow the operator-facing convention
 // used in the existing WSPR matrix panel.
 var propIntelRegionDisplayNames = map[string]string{
-	"EU":   "Europe",
-	"NA":   "North America",
-	"SA":   "South America",
-	"AF":   "Africa",
-	"AS":   "Asia",
-	"OC":   "Oceania",
-	"AN":   "Antarctica",
-	"JA":   "Japan",
-	"VK":   "Australia",
-	"KH6":  "Hawaii",
-	"CAR":  "Caribbean",
+	"EU":  "Europe",
+	"NA":  "North America",
+	"SA":  "South America",
+	"AF":  "Africa",
+	"AS":  "Asia",
+	"OC":  "Oceania",
+	"AN":  "Antarctica",
+	"JA":  "Japan",
+	"VK":  "Australia",
+	"KH6": "Hawaii",
+	"CAR": "Caribbean",
 }
 
 // regionDisplayName returns the display name for a region code, falling back
