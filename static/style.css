@@ -786,6 +786,59 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     }
 }
 
+/* U5: Web Push settings (options panel). The matrix is a compact
+   (band × region) checkbox grid mirroring the prop-matrix layout. */
+.push-pref-matrix {
+    padding: 4px 0;
+}
+
+.push-pref-grid {
+    display: grid;
+    grid-template-columns: 3em repeat(11, minmax(1.6em, 1fr));
+    gap: 2px;
+    font-size: 0.65rem;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.push-pref-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.6em;
+}
+
+.push-pref-cell input[type="checkbox"] {
+    margin: 0;
+}
+
+.push-pref-header-cell {
+    font-weight: 600;
+    opacity: 0.75;
+    text-align: center;
+}
+
+.push-pref-band-label {
+    font-weight: 600;
+    text-align: right;
+    padding-right: 4px;
+    justify-content: flex-end;
+}
+
+.push-ios-hint {
+    border-left: 3px solid var(--accent, #1f9e8f);
+    padding-left: 6px;
+}
+
+.push-reenable-hint {
+    color: #c0392b;
+    font-weight: 600;
+}
+
+#push-status[data-kind="error"] { color: #c0392b; }
+#push-status[data-kind="ok"] { color: var(--accent, #1f9e8f); }
+#push-status[data-kind="busy"] { color: var(--status-color, #6c757d); }
+
 .band-lab-card-charts {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

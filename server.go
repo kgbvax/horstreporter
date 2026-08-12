@@ -15,6 +15,152 @@ import (
 	"time"
 )
 
+// pushSubscribeRequest is the JSON body of POST /api/push/subscribe.
+// The browser sends its PushSubscription object (endpoint + keys) and
+// the operator's per-(band × region) enable preferences. A re-POST of an
+// existing endpoint updates the preferences in place (idempotent).
+type pushSubscribeRequest struct {
+	Endpoint    string          `json:"endpoint"`
+	Keys        pushSubscriptionKeys `json:"keys"`
+	QTH         string          `json:"qth"`
+	Preferences map[string]bool `json:"preferences"`
+}
+
+// pushUnsubscribeRequest is the JSON body of POST /api/push/unsubscribe.
+type pushUnsubscribeRequest struct {
+	Endpoint string `json:"endpoint"`
+}
+
+// pushVAPIDPublicKeyHandler serves the server's VAPID public key (base64url)
+// for the frontend subscription flow. The private key is NEVER exposed
+// here. Returns 503 when push is not configured.
+func pushVAPIDPublicKeyHandler(w http.ResponseWriter, r *http.Request) {
+	if !pushStore.isEnabled() {
+		http.Error(w, "push not configured", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		PublicKey string `json:"public_key"`
+	}{PublicKey: pushStore.publicKey()})
+}
+
+// pushSubscribeHandler stores (or updates) a browser Push API
+// subscription. Validates the subscription shape (HTTPS endpoint +
+// p256dh + auth keys) before storing. Per-client-IP rate limiting
+// (pushSubscribeRatePerHour / hour) mitigates abuse from unauthenticated
+// clients. A re-POST of an existing endpoint is a no-op update (the plan's
+// idempotent re-subscription requirement).
+func pushSubscribeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !pushStore.isEnabled() {
+		http.Error(w, "push not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if !pushRateLimiter.allow(clientIPFromRequest(r)) {
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+	var req pushSubscribeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	sub := &pushSubscription{
+		Endpoint:    strings.TrimSpace(req.Endpoint),
+		Keys:        req.Keys,
+		QTH:         strings.ToUpper(strings.TrimSpace(req.QTH)),
+		Preferences: req.Preferences,
+	}
+	if sub.Preferences == nil {
+		sub.Preferences = map[string]bool{}
+	}
+	if err := validatePushSubscription(sub); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	pushStore.add(sub)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(struct {
+		OK         bool   `json:"ok"`
+		Endpoint   string `json:"endpoint"`
+		Registered bool   `json:"registered"`
+	}{OK: true, Endpoint: sub.Endpoint, Registered: true})
+}
+
+// pushUnsubscribeHandler removes a subscription by endpoint. No-op when
+// the endpoint was never stored (the browser may unsubscribe after a
+// server restart that already lost the record).
+func pushUnsubscribeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !pushStore.isEnabled() {
+		// Still accept unsubscriptions when push is disabled so the
+		// browser can clean up its side without a 503.
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	var req pushUnsubscribeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	pushStore.remove(strings.TrimSpace(req.Endpoint))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(struct {
+		OK bool `json:"ok"`
+	}{OK: true})
+}
+
+// pushSubscriptionStatusHandler reports whether a given endpoint is
+// currently registered server-side. Used by the frontend's
+// re-subscription flow: on panel open the browser queries its existing
+// subscription endpoint here; a 404 triggers a re-POST to
+// /api/push/subscribe (the plan's restart-recovery requirement).
+func pushSubscriptionStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !pushStore.isEnabled() {
+		http.Error(w, "push not configured", http.StatusServiceUnavailable)
+		return
+	}
+	endpoint := strings.TrimSpace(r.URL.Query().Get("endpoint"))
+	if endpoint == "" {
+		http.Error(w, "endpoint required", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Registered bool `json:"registered"`
+	}{Registered: pushStore.has(endpoint)})
+}
+
+// clientIPFromRequest extracts the client IP for rate limiting. Honors
+// X-Forwarded-For (first entry) when present (production runs behind a
+// TLS-terminating proxy), falling back to RemoteAddr. Strips the port.
+func clientIPFromRequest(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if idx := strings.IndexByte(xff, ','); idx >= 0 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return strings.TrimSpace(xff)
+	}
+	host := r.RemoteAddr
+	if idx := strings.LastIndexByte(host, ':'); idx >= 0 {
+		host = host[:idx]
+	}
+	return strings.TrimSpace(host)
+}
+
 type countingResponseWriter struct {
 	http.ResponseWriter
 	bytesWritten int64

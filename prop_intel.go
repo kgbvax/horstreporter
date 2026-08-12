@@ -396,7 +396,30 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 	detectSurges(cells, qth, surroundings, cwMinDb, history, now, threshold, regionBaseline)
 
 	resp.Cells = cells
+
+	// U5: Web Push. After detectSurges has flagged cells, fan out push
+	// notifications to subscriptions whose preferences match a surged
+	// (band × region). Runs in a goroutine so a slow push endpoint
+	// cannot block the /api/prop_intel HTTP response (the plan's
+	// async-push requirement). The store is nil-safe and a no-op when
+	// push is not configured. cells is a copy owned by this response,
+	// so the goroutine can read it after the handler returns.
+	if hasSurge := surgePresent(cells); hasSurge {
+		go pushStore.NotifySurges(cells, qth)
+	}
+
 	return resp
+}
+
+// surgePresent reports whether any cell in the slice has a Surge.
+// O(cells); used to skip the goroutine launch when there is nothing to push.
+func surgePresent(cells []propIntelCell) bool {
+	for i := range cells {
+		if cells[i].Surge != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveRemoteEnd returns the remote locator and callsign (the end of the spot

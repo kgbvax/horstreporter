@@ -222,6 +222,10 @@ func main() {
 	opModeControlEnableFlag := flag.Bool("opmode-control-enable", false, "Allow rotate/control commands in operator mode")
 	opModeAgentURLFlag := flag.String("opmode-agent-url", "", "Deprecated and ignored: backend never proxies to local operator agent")
 	opModeAgentTimeoutMsFlag := flag.Int("opmode-agent-timeout-ms", 1500, "Deprecated and ignored: backend never proxies to local operator agent")
+	pushEnableFlag := flag.Bool("push-enable", false, "Enable Web Push notification channel for surge alerts (requires VAPID keys via -push-vapid-private-key/-push-vapid-public-key or PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
+	pushVAPIDPrivateKeyFlag := flag.String("push-vapid-private-key", "", "VAPID private key (base64url) for signing Web Push messages. Falls back to env PUSH_VAPID_PRIVATE_KEY. Generate with `go run github.com/SherClockHolmes/webpush-go` or the scripts/generate-vapid-keys.sh helper.")
+	pushVAPIDPublicKeyFlag := flag.String("push-vapid-public-key", "", "VAPID public key (base64url) served at /api/push/vapid-public-key for the browser subscription flow. Falls back to env PUSH_VAPID_PUBLIC_KEY.")
+	pushVAPIDSubscriberFlag := flag.String("push-vapid-subscriber", "", "mailto: URL in the VAPID JWT (identifies the sending server to the push service). Defaults to mailto:horstreporter@example.com.")
 	flag.Parse()
 
 	// Override logLevel from flag if provided
@@ -258,6 +262,27 @@ func main() {
 		logInfo("-opmode-agent-timeout-ms is deprecated and ignored; backend no longer calls operator agent")
 	}
 	configureOpMode(*opModeControlEnableFlag)
+
+	// Web Push (U5): resolve VAPID keys from flag then env (mirrors the
+	// DX_POSTGRES_DSN pattern — keep the private key out of argv via the
+	// env var in production). Push is enabled only when both keys are
+	// present AND -push-enable is set, so the subsystem is opt-in.
+	pushVAPIDPrivate := strings.TrimSpace(*pushVAPIDPrivateKeyFlag)
+	if pushVAPIDPrivate == "" {
+		pushVAPIDPrivate = strings.TrimSpace(os.Getenv("PUSH_VAPID_PRIVATE_KEY"))
+	}
+	pushVAPIDPublic := strings.TrimSpace(*pushVAPIDPublicKeyFlag)
+	if pushVAPIDPublic == "" {
+		pushVAPIDPublic = strings.TrimSpace(os.Getenv("PUSH_VAPID_PUBLIC_KEY"))
+	}
+	pushStore.configure(pushVAPIDPrivate, pushVAPIDPublic, *pushVAPIDSubscriberFlag, *pushEnableFlag)
+	if pushStore.isEnabled() {
+		logInfo("Web Push enabled (vapid public key present, subscriber=%q)", pushStore.vapidSubscriber)
+	} else if *pushEnableFlag {
+		logInfo("Web Push requested via -push-enable but VAPID keys are missing — push disabled (set PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
+	} else {
+		logInfo("Web Push disabled (-push-enable not set)")
+	}
 
 	// Resolve the Postgres DSN: explicit flag wins (for ad-hoc/dev), then the
 	// DX_POSTGRES_DSN env var (the production path — keeps the secret out of
@@ -447,6 +472,15 @@ func main() {
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
 	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)
 	appMux.HandleFunc("/api/opmode/status", opModeStatusHandler)
+	// Web Push (U5): VAPID public key for the browser subscription flow,
+	// subscribe/unsubscribe, and a subscription-status endpoint used by
+	// the frontend's re-subscription-after-restart check. The handlers
+	// are registered unconditionally (they return 503 when push is not
+	// configured) so the frontend can feature-detect without a crash.
+	appMux.HandleFunc("/api/push/vapid-public-key", pushVAPIDPublicKeyHandler)
+	appMux.HandleFunc("/api/push/subscribe", pushSubscribeHandler)
+	appMux.HandleFunc("/api/push/unsubscribe", pushUnsubscribeHandler)
+	appMux.HandleFunc("/api/push/subscription-status", pushSubscriptionStatusHandler)
 
 	// Reverse-proxy /horstprop/* to the local horstprop scoring service so the
 	// Chase Queue reaches it same-origin (horstprop itself stays bound to
