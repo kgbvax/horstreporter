@@ -600,7 +600,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     top: 64px;
     right: 12px;
     left: auto;
-    width: 380px;
+    width: fit-content;
     max-width: calc(100% - 24px);
     max-height: calc(100% - 120px);
     background: color-mix(in srgb, var(--bg-color) 88%, transparent);
@@ -636,7 +636,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 }
 
 .wspr-matrix-table {
-    width: 100%;
+    width: auto;
     border-collapse: collapse;
     font-size: 0.72rem;
 }
@@ -678,7 +678,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     position: absolute;
     top: 64px;
     left: 12px;
-    width: 380px;
+    width: fit-content;
     max-width: calc(100% - 24px);
     max-height: calc(100% - 120px);
     background: color-mix(in srgb, var(--bg-color) 88%, transparent);
@@ -713,6 +713,26 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     gap: 6px;
 }
 
+/* Draggable overlay cards: the header is the drag handle (grab), the close
+   button stays a pointer, and the whole card suppresses text selection while
+   being dragged so the matrix cells don't highlight. */
+.prop-matrix-window-header,
+.wspr-matrix-window-header {
+    cursor: grab;
+}
+.prop-matrix-window-header button,
+.wspr-matrix-window-header button {
+    cursor: pointer;
+}
+.prop-matrix-window.is-dragging,
+.wspr-matrix-window.is-dragging {
+    user-select: none;
+}
+.prop-matrix-window.is-dragging .prop-matrix-window-header,
+.wspr-matrix-window.is-dragging .wspr-matrix-window-header {
+    cursor: grabbing;
+}
+
 .prop-matrix-body {
     flex: 1;
     overflow-y: auto;
@@ -720,7 +740,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 }
 
 .prop-matrix-table {
-    width: 100%;
+    width: auto;
     border-collapse: collapse;
     font-size: 0.72rem;
 }
@@ -929,17 +949,19 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 
     /* Floating matrix overlay cards: stack near-full-width so they don't cover
        the whole map side-by-side. #controls is z1200 here, so opening the
-       sidebar still covers the cards (z1100 < z1200). */
+       sidebar still covers the cards (z1100 < z1200). !important wins over
+       inline left/top set by the drag helper so the stack is reliable. */
     .prop-matrix-window,
     .wspr-matrix-window {
-        left: 8px;
-        right: 8px;
-        width: auto;
+        left: 8px !important;
+        right: 8px !important;
+        top: 64px !important;
+        width: auto !important;
         max-width: none;
         max-height: 38vh;
     }
     .wspr-matrix-window {
-        top: calc(64px + 38vh + 8px);
+        top: calc(64px + 38vh + 8px) !important;
     }
 }
 

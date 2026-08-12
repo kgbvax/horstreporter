@@ -1,5 +1,6 @@
 import { WSPR_REGIONS, bandColors, getEnabledBands } from './utils.js';
 import { state } from './state.js';
+import { makeDraggable } from './panel-drag.js';
 
 // prop-matrix.js — band × region propagation-intelligence matrix panel.
 // Polls the backend `/api/prop_intel` endpoint (built in U1/U2) and renders
@@ -79,6 +80,9 @@ export function initPropMatrix({ onLayoutChange } = {}) {
                 }
             });
         }
+
+        // Make the floating card draggable by its header (position persisted).
+        makeDraggable(panel, panel.querySelector('.prop-matrix-window-header'), 'propMatrixPos');
 
         runtime.initialized = true;
     }
