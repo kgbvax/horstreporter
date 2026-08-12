@@ -126,6 +126,121 @@ priority ("high"|"normal"), reason, rank_score, spots_per_minute,
 baseline_activity, activity_ratio, sustained_bins, p90_distance_km,
 baseline_p90_distance_km?, distance_ratio?, trend, trend_delta, status}]}`.
 
+### `GET /api/prop_intel` — propagation intelligence nowcast + forecast
+
+Per-(band × region) nowcast and 1-hour forecast of P(open), expected spot
+count, and confidence. Reuses the DxBaseline sparkline for the forecast
+slope, the dxPulse 11-region classifier for the region axis, and the
+Postgres `regionCalendarStats` baseline when a store is configured. Stateless
+beyond the `dxBaseline` singleton and `hub.history` ring; every request
+re-derives its cells from a snapshotted history window. See
+`prop_intel.go`.
+
+Params: `qth` (required), `surroundings`, `minutes` (default 15,
+max 180), `cw_min_db` (default -15), `surge_threshold` (float, default
+2.0 — z-score above which a cell is flagged as a surge; per-band/region
+overrides are deferred to v2).
+
+Response:
+```
+{
+  "qth": "JO32",
+  "minutes": 15,
+  "now": 1734567890,
+  "forecast_horizon_hours": 1.0,
+  "bands": ["20m", "10m", ...],
+  "regions": ["EU", "NA", "SA", "AF", "AS", "OC", "AN", "JA", "VK", "KH6", "CAR"],
+  "cells": [
+    {
+      "band": "20m",
+      "region": "CAR",
+      "p_open": 0.834,
+      "expected_count": 4.2,
+      "confidence": 0.71,
+      "sources": ["rbn", "pskreporter"],
+      "nowcast":  { "p_open": 0.834, "expected_count": 4.2, "confidence": 0.71 },
+      "forecast": { "p_open": 0.881, "expected_count": 5.1, "confidence": 0.68 },
+      "surge": { "z_score": 3.2, "label": "tune to 20m, surge to Caribbean" }
+    }
+  ]
+}
+```
+
+- `p_open` = P(≥1 spot in the next 15-minute slot) = 1 − e^(−λ) with
+  λ = rate_per_hour × (15/60). `expected_count` is the rate per hour.
+- `confidence` ∈ [0,1] is a function of unique-sender support and source
+  diversity; single-source cells are discounted, dense single-source
+  cells are lifted to moderate. Forecast confidence is further
+  discounted by sparkline volatility.
+- Sparse cells (band seen in the window with a region baseline but no
+  live spots) are still emitted with a low-confidence (0.15) prior so
+  the frontend can render the full 11-region grid.
+- `surge` is present only when the cell's live rate z-scores above the
+  region-level baseline (Postgres `regionCalendarStats` for the current
+  slot, or a memory-fallback trailing 6h baseline). Suppressed when the
+  baseline has fewer than 30 samples (PG) / 10 sub-windows (memory), or
+  when the baseline stddev is zero.
+- When at least one cell surges, the engine fans out Web Push
+  notifications to matching subscriptions asynchronously (see
+  `/api/push/*`); the push send never blocks this response.
+- Counters are surfaced in `/api/stats` under `prop_intel.requests`,
+  `prop_intel.errors`, `prop_intel.surges_detected`.
+
+### `GET /api/push/vapid-public-key` — Web Push public key
+
+Returns the server's VAPID public key (base64url) for the browser
+subscription flow. The private key is NEVER exposed here. Returns 503
+when push is not configured (`-push-enable` false or VAPID keys
+missing).
+
+No params.
+
+Response: `{"public_key": "<base64url>"}`.
+
+### `POST /api/push/subscribe` — register a Web Push subscription
+
+Stores (or updates) a browser Push API subscription. Validates the
+subscription shape (HTTPS endpoint + `p256dh` + `auth` keys) before
+storing. Per-client-IP rate limiting (`pushSubscribeRatePerHour`/hour =
+10/h) mitigates abuse from unauthenticated clients. A re-POST of an
+existing endpoint updates the QTH/preferences in place (idempotent
+re-subscription — the plan's restart-recovery requirement). When the
+store is at capacity (`pushMaxSubscriptions` = 1000), the oldest
+subscription is evicted (FIFO) before the new one is added.
+
+Request body:
+```
+{
+  "endpoint": "https://fcm.googleapis.com/fcm/abc",
+  "keys": { "auth": "<base64url>", "p256dh": "<base64url>" },
+  "qth": "JO32",
+  "preferences": { "all": true }
+}
+```
+
+`preferences` is a map of `"band:region"` → bool (e.g.
+`"10m:CAR": true`) or the special key `"all"` for every surge. An empty
+map with no `"all"` entry means no pushes (subscription stored but
+inert).
+
+Response: `{"ok": true, "endpoint": "...", "registered": true}`.
+
+Errors: 405 (non-POST), 503 (push not configured), 429 (rate limit),
+400 (invalid JSON / validation failure).
+
+### `POST /api/push/unsubscribe` — remove a Web Push subscription
+
+Removes a subscription by endpoint. No-op when the endpoint was never
+stored (the browser may unsubscribe after a server restart that already
+lost the record). Accepts the request even when push is disabled so the
+browser can clean up its side without a 503.
+
+Request body: `{"endpoint": "https://fcm.googleapis.com/fcm/abc"}`.
+
+Response: `{"ok": true}`.
+
+Errors: 405 (non-POST), 400 (invalid JSON).
+
 ### `GET /api/square_details` — one grid square's reports
 
 Params: `locator` (required, valid Maidenhead or 400), plus the same context
@@ -149,7 +264,9 @@ with freq ≤ 0 skipped. Requires DX cluster ingest to be enabled.
 
 No params. Active connections, hub history size/minutes/KB, session totals
 and byte accounting, DX baseline event counts, DX-cluster / RBN / WSPR ingest
-counters. The de-facto health endpoint.
+counters, plus a `prop_intel` block (`requests`, `errors`, `surges_detected`)
+and a `push` block (`surges_detected`, `push_sent`, `push_errors`). The
+de-facto health endpoint.
 
 ### `GET /api/opmode/status` — operator-mode wiring info
 

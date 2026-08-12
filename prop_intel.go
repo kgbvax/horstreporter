@@ -934,8 +934,10 @@ func meanFloat(v []float64) float64 {
 // call the engine, JSON-encode. The `surge_threshold` query parameter
 // overrides the default z-score threshold for surge detection (U2).
 func propIntelHandler(w http.ResponseWriter, r *http.Request) {
+	propIntelAccounting.requests.Add(1)
 	qth, surroundings := resolveQTHQuery(r)
 	if qth == "" {
+		propIntelAccounting.errors.Add(1)
 		http.Error(w, "qth required", http.StatusBadRequest)
 		return
 	}
@@ -968,10 +970,6 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().Unix()
 	cutoff := now - int64(minutes)*60
-	hub.RLock()
-	idx := sort.Search(len(hub.history), func(i int) bool {
-		return hub.history[i].T >= cutoff
-	})
 	// Copy a wider window than the nowcast when surge detection is active so
 	// the memory-fallback baseline (trailing 6h) is available even when the
 	// requested `minutes` is short. The engine ignores out-of-window spots
@@ -980,6 +978,10 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 	if baselineCutoff < cutoff {
 		cutoff = baselineCutoff
 	}
+	hub.RLock()
+	idx := sort.Search(len(hub.history), func(i int) bool {
+		return hub.history[i].T >= cutoff
+	})
 	historyCopy := make([]MQTTMessage, len(hub.history)-idx)
 	copy(historyCopy, hub.history[idx:])
 	hub.RUnlock()
@@ -990,6 +992,15 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	engine.surgeThreshold = surgeThreshold
 	resp := engine.Evaluate(qth, surroundings, minutes, cwMinDb, historyCopy, now)
+
+	// Count surges flagged by detectSurges so /api/stats can report the
+	// surge-detection rate (U6). A single request may flag more than one
+	// (band × region) cell; each flagged cell increments the counter.
+	for i := range resp.Cells {
+		if resp.Cells[i].Surge != nil {
+			propIntelAccounting.surgesDetected.Add(1)
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

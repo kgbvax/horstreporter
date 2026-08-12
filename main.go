@@ -89,8 +89,45 @@ var embeddedCtyData []byte
 var compressStream bool
 var dxBaseline *DxBaselineEngine
 var streamAccounting = &streamAccountingState{}
+var propIntelAccounting = &propIntelAccountingState{}
+var pushAccounting = &pushAccountingState{}
 
 const defaultLiveHistoryRetentionMinutes = 60
+
+// propIntelAccountingState tracks /api/prop_intel request, error, and
+// surge-detection counters. Mirrors the per-ingest accounting pattern
+// (streamAccountingState / dxClusterAccountingState): atomic.Int64 fields
+// with a snapshot() helper, surfaced via statsHandler under the
+// prop_intel.* JSON keys. See U6 of the Propagation Intelligence Layer plan.
+type propIntelAccountingState struct {
+	requests       atomic.Int64
+	errors         atomic.Int64
+	surgesDetected atomic.Int64
+}
+
+func (a *propIntelAccountingState) snapshot() (requests, errors, surgesDetected int64) {
+	requests = a.requests.Load()
+	errors = a.errors.Load()
+	surgesDetected = a.surgesDetected.Load()
+	return
+}
+
+// pushAccountingState tracks Web Push send and error counters, plus the
+// number of surges that triggered a push fan-out. Mirrors the per-ingest
+// accounting pattern; surfaced via statsHandler under the push.* JSON
+// keys. See U6.
+type pushAccountingState struct {
+	surgesDetected atomic.Int64
+	pushSent       atomic.Int64
+	pushErrors     atomic.Int64
+}
+
+func (a *pushAccountingState) snapshot() (surgesDetected, pushSent, pushErrors int64) {
+	surgesDetected = a.surgesDetected.Load()
+	pushSent = a.pushSent.Load()
+	pushErrors = a.pushErrors.Load()
+	return
+}
 
 var maxClients int
 var logLevel = "INFO"

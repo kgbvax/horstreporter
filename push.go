@@ -425,6 +425,12 @@ func (s *pushSubscriptionStore) NotifySurges(cells []propIntelCell, qth string) 
 	if len(surges) == 0 {
 		return
 	}
+	// U6: count surge fan-out events so /api/stats can report the
+	// surge-to-push conversion rate. One increment per NotifySurges call
+	// that had at least one surged cell, regardless of how many
+	// subscriptions matched — this mirrors the prop_intel.surgesDetected
+	// granularity (per-request, not per-cell).
+	pushAccounting.surgesDetected.Add(1)
 	subs := s.snapshot()
 	for _, sub := range subs {
 		for _, c := range surges {
@@ -462,7 +468,13 @@ func (s *pushSubscriptionStore) sendPushNotification(sub *pushSubscription, payl
 	ctx, cancel := context.WithTimeout(context.Background(), pushSendTimeout)
 	defer cancel()
 	status, err := sendFunc(ctx, sub, body)
+	// U6: account every send attempt (success or failure) so /api/stats
+	// can report the push send rate. A send is "sent" once the sendFunc
+	// was invoked; transport errors and 5xx/4xx responses still count as
+	// a send attempt and additionally as an error.
+	pushAccounting.pushSent.Add(1)
 	if err != nil {
+		pushAccounting.pushErrors.Add(1)
 		// Redact: log only the endpoint host, not the URL (which
 		// carries no secrets itself but the Authorization header we
 		// just sent does). VAPID material is never in the error
@@ -471,15 +483,18 @@ func (s *pushSubscriptionStore) sendPushNotification(sub *pushSubscription, payl
 		return
 	}
 	if status == http.StatusGone || status == http.StatusNotFound {
+		pushAccounting.pushErrors.Add(1)
 		s.remove(sub.Endpoint)
 		logInfo("push endpoint gone (host=%s, status=%d); subscription removed", pushEndpointHost(sub.Endpoint), status)
 		return
 	}
 	if status >= 500 {
+		pushAccounting.pushErrors.Add(1)
 		logInfo("push endpoint transient error (host=%s, status=%d)", pushEndpointHost(sub.Endpoint), status)
 		return
 	}
 	if status >= 400 {
+		pushAccounting.pushErrors.Add(1)
 		logInfo("push endpoint client error (host=%s, status=%d)", pushEndpointHost(sub.Endpoint), status)
 		return
 	}

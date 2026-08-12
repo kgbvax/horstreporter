@@ -1421,3 +1421,322 @@ func TestBuildSquareDetailsResponseEmptyAndFiltered(t *testing.T) {
 		}
 	})
 }
+
+// TestPropIntelIntegration verifies the U6 integration path:
+//   - /api/prop_intel returns the documented response shape (bands, regions, cells).
+//   - At least one cell has p_open > 0 when the history window has live spots.
+//   - /api/stats reports prop_intel.requests == N after N calls.
+//   - When a surge triggers a push (mocked sendFunc), /api/stats reports
+//     push.surges_detected >= 1 and push.push_sent >= 1.
+//
+// The test mirrors the TestStreamHandlerIntegration / TestStatsHandlerIntegration
+// pattern: seed hub.history, spin up httptest.NewServer with the handler, make
+// real HTTP requests, decode JSON, assert on the shape.
+func TestPropIntelIntegration(t *testing.T) {
+	// Isolate global state: hub history, prop_intel accounting, push store,
+	// and the push accounting counters. Restore on exit.
+	hub.Lock()
+	origHistory := hub.history
+	origClients := hub.clients
+	hub.clients = make(map[*Client]bool)
+	hub.Unlock()
+	defer func() {
+		hub.Lock()
+		hub.history = origHistory
+		hub.clients = origClients
+		hub.Unlock()
+	}()
+
+	origPropIntelReqs := propIntelAccounting.requests.Load()
+	origPropIntelErrs := propIntelAccounting.errors.Load()
+	origPropIntelSurges := propIntelAccounting.surgesDetected.Load()
+	origPushSurges := pushAccounting.surgesDetected.Load()
+	origPushSent := pushAccounting.pushSent.Load()
+	origPushErrs := pushAccounting.pushErrors.Load()
+	defer func() {
+		propIntelAccounting.requests.Store(origPropIntelReqs)
+		propIntelAccounting.errors.Store(origPropIntelErrs)
+		propIntelAccounting.surgesDetected.Store(origPropIntelSurges)
+		pushAccounting.surgesDetected.Store(origPushSurges)
+		pushAccounting.pushSent.Store(origPushSent)
+		pushAccounting.pushErrors.Store(origPushErrs)
+	}()
+
+	resetPushStoreForTest()
+	defer resetPushStoreForTest()
+	mock := &mockPushSend{}
+	newTestPushStore(t, mock)
+	defer func() {
+		pushStore.configure("", "", "", false)
+	}()
+
+	// Seed hub.history with a dense burst of 20m spots into the Caribbean
+	// region (CAR) from a JO32 operator. The surge detector compares the
+	// live 15-min rate against the trailing 6h baseline; we craft the
+	// baseline to be quiet (a few low-rate sub-windows) and the live
+	// window to be loud so a surge is flagged.
+	now := time.Now().Unix()
+	const liveSenders = 12
+	history := make([]MQTTMessage, 0, 200)
+	// Live nowcast window: 12 unique senders in the last 5 minutes, all
+	// 20m → CAR (remote locator in a Caribbean grid square, e.g. FK88).
+	// The remote locator must be a valid 4-char Maidenhead (isLocator
+	// requires the first 4 chars to be AA00-form). We cycle the 4th
+	// char through digits 0-9 then reuse, and the receiver callsign
+	// stays unique via a letter suffix so dedup counts 12 senders.
+	rlChar := func(i int) byte {
+		d := i % 10
+		return byte('0' + d)
+	}
+	for i := 0; i < liveSenders; i++ {
+		history = append(history, MQTTMessage{
+			T:  now - int64(60+i*5),
+			SC: "DL1AAA",
+			RC: "FK8" + string(rlChar(i)) + string(rune('A'+i)),
+			SL: "JO32",
+			RL: "FK8" + string(rlChar(i)) + "A",
+			RP: -10,
+			B:  "20m",
+			MD: "FT8",
+		})
+	}
+	// Trailing 6h baseline: a handful of low-activity 15-min sub-windows
+	// with a single unique sender each, so the baseline mean is low and
+	// the stddev is nonzero (otherwise the surge guard suppresses the
+	// z-score). Spread them across the 6h window excluding the live 15 min.
+	for subIdx := 0; subIdx < 12; subIdx++ {
+		t0 := now - int64(6*3600) + int64(subIdx*30*60)
+		if t0 > now-int64(15*60) {
+			t0 = now - int64(6*3600)
+		}
+		history = append(history, MQTTMessage{
+			T:  t0,
+			SC: "DL1AAA",
+			RC: "FK80XY",
+			SL: "JO32",
+			RL: "FK80",
+			RP: -15,
+			B:  "20m",
+			MD: "FT8",
+		})
+	}
+	// Pad a couple of zero-activity sub-windows by adding nothing for them;
+	// the memory-fallback baseline treats missing sub-windows as rate 0,
+	// which both lowers the mean and adds variance (helps the stddev > 0
+	// guard).
+	hub.Lock()
+	hub.history = history
+	hub.Unlock()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/prop_intel", propIntelHandler)
+	mux.HandleFunc("/api/stats", statsHandler)
+	mux.HandleFunc("/api/push/subscribe", pushSubscribeHandler)
+	mux.HandleFunc("/api/push/unsubscribe", pushUnsubscribeHandler)
+	mux.HandleFunc("/api/push/vapid-public-key", pushVAPIDPublicKeyHandler)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	// Subscribe to 20m:CAR surges so the mocked sendFunc will fire.
+	subBody := `{"endpoint":"https://fcm.googleapis.com/fcm/inttest","keys":{"auth":"auth-key","p256dh":"p256dh-key"},"qth":"JO32","preferences":{"20m:CAR":true}}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/push/subscribe", strings.NewReader(subBody))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("subscribe status = %d, want 200", resp.StatusCode)
+	}
+
+	// Make 3 calls to /api/prop_intel. The engine fans out push
+	// notifications in a goroutine; we issue the requests serially and
+	// then poll the mock until at least one push lands (the goroutine
+	// schedule is non-deterministic).
+	for i := 0; i < 3; i++ {
+		resp, err := http.Get(server.URL + "/api/prop_intel?qth=JO32&minutes=15")
+		if err != nil {
+			t.Fatalf("prop_intel request %d: %v", i, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			t.Fatalf("prop_intel request %d status = %d, body=%s", i, resp.StatusCode, body)
+		}
+		var data struct {
+			QTH   string   `json:"qth"`
+			Bands []string `json:"bands"`
+			Cells []struct {
+				Band   string  `json:"band"`
+				Region string  `json:"region"`
+				POpen  float64 `json:"p_open"`
+				Surge  *struct {
+					ZScore float64 `json:"z_score"`
+					Label  string  `json:"label"`
+				} `json:"surge,omitempty"`
+			} `json:"cells"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+			resp.Body.Close()
+			t.Fatalf("prop_intel decode %d: %v", i, err)
+		}
+		resp.Body.Close()
+
+		if i == 0 {
+			// Verify response shape on the first call.
+			if data.QTH == "" {
+				t.Errorf("prop_intel response qth empty")
+			}
+			if len(data.Bands) == 0 {
+				t.Errorf("prop_intel response bands empty; expected at least 20m")
+			}
+			// At least one cell must have p_open > 0 (the live window
+			// had 12 senders).
+			anyPOpen := false
+			for _, c := range data.Cells {
+				if c.POpen > 0 {
+					anyPOpen = true
+					break
+				}
+			}
+			if !anyPOpen {
+				t.Errorf("prop_intel response: no cell with p_open > 0 (cells=%d)", len(data.Cells))
+			}
+		}
+	}
+
+	// Poll the mock push send for up to 2s — the surge fan-out runs in a
+	// goroutine and may land after the HTTP response returns.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && mock.count() < 1 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := mock.count(); got < 1 {
+		t.Fatalf("expected at least 1 push sent after surge, got %d (surge may not have fired)", got)
+	}
+
+	// Verify /api/stats includes the prop_intel and push blocks.
+	statsResp, err := http.Get(server.URL + "/api/stats")
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	defer statsResp.Body.Close()
+	if statsResp.StatusCode != http.StatusOK {
+		t.Fatalf("stats status = %d, want 200", statsResp.StatusCode)
+	}
+	var stats struct {
+		PropIntel *struct {
+			Requests       int64 `json:"requests"`
+			Errors         int64 `json:"errors"`
+			SurgesDetected int64 `json:"surges_detected"`
+		} `json:"prop_intel"`
+		Push *struct {
+			SurgesDetected int64 `json:"surges_detected"`
+			PushSent       int64 `json:"push_sent"`
+			PushErrors     int64 `json:"push_errors"`
+		} `json:"push"`
+	}
+	if err := json.NewDecoder(statsResp.Body).Decode(&stats); err != nil {
+		t.Fatalf("stats decode: %v", err)
+	}
+	if stats.PropIntel == nil {
+		t.Fatalf("stats: prop_intel block missing")
+	}
+	if stats.Push == nil {
+		t.Fatalf("stats: push block missing")
+	}
+	// 3 calls to /api/prop_intel → requests delta == 3.
+	gotReqs := stats.PropIntel.Requests - origPropIntelReqs
+	if gotReqs != 3 {
+		t.Errorf("stats prop_intel.requests delta = %d, want 3", gotReqs)
+	}
+	// No 400s in this test → errors delta == 0.
+	gotErrs := stats.PropIntel.Errors - origPropIntelErrs
+	if gotErrs != 0 {
+		t.Errorf("stats prop_intel.errors delta = %d, want 0", gotErrs)
+	}
+	// The live window was crafted to surge 20m:CAR, so at least one
+	// surge should have been detected across the 3 calls.
+	gotSurges := stats.PropIntel.SurgesDetected - origPropIntelSurges
+	if gotSurges < 1 {
+		t.Errorf("stats prop_intel.surges_detected delta = %d, want >= 1", gotSurges)
+	}
+	// Push accounting: surges_detected >= 1, push_sent >= 1.
+	gotPushSurges := stats.Push.SurgesDetected - origPushSurges
+	if gotPushSurges < 1 {
+		t.Errorf("stats push.surges_detected delta = %d, want >= 1", gotPushSurges)
+	}
+	gotPushSent := stats.Push.PushSent - origPushSent
+	if gotPushSent < 1 {
+		t.Errorf("stats push.push_sent delta = %d, want >= 1", gotPushSent)
+	}
+}
+
+// TestPropIntelStatsAccounting verifies the U6 stats-accounting scenario in
+// isolation: after 3 calls to /api/prop_intel, /api/stats reports
+// prop_intel.requests == 3 (delta from the pre-call snapshot). It does not
+// depend on a surge firing, so it is robust to the goroutine timing that
+// TestPropIntelIntegration exercises.
+func TestPropIntelStatsAccounting(t *testing.T) {
+	hub.Lock()
+	origHistory := hub.history
+	origClients := hub.clients
+	hub.clients = make(map[*Client]bool)
+	hub.history = []MQTTMessage{}
+	hub.Unlock()
+	defer func() {
+		hub.Lock()
+		hub.history = origHistory
+		hub.clients = origClients
+		hub.Unlock()
+	}()
+
+	origReqs := propIntelAccounting.requests.Load()
+	origErrs := propIntelAccounting.errors.Load()
+	defer func() {
+		propIntelAccounting.requests.Store(origReqs)
+		propIntelAccounting.errors.Store(origErrs)
+	}()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/prop_intel", propIntelHandler)
+	mux.HandleFunc("/api/stats", statsHandler)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	for i := 0; i < 3; i++ {
+		resp, err := http.Get(server.URL + "/api/prop_intel?qth=JO32&minutes=15")
+		if err != nil {
+			t.Fatalf("prop_intel request %d: %v", i, err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+
+	statsResp, err := http.Get(server.URL + "/api/stats")
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	defer statsResp.Body.Close()
+	var stats struct {
+		PropIntel *struct {
+			Requests int64 `json:"requests"`
+			Errors   int64 `json:"errors"`
+		} `json:"prop_intel"`
+	}
+	if err := json.NewDecoder(statsResp.Body).Decode(&stats); err != nil {
+		t.Fatalf("stats decode: %v", err)
+	}
+	if stats.PropIntel == nil {
+		t.Fatalf("stats: prop_intel block missing")
+	}
+	if got := stats.PropIntel.Requests - origReqs; got != 3 {
+		t.Errorf("stats prop_intel.requests delta = %d, want 3", got)
+	}
+	if got := stats.PropIntel.Errors - origErrs; got != 0 {
+		t.Errorf("stats prop_intel.errors delta = %d, want 0", got)
+	}
+}

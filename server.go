@@ -580,6 +580,8 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	if dxBaseline != nil {
 		_, dxBaselineEventCount, dxBaselineHistoryMinutes = dxBaseline.Stats(time.Now().Unix())
 	}
+	propIntelReqs, propIntelErrs, propIntelSurges := propIntelAccounting.snapshot()
+	pushSurges, pushSent, pushErrs := pushAccounting.snapshot()
 
 	stats := struct {
 		ActiveConnections    int     `json:"active_connections"`
@@ -616,6 +618,8 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		WsprPersisted        int64   `json:"wspr_persisted_spots"`
 		WsprForwarded        int64   `json:"wspr_live_forwarded"`
 		WsprDroppedLoc       int64   `json:"wspr_dropped_no_locator"`
+		PropIntel            *propIntelStatsBlock `json:"prop_intel"`
+		Push                 *pushStatsBlock      `json:"push"`
 	}{
 		ActiveConnections:    numClients,
 		HistorySize:          historySize,
@@ -651,10 +655,36 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		WsprPersisted:        wsprPersisted,
 		WsprForwarded:        wsprForwarded,
 		WsprDroppedLoc:       wsprDroppedNoLoc,
+		PropIntel: &propIntelStatsBlock{
+			Requests:       propIntelReqs,
+			Errors:         propIntelErrs,
+			SurgesDetected: propIntelSurges,
+		},
+		Push: &pushStatsBlock{
+			SurgesDetected: pushSurges,
+			PushSent:       pushSent,
+			PushErrors:     pushErrs,
+		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
+}
+
+// propIntelStatsBlock is the prop_intel.* sub-object in /api/stats.
+// Mirrors the flat per-ingest counter layout but nested under prop_intel
+// to keep the namespace clean (the plan's accounting requirement, U6).
+type propIntelStatsBlock struct {
+	Requests       int64 `json:"requests"`
+	Errors         int64 `json:"errors"`
+	SurgesDetected int64 `json:"surges_detected"`
+}
+
+// pushStatsBlock is the push.* sub-object in /api/stats. U6.
+type pushStatsBlock struct {
+	SurgesDetected int64 `json:"surges_detected"`
+	PushSent       int64 `json:"push_sent"`
+	PushErrors     int64 `json:"push_errors"`
 }
 
 func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
