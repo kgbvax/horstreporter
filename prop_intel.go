@@ -11,10 +11,9 @@ import (
 )
 
 // prop_intel.go implements the Propagation Intelligence engine: a per
-// (band × region) nowcast + 1-hour forecast of P(open), expected spot count,
-// and confidence. It reuses the existing DxBaseline.Evaluate sparkline for the
-// forecast slope, the dxPulse 11-region classifier for the region axis, and
-// the regionCalendarStats Postgres baseline when a store is configured.
+// (band × region) nowcast of P(open), expected spot count, and confidence.
+// It reuses the dxPulse 11-region classifier for the region axis, and the
+// regionCalendarStats Postgres baseline when a store is configured.
 //
 // The engine is intentionally stateless beyond the package-level dxBaseline
 // singleton and the hub.history ring: every request re-derives its cells from
@@ -34,8 +33,6 @@ const (
 	// propIntelNowcastPOpenMin is the 15-minute slot used in the Poisson
 	// P(open) = 1 − e^(−λ) formula: λ = rate_per_hour × (slot/60).
 	propIntelNowcastSlotMin = 15.0
-	// propIntelForecastHorizonH is the forecast horizon in hours (1h ahead).
-	propIntelForecastHorizonH = 1.0
 	// propIntelMinSendersHighConf is the unique-sender count at/above which a
 	// multi-source cell reaches the high confidence band.
 	propIntelMinSendersHighConf = 10
@@ -45,9 +42,6 @@ const (
 	// propIntelSingleSourceDiscount is multiplied into the confidence of a
 	// cell backed by only one ingest source.
 	propIntelSingleSourceDiscount = 0.6
-	// propIntelForecastVolatilityDiscount is the per-unit-of-variance
-	// discount applied to forecast confidence relative to nowcast confidence.
-	propIntelForecastVolatilityDiscount = 0.02
 	// propIntelRegionBaselineDaysBack is the lookback for regionCalendarStats.
 	propIntelRegionBaselineDaysBack = 30
 
@@ -81,13 +75,12 @@ const (
 
 // propIntelResponse is the JSON envelope returned by /api/prop_intel.
 type propIntelResponse struct {
-	QTH                 string           `json:"qth"`
-	Minutes             int              `json:"minutes"`
-	Now                 int64            `json:"now"`
-	ForecastHorizonHours float64         `json:"forecast_horizon_hours"`
-	Bands               []string         `json:"bands"`
-	Regions             []string         `json:"regions"`
-	Cells               []propIntelCell  `json:"cells"`
+	QTH     string          `json:"qth"`
+	Minutes int             `json:"minutes"`
+	Now     int64           `json:"now"`
+	Bands   []string        `json:"bands"`
+	Regions []string        `json:"regions"`
+	Cells   []propIntelCell `json:"cells"`
 }
 
 // propIntelCell is one (band × region) row. Sparse cells (no spots in the
@@ -95,18 +88,16 @@ type propIntelResponse struct {
 // can render the full 11-region grid; the deduplication and source attribution
 // only apply to cells with ≥1 spot.
 type propIntelCell struct {
-	Band          string             `json:"band"`
-	Region        string             `json:"region"`
-	POpen         float64            `json:"p_open"`
-	ExpectedCount float64            `json:"expected_count"`
-	Confidence    float64            `json:"confidence"`
-	Sources       []string           `json:"sources"`
-	Nowcast       propIntelEstimate  `json:"nowcast"`
-	Forecast      propIntelEstimate  `json:"forecast"`
+	Band          string   `json:"band"`
+	Region        string   `json:"region"`
+	POpen         float64  `json:"p_open"`
+	ExpectedCount float64  `json:"expected_count"`
+	Confidence    float64  `json:"confidence"`
+	Sources       []string `json:"sources"`
 	// Surge is non-nil when surge detection flagged this cell. nil means no
 	// surge (either below the z-threshold, suppressed by the minimum-sample
 	// guard, or the stddev was zero). See U2.
-	Surge         *SurgeInfo         `json:"surge,omitempty"`
+	Surge *SurgeInfo `json:"surge,omitempty"`
 }
 
 // SurgeInfo carries the surge-detection result for a flagged cell. Mirrors
@@ -117,22 +108,15 @@ type SurgeInfo struct {
 	Label  string  `json:"label"`
 }
 
-// propIntelEstimate is the nowcast or forecast sub-object.
-type propIntelEstimate struct {
-	POpen         float64 `json:"p_open"`
-	ExpectedCount float64 `json:"expected_count"`
-	Confidence    float64 `json:"confidence"`
-}
-
 // propIntelEngine is the stateless evaluator. It holds no mutable state of its
-// own; the dxBaseline singleton and hub.history are read per-request by the
-// handler. The struct exists so tests can construct an engine with a chosen
-// dxBaseline (nil for the no-PG path) and call Evaluate directly.
+// own; the dxBaseline singleton (for the Postgres store) and hub.history are
+// read per-request by the handler. The struct exists so tests can construct an
+// engine with a chosen dxBaseline (nil for the no-PG path) and call Evaluate
+// directly.
 type propIntelEngine struct {
-	// baseline is the DxBaselineEngine used for the per-band sparkline
-	// (forecast slope) and for accessing the Postgres store
+	// baseline is the DxBaselineEngine used for accessing the Postgres store
 	// (regionCalendarStats). May be nil — the engine degrades to a
-	// history-only nowcast with a flat (zero-slope) forecast.
+	// history-only nowcast.
 	baseline *DxBaselineEngine
 }
 
@@ -158,10 +142,10 @@ type propIntelCellAcc struct {
 	sources map[string]struct{}
 }
 
-// Evaluate computes the per-(band × region) nowcast and 1-hour forecast for the
-// given QTH and history window. It mirrors the dxConditionsHandler history
-// access pattern: the caller passes a pre-copied history slice scoped to the
-// window, so no lock is taken here.
+// Evaluate computes the per-(band × region) nowcast for the given QTH and
+// history window. It mirrors the dxConditionsHandler history access pattern:
+// the caller passes a pre-copied history slice scoped to the window, so no
+// lock is taken here.
 //
 // The engine:
 //  1. Resolves the QTH to a qthSet (locator → surroundings expansion, callsign
@@ -171,11 +155,7 @@ type propIntelCellAcc struct {
 //     and deduplicating senders across sources.
 //  3. Computes the nowcast rate per cell = unique_senders / window_hours, then
 //     P(open) = 1 − e^(−λ) with λ = rate × (slot/60).
-//  4. Computes the 1-hour forecast by calling dxBaseline.Evaluate for the
-//     per-band sparkline, taking slope = mean(last4) − mean(first4) bins,
-//     normalised to rate/hour, and applying it to the nowcast rate.
-//  5. Confidence = f(unique_senders, source_diversity), discounted for the
-//     forecast by sparkline volatility.
+//  4. Confidence = f(unique_senders, source_diversity).
 func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, cwMinDb int, history []MQTTMessage, now int64, surgeThreshold float64) propIntelResponse {
 	qth = normalizeQTHToken(qth)
 	if minutes <= 0 {
@@ -189,13 +169,12 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 	}
 
 	resp := propIntelResponse{
-		QTH:                  qth,
-		Minutes:              minutes,
-		Now:                  now,
-		ForecastHorizonHours: propIntelForecastHorizonH,
-		Bands:                []string{},
-		Regions:              allRegionStrings(),
-		Cells:                []propIntelCell{},
+		QTH:     qth,
+		Minutes: minutes,
+		Now:     now,
+		Bands:   []string{},
+		Regions: allRegionStrings(),
+		Cells:   []propIntelCell{},
 	}
 
 	if qth == "" {
@@ -259,18 +238,6 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 	// emit the canonical HF→VHF order for a stable response.
 	resp.Bands = inScopeBandsOrdered(bandsSeen)
 
-	// Per-band sparkline for forecast slope. Only call Evaluate if a baseline
-	// is configured; otherwise the slope is zero (flat forecast).
-	bandSparkline := make(map[string][]float64)
-	if e.baseline != nil {
-		cond := e.baseline.Evaluate(qth, surroundings, minutes, cwMinDb, history, now)
-		for _, b := range cond.Bands {
-			if len(b.Sparkline) > 0 {
-				bandSparkline[b.Band] = b.Sparkline
-			}
-		}
-	}
-
 	// Region baseline rates from Postgres (regionCalendarStats), keyed by
 	// (band, region, slot). Used as the prior for sparse cells and as a
 	// sanity clamp on the nowcast rate. Absent when no store is configured.
@@ -298,19 +265,6 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		nowcastPOpen := poissonPOpen(nowcastRate, propIntelNowcastSlotMin)
 		nowcastConf := cellConfidence(uniqueSenders, len(cell.sources))
 
-		spark := bandSparkline[key.band]
-		slope := sparklineSlopePerHour(spark, minutes)
-		forecastRate := nowcastRate + slope*propIntelForecastHorizonH
-		if forecastRate < 0 {
-			forecastRate = 0
-		}
-		forecastPOpen := poissonPOpen(forecastRate, propIntelNowcastSlotMin)
-		volatility := sparklineVolatility(spark)
-		forecastConf := nowcastConf * (1.0 - volatility*propIntelForecastVolatilityDiscount)
-		if forecastConf < 0 {
-			forecastConf = 0
-		}
-
 		cells = append(cells, propIntelCell{
 			Band:          key.band,
 			Region:        key.region,
@@ -318,16 +272,6 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 			ExpectedCount: round3(nowcastRate),
 			Confidence:    round3(nowcastConf),
 			Sources:       sortedSources(cell.sources),
-			Nowcast: propIntelEstimate{
-				POpen:         round3(nowcastPOpen),
-				ExpectedCount: round3(nowcastRate),
-				Confidence:    round3(nowcastConf),
-			},
-			Forecast: propIntelEstimate{
-				POpen:         round3(forecastPOpen),
-				ExpectedCount: round3(forecastRate),
-				Confidence:    round3(forecastConf),
-			},
 		})
 		emitted[key] = true
 	}
@@ -355,16 +299,6 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 				ExpectedCount: round3(rate),
 				Confidence:    round3(conf),
 				Sources:       []string{},
-				Nowcast: propIntelEstimate{
-					POpen:         round3(pOpen),
-					ExpectedCount: round3(rate),
-					Confidence:    round3(conf),
-				},
-				Forecast: propIntelEstimate{
-					POpen:         round3(pOpen),
-					ExpectedCount: round3(rate),
-					Confidence:    round3(conf),
-				},
 			})
 			emitted[key] = true
 		}
@@ -556,43 +490,6 @@ func cellConfidence(uniqueSenders, sourceCount int) float64 {
 		}
 	}
 	return clamp01(conf)
-}
-
-// sparklineSlopePerHour returns the slope of the sparkline (mean of last 4
-// bins − mean of first 4 bins), converted to a rate-per-hour delta. The
-// sparkline is a 0–100 normalised series over `minutes`; the conversion assumes
-// the series is proportional to spots/min, so slope_per_hour = slope × (60 /
-// minutes) — i.e. the bin delta expressed as an hourly rate change. A nil/short
-// sparkline yields 0 (flat forecast).
-func sparklineSlopePerHour(sparkline []float64, minutes int) float64 {
-	if len(sparkline) < 8 || minutes <= 0 {
-		return 0
-	}
-	first4 := mean(sparkline[:4])
-	last4 := mean(sparkline[len(sparkline)-4:])
-	delta := last4 - first4
-	// The sparkline spans `minutes` across 12 bins; each bin = minutes/12 min.
-	// Convert the 0–100 delta to a per-hour rate delta: scale by 60/minutes so
-	// a full-window rise maps to an hourly rate.
-	return delta * (60.0 / float64(minutes))
-}
-
-// sparklineVolatility returns the variance of bin-to-bin deltas, a measure of
-// how jittery the band has been. Used to discount forecast confidence.
-func sparklineVolatility(sparkline []float64) float64 {
-	if len(sparkline) < 2 {
-		return 0
-	}
-	deltas := make([]float64, 0, len(sparkline)-1)
-	for i := 1; i < len(sparkline); i++ {
-		deltas = append(deltas, sparkline[i]-sparkline[i-1])
-	}
-	m := mean(deltas)
-	var sumSq float64
-	for _, d := range deltas {
-		sumSq += (d - m) * (d - m)
-	}
-	return sumSq / float64(len(deltas))
 }
 
 func mean(v []float64) float64 {

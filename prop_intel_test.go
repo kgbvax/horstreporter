@@ -2,7 +2,6 @@ package main
 
 import (
 	"math"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -111,78 +110,6 @@ func TestPropIntelMultiSource(t *testing.T) {
 	}
 }
 
-// TestPropIntelForecastSlope verifies that a band with a rising sparkline
-// (last 4 bins > first 4 bins) produces forecast P(open) > nowcast P(open).
-func TestPropIntelForecastSlope(t *testing.T) {
-	dir := t.TempDir()
-	baseline := newDxBaselineEngine(filepath.Join(dir, "dx_baseline.json"))
-	if err := baseline.Load(); err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	e := &propIntelEngine{baseline: baseline}
-	now := int64(1700000000)
-	// Build a history where spots are concentrated in the last quarter of a
-	// 60-minute window so the sparkline rises. 60 min window → 12 bins of 5 min.
-	// Put 2 spots in the first 20 min (bins 0-3) and 20 spots in the last 20 min (bins 8-11).
-	// Observe each spot so the event ring (used by buildBandActivityByBin) is
-	// populated — Evaluate's sparkline comes from the event ring, not the
-	// history parameter.
-	history := make([]MQTTMessage, 0, 22)
-	for i := 0; i < 2; i++ {
-		m := MQTTMessage{RP: -8, T: now - 50*60 + int64(i)*60, SC: "A", SL: "JO40", RC: "DL1A", RL: "JO62", B: "20m", MD: "FT8"}
-		history = append(history, m)
-		baseline.Observe(m)
-	}
-	for i := 0; i < 20; i++ {
-		m := MQTTMessage{RP: -8, T: now - 10*60 + int64(i)*30, SC: "B", SL: "JO41", RC: "DL1A", RL: "JO62", B: "20m", MD: "FT8"}
-		history = append(history, m)
-		baseline.Observe(m)
-	}
-	resp := e.Evaluate("JO62", false, 60, -15, history, now, 2.0)
-	cell := findCell(t, resp, "20m", "EU")
-	if cell == nil {
-		t.Fatalf("expected 20m/EU cell")
-	}
-	if cell.Forecast.POpen <= cell.Nowcast.POpen {
-		t.Errorf("forecast P(open) = %v, nowcast = %v; want forecast > nowcast for rising sparkline",
-			cell.Forecast.POpen, cell.Nowcast.POpen)
-	}
-}
-
-// TestPropIntelForecastVolatility verifies that a band with high sparkline
-// variance produces forecast confidence < nowcast confidence.
-func TestPropIntelForecastVolatility(t *testing.T) {
-	dir := t.TempDir()
-	baseline := newDxBaselineEngine(filepath.Join(dir, "dx_baseline.json"))
-	if err := baseline.Load(); err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	e := &propIntelEngine{baseline: baseline}
-	now := int64(1700000000)
-	// Alternating bursts and gaps across a 60-min window → high bin-to-bin
-	// variance in the sparkline. Observe each spot to populate the event ring.
-	history := make([]MQTTMessage, 0, 40)
-	for bin := 0; bin < 12; bin++ {
-		if bin%2 == 0 {
-			// Burst bin: 4 spots.
-			for i := 0; i < 4; i++ {
-				m := MQTTMessage{RP: -8, T: now - int64((11-bin)*5*60) + int64(i)*30, SC: "X", SL: "JO40", RC: "DL1A", RL: "JO62", B: "20m", MD: "FT8"}
-				history = append(history, m)
-				baseline.Observe(m)
-			}
-		}
-	}
-	resp := e.Evaluate("JO62", false, 60, -15, history, now, 2.0)
-	cell := findCell(t, resp, "20m", "EU")
-	if cell == nil {
-		t.Fatalf("expected 20m/EU cell")
-	}
-	if cell.Forecast.Confidence >= cell.Nowcast.Confidence {
-		t.Errorf("forecast confidence = %v, nowcast = %v; want forecast < nowcast for volatile sparkline",
-			cell.Forecast.Confidence, cell.Nowcast.Confidence)
-	}
-}
-
 // TestPropIntelEmptyHistory verifies that with no spots in the window, the
 // response has no cells (all cells absent).
 func TestPropIntelEmptyHistory(t *testing.T) {
@@ -285,32 +212,6 @@ func TestPropIntelPoissonPOpen(t *testing.T) {
 		if absFloat(got-tc.want) > tc.eps {
 			t.Errorf("poissonPOpen(%v, %v) = %v, want %v ±%v", tc.rate, tc.slot, got, tc.want, tc.eps)
 		}
-	}
-}
-
-// TestPropIntelSparklineSlope verifies the slope computation.
-func TestPropIntelSparklineSlope(t *testing.T) {
-	// Rising: last 4 bins all 80, first 4 all 20 → delta 60 over 60 min.
-	rising := []float64{20, 20, 20, 20, 50, 50, 60, 70, 80, 80, 80, 80}
-	slope := sparklineSlopePerHour(rising, 60)
-	if slope <= 0 {
-		t.Errorf("sparklineSlopePerHour(rising) = %v, want > 0", slope)
-	}
-	// Falling: first 4 high, last 4 low.
-	falling := []float64{80, 80, 80, 80, 50, 50, 40, 30, 20, 20, 20, 20}
-	slope = sparklineSlopePerHour(falling, 60)
-	if slope >= 0 {
-		t.Errorf("sparklineSlopePerHour(falling) = %v, want < 0", slope)
-	}
-	// Flat: all equal.
-	flat := []float64{50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50}
-	slope = sparklineSlopePerHour(flat, 60)
-	if slope != 0 {
-		t.Errorf("sparklineSlopePerHour(flat) = %v, want 0", slope)
-	}
-	// Too short: nil/short sparkline → 0.
-	if s := sparklineSlopePerHour([]float64{1, 2, 3}, 60); s != 0 {
-		t.Errorf("sparklineSlopePerHour(short) = %v, want 0", s)
 	}
 }
 

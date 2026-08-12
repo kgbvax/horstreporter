@@ -4,7 +4,7 @@ import { state } from './state.js';
 // prop-matrix.js — band × region propagation-intelligence matrix panel.
 // Polls the backend `/api/prop_intel` endpoint (built in U1/U2) and renders
 // per-cell P(open) as background intensity, expected count as a numeric
-// badge, surge highlight, confidence border, and a nowcast/forecast toggle.
+// badge, surge highlight, and a confidence border.
 //
 // Patterns mirrored from:
 //   - wspr-matrix.js: toggle button + localStorage enable + DOM-rebuild
@@ -16,9 +16,7 @@ import { state } from './state.js';
 const PANEL_ID = 'prop-matrix-window';
 const TOGGLE_ID = 'prop-matrix-toggle';
 const BODY_ID = 'prop-matrix-body';
-const VIEW_TOGGLE_ID = 'prop-matrix-view-toggle';
 const ENABLE_KEY = 'propMatrixEnabled';
-const VIEW_KEY = 'propMatrixView'; // 'nowcast' | 'forecast'
 
 const POLL_INTERVAL_MS = 30_000;
 const CACHE_TTL_MS = 15_000;
@@ -33,7 +31,6 @@ const LOW_CONFIDENCE_THRESHOLD = 0.4;
 const runtime = {
     enabled: false,
     initialized: false,
-    view: 'nowcast',
     pollTimer: null,
     abortController: null,
     cache: null,
@@ -52,11 +49,6 @@ export function initPropMatrix({ onLayoutChange } = {}) {
     runtime.onLayoutChange = onLayoutChange || null;
 
     const stored = localStorage.getItem(ENABLE_KEY);
-    const storedView = localStorage.getItem(VIEW_KEY);
-    if (storedView === 'forecast' || storedView === 'nowcast') {
-        runtime.view = storedView;
-        syncViewToggle();
-    }
 
     if (stored === 'true') {
         setPropMatrixVisible(true);
@@ -70,19 +62,6 @@ export function initPropMatrix({ onLayoutChange } = {}) {
         const closeBtn = panel.querySelector('.prop-matrix-close');
         if (closeBtn) {
             closeBtn.addEventListener('click', () => setPropMatrixVisible(false));
-        }
-
-        const viewToggle = document.getElementById(VIEW_TOGGLE_ID);
-        if (viewToggle) {
-            viewToggle.addEventListener('click', () => {
-                runtime.view = runtime.view === 'nowcast' ? 'forecast' : 'nowcast';
-                localStorage.setItem(VIEW_KEY, runtime.view);
-                syncViewToggle();
-                // Force a re-render from cache (no re-fetch needed; both views
-                // are present in the same response payload).
-                runtime.lastRenderKey = '';
-                renderPropMatrix();
-            });
         }
 
         // Re-poll when QTH changes (band-lab.js pattern at line 138).
@@ -105,16 +84,6 @@ export function initPropMatrix({ onLayoutChange } = {}) {
     }
 }
 
-function syncViewToggle() {
-    const viewToggle = document.getElementById(VIEW_TOGGLE_ID);
-    if (!viewToggle) return;
-    viewToggle.textContent = runtime.view === 'nowcast' ? 'Nowcast ▸' : 'Forecast ▸';
-    viewToggle.setAttribute('aria-pressed', runtime.view === 'forecast' ? 'true' : 'false');
-    viewToggle.title = runtime.view === 'nowcast'
-        ? 'Showing nowcast. Click for 1-hour forecast.'
-        : 'Showing 1-hour forecast. Click for nowcast.';
-}
-
 export function setPropMatrixVisible(visible) {
     const panel = document.getElementById(PANEL_ID);
     const toggle = document.getElementById(TOGGLE_ID);
@@ -125,7 +94,6 @@ export function setPropMatrixVisible(visible) {
     localStorage.setItem(ENABLE_KEY, visible ? 'true' : 'false');
     if (runtime.onLayoutChange) runtime.onLayoutChange();
     if (visible) {
-        syncViewToggle();
         startPolling();
     } else {
         stopPolling();
@@ -225,7 +193,7 @@ function renderPropMatrix() {
     const cellsByBandRegion = indexCells(resp);
 
     // Rebuild fingerprint: skip DOM rebuild when nothing changed.
-    const renderKey = `${runtime.view}|${bandList.join(',')}|${regions.join(',')}|${fingerprintCells(cellsByBandRegion)}`;
+    const renderKey = `${bandList.join(',')}|${regions.join(',')}|${fingerprintCells(cellsByBandRegion)}`;
     if (renderKey === runtime.lastRenderKey) return;
     runtime.lastRenderKey = renderKey;
 
@@ -259,10 +227,9 @@ function renderCell(band, region, cell) {
     if (!cell) {
         return `<td class="prop-matrix-cell-empty" data-band="${escapeHtml(band)}" data-region="${escapeHtml(region)}" role="button" tabindex="0"></td>`;
     }
-    const view = cell[runtime.view] || cell.nowcast || cell;
-    const pOpen = clamp01(Number(view.pOpen ?? 0));
-    const expectedCount = Number(view.expectedCount ?? 0);
-    const confidence = clamp01(Number(view.confidence ?? (cell.confidence ?? 0)));
+    const pOpen = clamp01(Number(cell.pOpen ?? 0));
+    const expectedCount = Number(cell.expectedCount ?? 0);
+    const confidence = clamp01(Number(cell.confidence ?? 0));
     const surge = Boolean(cell.surge);
 
     const alpha = 0.15 + pOpen * 0.85;
@@ -283,7 +250,7 @@ function renderCell(band, region, cell) {
 function buildCellTitle(band, region, pOpen, expectedCount, confidence, surge) {
     const lines = [
         `${band} → ${region}`,
-        `${runtime.view === 'forecast' ? 'Forecast' : 'Nowcast'}: P(open) ${(pOpen * 100).toFixed(0)}%, exp ${Math.round(expectedCount)}/h`,
+        `P(open) ${(pOpen * 100).toFixed(0)}%, exp ${Math.round(expectedCount)}/h`,
         `confidence ${(confidence * 100).toFixed(0)}%`,
     ];
     if (surge) lines.push('SURGE');
@@ -307,8 +274,7 @@ function cellKey(band, region) {
 function fingerprintCells(map) {
     const out = [];
     for (const [k, c] of map.entries()) {
-        const v = c[runtime.view] || c.nowcast || c;
-        out.push(`${k}:${Number(v?.pOpen ?? 0).toFixed(3)}:${Number(v?.expectedCount ?? 0).toFixed(1)}:${c.surge ? 1 : 0}`);
+        out.push(`${k}:${Number(c?.pOpen ?? 0).toFixed(3)}:${Number(c?.expectedCount ?? 0).toFixed(1)}:${c.surge ? 1 : 0}`);
     }
     return out.sort().join('|');
 }
@@ -388,7 +354,6 @@ export const __test = {
         stopPolling();
         runtime.enabled = false;
         runtime.initialized = false;
-        runtime.view = 'nowcast';
         runtime.cache = null;
         runtime.cacheKey = '';
         runtime.lastFetchedAt = 0;
@@ -405,7 +370,5 @@ export const __test = {
     PANEL_ID,
     TOGGLE_ID,
     BODY_ID,
-    VIEW_TOGGLE_ID,
     ENABLE_KEY,
-    VIEW_KEY,
 };

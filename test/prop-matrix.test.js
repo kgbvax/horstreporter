@@ -14,9 +14,7 @@ const {
     PANEL_ID,
     TOGGLE_ID,
     BODY_ID,
-    VIEW_TOGGLE_ID,
     ENABLE_KEY,
-    VIEW_KEY,
     reset,
     renderCell,
     setPropMatrixVisible,
@@ -45,7 +43,6 @@ function setupDom() {
             <div class="prop-matrix-window-header">
                 <span>Propagation Intel</span>
                 <div class="prop-matrix-window-header-actions">
-                    <button id="${VIEW_TOGGLE_ID}" type="button"></button>
                     <button type="button" class="prop-matrix-close"></button>
                 </div>
             </div>
@@ -63,16 +60,14 @@ function mockFetchOnce(payload, ok = true) {
     global.fetch = vi.fn(async () => resp);
 }
 
-function makeCell(band, region, { pOpen = 0.8, expectedCount = 12, confidence = 0.8, surge = false, view = 'nowcast' } = {}) {
+function makeCell(band, region, { pOpen = 0.8, expectedCount = 12, confidence = 0.8, surge = false } = {}) {
     return {
         band,
         region,
+        pOpen,
+        expectedCount,
         confidence,
         surge,
-        nowcast: { pOpen, expectedCount, confidence },
-        forecast: view === 'forecast'
-            ? { pOpen, expectedCount, confidence }
-            : { pOpen: pOpen * 0.5, expectedCount: expectedCount * 0.5, confidence: confidence * 0.5 },
     };
 }
 
@@ -167,31 +162,6 @@ describe('prop-matrix panel', () => {
     it('low confidence produces a dashed border class', () => {
         const html = renderCell('20m', 'AF', makeCell('20m', 'AF', { pOpen: 0.5, expectedCount: 3, confidence: 0.2 }));
         expect(html).toContain('prop-matrix-low-confidence');
-    });
-
-    it('forecast toggle renders forecast values instead of nowcast', async () => {
-        const payload = {
-            regions: ['EU', 'NA'],
-            bands: ['20m', '10m'],
-            cells: [
-                makeCell('20m', 'EU', { pOpen: 0.9, expectedCount: 20, surge: false }),
-            ],
-        };
-        mockFetchOnce(payload);
-        initPropMatrix();
-        document.getElementById(TOGGLE_ID).click();
-        await new Promise((r) => setTimeout(r, 0));
-
-        const body = document.getElementById(BODY_ID);
-        // Nowcast view default: 20 expected.
-        expect(body.innerHTML).toContain('<span class="prop-matrix-badge">20</span>');
-
-        // Switch to forecast view.
-        const viewToggle = document.getElementById(VIEW_TOGGLE_ID);
-        viewToggle.click();
-        expect(store.getItem(VIEW_KEY)).toBe('forecast');
-        // Forecast values are 50% of nowcast in the helper → 10 expected.
-        expect(body.innerHTML).toContain('<span class="prop-matrix-badge">10</span>');
     });
 
     it('changing QTH triggers a re-poll with the new QTH', async () => {

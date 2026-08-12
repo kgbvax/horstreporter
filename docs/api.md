@@ -126,14 +126,13 @@ priority ("high"|"normal"), reason, rank_score, spots_per_minute,
 baseline_activity, activity_ratio, sustained_bins, p90_distance_km,
 baseline_p90_distance_km?, distance_ratio?, trend, trend_delta, status}]}`.
 
-### `GET /api/prop_intel` — propagation intelligence nowcast + forecast
+### `GET /api/prop_intel` — propagation intelligence nowcast
 
-Per-(band × region) nowcast and 1-hour forecast of P(open), expected spot
-count, and confidence. Reuses the DxBaseline sparkline for the forecast
-slope, the dxPulse 11-region classifier for the region axis, and the
-Postgres `regionCalendarStats` baseline when a store is configured. Stateless
-beyond the `dxBaseline` singleton and `hub.history` ring; every request
-re-derives its cells from a snapshotted history window. See
+Per-(band × region) nowcast of P(open), expected spot count, and
+confidence. Reuses the dxPulse 11-region classifier for the region axis and
+the Postgres `regionCalendarStats` baseline when a store is configured.
+Stateless beyond the `dxBaseline` singleton and `hub.history` ring; every
+request re-derives its cells from a snapshotted history window. See
 `prop_intel.go`.
 
 Params: `qth` (required), `surroundings`, `minutes` (default 15,
@@ -147,7 +146,6 @@ Response:
   "qth": "JO32",
   "minutes": 15,
   "now": 1734567890,
-  "forecast_horizon_hours": 1.0,
   "bands": ["20m", "10m", ...],
   "regions": ["EU", "NA", "SA", "AF", "AS", "OC", "AN", "JA", "VK", "KH6", "CAR"],
   "cells": [
@@ -158,8 +156,6 @@ Response:
       "expected_count": 4.2,
       "confidence": 0.71,
       "sources": ["rbn", "pskreporter"],
-      "nowcast":  { "p_open": 0.834, "expected_count": 4.2, "confidence": 0.71 },
-      "forecast": { "p_open": 0.881, "expected_count": 5.1, "confidence": 0.68 },
       "surge": { "z_score": 3.2, "label": "tune to 20m, surge to Caribbean" }
     }
   ]
@@ -170,8 +166,7 @@ Response:
   λ = rate_per_hour × (15/60). `expected_count` is the rate per hour.
 - `confidence` ∈ [0,1] is a function of unique-sender support and source
   diversity; single-source cells are discounted, dense single-source
-  cells are lifted to moderate. Forecast confidence is further
-  discounted by sparkline volatility.
+  cells are lifted to moderate.
 - Sparse cells (band seen in the window with a region baseline but no
   live spots) are still emitted with a low-confidence (0.15) prior so
   the frontend can render the full 11-region grid.
