@@ -61,6 +61,17 @@ function applyBandChange() {
     refreshBandPills();
 }
 
+// Re-connect the live stream when band/SNR filters change, so the server can
+// start sending only the spots that match the new filter. Mirrors the
+// surroundings-changed restart pattern.
+function restartStreamIfSubscribed() {
+    const btnSubmit = document.getElementById('btn-submit');
+    if (btnSubmit && isStreaming(btnSubmit)) {
+        setSubmitMode(btnSubmit, 'go');
+        document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    }
+}
+
 function stopBandCycle() {
     if (state.cycleInterval) {
         clearInterval(state.cycleInterval);
@@ -1623,6 +1634,7 @@ bandContainerEl?.addEventListener('change', (e) => {
     // Toggling enabled must NOT change focus; just persist the set and re-render.
     localStorage.setItem(`enable-${cb.value}`, cb.checked);
     applyBandChange();
+    restartStreamIfSubscribed();
 });
 
 document.getElementById('btn-show-all')?.addEventListener('click', () => {
@@ -1665,6 +1677,15 @@ if (forecastEl) {
 document.getElementById('show-dxcc-labels')?.addEventListener('change', (e) => {
     updateDxccLabelsEnabled(e.target.checked);
 });
+
+// Restart the live stream when SNR filters change so the server-side filter can
+// take effect. The min-snr radios and threshold sliders are created by the
+// Svelte bundle, so attach listeners after DOM mount.
+document.getElementById('min-snr-group')?.addEventListener('change', (e) => {
+    if (e.target?.name === 'min-snr') restartStreamIfSubscribed();
+});
+document.getElementById('ssb-min-db')?.addEventListener('change', restartStreamIfSubscribed);
+document.getElementById('cw-min-db')?.addEventListener('change', restartStreamIfSubscribed);
 
 document.getElementById('btn-geo')?.addEventListener('click', () => {
     if (!navigator.geolocation) {
@@ -1837,6 +1858,22 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
     if (minutes) params.append('minutes', minutes);
     if (document.getElementById('surroundings')?.checked) {
         params.append('surroundings', 'true');
+    }
+
+    // Server-side band/SNR filter: tell the backend which spots the client will
+    // actually display so it can avoid sending the rest over the wire.
+    const enabledBands = Array.from(getEnabledBands()).sort();
+    if (enabledBands.length) {
+        params.append('enabled_bands', enabledBands.join(','));
+    }
+    const minSnrMode = getMinSnrMode();
+    if (minSnrMode && minSnrMode !== 'none') {
+        params.append('min_snr_mode', minSnrMode);
+        if (minSnrMode === 'ssb') {
+            params.append('ssb_min_db', document.getElementById('ssb-min-db')?.value || '0');
+        } else if (minSnrMode === 'cw') {
+            params.append('cw_min_db', document.getElementById('cw-min-db')?.value || '-15');
+        }
     }
 
     const statusEl = document.getElementById('stream-status');

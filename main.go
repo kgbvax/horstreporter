@@ -219,7 +219,7 @@ func main() {
 	keyFile := flag.String("key", "", "Path to TLS key file")
 	domain := flag.String("domain", "", "Domain for Let's Encrypt (enables automatic TLS)")
 	dev := flag.Bool("dev", false, "Enable development mode (disables caching of static files)")
-	flag.BoolVar(&compressStream, "compress", false, "Enable gzip compression for the SSE stream")
+	flag.BoolVar(&compressStream, "compress", true, "Enable gzip compression for the SSE stream (use -compress=false to disable)")
 	enablePprof := flag.Bool("pprof", false, "Enable pprof profiling on localhost:6060")
 	logLevelFlag := flag.String("log-level", "", "Log level: DEBUG, INFO, WARN (default: INFO if env LOG_LEVEL not set)")
 	logFile := flag.String("log-file", "", "Path to the log file (enables file logging with rotation)")

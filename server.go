@@ -309,6 +309,8 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	filter := newStreamClientFilter(r)
+
 	now := time.Now().Unix()
 	cutoff := now - historySeconds
 
@@ -340,7 +342,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 
 	var historySpots []Spot
 	for _, msg := range historyWindow {
-		if spot, ok := matchAndCreateSpot(client, msg, now); ok {
+		if spot, ok := matchAndCreateSpot(client, msg, now); ok && filter.spotAllowed(spot) {
 			historySpots = append(historySpots, spot)
 		}
 	}
@@ -394,6 +396,9 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		case spot, ok := <-client.send:
 			if !ok {
 				return
+			}
+			if !filter.spotAllowed(spot) {
+				continue
 			}
 			b, _ := json.Marshal(toStreamSpot(spot))
 			fmt.Fprintf(writer, "data: %s\n\n", string(b))
@@ -477,6 +482,49 @@ func toStreamSpot(spot Spot) streamSpot {
 		s.Receiver = spot.Receiver
 	}
 	return s
+}
+
+// streamClientFilter carries the band/SNR filters the browser requests so the
+// server can avoid sending spots the client will immediately discard. This cuts
+// both server-side serialization cost and the on-the-wire byte count.
+type streamClientFilter struct {
+	enabledBands map[string]struct{}
+	minSnrMode   string
+	ssbMinDb     int
+	cwMinDb      int
+}
+
+func newStreamClientFilter(r *http.Request) streamClientFilter {
+	return streamClientFilter{
+		enabledBands: parseEnabledBands(r.URL.Query().Get("enabled_bands")),
+		minSnrMode:   strings.ToLower(strings.TrimSpace(r.URL.Query().Get("min_snr_mode"))),
+		ssbMinDb:     parseIntDefault(r.URL.Query().Get("ssb_min_db"), 0),
+		cwMinDb:      parseIntDefault(r.URL.Query().Get("cw_min_db"), -15),
+	}
+}
+
+func (f streamClientFilter) spotAllowed(s Spot) bool {
+	if len(f.enabledBands) > 0 {
+		if _, ok := f.enabledBands[strings.ToLower(strings.TrimSpace(s.Band))]; !ok {
+			return false
+		}
+	}
+	// SNR thresholds are calibrated for FT8/MQTT spots; leave DX cluster,
+	// WSPR and RBN unfiltered by SNR because they use different scales.
+	if s.SourceType != "" && s.SourceType != "mqtt" && s.SourceType != "rbn" {
+		return true
+	}
+	switch f.minSnrMode {
+	case "ssb":
+		if s.SNR < f.ssbMinDb {
+			return false
+		}
+	case "cw":
+		if s.SNR < f.cwMinDb {
+			return false
+		}
+	}
+	return true
 }
 
 func parseIntDefault(raw string, fallback int) int {
