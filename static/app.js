@@ -1842,10 +1842,17 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
     const statusEl = document.getElementById('stream-status');
     const currentSub = `QTH: ${qth}`;
     let totalReceived = 0;
+    let totalBytes = 0;
     let lastStatusUpdate = 0;
     statusEl.innerHTML = `Status: Connecting to ${currentSub}...`;
 
     if (btnSubmit) setSubmitMode(btnSubmit, 'stop');
+
+    function formatBytes(bytes) {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+        return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    }
 
     // On mobile, hide sidebar after submitting so the map is immediately visible
     if (window.innerWidth <= 575) {
@@ -1889,13 +1896,19 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     state.eventSource.addEventListener('history_end', () => {
         historyLoading = false;
-        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)})</span>`;
+        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span>`;
         lastStatusUpdate = Date.now();
         scheduleRender();
     });
 
     state.eventSource.onmessage = (e) => {
         totalReceived++;
+        // SSE text frames: count bytes for a user-facing data-consumption hint.
+        // EventSource reassembles line-terminated data; e.data.length is close
+        // enough to the wire payload for the status display.
+        if (typeof e.data === 'string') {
+            totalBytes += e.data.length;
+        }
 
         let spot;
         try {
@@ -1923,9 +1936,9 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         const now = Date.now();
         if (now - lastStatusUpdate > 250) {
             if (historyLoading) {
-                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: orange;">Fetching history (Spots: ${formatNumber(totalReceived)})</span> <div class="spinner"></div>`;
+                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: orange;">Fetching history (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span> <div class="spinner"></div>`;
             } else {
-                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)})</span>`;
+                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span>`;
             }
             lastStatusUpdate = now;
         }
