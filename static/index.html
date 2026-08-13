@@ -283,10 +283,12 @@
     </div>
     <div id="map-stack" class="flex-grow-1 h-100 position-relative">
         <div id="map" class="w-100 h-100"></div>
-        <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent position-absolute" style="top: 12px; left: 12px; z-index: 1000;" title="Show Band Stats">Stats</button>
-        <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent position-absolute" style="top: 12px; left: 72px; z-index: 1000;" title="Show WSPR Band × Region Matrix">WSPR</button>
-        <button id="prop-matrix-toggle" type="button" class="panel-toggle is-translucent position-absolute" style="top: 12px; left: 132px; z-index: 1000;" title="Show Propagation Intelligence Matrix">Prop</button>
-        <button id="drill-down-clear" type="button" class="panel-toggle is-translucent position-absolute" style="top: 12px; left: 192px; z-index: 1000; display: none;" title="Clear grid-square filter"></button>
+        <div id="map-toggles" class="map-toggles">
+            <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show Band Stats">Stats</button>
+            <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show WSPR Band × Region Matrix">WSPR</button>
+            <button id="prop-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show Propagation Intelligence Matrix">Prop</button>
+            <button id="drill-down-clear" type="button" class="panel-toggle is-translucent" title="Clear grid-square filter" style="display: none;"></button>
+        </div>
         <canvas id="azimuth-canvas" class="position-absolute top-0 start-0 w-100 h-100"></canvas>
         <!-- Operator status line: Band | Mode | QRG | Antenna (opmode only) -->
         <div id="opmode-status-line" role="status" aria-live="polite" style="display: none;">
@@ -351,16 +353,12 @@
         <div id="wspr-matrix-window" class="wspr-matrix-window is-hidden">
             <div class="wspr-matrix-window-header">
                 <span>WSPR Band × Region</span>
-                <button type="button" class="wspr-matrix-close btn-close btn-close-white" aria-label="Close"></button>
             </div>
             <div id="wspr-matrix-body" class="wspr-matrix-body"></div>
         </div>
         <div id="prop-matrix-window" class="prop-matrix-window is-hidden">
             <div class="prop-matrix-window-header">
                 <span>Propagation Intel</span>
-                <div class="prop-matrix-window-header-actions">
-                    <button type="button" class="prop-matrix-close btn-close btn-close-white" aria-label="Close"></button>
-                </div>
             </div>
             <div id="prop-matrix-body" class="prop-matrix-body"></div>
         </div>

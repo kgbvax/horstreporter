@@ -60,11 +60,6 @@ export function initPropMatrix({ onLayoutChange } = {}) {
             setPropMatrixVisible(!runtime.enabled);
         });
 
-        const closeBtn = panel.querySelector('.prop-matrix-close');
-        if (closeBtn) {
-            closeBtn.addEventListener('click', () => setPropMatrixVisible(false));
-        }
-
         // Re-poll when QTH changes (band-lab.js pattern at line 138).
         const qthInput = document.getElementById('qth');
         if (qthInput) {
@@ -94,7 +89,7 @@ export function setPropMatrixVisible(visible) {
     if (!panel) return;
     runtime.enabled = visible;
     panel.classList.toggle('is-hidden', !visible);
-    if (toggle) toggle.style.display = visible ? 'none' : '';
+    if (toggle) toggle.classList.toggle('is-active', visible);
     localStorage.setItem(ENABLE_KEY, visible ? 'true' : 'false');
     if (runtime.onLayoutChange) runtime.onLayoutChange();
     if (visible) {

@@ -1314,6 +1314,30 @@ body[data-theme="dark"] .band-pill .band-nodata-tag {
     background: color-mix(in srgb, var(--accent-tint) 88%, transparent);
 }
 
+/* Top-left toggle row for the floating overlay cards. A flex container gives
+   even spacing regardless of each pill's actual width (the old fixed left:
+   12/72/132/192px offsets produced uneven gaps). The WSPR / Prop toggles stay
+   visible as on/off state pills instead of hiding when their card opens, so
+   the cards no longer need a close button. */
+.map-toggles {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 1000;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+/* Active state for the stateful overlay toggles — mirrors .opmode-beam-btn.active
+   so a filled accent pill reads as "this card is open" in both themes. Placed
+   after the :hover rules so it wins the equal-specificity tie. */
+.panel-toggle.is-active,
+.panel-toggle.is-active:hover {
+    background: var(--accent);
+    border-color: var(--accent-strong);
+    color: var(--accent-contrast);
+}
+
 
 /* ---------------------------------------------------------------------------
    UltraBeam beam-direction control (operation mode)

@@ -42,9 +42,6 @@ function setupDom() {
         <div id="${PANEL_ID}" class="prop-matrix-window is-hidden">
             <div class="prop-matrix-window-header">
                 <span>Propagation Intel</span>
-                <div class="prop-matrix-window-header-actions">
-                    <button type="button" class="prop-matrix-close"></button>
-                </div>
             </div>
             <div id="${BODY_ID}"></div>
         </div>
@@ -105,20 +102,22 @@ describe('prop-matrix panel', () => {
         const toggle = document.getElementById(TOGGLE_ID);
         expect(panel.classList.contains('is-hidden')).toBe(true);
         expect(store.getItem(ENABLE_KEY)).toBe(null);
+        expect(toggle.classList.contains('is-active')).toBe(false);
 
         toggle.click();
         // Let the in-flight fetch resolve.
         await new Promise((r) => setTimeout(r, 0));
         expect(panel.classList.contains('is-hidden')).toBe(false);
         expect(store.getItem(ENABLE_KEY)).toBe('true');
-        expect(toggle.style.display).toBe('none');
+        // The toggle stays visible as an active state pill (no close button on
+        // the card — the toggle itself is the on/off affordance).
+        expect(toggle.classList.contains('is-active')).toBe(true);
 
-        // Close via the panel close button.
-        const closeBtn = panel.querySelector('.prop-matrix-close');
-        closeBtn.click();
+        // Toggle off via the same toggle button.
+        toggle.click();
         expect(panel.classList.contains('is-hidden')).toBe(true);
         expect(store.getItem(ENABLE_KEY)).toBe('false');
-        expect(toggle.style.display).toBe('');
+        expect(toggle.classList.contains('is-active')).toBe(false);
     });
 
     it('opening the panel starts polling; closing aborts in-flight requests', async () => {
