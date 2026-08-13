@@ -1552,20 +1552,23 @@ function drawAntennaOverlay(ctx, width, height) {
 }
 
 // buildAzimuthDensityField interpolates a continuous report-COUNT surface from
-// the projected spots — a Gaussian kernel-density estimate of activity, not
-// signal strength. Spots are projected into canvas space first, so the azimuthal
-// projection's distortion is handled implicitly. The field is sampled on a
-// regular grid; each vertex holds the Gaussian-weighted report count (density)
-// and the dominant band (for hue). Because a single spot peaks at density ~1.0,
-// contour thresholds above 1.0 double as a min-count gate — lone spots never
-// reach PRESENCE and are drawn as dots by the caller instead. Returns null when
-// there is nothing to draw; otherwise { cols, rows, step, x0, y0, density,
-// bandIdx, pts } where pts is the aggregated points for the lone-spot dot pass.
+// the projected spots — per-band Gaussian kernel-density estimates of activity,
+// not signal strength. Spots are projected into canvas space first, so the
+// azimuthal projection's distortion is handled implicitly. The field is sampled
+// on a regular grid; each vertex holds the Gaussian-weighted report count
+// (density) for each band. Because a single spot peaks at density ~1.0, contour
+// thresholds above 1.0 double as a min-count gate — lone spots never reach
+// PRESENCE and are drawn as dots by the caller instead. Returns null when there
+// is nothing to draw; otherwise { cols, rows, step, x0, y0, densityByBand,
+// activeBands, pts } where pts is the aggregated points for the lone-spot dot
+// pass.
 function buildAzimuthDensityField(filteredSpots, width, height, step, radius) {
     // Reports from one grid square all project to the same pixel; aggregate
-    // them into a single weighted point so the wider smoothing kernel stays
-    // cheap. Each aggregated point carries a report count (used as the density
-    // contribution) and the dominant band at that location.
+    // them into a single weighted point per band so the wider smoothing kernel
+    // stays cheap. Each aggregated point carries a per-band report count (used as
+    // the density contribution). Keeping bands separate means multi-band views
+    // show smooth per-band iso-contours that overlap, instead of blocky
+    // per-cell dominant-band mosaics.
     const agg = new Map();
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const spot of filteredSpots) {
@@ -1576,11 +1579,12 @@ function buildAzimuthDensityField(filteredSpots, width, height, step, radius) {
         if (!p) continue;
         const kx = Math.round(p.x), ky = Math.round(p.y);
         const key = kx + ',' + ky;
+        const band = spot.band || 'all';
         let a = agg.get(key);
-        if (!a) { a = { x: kx, y: ky, snrSum: 0, n: 0, bands: {} }; agg.set(key, a); }
-        a.snrSum += snr;
-        a.n += 1;
-        a.bands[spot.band || 'all'] = (a.bands[spot.band || 'all'] || 0) + 1;
+        if (!a) { a = { x: kx, y: ky, bands: {} }; agg.set(key, a); }
+        const b = a.bands[band] || (a.bands[band] = { n: 0, snrSum: 0 });
+        b.n += 1;
+        b.snrSum += snr;
         if (kx < minX) minX = kx;
         if (ky < minY) minY = ky;
         if (kx > maxX) maxX = kx;
@@ -1588,11 +1592,14 @@ function buildAzimuthDensityField(filteredSpots, width, height, step, radius) {
     }
     if (agg.size === 0) return null;
 
+    // Flatten aggregated points into a per-band point list. Each point carries a
+    // report count for exactly one band; this is what the per-band KDE sums over.
     const pts = [];
     for (const a of agg.values()) {
-        let bestBand = 'all', bestCount = -1;
-        for (const b in a.bands) if (a.bands[b] > bestCount) { bestCount = a.bands[b]; bestBand = b; }
-        pts.push({ x: a.x, y: a.y, snr: a.snrSum / a.n, n: a.n, band: bestBand });
+        for (const band in a.bands) {
+            const b = a.bands[band];
+            pts.push({ x: a.x, y: a.y, band, n: b.n, snr: b.snrSum / b.n });
+        }
     }
 
     // Bucket index for O(1) neighbour lookup (bucket size == search radius).
@@ -1617,43 +1624,44 @@ function buildAzimuthDensityField(filteredSpots, width, height, step, radius) {
     const x0 = minX - radius, y0 = minY - radius;
     const cols = Math.max(2, Math.ceil((maxX + radius - x0) / step) + 1);
     const rows = Math.max(2, Math.ceil((maxY + radius - y0) / step) + 1);
-    const density = new Float32Array(cols * rows);
-    const bandIdx = new Array(cols * rows);
     const r2 = radius * radius;
     const sigma = radius / 2.2;
     const twoSigma2 = 2 * sigma * sigma;
 
-    for (let j = 0; j < rows; j++) {
-        const vy = y0 + j * step;
-        const by = Math.floor((vy - minY) / bucket);
-        for (let i = 0; i < cols; i++) {
-            const vx = x0 + i * step;
-            const bx = Math.floor((vx - minX) / bucket);
-            let wsum = 0;
-            let bestBand = 'all', bestBandW = -1;
-            const bandW = {};
-            for (let dby = -1; dby <= 1; dby++) {
-                for (let dbx = -1; dbx <= 1; dbx++) {
-                    const nb = buckets.get(bkey(bx + dbx, by + dby));
-                    if (!nb) continue;
-                    for (const p of nb) {
-                        const dx = p.x - vx, dy = p.y - vy;
-                        const d2 = dx * dx + dy * dy;
-                        if (d2 > r2) continue;
-                        const w = Math.exp(-d2 / twoSigma2) * p.n;
-                        wsum += w;
-                        const bw = (bandW[p.band] || 0) + w;
-                        bandW[p.band] = bw;
-                        if (bw > bestBandW) { bestBandW = bw; bestBand = p.band; }
+    const activeBandsSet = new Set();
+    for (const p of pts) activeBandsSet.add(p.band);
+    const activeBands = [...activeBandsSet].sort();
+    const densityByBand = {};
+
+    for (const band of activeBands) {
+        const density = new Float32Array(cols * rows);
+        for (let j = 0; j < rows; j++) {
+            const vy = y0 + j * step;
+            const by = Math.floor((vy - minY) / bucket);
+            for (let i = 0; i < cols; i++) {
+                const vx = x0 + i * step;
+                const bx = Math.floor((vx - minX) / bucket);
+                let wsum = 0;
+                for (let dby = -1; dby <= 1; dby++) {
+                    for (let dbx = -1; dbx <= 1; dbx++) {
+                        const nb = buckets.get(bkey(bx + dbx, by + dby));
+                        if (!nb) continue;
+                        for (const p of nb) {
+                            if (p.band !== band) continue;
+                            const dx = p.x - vx, dy = p.y - vy;
+                            const d2 = dx * dx + dy * dy;
+                            if (d2 > r2) continue;
+                            wsum += Math.exp(-d2 / twoSigma2) * p.n;
+                        }
                     }
                 }
+                density[j * cols + i] = wsum;
             }
-            const idx = j * cols + i;
-            density[idx] = wsum;
-            if (wsum > 0) bandIdx[idx] = bestBand;
         }
+        densityByBand[band] = density;
     }
-    return { cols, rows, step, x0, y0, density, bandIdx, pts };
+
+    return { cols, rows, step, x0, y0, densityByBand, activeBands, pts };
 }
 
 // cellAbove returns the polygon (as {x,y} points) of the part of one grid cell
@@ -1674,57 +1682,62 @@ function cellAbove(threshold, cx, cy, cv) {
     return out;
 }
 
-// fillAzimuthContours renders the density field as stacked filled contour zones.
-// The lowest threshold (PRESENCE) is the outer "activity" boundary — it doubles
-// as the min-count gate, so lone spots (peak density ~1.0 < 1.5) never paint a
-// region and are drawn as dots by the caller. MID/CORE layer on top so denser
-// clusters read brighter. Every boundary is an interpolated iso-line, so there
-// are no blocky cell edges anywhere.
+// fillAzimuthContours renders each per-band density field as stacked filled
+// contour zones. The lowest threshold (PRESENCE) is the outer "activity"
+// boundary — it doubles as the min-count gate, so lone spots
+// (peak density ~1.0 < 1.5) never paint a region and are drawn as dots by the
+// caller. MID/CORE layers stack on top so denser clusters read brighter.
+// Because every band is rendered independently in its canonical color, no
+// per-cell dominant-band decision is made; contours are smooth iso-lines and
+// two bands covering the same area overlap translucently (matching Mercator's
+// overlapping-area look). Multi-band opacity is scaled down so overlaps stay
+// readable instead of washing out.
 function fillAzimuthContours(ctx, field) {
     if (!field) return;
-    const { cols, rows, step, x0, y0, density, bandIdx } = field;
+    const { cols, rows, step, x0, y0, densityByBand, activeBands } = field;
+    if (!activeBands || activeBands.length === 0) return;
+
+    const overlapFactor = activeBands.length <= 1 ? 1.0 : 0.55;
     const layers = [
-        { t: AZIMUTH_DENSITY_PRESENCE, alpha: 0.22 },
-        { t: AZIMUTH_DENSITY_MID, alpha: 0.34 },
-        { t: AZIMUTH_DENSITY_CORE, alpha: 0.48 }
+        { t: AZIMUTH_DENSITY_PRESENCE, alpha: 0.22 * overlapFactor },
+        { t: AZIMUTH_DENSITY_MID, alpha: 0.34 * overlapFactor },
+        { t: AZIMUTH_DENSITY_CORE, alpha: 0.48 * overlapFactor }
     ];
-    const ci = [0, 1, 1, 0];
-    const cj = [0, 0, 1, 1];
 
-    for (const layer of layers) {
-        for (let j = 0; j < rows - 1; j++) {
-            for (let i = 0; i < cols - 1; i++) {
-                const i00 = j * cols + i;
-                const i10 = j * cols + i + 1;
-                const i11 = (j + 1) * cols + i + 1;
-                const i01 = (j + 1) * cols + i;
+    for (const band of activeBands) {
+        const density = densityByBand[band];
+        if (!density) continue;
+        const color = bandColors[band] || bandColors.all;
+        ctx.fillStyle = color;
 
-                const cv = [density[i00], density[i10], density[i11], density[i01]];
-                const cx = [x0 + i * step, x0 + (i + 1) * step, x0 + (i + 1) * step, x0 + i * step];
-                const cy = [y0 + j * step, y0 + j * step, y0 + (j + 1) * step, y0 + (j + 1) * step];
-                const poly = cellAbove(layer.t, cx, cy, cv);
-                if (!poly || poly.length < 3) continue;
+        for (const layer of layers) {
+            ctx.globalAlpha = layer.alpha;
+            for (let j = 0; j < rows - 1; j++) {
+                for (let i = 0; i < cols - 1; i++) {
+                    const i00 = j * cols + i;
+                    const i10 = j * cols + i + 1;
+                    const i11 = (j + 1) * cols + i + 1;
+                    const i01 = (j + 1) * cols + i;
 
-                // Hue follows the dominant band of the cell's strongest corner.
-                let best = 0;
-                for (let k = 1; k < 4; k++) if (cv[k] > cv[best]) best = k;
-                const bandCornerIdx = (j + cj[best]) * cols + (i + ci[best]);
-                const band = bandIdx[bandCornerIdx] || 'all';
+                    const cv = [density[i00], density[i10], density[i11], density[i01]];
+                    const cx = [x0 + i * step, x0 + (i + 1) * step, x0 + (i + 1) * step, x0 + i * step];
+                    const cy = [y0 + j * step, y0 + j * step, y0 + (j + 1) * step, y0 + (j + 1) * step];
+                    const poly = cellAbove(layer.t, cx, cy, cv);
+                    if (!poly || poly.length < 3) continue;
 
-                ctx.fillStyle = bandColors[band] || bandColors.all;
-                ctx.globalAlpha = layer.alpha;
-                ctx.beginPath();
-                ctx.moveTo(poly[0].x, poly[0].y);
-                for (let k = 1; k < poly.length; k++) ctx.lineTo(poly[k].x, poly[k].y);
-                ctx.closePath();
-                ctx.fill();
+                    ctx.beginPath();
+                    ctx.moveTo(poly[0].x, poly[0].y);
+                    for (let k = 1; k < poly.length; k++) ctx.lineTo(poly[k].x, poly[k].y);
+                    ctx.closePath();
+                    ctx.fill();
+                }
             }
         }
     }
     ctx.globalAlpha = 1;
 }
 
-function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClusterDist) {
+function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, renderCtx) {
     // Split once so drawDxClusterSpots/drawWsprSpots don't each re-filter the
     // full array (two extra O(n) passes per frame).
     const dxClusterSpots = [];
@@ -1777,23 +1790,26 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
     }
 
     if (style === 'active-area') {
-        // Interpolate a continuous report-COUNT (density) surface and render it
-        // as filled contour zones. Sample resolution and search radius scale
-        // with the canvas. Spots whose local density stays below PRESENCE — i.e.
-        // lone or near-isolated reports that never grow a region — are drawn as
-        // 4 px dots instead, so quiet single spots read as points, not blobs.
+        // Interpolate per-band continuous report-COUNT (density) surfaces and
+        // render each as filled contour zones. Sample resolution and search radius
+        // scale with the canvas. Spots whose local density stays below PRESENCE
+        // — i.e. lone or near-isolated reports that never grow a region — are
+        // drawn as 4 px dots instead, so quiet single spots read as points, not
+        // blobs.
         const minDim = Math.min(width, height);
         const step = Math.max(8, Math.min(16, Math.round(minDim / 95)));
         const radius = step * 3;
         // Rebuild the KDE field at most ~1x/sec (it's the most expensive
-        // per-frame azimuth computation). The key captures the projection so a
-        // pan/zoom still triggers a rebuild, but the time gate bounds the cost
-        // during active traffic and fast drags alike.
-        const densityKey = `${width}x${height}:${state.center[0].toFixed(1)}:${state.center[1].toFixed(1)}:${state.zoom.toFixed(1)}`;
+        // per-frame azimuth computation). The key captures the projection, the
+        // active band set, and a cheap spot-set fingerprint so pan/zoom/band
+        // toggles rebuild promptly but a fast traffic stream doesn't.
         const now = Date.now();
+        const activeBandsArr = [...renderCtx.enabledBands].sort();
+        const spotFingerprint = `${filteredSpots.length}:${filteredSpots[0]?.locator || ''}:${filteredSpots[filteredSpots.length - 1]?.locator || ''}`;
+        const densityKey = `${width}x${height}:${state.center[0].toFixed(1)}:${state.center[1].toFixed(1)}:${state.zoom.toFixed(1)}:${activeBandsArr.join(',')}:${spotFingerprint}`;
         let field = null;
         const densityCached = state.densityFieldCache;
-        if (densityCached && (now - densityCached.at) < DENSITY_FIELD_REBUILD_INTERVAL_MS) {
+        if (densityCached && densityCached.key === densityKey && (now - densityCached.at) < DENSITY_FIELD_REBUILD_INTERVAL_MS) {
             field = densityCached.field;
         } else {
             field = buildAzimuthDensityField(filteredSpots, width, height, step, radius);
@@ -1801,12 +1817,13 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, maxClu
         }
         fillAzimuthContours(ctx, field);
         if (field) {
-            const { cols, step: fs, x0, y0, density, pts } = field;
+            const { cols, step: fs, x0, y0, densityByBand, pts } = field;
             for (const p of pts) {
                 const gi = Math.round((p.x - x0) / fs);
                 const gj = Math.round((p.y - y0) / fs);
-                const d = (gi >= 0 && gj >= 0) ? density[gj * cols + gi] : 0;
-                if (d >= AZIMUTH_DENSITY_PRESENCE) continue; // inside a region — no dot
+                const density = densityByBand[p.band];
+                const d = (density && gi >= 0 && gj >= 0) ? density[gj * cols + gi] : 0;
+                if (d >= AZIMUTH_DENSITY_PRESENCE) continue; // inside its band's region — no dot
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
                 ctx.fillStyle = bandColors[p.band] || bandColors.all;
@@ -1919,7 +1936,7 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
         }
 
         if (profile) profile.spotsStart = nowMs();
-        drawSpots(state.ctx, width, height, filteredSpots, resolvedStyle, gridSquares, renderCtx.maxClusterDist);
+        drawSpots(state.ctx, width, height, filteredSpots, resolvedStyle, gridSquares, renderCtx);
         if (profile) profile.spotsEnd = nowMs();
 
         if (state.dxccLabelsEnabled) {

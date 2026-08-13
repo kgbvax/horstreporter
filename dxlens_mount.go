@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"sync"
@@ -410,7 +411,11 @@ func populateRecent24h(snap *dxlens.Snapshot, store *dxPostgresStore, now int64)
 // populateRegionStats fills snap.RegionCalendarStats from
 // dx_region_baseline_daily over the configured lookback window.
 func populateRegionStats(snap *dxlens.Snapshot, store *dxPostgresStore, now int64) {
-	rows, err := store.regionCalendarStats(dxlensRegionStatsLookbackDays, now)
+	// Background snapshot fill (not on the request hot path): use a generous
+	// timeout. regionCalendarStats now takes a caller-supplied context.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rows, err := store.regionCalendarStats(ctx, dxlensRegionStatsLookbackDays, now)
 	if err != nil {
 		logInfo("DXLens region stats query failed: %v", err)
 		return

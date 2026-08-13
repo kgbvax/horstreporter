@@ -89,8 +89,45 @@ var embeddedCtyData []byte
 var compressStream bool
 var dxBaseline *DxBaselineEngine
 var streamAccounting = &streamAccountingState{}
+var propIntelAccounting = &propIntelAccountingState{}
+var pushAccounting = &pushAccountingState{}
 
 const defaultLiveHistoryRetentionMinutes = 60
+
+// propIntelAccountingState tracks /api/prop_intel request, error, and
+// surge-detection counters. Mirrors the per-ingest accounting pattern
+// (streamAccountingState / dxClusterAccountingState): atomic.Int64 fields
+// with a snapshot() helper, surfaced via statsHandler under the
+// prop_intel.* JSON keys. See U6 of the Propagation Intelligence Layer plan.
+type propIntelAccountingState struct {
+	requests       atomic.Int64
+	errors         atomic.Int64
+	surgesDetected atomic.Int64
+}
+
+func (a *propIntelAccountingState) snapshot() (requests, errors, surgesDetected int64) {
+	requests = a.requests.Load()
+	errors = a.errors.Load()
+	surgesDetected = a.surgesDetected.Load()
+	return
+}
+
+// pushAccountingState tracks Web Push send and error counters, plus the
+// number of surges that triggered a push fan-out. Mirrors the per-ingest
+// accounting pattern; surfaced via statsHandler under the push.* JSON
+// keys. See U6.
+type pushAccountingState struct {
+	surgesDetected atomic.Int64
+	pushSent       atomic.Int64
+	pushErrors     atomic.Int64
+}
+
+func (a *pushAccountingState) snapshot() (surgesDetected, pushSent, pushErrors int64) {
+	surgesDetected = a.surgesDetected.Load()
+	pushSent = a.pushSent.Load()
+	pushErrors = a.pushErrors.Load()
+	return
+}
 
 var maxClients int
 var logLevel = "INFO"
@@ -182,7 +219,7 @@ func main() {
 	keyFile := flag.String("key", "", "Path to TLS key file")
 	domain := flag.String("domain", "", "Domain for Let's Encrypt (enables automatic TLS)")
 	dev := flag.Bool("dev", false, "Enable development mode (disables caching of static files)")
-	flag.BoolVar(&compressStream, "compress", false, "Enable gzip compression for the SSE stream")
+	flag.BoolVar(&compressStream, "compress", true, "Enable gzip compression for the SSE stream (use -compress=false to disable)")
 	enablePprof := flag.Bool("pprof", false, "Enable pprof profiling on localhost:6060")
 	logLevelFlag := flag.String("log-level", "", "Log level: DEBUG, INFO, WARN (default: INFO if env LOG_LEVEL not set)")
 	logFile := flag.String("log-file", "", "Path to the log file (enables file logging with rotation)")
@@ -222,6 +259,11 @@ func main() {
 	opModeControlEnableFlag := flag.Bool("opmode-control-enable", false, "Allow rotate/control commands in operator mode")
 	opModeAgentURLFlag := flag.String("opmode-agent-url", "", "Deprecated and ignored: backend never proxies to local operator agent")
 	opModeAgentTimeoutMsFlag := flag.Int("opmode-agent-timeout-ms", 1500, "Deprecated and ignored: backend never proxies to local operator agent")
+	pushEnableFlag := flag.Bool("push-enable", false, "Enable Web Push notification channel for surge alerts (requires VAPID keys via -push-vapid-private-key/-push-vapid-public-key or PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
+	pushVAPIDPrivateKeyFlag := flag.String("push-vapid-private-key", "", "VAPID private key (base64url) for signing Web Push messages. Falls back to env PUSH_VAPID_PRIVATE_KEY. Generate with `go run github.com/SherClockHolmes/webpush-go` or the scripts/generate-vapid-keys.sh helper.")
+	pushVAPIDPublicKeyFlag := flag.String("push-vapid-public-key", "", "VAPID public key (base64url) served at /api/push/vapid-public-key for the browser subscription flow. Falls back to env PUSH_VAPID_PUBLIC_KEY.")
+	pushVAPIDSubscriberFlag := flag.String("push-vapid-subscriber", "", "mailto: URL in the VAPID JWT (identifies the sending server to the push service). Defaults to mailto:horstreporter@example.com.")
+	pushTrustedProxyCIDRFlag := flag.String("push-trusted-proxy-cidr", "", "Comma-separated CIDR ranges of trusted TLS-terminating proxies whose X-Forwarded-For header is honored for push rate-limiting (e.g. \"10.0.0.0/8,172.16.0.0/12\"). When unset, X-Forwarded-For is NOT trusted and the client IP is taken from RemoteAddr — this prevents spoofed-XFF rate-limit bypass. Only applies when -push-enable is set.")
 	flag.Parse()
 
 	// Override logLevel from flag if provided
@@ -259,6 +301,35 @@ func main() {
 	}
 	configureOpMode(*opModeControlEnableFlag)
 
+	// Web Push (U5): resolve VAPID keys from flag then env (mirrors the
+	// DX_POSTGRES_DSN pattern — keep the private key out of argv via the
+	// env var in production). Push is enabled only when both keys are
+	// present AND -push-enable is set, so the subsystem is opt-in.
+	pushVAPIDPrivate := strings.TrimSpace(*pushVAPIDPrivateKeyFlag)
+	if pushVAPIDPrivate == "" {
+		pushVAPIDPrivate = strings.TrimSpace(os.Getenv("PUSH_VAPID_PRIVATE_KEY"))
+	}
+	pushVAPIDPublic := strings.TrimSpace(*pushVAPIDPublicKeyFlag)
+	if pushVAPIDPublic == "" {
+		pushVAPIDPublic = strings.TrimSpace(os.Getenv("PUSH_VAPID_PUBLIC_KEY"))
+	}
+	pushStore.configure(pushVAPIDPrivate, pushVAPIDPublic, *pushVAPIDSubscriberFlag, *pushEnableFlag)
+	if pushStore.isEnabled() {
+		logInfo("Web Push enabled (vapid public key present, subscriber=%q)", pushStore.vapidSubscriber)
+	} else if *pushEnableFlag {
+		logInfo("Web Push requested via -push-enable but VAPID keys are missing — push disabled (set PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
+	} else {
+		logInfo("Web Push disabled (-push-enable not set)")
+	}
+	// Configure the trusted-proxy allowlist for X-Forwarded-For handling
+	// in push rate-limiting. Without this, XFF is never trusted, so a
+	// spoofed X-Forwarded-For header cannot rotate the rate-limit key.
+	if *pushTrustedProxyCIDRFlag != "" {
+		if err := setPushTrustedProxies(strings.Split(*pushTrustedProxyCIDRFlag, ",")); err != nil {
+			log.Fatalf("invalid -push-trusted-proxy-cidr: %v", err)
+		}
+	}
+
 	// Resolve the Postgres DSN: explicit flag wins (for ad-hoc/dev), then the
 	// DX_POSTGRES_DSN env var (the production path — keeps the secret out of
 	// argv / systemctl status), then the built-in default.
@@ -273,6 +344,10 @@ func main() {
 	logInfo("DX postgres DSN source: %s", dsnSource(*dxPostgresDSN))
 
 	dxBaseline = newDxBaselineEngine(strings.TrimSpace(*dxBaselineFile))
+	// Wire the prop_intel engine to the same baseline so it can reuse the
+	// Postgres store (regionCalendarStats). Set up early so the handler
+	// always has a baseline reference even if EnablePostgres fails below.
+	propIntel.baseline = dxBaseline
 	// Wire the DXCC cty.dat resolver into the baseline engine so the regional
 	// baseline can derive the operator's region for callsign targets (QRZ
 	// locator → region; fallback to DXCC entity centroid → region). The cty
@@ -438,9 +513,19 @@ func main() {
 	appMux.HandleFunc("/api/stats", statsHandler)
 	appMux.HandleFunc("/api/dx_conditions", dxConditionsHandler)
 	appMux.HandleFunc("/api/hot_bands", hotBandsHandler)
+	appMux.HandleFunc("/api/prop_intel", propIntelHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
 	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)
 	appMux.HandleFunc("/api/opmode/status", opModeStatusHandler)
+	// Web Push (U5): VAPID public key for the browser subscription flow,
+	// subscribe/unsubscribe, and a subscription-status endpoint used by
+	// the frontend's re-subscription-after-restart check. The handlers
+	// are registered unconditionally (they return 503 when push is not
+	// configured) so the frontend can feature-detect without a crash.
+	appMux.HandleFunc("/api/push/vapid-public-key", pushVAPIDPublicKeyHandler)
+	appMux.HandleFunc("/api/push/subscribe", pushSubscribeHandler)
+	appMux.HandleFunc("/api/push/unsubscribe", pushUnsubscribeHandler)
+	appMux.HandleFunc("/api/push/subscription-status", pushSubscriptionStatusHandler)
 
 	// Reverse-proxy /horstprop/* to the local horstprop scoring service so the
 	// Chase Queue reaches it same-origin (horstprop itself stays bound to

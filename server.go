@@ -8,12 +8,210 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// pushSubscribeRequest is the JSON body of POST /api/push/subscribe.
+// The browser sends its PushSubscription object (endpoint + keys) and
+// the operator's per-(band × region) enable preferences. A re-POST of an
+// existing endpoint updates the preferences in place (idempotent).
+type pushSubscribeRequest struct {
+	Endpoint    string               `json:"endpoint"`
+	Keys        pushSubscriptionKeys `json:"keys"`
+	QTH         string               `json:"qth"`
+	Preferences map[string]bool      `json:"preferences"`
+}
+
+// pushUnsubscribeRequest is the JSON body of POST /api/push/unsubscribe.
+type pushUnsubscribeRequest struct {
+	Endpoint string `json:"endpoint"`
+}
+
+// pushVAPIDPublicKeyHandler serves the server's VAPID public key (base64url)
+// for the frontend subscription flow. The private key is NEVER exposed
+// here. Returns 503 when push is not configured.
+func pushVAPIDPublicKeyHandler(w http.ResponseWriter, r *http.Request) {
+	if !pushStore.isEnabled() {
+		http.Error(w, "push not configured", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		PublicKey string `json:"public_key"`
+	}{PublicKey: pushStore.publicKey()})
+}
+
+// pushSubscribeHandler stores (or updates) a browser Push API
+// subscription. Validates the subscription shape (HTTPS endpoint +
+// p256dh + auth keys) before storing. Per-client-IP rate limiting
+// (pushSubscribeRatePerHour / hour) mitigates abuse from unauthenticated
+// clients. A re-POST of an existing endpoint is a no-op update (the plan's
+// idempotent re-subscription requirement).
+func pushSubscribeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !pushStore.isEnabled() {
+		http.Error(w, "push not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if !pushRateLimiter.allow(clientIPFromRequest(r)) {
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+	var req pushSubscribeRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 8192)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	sub := &pushSubscription{
+		Endpoint:    strings.TrimSpace(req.Endpoint),
+		Keys:        req.Keys,
+		QTH:         strings.ToUpper(strings.TrimSpace(req.QTH)),
+		Preferences: req.Preferences,
+	}
+	if sub.Preferences == nil {
+		sub.Preferences = map[string]bool{}
+	}
+	if err := validatePushSubscription(sub); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	pushStore.add(sub)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(struct {
+		OK         bool   `json:"ok"`
+		Endpoint   string `json:"endpoint"`
+		Registered bool   `json:"registered"`
+	}{OK: true, Endpoint: sub.Endpoint, Registered: true})
+}
+
+// pushUnsubscribeHandler removes a subscription by endpoint. No-op when
+// the endpoint was never stored (the browser may unsubscribe after a
+// server restart that already lost the record).
+func pushUnsubscribeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !pushStore.isEnabled() {
+		// Still accept unsubscriptions when push is disabled so the
+		// browser can clean up its side without a 503.
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			OK bool `json:"ok"`
+		}{OK: true})
+		return
+	}
+	var req pushUnsubscribeRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 2048)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	pushStore.remove(strings.TrimSpace(req.Endpoint))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(struct {
+		OK bool `json:"ok"`
+	}{OK: true})
+}
+
+// pushSubscriptionStatusHandler reports whether a given endpoint is
+// currently registered server-side. Used by the frontend's
+// re-subscription flow: on panel open the browser queries its existing
+// subscription endpoint here; a 404 triggers a re-POST to
+// /api/push/subscribe (the plan's restart-recovery requirement).
+func pushSubscriptionStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !pushStore.isEnabled() {
+		http.Error(w, "push not configured", http.StatusServiceUnavailable)
+		return
+	}
+	endpoint := strings.TrimSpace(r.URL.Query().Get("endpoint"))
+	if endpoint == "" {
+		http.Error(w, "endpoint required", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Registered bool `json:"registered"`
+	}{Registered: pushStore.has(endpoint)})
+}
+
+// pushTrustedProxies is the allowlist of CIDR ranges whose
+// X-Forwarded-For header is trusted for push rate-limiting. When empty,
+// X-Forwarded-For is never honored — the client IP is taken from RemoteAddr.
+// This prevents a client from spoofing X-Forwarded-For to rotate the
+// rate-limit key and bypass the per-IP subscribe cap. Configured via
+// -push-trusted-proxy-cidr (main.go) and only meaningful when push is enabled.
+var pushTrustedProxies []*net.IPNet
+
+// setPushTrustedProxies parses a list of CIDR strings into the trusted-proxy
+// allowlist. Invalid CIDRs return an error (fatal at startup). An empty list
+// (or all-empty entries) clears the allowlist, disabling XFF trust.
+func setPushTrustedProxies(cidrs []string) error {
+	var nets []*net.IPNet
+	for _, c := range cidrs {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		_, ipnet, err := net.ParseCIDR(c)
+		if err != nil {
+			return fmt.Errorf("bad CIDR %q: %w", c, err)
+		}
+		nets = append(nets, ipnet)
+	}
+	pushTrustedProxies = nets
+	return nil
+}
+
+// remoteAddrHost strips the port from r.RemoteAddr and returns the host
+// (IP literal). Works for both "host:port" and "[ipv6]:port".
+func remoteAddrHost(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// clientIPFromRequest extracts the client IP for rate limiting. It honors
+// X-Forwarded-For (leftmost entry) ONLY when the direct TCP peer (RemoteAddr)
+// is in the configured trusted-proxy allowlist (pushTrustedProxies); otherwise
+// it uses RemoteAddr. This prevents spoofed X-Forwarded-For from rotating the
+// rate-limit key when the server is reachable directly. Strips the port.
+func clientIPFromRequest(r *http.Request) string {
+	peer := remoteAddrHost(r)
+	if len(pushTrustedProxies) > 0 {
+		if ip := net.ParseIP(peer); ip != nil {
+			for _, n := range pushTrustedProxies {
+				if n.Contains(ip) {
+					if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+						if idx := strings.IndexByte(xff, ','); idx >= 0 {
+							return strings.TrimSpace(xff[:idx])
+						}
+						return strings.TrimSpace(xff)
+					}
+					break
+				}
+			}
+		}
+	}
+	return peer
+}
 
 type countingResponseWriter struct {
 	http.ResponseWriter
@@ -111,6 +309,8 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	filter := newStreamClientFilter(r)
+
 	now := time.Now().Unix()
 	cutoff := now - historySeconds
 
@@ -142,7 +342,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 
 	var historySpots []Spot
 	for _, msg := range historyWindow {
-		if spot, ok := matchAndCreateSpot(client, msg, now); ok {
+		if spot, ok := matchAndCreateSpot(client, msg, now); ok && filter.spotAllowed(spot) {
 			historySpots = append(historySpots, spot)
 		}
 	}
@@ -196,6 +396,9 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		case spot, ok := <-client.send:
 			if !ok {
 				return
+			}
+			if !filter.spotAllowed(spot) {
+				continue
 			}
 			b, _ := json.Marshal(toStreamSpot(spot))
 			fmt.Fprintf(writer, "data: %s\n\n", string(b))
@@ -279,6 +482,49 @@ func toStreamSpot(spot Spot) streamSpot {
 		s.Receiver = spot.Receiver
 	}
 	return s
+}
+
+// streamClientFilter carries the band/SNR filters the browser requests so the
+// server can avoid sending spots the client will immediately discard. This cuts
+// both server-side serialization cost and the on-the-wire byte count.
+type streamClientFilter struct {
+	enabledBands map[string]struct{}
+	minSnrMode   string
+	ssbMinDb     int
+	cwMinDb      int
+}
+
+func newStreamClientFilter(r *http.Request) streamClientFilter {
+	return streamClientFilter{
+		enabledBands: parseEnabledBands(r.URL.Query().Get("enabled_bands")),
+		minSnrMode:   strings.ToLower(strings.TrimSpace(r.URL.Query().Get("min_snr_mode"))),
+		ssbMinDb:     parseIntDefault(r.URL.Query().Get("ssb_min_db"), 0),
+		cwMinDb:      parseIntDefault(r.URL.Query().Get("cw_min_db"), -15),
+	}
+}
+
+func (f streamClientFilter) spotAllowed(s Spot) bool {
+	if len(f.enabledBands) > 0 {
+		if _, ok := f.enabledBands[strings.ToLower(strings.TrimSpace(s.Band))]; !ok {
+			return false
+		}
+	}
+	// SNR thresholds are calibrated for FT8/MQTT spots; leave DX cluster,
+	// WSPR and RBN unfiltered by SNR because they use different scales.
+	if s.SourceType != "" && s.SourceType != "mqtt" && s.SourceType != "rbn" {
+		return true
+	}
+	switch f.minSnrMode {
+	case "ssb":
+		if s.SNR < f.ssbMinDb {
+			return false
+		}
+	case "cw":
+		if s.SNR < f.cwMinDb {
+			return false
+		}
+	}
+	return true
 }
 
 func parseIntDefault(raw string, fallback int) int {
@@ -434,42 +680,46 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	if dxBaseline != nil {
 		_, dxBaselineEventCount, dxBaselineHistoryMinutes = dxBaseline.Stats(time.Now().Unix())
 	}
+	propIntelReqs, propIntelErrs, propIntelSurges := propIntelAccounting.snapshot()
+	pushSurges, pushSent, pushErrs := pushAccounting.snapshot()
 
 	stats := struct {
-		ActiveConnections    int     `json:"active_connections"`
-		HistorySize          int     `json:"history_size"`
-		HistoryMinutes       int     `json:"history_minutes"`
-		HistoryRetentionMins int     `json:"history_retention_minutes"`
-		HistorySizeKB        int64   `json:"history_size_kb"`
-		SessionsTotal        int64   `json:"sessions_total"`
-		SessionsCompleted    int64   `json:"sessions_completed"`
-		SessionsActive       int64   `json:"sessions_active"`
-		SessionBytesTotal    int64   `json:"session_bytes_total"`
-		SessionBytesAvg      float64 `json:"session_bytes_avg"`
-		DxBaselineEventCount int     `json:"dx_baseline_event_count"`
-		DxBaselineHistoryM   int     `json:"dx_baseline_history_minutes"`
-		DxBaselineMaxEvents  int     `json:"dx_baseline_max_events"`
-		DxClusterConnAttempt int64   `json:"dxcluster_connect_attempts"`
-		DxClusterConnected   int64   `json:"dxcluster_connected_sessions"`
-		DxClusterLinesSeen   int64   `json:"dxcluster_lines_seen"`
-		DxClusterParsed      int64   `json:"dxcluster_parsed_spots"`
-		DxClusterPersisted   int64   `json:"dxcluster_persisted_spots"`
-		DxClusterForwarded   int64   `json:"dxcluster_live_forwarded"`
-		DxClusterDroppedLoc  int64   `json:"dxcluster_dropped_no_locator"`
-		RbnConnAttempt       int64   `json:"rbn_connect_attempts"`
-		RbnConnected         int64   `json:"rbn_connected_sessions"`
-		RbnLinesSeen         int64   `json:"rbn_lines_seen"`
-		RbnParsed            int64   `json:"rbn_parsed_spots"`
-		RbnPersisted         int64   `json:"rbn_persisted_spots"`
-		RbnForwarded         int64   `json:"rbn_live_forwarded"`
-		RbnDroppedLoc        int64   `json:"rbn_dropped_no_locator"`
-		WsprPollAttempts     int64   `json:"wspr_poll_attempts"`
-		WsprPollFailures     int64   `json:"wspr_poll_failures"`
-		WsprRowsSeen         int64   `json:"wspr_rows_seen"`
-		WsprParsed           int64   `json:"wspr_parsed_spots"`
-		WsprPersisted        int64   `json:"wspr_persisted_spots"`
-		WsprForwarded        int64   `json:"wspr_live_forwarded"`
-		WsprDroppedLoc       int64   `json:"wspr_dropped_no_locator"`
+		ActiveConnections    int                  `json:"active_connections"`
+		HistorySize          int                  `json:"history_size"`
+		HistoryMinutes       int                  `json:"history_minutes"`
+		HistoryRetentionMins int                  `json:"history_retention_minutes"`
+		HistorySizeKB        int64                `json:"history_size_kb"`
+		SessionsTotal        int64                `json:"sessions_total"`
+		SessionsCompleted    int64                `json:"sessions_completed"`
+		SessionsActive       int64                `json:"sessions_active"`
+		SessionBytesTotal    int64                `json:"session_bytes_total"`
+		SessionBytesAvg      float64              `json:"session_bytes_avg"`
+		DxBaselineEventCount int                  `json:"dx_baseline_event_count"`
+		DxBaselineHistoryM   int                  `json:"dx_baseline_history_minutes"`
+		DxBaselineMaxEvents  int                  `json:"dx_baseline_max_events"`
+		DxClusterConnAttempt int64                `json:"dxcluster_connect_attempts"`
+		DxClusterConnected   int64                `json:"dxcluster_connected_sessions"`
+		DxClusterLinesSeen   int64                `json:"dxcluster_lines_seen"`
+		DxClusterParsed      int64                `json:"dxcluster_parsed_spots"`
+		DxClusterPersisted   int64                `json:"dxcluster_persisted_spots"`
+		DxClusterForwarded   int64                `json:"dxcluster_live_forwarded"`
+		DxClusterDroppedLoc  int64                `json:"dxcluster_dropped_no_locator"`
+		RbnConnAttempt       int64                `json:"rbn_connect_attempts"`
+		RbnConnected         int64                `json:"rbn_connected_sessions"`
+		RbnLinesSeen         int64                `json:"rbn_lines_seen"`
+		RbnParsed            int64                `json:"rbn_parsed_spots"`
+		RbnPersisted         int64                `json:"rbn_persisted_spots"`
+		RbnForwarded         int64                `json:"rbn_live_forwarded"`
+		RbnDroppedLoc        int64                `json:"rbn_dropped_no_locator"`
+		WsprPollAttempts     int64                `json:"wspr_poll_attempts"`
+		WsprPollFailures     int64                `json:"wspr_poll_failures"`
+		WsprRowsSeen         int64                `json:"wspr_rows_seen"`
+		WsprParsed           int64                `json:"wspr_parsed_spots"`
+		WsprPersisted        int64                `json:"wspr_persisted_spots"`
+		WsprForwarded        int64                `json:"wspr_live_forwarded"`
+		WsprDroppedLoc       int64                `json:"wspr_dropped_no_locator"`
+		PropIntel            *propIntelStatsBlock `json:"prop_intel"`
+		Push                 *pushStatsBlock      `json:"push"`
 	}{
 		ActiveConnections:    numClients,
 		HistorySize:          historySize,
@@ -505,10 +755,36 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		WsprPersisted:        wsprPersisted,
 		WsprForwarded:        wsprForwarded,
 		WsprDroppedLoc:       wsprDroppedNoLoc,
+		PropIntel: &propIntelStatsBlock{
+			Requests:       propIntelReqs,
+			Errors:         propIntelErrs,
+			SurgesDetected: propIntelSurges,
+		},
+		Push: &pushStatsBlock{
+			SurgesDetected: pushSurges,
+			PushSent:       pushSent,
+			PushErrors:     pushErrs,
+		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
+}
+
+// propIntelStatsBlock is the prop_intel.* sub-object in /api/stats.
+// Mirrors the flat per-ingest counter layout but nested under prop_intel
+// to keep the namespace clean (the plan's accounting requirement, U6).
+type propIntelStatsBlock struct {
+	Requests       int64 `json:"requests"`
+	Errors         int64 `json:"errors"`
+	SurgesDetected int64 `json:"surges_detected"`
+}
+
+// pushStatsBlock is the push.* sub-object in /api/stats. U6.
+type pushStatsBlock struct {
+	SurgesDetected int64 `json:"surges_detected"`
+	PushSent       int64 `json:"push_sent"`
+	PushErrors     int64 `json:"push_errors"`
 }
 
 func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {

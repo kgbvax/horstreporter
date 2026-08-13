@@ -1,5 +1,6 @@
 import { state } from './state.js';
 import { regionForLocatorCached, WSPR_REGIONS, bandColors } from './utils.js';
+import { makeDraggable } from './panel-drag.js';
 
 // wspr-matrix.js — band × region matrix panel showing which bands have WSPR
 // paths open to which world regions right now. Aggregates state.liveSpots
@@ -37,10 +38,8 @@ export function initWsprMatrix({ onLayoutChange } = {}) {
         setWsprMatrixVisible(!runtime.enabled);
     });
 
-    const closeBtn = panel.querySelector('.wspr-matrix-close');
-    if (closeBtn) {
-        closeBtn.addEventListener('click', () => setWsprMatrixVisible(false));
-    }
+    // Make the floating card draggable by its header (position persisted).
+    makeDraggable(panel, panel.querySelector('.wspr-matrix-window-header'), 'wsprMatrixPos');
 }
 
 function setWsprMatrixVisible(visible) {
@@ -49,7 +48,7 @@ function setWsprMatrixVisible(visible) {
     if (!panel) return;
     runtime.enabled = visible;
     panel.classList.toggle('is-hidden', !visible);
-    if (toggle) toggle.style.display = visible ? 'none' : '';
+    if (toggle) toggle.classList.toggle('is-active', visible);
     localStorage.setItem(ENABLE_KEY, visible ? 'true' : 'false');
     if (runtime.onLayoutChange) runtime.onLayoutChange();
     if (visible) updateWsprMatrix();

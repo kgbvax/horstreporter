@@ -5,8 +5,10 @@ import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzi
 import { initUI, attachUITooltipEvents, initGridSnrLegend } from './ui.js';
 import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
 import { initWsprMatrix, updateWsprMatrix } from './wspr-matrix.js';
+import { initPropMatrix, clearDrillDown, updateDrillDownButton } from './prop-matrix.js';
 import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initHorstKevin } from './horst-kevin.js';
+import { initPushUI } from './push.js';
 import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
@@ -57,6 +59,17 @@ function applyBandChange() {
     hotBandIndicator?.refresh();
     horstKevin?.refresh();
     refreshBandPills();
+}
+
+// Re-connect the live stream when band/SNR filters change, so the server can
+// start sending only the spots that match the new filter. Mirrors the
+// surroundings-changed restart pattern.
+function restartStreamIfSubscribed() {
+    const btnSubmit = document.getElementById('btn-submit');
+    if (btnSubmit && isStreaming(btnSubmit)) {
+        setSubmitMode(btnSubmit, 'go');
+        document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    }
 }
 
 function stopBandCycle() {
@@ -648,9 +661,32 @@ function getRenderableMapSpots(spots) {
     const showDXClusterSpots = document.getElementById('show-dxcluster-spots')?.checked !== false;
     const showRbnSpots = document.getElementById('show-rbn-spots')?.checked !== false;
     const showWsprSpots = document.getElementById('show-wspr-spots')?.checked !== false;
-    if (showDXClusterSpots && showRbnSpots && showWsprSpots) return spots;
+    const srcFilter = !(showDXClusterSpots && showRbnSpots && showWsprSpots);
+
+    // Render-time age gate using TRUE wall-clock age, not the prune's 5s-stepped
+    // ageSeconds. The prune (state.renderInterval) already reaps over-age spots
+    // out of state.liveSpots, so a same-threshold filter on the stepped value
+    // would be a no-op and the boundary cohort (age within one prune step of
+    // maxAge) would still vanish in a 5s batch at each tick — the "shown then
+    // hidden" flash on reload. By tracking each spot's receive wall-clock time
+    // (__recvMs) and its server-stamped age at receipt (__recvAge), the render
+    // computes a continuous true age and hides spots smoothly as their real
+    // age crosses the cutoff (at whatever render runs between ticks), instead
+    // of a discrete batch drop. The prune keeps reaping memory on its 5s tick.
+    const maxAge = getCurrentMaxSpotAgeSeconds();
+    const now = Date.now();
 
     return spots.filter((spot) => {
+        const recvMs = spot.__recvMs;
+        if (recvMs) {
+            const trueAge = (spot.__recvAge ?? spot.ageSeconds) + (now - recvMs) / 1000;
+            if (trueAge > maxAge) return false;
+        } else if (spot.ageSeconds > maxAge) {
+            // Fallback for spots lacking a receive stamp (e.g. capture-mode
+            // snapshots loaded directly into liveSpots): use the stepped age.
+            return false;
+        }
+        if (!srcFilter) return true;
         const src = String(spot?.sourceType || '').toLowerCase();
         if (!showDXClusterSpots && src === 'dxcluster') return false;
         if (!showRbnSpots && src === 'rbn') return false;
@@ -1277,16 +1313,35 @@ if (captureConfig?.enabled) {
     });
     initWsprMatrix({
         onLayoutChange: () => {
-            if (map) map.invalidateSize();
+            // The WSPR matrix is a floating overlay inside #map-stack; toggling
+            // it no longer changes the map container's box, so invalidateSize is
+            // not needed (unlike band-lab, which is docked in-flow). The azimuth
+            // canvas display-swaps with #map and may need a re-render.
             if (isAzimuthEnabled()) scheduleRender();
         },
     });
+    initPropMatrix({
+        onLayoutChange: () => {
+            // Same as WSPR: floating overlay, no map resize, just azimuth re-render.
+            if (isAzimuthEnabled()) scheduleRender();
+        },
+    });
+    // U4: wire up the "clear filter" overlay button for grid-square drill-down.
+    const drillDownClearBtn = document.getElementById('drill-down-clear');
+    if (drillDownClearBtn) {
+        drillDownClearBtn.addEventListener('click', clearDrillDown);
+    }
+    updateDrillDownButton();
     hotBandIndicator = initHotBandIndicator({
         getQth: () => document.getElementById('qth')?.value?.trim()?.toUpperCase() || '',
         getSurroundings: () => Boolean(document.getElementById('surroundings')?.checked),
         getCurrentBand: () => getSelectedBand(),
         onBandSwitch: switchToBand,
     });
+    // U5: Web Push UI — wires up the push settings panel, Service Worker
+    // registration, and re-subscription-after-restart reconciliation.
+    // Returns null when push is unsupported (UI stays hidden).
+    initPushUI().catch((err) => { console.warn('push UI init failed:', err); });
     if (HORST_KEVIN_ENABLED) {
         horstKevin = initHorstKevin({
             getQth: () => document.getElementById('qth')?.value?.trim()?.toUpperCase() || '',
@@ -1579,6 +1634,7 @@ bandContainerEl?.addEventListener('change', (e) => {
     // Toggling enabled must NOT change focus; just persist the set and re-render.
     localStorage.setItem(`enable-${cb.value}`, cb.checked);
     applyBandChange();
+    restartStreamIfSubscribed();
 });
 
 document.getElementById('btn-show-all')?.addEventListener('click', () => {
@@ -1621,6 +1677,15 @@ if (forecastEl) {
 document.getElementById('show-dxcc-labels')?.addEventListener('change', (e) => {
     updateDxccLabelsEnabled(e.target.checked);
 });
+
+// Restart the live stream when SNR filters change so the server-side filter can
+// take effect. The min-snr radios and threshold sliders are created by the
+// Svelte bundle, so attach listeners after DOM mount.
+document.getElementById('min-snr-group')?.addEventListener('change', (e) => {
+    if (e.target?.name === 'min-snr') restartStreamIfSubscribed();
+});
+document.getElementById('ssb-min-db')?.addEventListener('change', restartStreamIfSubscribed);
+document.getElementById('cw-min-db')?.addEventListener('change', restartStreamIfSubscribed);
 
 document.getElementById('btn-geo')?.addEventListener('click', () => {
     if (!navigator.geolocation) {
@@ -1795,13 +1860,36 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         params.append('surroundings', 'true');
     }
 
+    // Server-side band/SNR filter: tell the backend which spots the client will
+    // actually display so it can avoid sending the rest over the wire.
+    const enabledBands = Array.from(getEnabledBands()).sort();
+    if (enabledBands.length) {
+        params.append('enabled_bands', enabledBands.join(','));
+    }
+    const minSnrMode = getMinSnrMode();
+    if (minSnrMode && minSnrMode !== 'none') {
+        params.append('min_snr_mode', minSnrMode);
+        if (minSnrMode === 'ssb') {
+            params.append('ssb_min_db', document.getElementById('ssb-min-db')?.value || '0');
+        } else if (minSnrMode === 'cw') {
+            params.append('cw_min_db', document.getElementById('cw-min-db')?.value || '-15');
+        }
+    }
+
     const statusEl = document.getElementById('stream-status');
     const currentSub = `QTH: ${qth}`;
     let totalReceived = 0;
+    let totalBytes = 0;
     let lastStatusUpdate = 0;
     statusEl.innerHTML = `Status: Connecting to ${currentSub}...`;
 
     if (btnSubmit) setSubmitMode(btnSubmit, 'stop');
+
+    function formatBytes(bytes) {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+        return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    }
 
     // On mobile, hide sidebar after submitting so the map is immediately visible
     if (window.innerWidth <= 575) {
@@ -1820,6 +1908,12 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     state.eventSource.onopen = () => {
         console.log("Connected to live MQTT stream");
+        // On auto-reconnect EventSource re-sends a history dump before live
+        // frames. Reset the loading flag so that dump is also suppressed from
+        // rendering (and the 5s prune is gated) until history_end fires —
+        // otherwise a reconnect paints the dump in chunks mid-stream. Harmless
+        // on the initial connect (historyLoading is already true).
+        historyLoading = true;
         statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: orange;">(Fetching history...)</span> <div class="spinner"></div>`;
         setFaviconColor('#ffa500'); // Orange until data arrives
     };
@@ -1839,13 +1933,19 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     state.eventSource.addEventListener('history_end', () => {
         historyLoading = false;
-        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)})</span>`;
+        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span>`;
         lastStatusUpdate = Date.now();
         scheduleRender();
     });
 
     state.eventSource.onmessage = (e) => {
         totalReceived++;
+        // SSE text frames: count bytes for a user-facing data-consumption hint.
+        // EventSource reassembles line-terminated data; e.data.length is close
+        // enough to the wire payload for the status display.
+        if (typeof e.data === 'string') {
+            totalBytes += e.data.length;
+        }
 
         let spot;
         try {
@@ -1859,6 +1959,13 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         if (state.liveSpots.length >= MAX_LIVE_SPOTS) {
             state.liveSpots.splice(0, state.liveSpots.length - MAX_LIVE_SPOTS + 1);
         }
+        // Stamp receive time for the render-time true-age gate (see
+        // getRenderableMapSpots). __recvAge is the server-stamped age at
+        // receive; __recvMs is the client wall-clock at receive. The prune
+        // mutates ageSeconds (+5/tick) but these stay fixed, so the render
+        // filter computes a continuous true age.
+        spot.__recvMs = Date.now();
+        spot.__recvAge = spot.ageSeconds;
         state.liveSpots.push(spot);
         setFaviconColor('#28a745'); // Green for active receiving
 
@@ -1866,9 +1973,9 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         const now = Date.now();
         if (now - lastStatusUpdate > 250) {
             if (historyLoading) {
-                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: orange;">Fetching history (Spots: ${formatNumber(totalReceived)})</span> <div class="spinner"></div>`;
+                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: orange;">Fetching history (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span> <div class="spinner"></div>`;
             } else {
-                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)})</span>`;
+                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span>`;
             }
             lastStatusUpdate = now;
         }
@@ -1907,6 +2014,12 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     state.renderInterval = setInterval(() => {
         if (state.softPaused) return;
+        // Don't prune/age during the history dump: the dump delivers many spots
+        // old→new over (potentially) multiple 5s ticks, and pruning mid-dump
+        // both races the in-flight frames and paints a half-loaded grid.
+        // historyLoading is reset to true on reconnect (onopen) for the same
+        // reason, and cleared at history_end.
+        if (historyLoading) return;
 
         if (state.liveSpots.length > 0) {
             // Read the live Max Spot Age slider value rather than the `minutes`
