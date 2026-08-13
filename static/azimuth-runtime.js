@@ -1,4 +1,4 @@
-import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
+import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, gridSnrOpacity, topQuartileMean, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
 
 import { radialLine, strokeCircle } from './canvas-draw.js';
 
@@ -502,9 +502,12 @@ function collectGridSquares(visibleSpots, resolution) {
         let loc = (spot.locator || '').substring(0, resolution);
         if (loc.length < resolution) loc = (spot.locator || '').substring(0, 4);
         if (loc.length < 4) return;
-        if (!squareData[loc]) squareData[loc] = { visibleCount: 0, bands: {} };
+        if (!squareData[loc]) squareData[loc] = { visibleCount: 0, bands: {}, snrs: [] };
         squareData[loc].visibleCount += 1;
         squareData[loc].bands[spot.band] = (squareData[loc].bands[spot.band] || 0) + 1;
+        // Reachability model: only filter-passing spots feed the square score
+        // (matches the Mercator filter-first contract, commit 589d9a8).
+        squareData[loc].snrs.push(Number(spot.snr));
     });
     return squareData;
 }
@@ -1767,10 +1770,9 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, render
                 }
             }
             ctx.fillStyle = bandColors[dominantBand] || bandColors.all;
-            // Flat opacity: all active grid squares read at the same moderate
-            // level. SNR-driven brightness was removed because it obscured weak
-            // squares and oversaturated strong ones without improving readability.
-            ctx.globalAlpha = 0.45;
+            // Brightness = mean of the strongest quarter of (filter-passing)
+            // reports on the continuous ramp; matches the Mercator renderer.
+            ctx.globalAlpha = gridSnrOpacity(topQuartileMean(entry.snrs));
 
             ctx.beginPath();
             ctx.moveTo(corners[0].x, corners[0].y);

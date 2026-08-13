@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Verifies the Mercator Grid-SNR threshold + color contract:
+// Verifies the Mercator Grid-SNR threshold + intensity contract:
 //   * A grid square is only drawn when at least one spot in it passes BOTH
 //     the SNR threshold (active min-SNR mode) AND the band filter.
-//   * A square's color is determined by the dominant band among filter-passing
-//     spots; its opacity is flat (SNR-driven brightness was removed).
+//   * A square's intensity (opacity) reflects only the filter-passing spots,
+//     not band/SNR-filtered-out spots that happen to share the square.
 //
 // Regression guard for the "green 20m squares with no spots above the set
 // threshold" symptom: in SSB mode the gate at renderGridSnr must filter
@@ -116,8 +116,8 @@ describe('renderGridSnr threshold gate', () => {
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
         expect(feats[0].color).toBe('#008000');
-        // Flat opacity: weak spots are shown at the same level as strong ones.
-        expect(feats[0].fillOpacity).toBeCloseTo(0.45, 2);
+        // -5 dB -> ramp 0.45 - 0.03*5 = 0.30 (low-ish but honest: the spot is weak).
+        expect(feats[0].fillOpacity).toBeCloseTo(0.30, 2);
     });
 
     it('in CW mode filters by the CW threshold, not the (dead) SSB slider', () => {
@@ -139,29 +139,30 @@ describe('renderGridSnr threshold gate', () => {
     });
 });
 
-describe('renderGridSnr color reflects only filter-passing spots', () => {
-    it('does not let a band-filtered-out spot change a soloed-band square color', () => {
-        // Solo 20m. The square has a passing 20m spot and a strong 15m spot
-        // that is filtered out by the band filter. The square must stay 20m green.
+describe('renderGridSnr intensity reflects only filter-passing spots', () => {
+    it('does not let a band-filtered-out spot inflate a soloed-band square', () => {
+        // Solo 20m. The square has a weak passing 20m spot (+1 dB) and a strong
+        // 15m spot (+25 dB) that is filtered out by the band filter. The square
+        // must grade from the +1 dB 20m spot alone (ramp 0.465), not from the
+        // hidden +25 dB 15m spot (which would score near the ramp cap).
         setupDom({ minSnr: 'ssb', ssbMinDb: 0, focusBand: '20m' });
         const spots = [spot('JO32', 1, '20m'), spot('JO32', 25, '15m')];
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
         expect(feats[0].color).toBe('#008000');
-        expect(feats[0].fillOpacity).toBeCloseTo(0.45, 2);
+        expect(feats[0].fillOpacity).toBeCloseTo(0.465, 3);
     });
 
-    it('does not let a sub-threshold spot change the dominant band color', () => {
-        // SSB threshold 0. The -9 dB spot is filtered out; the square still
-        // colors from the passing +12 dB 20m spot.
+    it('does not let a sub-threshold spot inflate intensity', () => {
+        // SSB threshold 0. The -9 dB spot is filtered out; the square grades
+        // from the +12 dB spot alone: ramp 0.45 + 0.015*12 = 0.63.
         setupDom({ minSnr: 'ssb', ssbMinDb: 0 });
         const spots = [spot('JO32', 12, '20m'), spot('JO32', -9, '20m')];
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
-        expect(feats[0].color).toBe('#008000');
-        expect(feats[0].fillOpacity).toBeCloseTo(0.45, 2);
+        expect(feats[0].fillOpacity).toBeCloseTo(0.63, 2);
     });
 
     it('colors by the dominant band among passing spots only', () => {
@@ -179,10 +180,11 @@ describe('renderGridSnr color reflects only filter-passing spots', () => {
     });
 });
 
-// Flat opacity model: every active square is shown at the same moderate
-// opacity regardless of SNR. Color still follows the dominant band.
-describe('renderGridSnr flat opacity', () => {
-    it('shows a square with a single strong outlier at flat opacity', () => {
+// Grading model (top-quartile mean -> continuous opacity ramp). The core
+// property: one lucky strong decode among many weak reports must NOT light
+// up the square; corroborated strong paths should.
+describe('renderGridSnr grading', () => {
+    it('does not highlight a square on a single strong outlier among weak spots', () => {
         setupDom({ minSnr: 'none' });
         const spots = [
             spot('JO32', 12, '20m'),
@@ -191,46 +193,49 @@ describe('renderGridSnr flat opacity', () => {
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
-        expect(feats[0].fillOpacity).toBeCloseTo(0.45, 2);
+        // top quartile = best 6 -> mean(12, -8 x5) ~= -4.67 dB -> ramp ~0.31.
+        expect(feats[0].fillOpacity).toBeLessThan(0.35);
     });
 
-    it('shows corroborated strong reports at the same flat opacity', () => {
+    it('reads bright when strong reports are corroborated', () => {
         setupDom({ minSnr: 'none' });
         const spots = [10, 11, 12, 13, 14, 15].map((s) => spot('JO32', s, '20m'));
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
-        expect(feats[0].fillOpacity).toBeCloseTo(0.45, 2);
+        // top quartile = best 2 -> mean 14.5 -> ramp ~0.67.
+        expect(feats[0].fillOpacity).toBeGreaterThan(0.6);
     });
 
-    it('shows a lone strong spot at flat opacity', () => {
+    it('still gives a lone strong spot visual credit', () => {
         setupDom({ minSnr: 'none' });
         const spots = [spot('JO32', 12, '20m')];
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
-        expect(feats[0].fillOpacity).toBeCloseTo(0.45, 2);
+        // mean of 1 = 12 dB -> 0.45 + 0.015*12 = 0.63.
+        expect(feats[0].fillOpacity).toBeCloseTo(0.63, 2);
     });
 
-    it('shows a lone weak spot at flat opacity', () => {
+    it('subdues a lone weak spot on the ramp', () => {
         setupDom({ minSnr: 'none' });
         const spots = [spot('JO32', -5, '20m')];
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
-        expect(feats[0].fillOpacity).toBeCloseTo(0.45, 2);
+        // -5 dB -> 0.45 - 0.15 = 0.30.
+        expect(feats[0].fillOpacity).toBeCloseTo(0.30, 2);
     });
 
-    it('keeps the filter-first contract: filtered-out spots never affect color', () => {
-        // Solo 20m; a strong 15m spot is band-filtered out and must not change
-        // the passing 20m spot's square to 15m orange.
+    it('keeps the filter-first contract: filtered-out spots never feed the score', () => {
+        // Solo 20m; a strong 15m spot is band-filtered out and must not lift
+        // the weak passing 20m spot's square.
         setupDom({ minSnr: 'none', focusBand: '20m' });
         const spots = [spot('JO32', -5, '20m'), spot('JO32', 25, '15m')];
         updateMapVisualization(spots, 15);
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
-        expect(feats[0].color).toBe('#008000');
-        expect(feats[0].fillOpacity).toBeCloseTo(0.45, 2);
+        expect(feats[0].fillOpacity).toBeCloseTo(0.30, 2);
     });
 });
 

@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, bandColors, locatorToBounds, hexToRgba, pillTextColor, regionForLocatorCached } from './utils.js';
+import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, hexToRgba, pillTextColor, regionForLocatorCached } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTimer } from './perf.js';
 
 // Rendered-state fingerprint for the grid-snr heat layer. Unlike the old
@@ -473,6 +473,15 @@ export function aggregateGridSquares(regularSpots, filterCtx) {
     const activeBands = new Set();
     const aggregateTimer = startPerfTimer();
 
+    // Filter first, then aggregate: the snrs list (which drives a square's
+    // brightness via topQuartileMean) must reflect only the spots the user is
+    // actually allowed to see. Aggregating before the band+SNR filter
+    // previously let a band-filtered-out spot (e.g. a +25 dB 15m spot while
+    // soloing 20m) inflate a square's opacity, and let an RBN 0-40 dB CW-scale
+    // spot set intensity against an FT8-calibrated threshold. visibleCount
+    // and bands (which gate drawing and pick the color) were already
+    // post-filter, so only the intensity was wrong — but wrong intensity
+    // is what made a square read as "active" when its visible spots were weak.
     regularSpots.forEach(spot => {
         if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
         if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
@@ -488,11 +497,12 @@ export function aggregateGridSquares(regularSpots, filterCtx) {
         if (loc.length < 4) return;
 
         if (!squareData[loc]) {
-            squareData[loc] = { count: 0, visibleCount: 0, bands: {} };
+            squareData[loc] = { count: 0, visibleCount: 0, bands: {}, snrs: [] };
         }
         squareData[loc].count++;
         squareData[loc].visibleCount++;
         squareData[loc].bands[spot.band] = (squareData[loc].bands[spot.band] || 0) + 1;
+        squareData[loc].snrs.push(Number(spot.snr));
         activeBands.add(spot.band);
     });
     endPerfTimer('mercator.grid.aggregate_ms', aggregateTimer);
@@ -500,9 +510,9 @@ export function aggregateGridSquares(regularSpots, filterCtx) {
 }
 
 // Fingerprint of the grid's RENDERED state: the filter key plus, per square,
-// its locator and dominant band. Stable across new spots that don't change a
-// square's dominant band, so the heat layer is only rebuilt when what's on
-// screen actually changes.
+// its locator, dominant band, and quantized opacity. Stable across new spots
+// that don't change any square's appearance, so the heat layer is only rebuilt
+// when what's on screen actually changes.
 function buildGridFingerprint(squareData, filterCtx) {
     const filterKey = `${filterCtx.minSnrMode}:${filterCtx.ssbMinDb}:${filterCtx.cwMinDb}:${filterCtx.selectedBand}:${[...filterCtx.enabledBands].sort().join(',')}:${filterCtx.filterBand || ''}:${filterCtx.filterRegion || ''}`;
     const parts = [];
@@ -513,7 +523,8 @@ function buildGridFingerprint(squareData, filterCtx) {
         for (const b in entry.bands) {
             if (entry.bands[b] > maxCount) { maxCount = entry.bands[b]; dominantBand = b; }
         }
-        parts.push(`${loc}:${dominantBand}`);
+        const opacity = gridSnrOpacity(topQuartileMean(entry.snrs)).toFixed(2);
+        parts.push(`${loc}:${dominantBand}:${opacity}`);
     }
     parts.sort();
     return `${filterKey}|${parts.join('|')}`;
@@ -534,10 +545,10 @@ function renderGridSquares(squareData, filterCtx) {
     for (let loc in squareData) {
         if (squareData[loc].visibleCount <= 0 || squareData[loc].count <= 0) continue;
 
-        // Flat opacity: every active grid square is shown at the same moderate
-        // level. SNR-driven brightness was removed because it made weak squares
-        // disappear and strong squares oversaturate without improving readability.
-        const fillOpacity = 0.45;
+        // Brightness = mean of the strongest quarter of reports, mapped
+        // through a continuous ramp. One lucky decode in a sea of weak
+        // spots no longer lights up the square.
+        const fillOpacity = gridSnrOpacity(topQuartileMean(squareData[loc].snrs));
 
         let dominantBand = 'all';
         let maxCount = 0;
