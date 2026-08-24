@@ -118,6 +118,7 @@ func wsprHeardHandler(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := st.wsprHeardReports(ctx, qth, hours)
 	if err != nil {
+		logError("wspr_heard reports query failed: %v", err)
 		http.Error(w, "wspr_heard query failed", http.StatusInternalServerError)
 		return
 	}
@@ -154,6 +155,7 @@ func wsprHeardHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Baseline is a secondary surface; a failure here should not fail the
 		// whole request. Serve the reports and an empty baseline.
+		logError("wspr_heard region baseline query failed: %v", err)
 		baseline = nil
 	}
 	for _, b := range baseline {
