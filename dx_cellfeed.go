@@ -187,8 +187,6 @@ type CellBucketFeed struct {
 
 	dedup             map[string]int64
 	lastPrune         time.Time
-	stopCh            chan struct{}
-	wg                sync.WaitGroup
 	started           bool
 	recomputeInterval time.Duration
 }
@@ -199,7 +197,6 @@ func newCellBucketFeed(baseline *DxBaselineEngine, retentionDays int) *CellBucke
 		engine:            proplab.NewCellBucketEngine(),
 		retentionDays:     retentionDays,
 		dedup:             make(map[string]int64),
-		stopCh:            make(chan struct{}),
 		recomputeInterval: 60 * time.Second,
 	}
 	if baseline != nil {
@@ -214,30 +211,14 @@ func (s *CellBucketFeed) Start() {
 		return
 	}
 	s.started = true
-	s.wg.Add(1)
 	go s.loop()
 }
 
-// Stop shuts the tick down (tests).
-func (s *CellBucketFeed) Stop() {
-	if s == nil || s.stopCh == nil {
-		return
-	}
-	close(s.stopCh)
-	s.wg.Wait()
-}
-
 func (s *CellBucketFeed) loop() {
-	defer s.wg.Done()
 	t := time.NewTicker(s.recomputeInterval)
 	defer t.Stop()
-	for {
-		select {
-		case <-t.C:
-			s.tick()
-		case <-s.stopCh:
-			return
-		}
+	for range t.C {
+		s.tick()
 	}
 }
 

@@ -142,9 +142,6 @@ func TestPushStoreSubscribeAndRetrieve(t *testing.T) {
 	if !pushStore.has(sub.Endpoint) {
 		t.Errorf("expected subscription stored and retrievable")
 	}
-	if got := pushStore.size(); got != 1 {
-		t.Errorf("size = %d, want 1", got)
-	}
 }
 
 func TestPushStoreUnsubscribe(t *testing.T) {
@@ -158,9 +155,6 @@ func TestPushStoreUnsubscribe(t *testing.T) {
 	pushStore.remove(sub.Endpoint)
 	if pushStore.has(sub.Endpoint) {
 		t.Errorf("expected subscription removed after unsubscribe")
-	}
-	if got := pushStore.size(); got != 0 {
-		t.Errorf("size = %d, want 0 after unsubscribe", got)
 	}
 }
 
@@ -514,9 +508,6 @@ func TestPushMaxSubscriptionCapFIFOEviction(t *testing.T) {
 	if pushStore.has(firstEndpoint) {
 		t.Errorf("expected oldest subscription evicted after cap exceeded; still present")
 	}
-	if got := pushStore.size(); got != pushMaxSubscriptions {
-		t.Errorf("size after eviction = %d, want %d", got, pushMaxSubscriptions)
-	}
 	if !pushStore.has("https://fcm.googleapis.com/fcm/capNEW") {
 		t.Errorf("new subscription not present after eviction")
 	}
@@ -540,9 +531,6 @@ func TestPushReSubscribeIdempotent(t *testing.T) {
 	orderBefore := append([]string(nil), pushStore.order...)
 	// Re-POST with different preferences (idempotent update): 10m:CAR only.
 	pushStore.add(makeSub(endpoint, map[string]bool{"10m:CAR": true}))
-	if got := pushStore.size(); got != 2 {
-		t.Errorf("size after re-subscribe = %d, want 2 (idempotent)", got)
-	}
 	updated := findSubByEndpoint(pushStore.snapshot(), endpoint)
 	if updated.Preferences["all"] {
 		t.Errorf("re-subscribe should have overwritten preferences; 'all' still true")

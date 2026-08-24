@@ -44,5 +44,3 @@ func PercentileInt(in []int, p float64) float64 {
 	}
 	return float64(in[idx])
 }
-
-// PercentileFloat is PercentileInt for float64 slices (sorted in place).

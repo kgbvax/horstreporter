@@ -83,13 +83,6 @@ type wsprJSONResponse struct {
 	Data []wsprSpot `json:"data"`
 }
 
-// wsprInScopeBands are the wspr.live band codes HorstReporter analyses
-// (160m–2m). Out-of-scope (LF/MF/70cm/23cm) are skipped.
-var wsprInScopeBands = map[int]struct{}{
-	1: {}, 3: {}, 5: {}, 7: {}, 10: {}, 14: {}, 18: {}, 21: {}, 24: {}, 28: {},
-	50: {}, 70: {}, 144: {},
-}
-
 // bandFromWSPR maps a wspr.live band code to the HorstReporter band string.
 // Returns "" for out-of-scope bands.
 func bandFromWSPR(band int) string {

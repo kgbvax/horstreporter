@@ -377,13 +377,6 @@ func (s *pushSubscriptionStore) snapshot() []*pushSubscription {
 	return out
 }
 
-// size returns the current subscription count.
-func (s *pushSubscriptionStore) size() int {
-	s.RLock()
-	defer s.RUnlock()
-	return len(s.subs)
-}
-
 // matches reports whether a subscription wants pushes for the given
 // (band, region). The "all" preference enables every surge; otherwise
 // the per-(band:region) map is consulted. An empty preference map with

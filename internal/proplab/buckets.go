@@ -4,13 +4,15 @@ package proplab
 // Propagation Lab engines. It exists to feed proplab_cell_buckets (read by
 // the pathscope module) and nothing else; the Ladder/Fusion/Reach engines,
 // the A/B/C lab UI and the backtest harness were removed. Kept helpers
-// (midpoint cells, lanes, bands, geo, regions, time) are primitives needed by
-// this path and by sibling consumers (e.g. internal/pathscope documents its
+// (midpoint cells, lanes, bands, geo, time) are primitives needed by this
+// path and by sibling consumers (e.g. internal/pathscope documents its
 // modes against lane.go).
 
 import (
 	"strings"
 	"sync"
+
+	"horstreporter/internal/region"
 )
 
 // cellBucket is the in-memory accumulator for one cell×band×lane×bucket.
@@ -75,7 +77,7 @@ func (e *CellBucketEngine) Observe(m Spot) {
 		b = &cellBucket{
 			links:     make(map[string]struct{}),
 			reporters: make(map[string]struct{}),
-			region:    RegionFromLocator(cell),
+			region:    string(region.FromLocator(cell)),
 		}
 		e.buckets[key] = b
 	}

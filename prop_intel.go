@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"horstreporter/internal/region"
 )
 
 // prop_intel.go implements the Propagation Intelligence engine: a per
@@ -57,13 +59,6 @@ const (
 	// query parameter on /api/prop_intel. Per-band/region overrides are
 	// deferred to v2.
 	propIntelSurgeZThreshold = 2.0
-	// propIntelSurgeMinSamples is the minimum baseline sample count for a
-	// PG-backed z-score to be statistically meaningful. Reserved for a
-	// future per-operator unique-sender PG baseline (the global raw
-	// regionCalendarStats baseline was removed from the surge z-score —
-	// see detectSurges). Currently unused; the memory-fallback surge uses
-	// propIntelSurgeMinSamplesMem instead. See U2.
-	propIntelSurgeMinSamples = 30
 	// propIntelSurgeMinSamplesMem is the memory-fallback analogue: the
 	// minimum number of 15-min sub-windows in the trailing 6h baseline for
 	// the z-score to be trustworthy. Lower than the PG guard because each
@@ -201,7 +196,7 @@ type propIntelCellAcc struct {
 //  1. Resolves the QTH to a qthSet (locator → surroundings expansion, callsign
 //     → QRZ/cty.dat fallback via dxBaseline.deriveOperatorCluster's resolver).
 //  2. Scans the window, resolving each spot's remote end (the end not matching
-//     QTH) to a region via dxPulseRegionForLocator, grouping by (band × region)
+//     QTH) to a region via region.FromLocator, grouping by (band × region)
 //     and deduplicating senders across sources.
 //  3. Computes the nowcast rate per cell = unique_senders / window_hours, then
 //     P(open) = 1 − e^(−λ) with λ = rate × (slot/60).
@@ -286,11 +281,11 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		if !ok {
 			continue
 		}
-		region := dxPulseRegionForLocator(remoteLocator)
-		if region == dxPulseRegionUnknown {
+		reg := region.FromLocator(remoteLocator)
+		if reg == region.Unknown {
 			continue
 		}
-		key := propIntelCellKey{band: band, region: string(region)}
+		key := propIntelCellKey{band: band, region: string(reg)}
 
 		if m.T >= cutoff {
 			// Nowcast window [cutoff, now]: per-cell unique senders + sources.
@@ -391,12 +386,12 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 	// but no live spots. These get a low-confidence estimate from the baseline
 	// prior so the frontend can render the full region grid.
 	for band := range bandsSeen {
-		for _, region := range dxPulseAllRegions {
-			key := propIntelCellKey{band: band, region: string(region)}
+		for _, reg := range region.AllRegions() {
+			key := propIntelCellKey{band: band, region: string(reg)}
 			if emitted[key] {
 				continue
 			}
-			base, ok := regionBaseline[regionBaselineKey{band, string(region), slot}]
+			base, ok := regionBaseline[regionBaselineKey{band, string(reg), slot}]
 			if !ok || base.Mean <= 0 {
 				continue
 			}
@@ -405,7 +400,7 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 			conf := 0.15 // sparse prior: low confidence, no source attribution
 			cells = append(cells, propIntelCell{
 				Band:          band,
-				Region:        string(region),
+				Region:        string(reg),
 				POpen:         round3(pOpen),
 				ExpectedCount: round3(rate),
 				Confidence:    round3(conf),
@@ -547,8 +542,8 @@ func sortedSources(s map[string]struct{}) []string {
 
 // allRegionStrings returns the 11-region list as strings.
 func allRegionStrings() []string {
-	out := make([]string, 0, len(dxPulseAllRegions))
-	for _, r := range dxPulseAllRegions {
+	out := make([]string, 0, len(region.AllRegions()))
+	for _, r := range region.AllRegions() {
 		out = append(out, string(r))
 	}
 	return out
@@ -709,7 +704,7 @@ func (e *propIntelEngine) loadRegionBaselines(now int64) map[regionBaselineKey]r
 
 // propIntelRegionDisplayNames maps the 11-region codes to the display names
 // used in surge labels (e.g., "tune to 10m, surge to Caribbean"). The codes
-// follow dxPulseAllRegions; the names follow the operator-facing convention
+// follow region.AllRegions(); the names follow the operator-facing convention
 // used in the existing WSPR matrix panel.
 var propIntelRegionDisplayNames = map[string]string{
 	"EU":  "Europe",

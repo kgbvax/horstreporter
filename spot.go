@@ -220,31 +220,6 @@ func locatorClusterAnchor(locator string) (string, bool) {
 	return squareXYToLocator(ax, ay), true
 }
 
-// getSquaresInCluster returns the 36 grid squares of the 6×6 Grid cluster
-// containing the locator, in row-major order (NW to SE). A non-locator is
-// returned unchanged (mirroring getSquaresWithinRings).
-func getSquaresInCluster(locator string) []string {
-	cx, cy, ok := locatorSquareXY(locator)
-	if !ok {
-		return []string{locator}
-	}
-	ax := (cx / gridClusterSide) * gridClusterSide
-	ay := (cy / gridClusterSide) * gridClusterSide
-	if ax > 180-gridClusterSide {
-		ax = 180 - gridClusterSide
-	}
-	if ay > 180-gridClusterSide {
-		ay = 180 - gridClusterSide
-	}
-	var res []string
-	for dy := 0; dy < gridClusterSide; dy++ {
-		for dx := 0; dx < gridClusterSide; dx++ {
-			res = append(res, squareXYToLocator(ax+dx, ay+dy))
-		}
-	}
-	return res
-}
-
 // getSurroundingSquares returns the qth square and its 8 neighbours.
 func getSurroundingSquares(locator string) []string {
 	return getSquaresWithinRings(locator, 1)
