@@ -475,9 +475,11 @@ func toStreamSpot(spot Spot) streamSpot {
 		SourceType:      spot.SourceType,
 		Band:            spot.Band,
 	}
-	// Only DX cluster spots need callsigns on the wire (hover tooltip on the
-	// cluster markers); regular spots stay trimmed.
-	if spot.SourceType == "dxcluster" {
+	// DX cluster spots need callsigns on the wire (hover tooltip on the cluster
+	// markers); WSPR spots need them too so the client can filter the live
+	// stream to the operator's own transmissions ("who heard me"). Regular
+	// spots stay trimmed.
+	if spot.SourceType == "dxcluster" || spot.SourceType == "wspr" {
 		s.Sender = spot.Sender
 		s.Receiver = spot.Receiver
 	}

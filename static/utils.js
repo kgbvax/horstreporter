@@ -819,3 +819,83 @@ export function locatorClusterAnchorJS(loc) {
     const c4 = String.fromCharCode(48 + (ay % 10));
     return c1 + c2 + c3 + c4;
 }
+
+// --- WSPR reverse-beacon ("who heard me") helpers ---
+
+// wsprSnrToMode maps a WSPR SNR (2500 Hz reference) to the most demanding QSO
+// mode that is viable, after applying the power offset. Thresholds are Joe
+// Taylor's (K1JT) decode thresholds: SSB ~+10 dB, CW −15 dB, FT8 −21 dB, WSPR
+// −31 dB. powerOffsetDb = 10·log10(P_qso/P_wspr) (default 0 = same power).
+export function wsprSnrToMode(snrDb, powerOffsetDb = 0) {
+    const eff = Number(snrDb) + Number(powerOffsetDb || 0);
+    if (!Number.isFinite(eff)) return 'wspr-only';
+    if (eff >= 10) return 'ssb';
+    if (eff >= -15) return 'cw';
+    if (eff >= -21) return 'ft8';
+    return 'wspr-only';
+}
+
+// wsprHeardConfidence maps a report count to a confidence tier: 1 → low,
+// 3+ → medium, 10+ → high.
+export function wsprHeardConfidence(count) {
+    const n = Number(count) || 0;
+    if (n >= 10) return 'high';
+    if (n >= 3) return 'medium';
+    return 'low';
+}
+
+// isLocatorJS reports whether s looks like a Maidenhead locator (4 or 6 chars).
+export function isLocatorJS(s) {
+    return /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(String(s || '').toUpperCase().trim());
+}
+
+// matchCallJS mirrors Go's spot.go:matchCall — exact callsign match, or a match
+// with common prefix/suffix modifiers (W1AW/P, DL/W1AW, DL/W1AW/P).
+export function matchCallJS(spotCall, qth) {
+    if (!spotCall || !qth) return false;
+    const sc = String(spotCall).toUpperCase();
+    const q = String(qth).toUpperCase();
+    if (sc === q) return true;
+    if (sc.startsWith(q + '/')) return true;
+    if (sc.endsWith('/' + q)) return true;
+    if (sc.includes('/' + q + '/')) return true;
+    return false;
+}
+
+// isMyWsprSpot reports whether a live WSPR spot is the operator's own
+// transmission ("who heard me"). For WSPR, spot.receiver = the transmitter
+// callsign (operator) and spot.locator = the transmitter grid (operator).
+export function isMyWsprSpot(spot, qth) {
+    if (!spot || !qth) return false;
+    if (String(spot?.sourceType || '').toLowerCase() !== 'wspr') return false;
+    const q = String(qth).toUpperCase().trim();
+    if (!q) return false;
+    if (isLocatorJS(q)) {
+        const loc = String(spot.locator || '').toUpperCase();
+        return loc.startsWith(q);
+    }
+    return matchCallJS(spot.receiver, q);
+}
+
+// deviationColor maps an above/below-average ratio to a diverging color:
+// green when above average (ratio > 1), gray at normal (ratio ≈ 1), red when
+// below average (ratio < 1). Uses a log2 scale so 2× and 0.5× are symmetric.
+export function deviationColor(ratio) {
+    const r = Number(ratio);
+    if (!Number.isFinite(r) || r <= 0) return '#6c757d';
+    const t = Math.max(-2, Math.min(2, Math.log2(r))) / 2; // [-1, 1]
+    if (t >= 0) return _mixHex('#6c757d', '#28a745', t);
+    return _mixHex('#dc3545', '#6c757d', 1 + t);
+}
+
+function _mixHex(a, b, t) {
+    const pa = _hexToRgb(a);
+    const pb = _hexToRgb(b);
+    const c = pa.map((v, i) => Math.round(v + (pb[i] - v) * t));
+    return `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function _hexToRgb(hex) {
+    const s = String(hex).replace('#', '');
+    return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
+}

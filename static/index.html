@@ -286,6 +286,7 @@
         <div id="map-toggles" class="map-toggles">
             <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show Band Stats">Stats</button>
             <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show WSPR Band × Region Matrix">WSPR</button>
+            <button id="wspr-heard-toggle" type="button" class="panel-toggle is-translucent" title="Show who heard me (WSPR reverse beacon)">Heard</button>
             <button id="prop-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show Propagation Intelligence Matrix">Prop</button>
             <button id="drill-down-clear" type="button" class="panel-toggle is-translucent" title="Clear grid-square filter" style="display: none;"></button>
         </div>
@@ -355,6 +356,12 @@
                 <span>WSPR Band × Region</span>
             </div>
             <div id="wspr-matrix-body" class="wspr-matrix-body"></div>
+        </div>
+        <div id="wspr-heard-window" class="wspr-heard-window is-hidden">
+            <div class="wspr-heard-window-header">
+                <span>Who heard me</span>
+            </div>
+            <div id="wspr-heard-body" class="wspr-heard-body"></div>
         </div>
         <div id="prop-matrix-window" class="prop-matrix-window is-hidden">
             <div class="prop-matrix-window-header">

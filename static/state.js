@@ -3,6 +3,7 @@ export const state = {
     heatLayer: null,
     dxClusterLayer: null,
     wsprLayer: null,
+    wsprHeardLayer: null,
     qthLayer: null,
     eventSource: null,
     renderInterval: null,
