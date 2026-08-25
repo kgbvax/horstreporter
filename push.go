@@ -420,10 +420,10 @@ func (s *pushSubscriptionStore) NotifySurges(cells []propIntelCell, qth string) 
 	if !s.isEnabled() {
 		return
 	}
-	// Collect the surged cells once.
+	// Collect the atypical cells once.
 	var surges []propIntelCell
 	for _, c := range cells {
-		if c.Surge != nil {
+		if c.Atypical != nil {
 			surges = append(surges, c)
 		}
 	}
@@ -432,7 +432,7 @@ func (s *pushSubscriptionStore) NotifySurges(cells []propIntelCell, qth string) 
 	}
 	// U6: count surge fan-out events so /api/stats can report the
 	// surge-to-push conversion rate. One increment per NotifySurges call
-	// that had at least one surged cell, regardless of how many
+	// that had at least one atypical cell, regardless of how many
 	// subscriptions matched — this mirrors the prop_intel.surgesDetected
 	// granularity (per-request, not per-cell).
 	pushAccounting.surgesDetected.Add(1)
@@ -445,8 +445,8 @@ func (s *pushSubscriptionStore) NotifySurges(cells []propIntelCell, qth string) 
 			s.sendPushNotification(sub, pushSurgePayload{
 				Band:   c.Band,
 				Region: c.Region,
-				Label:  c.Surge.Label,
-				ZScore: c.Surge.ZScore,
+				Label:  "tune to " + c.Band + ", atypical to " + regionDisplayName(c.Region),
+				ZScore: c.Atypical.ZScore,
 			})
 		}
 	}

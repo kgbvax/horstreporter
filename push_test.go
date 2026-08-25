@@ -168,7 +168,7 @@ func TestPushNotifySurgesSendsPush(t *testing.T) {
 	pushStore.add(makeSub("https://fcm.googleapis.com/fcm/surge1", map[string]bool{"10m:CAR": true}))
 
 	cells := []propIntelCell{
-		{Band: "10m", Region: "CAR", Surge: &SurgeInfo{ZScore: 7.0, Label: "tune to 10m, surge to Caribbean"}},
+		{Band: "10m", Region: "CAR", Atypical: &AtypicalInfo{ZScore: 7.0, Flavor: "atypical-wspr-only"}},
 		// Non-surge cell should not generate a push.
 		{Band: "20m", Region: "EU"},
 	}
@@ -184,8 +184,8 @@ func TestPushNotifySurgesSendsPush(t *testing.T) {
 	if p.Region != "CAR" {
 		t.Errorf("push payload region = %q, want CAR", p.Region)
 	}
-	if p.Label != "tune to 10m, surge to Caribbean" {
-		t.Errorf("push payload label = %q, want surge label", p.Label)
+	if p.Label != "tune to 10m, atypical to Caribbean" {
+		t.Errorf("push payload label = %q, want atypical label", p.Label)
 	}
 	if p.ZScore != 7.0 {
 		t.Errorf("push payload z_score = %v, want 7.0", p.ZScore)
@@ -205,7 +205,7 @@ func TestPushNotifySurgesNoPushWhenDisabled(t *testing.T) {
 	pushStore.add(makeSub("https://fcm.googleapis.com/fcm/falseall", map[string]bool{"all": false}))
 
 	cells := []propIntelCell{
-		{Band: "10m", Region: "CAR", Surge: &SurgeInfo{ZScore: 7.0, Label: "tune to 10m, surge to Caribbean"}},
+		{Band: "10m", Region: "CAR", Atypical: &AtypicalInfo{ZScore: 7.0, Flavor: "atypical-wspr-only"}},
 	}
 	pushStore.NotifySurges(cells, "JO62")
 
@@ -223,8 +223,8 @@ func TestPushNotifySurgesAllPreference(t *testing.T) {
 	// "all" preference should match every surge.
 	pushStore.add(makeSub("https://fcm.googleapis.com/fcm/all", map[string]bool{"all": true}))
 	cells := []propIntelCell{
-		{Band: "10m", Region: "CAR", Surge: &SurgeInfo{ZScore: 7.0, Label: "tune to 10m, surge to Caribbean"}},
-		{Band: "20m", Region: "EU", Surge: &SurgeInfo{ZScore: 3.0, Label: "tune to 20m, surge to Europe"}},
+		{Band: "10m", Region: "CAR", Atypical: &AtypicalInfo{ZScore: 7.0, Flavor: "atypical-wspr-only"}},
+		{Band: "20m", Region: "EU", Atypical: &AtypicalInfo{ZScore: 3.0, Flavor: "atypical-wspr-only"}},
 	}
 	pushStore.NotifySurges(cells, "JO62")
 	if got := mock.count(); got != 2 {
@@ -244,7 +244,7 @@ func TestPushNotifySurgesDisabledStore(t *testing.T) {
 
 	pushStore.add(makeSub("https://fcm.googleapis.com/fcm/disabled", map[string]bool{"all": true}))
 	pushStore.NotifySurges([]propIntelCell{
-		{Band: "10m", Region: "CAR", Surge: &SurgeInfo{ZScore: 7.0, Label: "x"}},
+		{Band: "10m", Region: "CAR", Atypical: &AtypicalInfo{ZScore: 7.0, Flavor: "atypical-wspr-only"}},
 	}, "")
 	if got := mock.count(); got != 0 {
 		t.Errorf("expected 0 pushes when push disabled, got %d", got)
@@ -571,7 +571,7 @@ func TestPushSendRemovesSubscriptionOnGone(t *testing.T) {
 	endpoint := "https://fcm.googleapis.com/fcm/expired"
 	pushStore.add(makeSub(endpoint, map[string]bool{"all": true}))
 	pushStore.NotifySurges([]propIntelCell{
-		{Band: "10m", Region: "CAR", Surge: &SurgeInfo{ZScore: 7.0, Label: "x"}},
+		{Band: "10m", Region: "CAR", Atypical: &AtypicalInfo{ZScore: 7.0, Flavor: "atypical-wspr-only"}},
 	}, "")
 	// The 410 Gone response should have removed the subscription.
 	if pushStore.has(endpoint) {
@@ -592,7 +592,7 @@ func TestPushSendRemovesSubscriptionOn404(t *testing.T) {
 	endpoint := "https://fcm.googleapis.com/fcm/notfound"
 	pushStore.add(makeSub(endpoint, map[string]bool{"all": true}))
 	pushStore.NotifySurges([]propIntelCell{
-		{Band: "10m", Region: "CAR", Surge: &SurgeInfo{ZScore: 7.0, Label: "x"}},
+		{Band: "10m", Region: "CAR", Atypical: &AtypicalInfo{ZScore: 7.0, Flavor: "atypical-wspr-only"}},
 	}, "")
 	if pushStore.has(endpoint) {
 		t.Errorf("expected subscription removed after 404 Not Found")
@@ -607,7 +607,7 @@ func TestPushSendLogsButKeepsOnTransientError(t *testing.T) {
 	endpoint := "https://fcm.googleapis.com/fcm/transient"
 	pushStore.add(makeSub(endpoint, map[string]bool{"all": true}))
 	pushStore.NotifySurges([]propIntelCell{
-		{Band: "10m", Region: "CAR", Surge: &SurgeInfo{ZScore: 7.0, Label: "x"}},
+		{Band: "10m", Region: "CAR", Atypical: &AtypicalInfo{ZScore: 7.0, Flavor: "atypical-wspr-only"}},
 	}, "")
 	// 5xx is transient — subscription should be retained.
 	if !pushStore.has(endpoint) {
@@ -731,16 +731,40 @@ func TestPushClientIPFromRequest(t *testing.T) {
 	})
 }
 
-// TestPushSurgePresent guards the goroutine-skip helper in prop_intel.go.
-func TestPushSurgePresent(t *testing.T) {
-	if surgePresent(nil) {
-		t.Errorf("surgePresent(nil) = true, want false")
+// TestPushAtypicalPresent guards the atypical-check helper.
+func TestPushAtypicalPresent(t *testing.T) {
+	// No cells → no atypical.
+	hasAtypical := false
+	for _, c := range []propIntelCell(nil) {
+		if c.Atypical != nil {
+			hasAtypical = true
+			break
+		}
 	}
-	if surgePresent([]propIntelCell{{Band: "10m", Region: "CAR"}}) {
-		t.Errorf("surgePresent(no surge) = true, want false")
+	if hasAtypical {
+		t.Errorf("atypical in nil slice = true, want false")
 	}
-	if !surgePresent([]propIntelCell{{Band: "10m", Region: "CAR", Surge: &SurgeInfo{Label: "x"}}}) {
-		t.Errorf("surgePresent(with surge) = false, want true")
+	// Cells without atypical.
+	hasAtypical = false
+	for _, c := range []propIntelCell{{Band: "10m", Region: "CAR"}} {
+		if c.Atypical != nil {
+			hasAtypical = true
+			break
+		}
+	}
+	if hasAtypical {
+		t.Errorf("atypical in no-atypical slice = true, want false")
+	}
+	// Cell with atypical.
+	hasAtypical = false
+	for _, c := range []propIntelCell{{Band: "10m", Region: "CAR", Atypical: &AtypicalInfo{Flavor: "atypical-wspr-only"}}} {
+		if c.Atypical != nil {
+			hasAtypical = true
+			break
+		}
+	}
+	if !hasAtypical {
+		t.Errorf("atypical in with-atypical slice = false, want true")
 	}
 }
 

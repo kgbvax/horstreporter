@@ -14,144 +14,123 @@ import (
 	"horstreporter/internal/region"
 )
 
-// prop_intel.go implements the Propagation Intelligence engine: a per
-// (band × region) nowcast of P(open), expected spot count, and confidence.
-// It reuses the dxPulse 11-region classifier for the region axis, and the
-// regionCalendarStats Postgres baseline when a store is configured.
-//
-// The engine is intentionally stateless beyond the package-level dxBaseline
-// singleton and the hub.history ring: every request re-derives its cells from
-// a snapshotted history window, so it stays consistent with dxConditionsHandler
-// and hotBandsHandler.
+// prop_intel.go implements the WSPR Propagation Intelligence engine: a per
+// (band × region) nowcast of SSB/CW openness, rising slope, and atypical
+// surge detection against a WSPR climatology. It supersedes the old FT8
+// nowcast. The engine is stateless beyond the package-level dxBaseline
+// singleton (for the FT8 cross-reference), wsprClimatology singleton (for
+// the WSPR climatology z-score), and the hub.history ring.
 
-// Tunable thresholds for the prop_intel confidence model. Confidence is a
-// function of (a) unique-sender support — how many distinct stations backed
-// the cell, and (b) source diversity — how many of the rbn/pskreporter/wspr
-// feeds contributed. A single-source cell is discounted; a multi-source cell
-// with thin support still caps below 1. These constants are calibrated so the
-// sparse-WSPRnet case (2 senders, 1 source) lands below 0.3 and the dense
-// multi-source case reaches the high band — see TestPropIntelConfidence.
+// Tunable thresholds for the WSPR propagation-intelligence engine.
 const (
 	// propIntelNowcastWindowMin is the default nowcast window in minutes.
 	propIntelNowcastWindowMin = 15
-	// propIntelNowcastPOpenMin is the 15-minute slot used in the Poisson
-	// P(open) = 1 − e^(−λ) formula: λ = rate_per_hour × (slot/60).
-	propIntelNowcastSlotMin = 15.0
-	// propIntelMinSendersHighConf is the unique-sender count at/above which a
-	// multi-source cell reaches the high confidence band.
-	propIntelMinSendersHighConf = 10
-	// propIntelMinSendersModConf is the unique-sender count at/above which a
-	// single-source cell reaches moderate confidence.
-	propIntelMinSendersModConf = 8
-	// propIntelSingleSourceDiscount is multiplied into the confidence of a
-	// cell backed by only one ingest source.
-	propIntelSingleSourceDiscount = 0.6
+	// propIntelAtypicalZThreshold is the default z-score above which a cell
+	// is flagged atypical. Operator-configurable via the surge_threshold
+	// query parameter on /api/prop_intel.
+	propIntelAtypicalZThreshold = 2.0
+	// propIntelRisingSlopeThreshold is the ratio of second-half to first-half
+	// rate above which a cell is flagged rising (e.g. 1.5 = 50% increase).
+	propIntelRisingSlopeThreshold = 1.5
+	// propIntelMinSampleDays is the minimum WSPR climatology sample-days
+	// for the atypical z-score to be computed. Below this, no atypical flag.
+	propIntelMinSampleDays = 3
+	// propIntelMatureSampleDays is the sample-days at which confidence
+	// reaches 1.0. Below this, confidence is discounted proportionally.
+	propIntelMatureSampleDays = 30
 	// propIntelRegionBaselineDaysBack is the lookback for regionCalendarStats.
 	propIntelRegionBaselineDaysBack = 30
-
-	// Surge-detection thresholds. Mirrors the hot_bands.go threshold-constant
-	// pattern (lines 12–24). The surge detector runs after the nowcast cells are
-	// built and computes a z-score per (band × region) cell against the
-	// region-level baseline. See KTD3 and U2 in the plan.
-	//
-	// propIntelSurgeZThreshold is the default z-score above which a cell is
-	// flagged as a surge. Operator-configurable via the `surge_threshold`
-	// query parameter on /api/prop_intel. Per-band/region overrides are
-	// deferred to v2.
-	propIntelSurgeZThreshold = 2.0
-	// propIntelSurgeMinSamplesMem is the memory-fallback analogue: the
-	// minimum number of 15-min sub-windows in the trailing 6h baseline for
-	// the z-score to be trustworthy. Lower than the PG guard because each
-	// sub-window carries less evidence than a full day, and a 6h window at
-	// 15-min granularity yields only ~23 sub-windows — the guard must be
-	// achievable within the fallback window or the fallback is dead code.
-	propIntelSurgeMinSamplesMem = 10
-	// propIntelRegionBaselineCacheTTL is how long the Postgres
-	// regionCalendarStats climatology is served from cache without re-querying.
-	// The result is a 30-day per-(band×region×slot) aggregate whose
-	// percentiles/mean drift negligibly within minutes (only the current day's
-	// row updates, 1 of ~30 in the aggregate), so a short TTL is semantically
-	// safe and removes a full-table analytical query from the hot path. Seconds.
+	// propIntelRegionBaselineCacheTTL is how long the climatology is cached.
 	propIntelRegionBaselineCacheTTL int64 = 120
-	// propIntelRegionBaselineNegCacheTTL bounds how long a failed
-	// regionCalendarStats query is remembered before we retry PG. The prod
-	// baseline query is a 30-day full-table analytical scan that, under load,
-	// can exceed its own timeout — without a negative cache every request
-	// re-pays that timeout (the success-only cache never populates). 30s is a
-	// short enough window that a transiently-slow PG self-heals, but long
-	// enough to keep the hot path off PG. Seconds.
+	// propIntelRegionBaselineNegCacheTTL bounds how long a failed query is
+	// remembered before retrying Postgres.
 	propIntelRegionBaselineNegCacheTTL int64 = 30
-	// propIntelRegionBaselineQueryTimeout is the per-query deadline passed into
-	// regionCalendarStats. Kept well under the prop_intel response budget: the
-	// baseline is an optional prior (blend + sparse-cell backfill), not a
-	// correctness input, so a slow PG degrades gracefully to a nowcast-only
-	// response rather than pinning the endpoint to the old 5s timeout.
+	// propIntelRegionBaselineQueryTimeout is the per-query deadline.
 	propIntelRegionBaselineQueryTimeout = 1500 * time.Millisecond
-	// propIntelHistoryPoolCap is the initial capacity of pooled scratch slices
-	// used to copy hub.history for evaluation. Buffers grow as needed and are
-	// reused across requests to avoid per-request 300MB+ allocations.
+	// propIntelHistoryPoolCap is the initial capacity of pooled scratch slices.
 	propIntelHistoryPoolCap = 1 << 14
-	// propIntelSurgeBaselineWindowMin is the trailing window used to derive a
-	// memory-fallback baseline rate/stddev when no PG store is configured.
-	// Must be wider than the nowcast window so the live signal is excluded.
-	propIntelSurgeBaselineWindowMin = 6 * 60
+	// SSB/CW budget model constants (KTD8).
+	// propIntelSSBFloorDb: SSB requires roughly +10 dB SNR/2500 Hz at 100W
+	// reference power to be comfortably copied.
+	propIntelSSBFloorDb = 10.0
+	// propIntelCWFloorDb: CW can be copied below noise with a narrow filter
+	// and a skilled ear; roughly -5 dB SNR/2500 Hz at 100W reference.
+	propIntelCWFloorDb = -5.0
+	// propIntelReferencePowerW is the assumed SSB/CW transmitter power for
+	// the budget model. WSPR beacons run at much lower power (0.1–100W),
+	// so the effective SNR for a 100W signal is:
+	//   effective_snr = wspr_snr + (wspr_power_dbm - reference_power_dbm)
+	// where reference_power_dbm = 10*log10(100W/1mW) = 50 dBm.
+	propIntelReferencePowerW = 100.0
+	propIntelReferencePowerDbm = 50.0 // 10*log10(100W / 1mW)
 )
 
 // propIntelResponse is the JSON envelope returned by /api/prop_intel.
 type propIntelResponse struct {
-	QTH     string          `json:"qth"`
-	Minutes int             `json:"minutes"`
-	Now     int64           `json:"now"`
-	Bands   []string        `json:"bands"`
-	Regions []string        `json:"regions"`
-	Cells   []propIntelCell `json:"cells"`
+	QTH      string          `json:"qth"`
+	Minutes  int             `json:"minutes"`
+	Now      int64           `json:"now"`
+	FromHere bool            `json:"from_here"`
+	Bands    []string        `json:"bands"`
+	Regions  []string        `json:"regions"`
+	Cells    []propIntelCell `json:"cells"`
 }
 
-// propIntelCell is one (band × region) row. Sparse cells (no spots in the
-// window) are still emitted with a low-confidence estimate so the frontend
-// can render the full 11-region grid; the deduplication and source attribution
-// only apply to cells with ≥1 spot.
+// propIntelCell is one (band × region) row in the WSPR nowcast. Each cell
+// carries independent signals: SSB/CW openness (from SNR+Power budget), a
+// rising slope flag, and an atypical z-score against the WSPR climatology
+// with a three-flavor FT8 cross-reference label.
 type propIntelCell struct {
-	Band          string   `json:"band"`
-	Region        string   `json:"region"`
-	POpen         float64  `json:"p_open"`
-	ExpectedCount float64  `json:"expected_count"`
-	Confidence    float64  `json:"confidence"`
-	Sources       []string `json:"sources"`
-	// Surge is non-nil when surge detection flagged this cell. nil means no
-	// surge (either below the z-threshold, suppressed by the minimum-sample
-	// guard, or the stddev was zero). See U2.
-	Surge *SurgeInfo `json:"surge,omitempty"`
+	Band   string `json:"band"`
+	Region string `json:"region"`
+	// SSBOpen / CWOpen: whether any WSPR path in this cell has enough
+	// budget (SNR + TX power) to be audible on SSB / CW. Computed from the
+	// best path in the cell.
+	SSBOpen bool `json:"ssb_open"`
+	CWOpen  bool `json:"cw_open"`
+	// Rising: the WSPR path rate has a positive slope over the recent
+	// sub-window (band is opening).
+	Rising bool `json:"rising"`
+	// Atypical: non-nil when the WSPR path rate z-scores above the WSPR
+	// climatology mean for this (band × region × slot). Carries the
+	// z-score, a confidence value (discounted during cold-start), and a
+	// flavor label from the FT8 cross-reference.
+	Atypical *AtypicalInfo `json:"atypical,omitempty"`
+	// FromHere: true when the operator's QTH is one end of any path in
+	// this cell.
+	FromHere bool `json:"from_here"`
+	// Sources: which ingest sources contributed to this cell (usually just
+	// ["wspr"] in the WSPR-primary engine).
+	Sources []string `json:"sources"`
+	// SpotCount is the number of WSPR spots in the window for this cell.
+	SpotCount int `json:"spot_count"`
 }
 
-// SurgeInfo carries the surge-detection result for a flagged cell. Mirrors
-// the AE2 acceptance example: z-score against the region-level baseline, plus
-// a human-readable label ("tune to 10m, surge to Caribbean").
-type SurgeInfo struct {
-	ZScore float64 `json:"z_score"`
-	Label  string  `json:"label"`
+// AtypicalInfo carries the atypical-surge detection result.
+type AtypicalInfo struct {
+	ZScore     float64 `json:"z_score"`
+	Confidence float64 `json:"confidence"`
+	Flavor     string  `json:"flavor"`
+	// FT8CrossRef notes whether the FT8 cross-reference was available.
+	// "available", "unavailable", or "" (not atypical).
+	FT8CrossRef string `json:"ft8_cross_ref,omitempty"`
 }
 
-// propIntelEngine is the stateless evaluator. It holds no mutable state of its
-// own; the dxBaseline singleton (for the Postgres store) and hub.history are
-// read per-request by the handler. The struct exists so tests can construct an
-// engine with a chosen dxBaseline (nil for the no-PG path) and call Evaluate
-// directly.
+// propIntelEngine is the stateless evaluator. It holds no mutable state of
+// its own; the dxBaseline singleton (for the FT8 cross-reference), the
+// wsprClimatology singleton (for the WSPR climatology z-score), and hub.history
+// are read per-request by the handler.
 type propIntelEngine struct {
 	// baseline is the DxBaselineEngine used for accessing the Postgres store
-	// (regionCalendarStats). May be nil — the engine degrades to a
-	// history-only nowcast.
+	// (FT8 regionCalendarStats for the atypical flavor cross-reference, U4).
 	baseline *DxBaselineEngine
 
-	// Region-baseline climatology cache (#1): the regionCalendarStats result is
-	// a 30-day aggregate that changes slowly, but loadRegionBaselines used to
-	// run the full analytical query on every request. The cache is shared
-	// across requests; the map is read-only after swap so it is returned by
-	// reference. Guarded by baselineCacheMu.
-	baselineCacheMu    sync.RWMutex
-	baselineCache      map[regionBaselineKey]regionCalendarStatRow
-	baselineCacheAt    int64
-	baselineCacheErrAt int64 // unix seconds of the last PG failure; 0 when none/valid
+	// FT8 climatology cache for the atypical flavor cross-reference (U4).
+	// Shared across requests; the map is read-only after swap.
+	ft8CacheMu    sync.RWMutex
+	ft8Cache      map[regionBaselineKey]regionCalendarStatRow
+	ft8CacheAt    int64
+	ft8CacheErrAt int64
 }
 
 // propIntel is the package-level singleton, mirroring dxBaseline. It is wired
@@ -178,39 +157,41 @@ type propIntelCellKey struct {
 
 // propIntelCellAcc accumulates per-cell evidence during a window scan.
 type propIntelCellAcc struct {
-	// uniqueSenders deduplicates across sources: the same callsign appearing
-	// in both an RBN spot and a PSKReporter spot counts once. The key is the
-	// remote callsign (the end not matching QTH).
+	// uniqueSenders deduplicates across the remote callsigns.
 	uniqueSenders map[string]struct{}
-	// sources records which ingest tags contributed, lower-cased and mapped to
-	// the canonical rbn/pskreporter/wspr labels.
+	// sources records which ingest tags contributed.
 	sources map[string]struct{}
+	// bestBudgetSNR tracks the highest effective SNR (adjusted for TX power)
+	// seen in this cell, for SSB/CW viability flags.
+	bestBudgetSNR float64
+	// hasPower tracks whether any spot in the cell had a nonzero TXPower
+	// (if none, SSB/CW flags can't be computed from this cell).
+	hasPower bool
+	// fromHere tracks whether the operator's QTH is one end of any path.
+	fromHere bool
+	// spotCount is the total number of WSPR spots in this cell.
+	spotCount int
+	// firstHalfSpots / secondHalfSpots count spots in the first and second
+	// halves of the nowcast window, for the rising slope computation.
+	firstHalfSpots  int
+	secondHalfSpots int
 }
 
-// Evaluate computes the per-(band × region) nowcast for the given QTH and
-// history window. It mirrors the dxConditionsHandler history access pattern:
-// the caller passes a pre-copied history slice scoped to the window, so no
-// lock is taken here.
-//
-// The engine:
-//  1. Resolves the QTH to a qthSet (locator → surroundings expansion, callsign
-//     → QRZ/cty.dat fallback via dxBaseline.deriveOperatorCluster's resolver).
-//  2. Scans the window, resolving each spot's remote end (the end not matching
-//     QTH) to a region via region.FromLocator, grouping by (band × region)
-//     and deduplicating senders across sources.
-//  3. Computes the nowcast rate per cell = unique_senders / window_hours, then
-//     P(open) = 1 − e^(−λ) with λ = rate × (slot/60).
-//  4. Confidence = f(unique_senders, source_diversity).
-func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, cwMinDb int, history []MQTTMessage, now int64, surgeThreshold float64) propIntelResponse {
+// Evaluate computes the per-(band × region) WSPR nowcast for the given QTH and
+// history window. The engine:
+//  1. Resolves the QTH to a qthSet.
+//  2. Scans WSPR spots only, resolving each spot's remote end to a region.
+//  3. Computes SSB/CW openness from the best path budget (SNR + TX power).
+//  4. Computes the rising slope from the first/second half spot counts.
+//  5. Computes the atypical z-score against the WSPR climatology.
+//  6. Tags from-here cells where the operator's QTH is one end.
+func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, cwMinDb int, history []MQTTMessage, now int64, atypicalThreshold float64) propIntelResponse {
 	qth = normalizeQTHToken(qth)
 	if minutes <= 0 {
 		minutes = propIntelNowcastWindowMin
 	}
 	if minutes > maxDxWindowMinutes {
 		minutes = maxDxWindowMinutes
-	}
-	if cwMinDb < -40 || cwMinDb > 20 {
-		cwMinDb = defaultDxCwViableMinDb
 	}
 
 	resp := propIntelResponse{
@@ -226,59 +207,64 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		return resp
 	}
 
-	// Build the QTH match set. For a locator QTH with surroundings, expand to
-	// the 3×3 block (same as dxConditionsHandler). For a callsign QTH, rely on
-	// the existing matchCall prefix/suffix logic — no locator expansion.
 	qthSet := []string{qth}
 	if surroundings && isLocator(qth) {
 		qthSet = getSurroundingSquares(qth)
 	}
 
 	cutoff := now - int64(minutes)*60
-	windowHours := float64(minutes) / 60.0
-	if windowHours <= 0 {
-		windowHours = float64(propIntelNowcastWindowMin) / 60.0
-	}
+	midpoint := cutoff + (now-cutoff)/2
 
-	// Surge baseline window setup. The nowcast window is [cutoff, now]; the
-	// memory-fallback surge baseline is the trailing window [baselineStart,
-	// cutoff) — it excludes the live nowcast window so the surge signal does
-	// not contaminate the baseline. The two windows partition the retained
-	// history, so one walk over the slice feeds both accumulators: each spot's
-	// band/remote-end/region is computed exactly once instead of the old code's
-	// two full walks (Evaluate + memorySurgeBaselines).
-	baselineWindowMin := propIntelSurgeBaselineWindowMin
-	if baselineWindowMin <= minutes {
-		baselineWindowMin = minutes * 2
-	}
-	baselineStart := now - int64(baselineWindowMin)*60
-	subWindowSec := int64(propIntelNowcastSlotMin * 60)
-	if subWindowSec <= 0 {
-		subWindowSec = 900
-	}
-
-	// Nowcast accumulators and surge-baseline sub-window accumulators, filled in
-	// the single pass below. surgeSubs/oldestBaseline feed computeSurgeBaselines
-	// after the nowcast cells are built.
 	acc := make(map[propIntelCellKey]*propIntelCellAcc)
 	bandsSeen := make(map[string]struct{})
-	surgeSubs := make(map[propIntelCellKey]*surgeCellSubs)
-	var oldestBaseline int64
-	haveOldestBaseline := false
 
 	for _, m := range history {
-		if m.T > now {
+		if m.T > now || m.T < cutoff {
+			continue
+		}
+		// WSPR spots only — the old FT8 nowcast is retired (R12).
+		if m.Source != "wspr" {
 			continue
 		}
 		band := normalizeBand(m.B)
 		if band == "" || !bandInScope(band) {
 			continue
 		}
-		// Resolve the remote end: the end not matching QTH. Reuse the same
-		// match logic as extractMatchedBandEvent so sender/receiver roles are
-		// consistent with the rest of the codebase.
-		remoteLocator, remoteCall, ok := resolveRemoteEnd(m, qthSet)
-		if !ok {
+		// Resolve the remote end for WSPR: SC/SL = receiver, RC/RL =
+		// transmitter (opposite of FT8 convention). If the operator's QTH
+		// matches one end, the remote is the other end. If neither end
+		// matches (global mesh view), use the receiver locator (SL) as the
+		// region key — "where the path landed".
+		sl := strings.ToUpper(strings.TrimSpace(m.SL))
+		rl := strings.ToUpper(strings.TrimSpace(m.RL))
+		sc := strings.ToUpper(strings.TrimSpace(m.SC))
+		rc := strings.ToUpper(strings.TrimSpace(m.RC))
+
+		var remoteLocator, remoteCall string
+		matchedEnd := false
+		for _, t := range qthSet {
+			if matchCall(sc, t) || (isLocator(t) && sl != "" && strings.HasPrefix(sl, t)) {
+				// Operator is the receiver → remote is the transmitter.
+				remoteLocator = rl
+				remoteCall = rc
+				matchedEnd = true
+				break
+			}
+			if matchCall(rc, t) || (isLocator(t) && rl != "" && strings.HasPrefix(rl, t)) {
+				// Operator is the transmitter → remote is the receiver.
+				remoteLocator = sl
+				remoteCall = sc
+				matchedEnd = true
+				break
+			}
+		}
+		if !matchedEnd {
+			// Global mesh view: neither end matches QTH. Use the receiver
+			// locator as the region key.
+			remoteLocator = sl
+			remoteCall = sc
+		}
+		if remoteLocator == "" || !isLocator(remoteLocator) {
 			continue
 		}
 		reg := region.FromLocator(remoteLocator)
@@ -287,127 +273,108 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		}
 		key := propIntelCellKey{band: band, region: string(reg)}
 
-		if m.T >= cutoff {
-			// Nowcast window [cutoff, now]: per-cell unique senders + sources.
-			cell := acc[key]
-			if cell == nil {
-				cell = &propIntelCellAcc{
-					uniqueSenders: make(map[string]struct{}),
-					sources:       make(map[string]struct{}),
-				}
-				acc[key] = cell
+		cell := acc[key]
+		if cell == nil {
+			cell = &propIntelCellAcc{
+				uniqueSenders: make(map[string]struct{}),
+				sources:       make(map[string]struct{}),
 			}
-			if remoteCall != "" {
-				cell.uniqueSenders[remoteCall] = struct{}{}
-			}
-			cell.sources[canonicalSource(m)] = struct{}{}
-			bandsSeen[band] = struct{}{}
-			continue
-		}
-
-		// Baseline window [baselineStart, cutoff): per-(cell × sub-window)
-		// unique senders for the surge z-score. Spots older than baselineStart
-		// are out of both windows.
-		if m.T < baselineStart {
-			continue
-		}
-		if !haveOldestBaseline || m.T < oldestBaseline {
-			oldestBaseline = m.T
-			haveOldestBaseline = true
-		}
-		subIdx := (m.T - baselineStart) / subWindowSec
-		if subIdx < 0 {
-			continue
-		}
-		sc := surgeSubs[key]
-		if sc == nil {
-			sc = &surgeCellSubs{subs: make(map[int64]*surgeSubAcc)}
-			surgeSubs[key] = sc
-		}
-		sa := sc.subs[subIdx]
-		if sa == nil {
-			sa = &surgeSubAcc{uniqueSenders: make(map[string]struct{})}
-			sc.subs[subIdx] = sa
+			acc[key] = cell
 		}
 		if remoteCall != "" {
-			sa.uniqueSenders[remoteCall] = struct{}{}
+			cell.uniqueSenders[remoteCall] = struct{}{}
+		}
+		cell.sources["wspr"] = struct{}{}
+		cell.spotCount++
+		bandsSeen[band] = struct{}{}
+
+		// SSB/CW budget: effective_snr = wspr_snr + (ref_power_dbm - tx_power_dbm)
+		// TXPower is in dBm (wspr.live convention). The reference is 100W = 50 dBm.
+		// A 20W beacon (43 dBm) at SNR +5 dB has effective SNR = 5 + (50-43) = +12 dB
+		// (the path would carry a 100W signal 7 dB stronger than the beacon).
+		if m.TXPower > 0 {
+			cell.hasPower = true
+			effectiveSNR := float64(m.RP) + propIntelReferencePowerDbm - float64(m.TXPower)
+			if effectiveSNR > cell.bestBudgetSNR {
+				cell.bestBudgetSNR = effectiveSNR
+			}
+		}
+
+		// From-here: check if the operator's QTH is one end of this path.
+		if !cell.fromHere && matchedEnd {
+			cell.fromHere = true
+		}
+
+		// Rising slope: first vs second half of the window.
+		if m.T < midpoint {
+			cell.firstHalfSpots++
+		} else {
+			cell.secondHalfSpots++
 		}
 	}
 
-	// In-scope bands list: the bandsInScope order is a map (unordered), so
-	// emit the canonical HF→VHF order for a stable response.
 	resp.Bands = inScopeBandsOrdered(bandsSeen)
-
-	// Region baseline rates from Postgres (regionCalendarStats), keyed by
-	// (band, region, slot). Used as the prior for sparse cells and as a
-	// sanity clamp on the nowcast rate. Absent when no store is configured.
-	regionBaseline := e.loadRegionBaselines(now)
-
 	slot := utcSlotOfDay(now)
-	cells := make([]propIntelCell, 0, len(acc))
 
-	// Emit cells for every (band × region) with data, plus sparse cells for
-	// in-scope bands with a region baseline but no live spots.
-	emitted := make(map[propIntelCellKey]bool)
+	// Load the WSPR climatology for the atypical z-score.
+	var wsprClim map[regionBaselineKey]wsprRegionCalendarStatRow
+	if wsprClimatology != nil {
+		rows := wsprClimatology.RegionCalendarStats(context.Background(), propIntelRegionBaselineDaysBack, now)
+		wsprClim = make(map[regionBaselineKey]wsprRegionCalendarStatRow, len(rows))
+		for _, r := range rows {
+			wsprClim[regionBaselineKey{r.Band, r.Region, r.SlotOfDay}] = r
+		}
+	}
+
+	// Load the FT8 climatology for the atypical flavor cross-reference (U4).
+	ft8Clim := e.loadFT8Baselines(now)
+
+	cells := make([]propIntelCell, 0, len(acc))
 	for key, cell := range acc {
-		uniqueSenders := len(cell.uniqueSenders)
-		nowcastRate := float64(uniqueSenders) / windowHours
-		// Clamp the nowcast rate against the region baseline mean when the
-		// baseline exists and is much higher than the live rate — this is a
-		// mild regulariser, not a cap: a live burst above baseline is allowed.
-		// Guarded by uniqueSenders > 0: a cell with no live senders (e.g.
-		// locator-only spots whose callsign did not resolve) must keep
-		// nowcastRate = 0, otherwise the blend fabricates a nonzero rate
-		// (0.3*base.Mean) for a zero-sender cell and misreports p_open.
-		if uniqueSenders > 0 {
-			if base, ok := regionBaseline[regionBaselineKey{key.band, key.region, slot}]; ok && base.Mean > nowcastRate {
-				// Blend: 70% live, 30% baseline prior when live is thin.
-				if uniqueSenders < propIntelMinSendersHighConf {
-					nowcastRate = 0.7*nowcastRate + 0.3*base.Mean
+		// SSB/CW flags from the best path budget.
+		ssbOpen := cell.hasPower && cell.bestBudgetSNR >= propIntelSSBFloorDb
+		cwOpen := cell.hasPower && cell.bestBudgetSNR >= propIntelCWFloorDb
+
+		// Rising slope: second half rate > first half rate * threshold.
+		rising := false
+		if cell.firstHalfSpots > 0 {
+			ratio := float64(cell.secondHalfSpots) / float64(cell.firstHalfSpots)
+			rising = ratio >= propIntelRisingSlopeThreshold
+		} else if cell.secondHalfSpots > 0 {
+			// No first-half spots but second-half spots → definitely rising.
+			rising = true
+		}
+
+		// Atypical z-score against the WSPR climatology.
+		var atypical *AtypicalInfo
+		if base, ok := wsprClim[regionBaselineKey{key.band, key.region, slot}]; ok {
+			if base.StdDev > 0 && base.SampleDays >= propIntelMinSampleDays {
+				liveRate := float64(cell.spotCount)
+				z := (liveRate - base.Mean) / base.StdDev
+				if z >= atypicalThreshold {
+					conf := atypicalConfidence(base.SampleDays)
+					flavor, ft8Ref := assignFlavor(key.band, key.region, slot, ft8Clim)
+					atypical = &AtypicalInfo{
+						ZScore:      round3(z),
+						Confidence:  round3(conf),
+						Flavor:      flavor,
+						FT8CrossRef: ft8Ref,
+					}
 				}
 			}
 		}
 
-		nowcastPOpen := poissonPOpen(nowcastRate, propIntelNowcastSlotMin)
-		nowcastConf := cellConfidence(uniqueSenders, len(cell.sources))
-
 		cells = append(cells, propIntelCell{
-			Band:          key.band,
-			Region:        key.region,
-			POpen:         round3(nowcastPOpen),
-			ExpectedCount: round3(nowcastRate),
-			Confidence:    round3(nowcastConf),
-			Sources:       sortedSources(cell.sources),
+			Band:     key.band,
+			Region:   key.region,
+			SSBOpen:  ssbOpen,
+			CWOpen:   cwOpen,
+			Rising:   rising,
+			Atypical: atypical,
+			FromHere: cell.fromHere,
+			Sources:  sortedSources(cell.sources),
+			SpotCount: cell.spotCount,
 		})
-		emitted[key] = true
-	}
-
-	// Sparse cells: in-scope bands seen in the window with a region baseline
-	// but no live spots. These get a low-confidence estimate from the baseline
-	// prior so the frontend can render the full region grid.
-	for band := range bandsSeen {
-		for _, reg := range region.AllRegions() {
-			key := propIntelCellKey{band: band, region: string(reg)}
-			if emitted[key] {
-				continue
-			}
-			base, ok := regionBaseline[regionBaselineKey{band, string(reg), slot}]
-			if !ok || base.Mean <= 0 {
-				continue
-			}
-			rate := base.Mean
-			pOpen := poissonPOpen(rate, propIntelNowcastSlotMin)
-			conf := 0.15 // sparse prior: low confidence, no source attribution
-			cells = append(cells, propIntelCell{
-				Band:          band,
-				Region:        string(reg),
-				POpen:         round3(pOpen),
-				ExpectedCount: round3(rate),
-				Confidence:    round3(conf),
-				Sources:       []string{},
-			})
-			emitted[key] = true
-		}
 	}
 
 	sort.Slice(cells, func(i, j int) bool {
@@ -417,51 +384,42 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		return cells[i].Region < cells[j].Region
 	})
 
-	// Surge detection runs after the nowcast cells are built. The baselines
-	// are derived from the surgeSubs accumulators populated in the merged scan
-	// above (no second history walk); computeSurgeBaselines applies the
-	// coverage gate (#3) and the per-(cell × sub-window) stats. detectSurges
-	// then mutates cells in place, attaching *SurgeInfo to any cell whose live
-	// rate z-scores above its baseline. See U2.
-	threshold := surgeThreshold
-	if threshold <= 0 {
-		threshold = propIntelSurgeZThreshold
-	}
-	baselines := computeSurgeBaselines(surgeSubs, baselineStart, cutoff, haveOldestBaseline, oldestBaseline, subWindowSec)
-	detectSurges(cells, baselines, threshold)
-
 	resp.Cells = cells
-
-	// U5: Web Push. After detectSurges has flagged cells, fan out push
-	// notifications to subscriptions whose preferences match a surged
-	// (band × region). Runs in a goroutine so a slow push endpoint
-	// cannot block the /api/prop_intel HTTP response (the plan's
-	// async-push requirement). The store is nil-safe and a no-op when
-	// push is not configured. cells is a copy owned by this response,
-	// so the goroutine can read it after the handler returns.
-	if hasSurge := surgePresent(cells); hasSurge {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logInfo("push goroutine panic: %v", r)
-				}
-			}()
-			pushStore.NotifySurges(cells, qth)
-		}()
-	}
-
 	return resp
 }
 
-// surgePresent reports whether any cell in the slice has a Surge.
-// O(cells); used to skip the goroutine launch when there is nothing to push.
-func surgePresent(cells []propIntelCell) bool {
-	for i := range cells {
-		if cells[i].Surge != nil {
-			return true
+// atypicalConfidence computes the confidence value from the WSPR climatology
+// sample depth. Scales from 0.3 at 1 day to 1.0 at propIntelMatureSampleDays.
+func atypicalConfidence(sampleDays int) float64 {
+	if sampleDays >= propIntelMatureSampleDays {
+		return 1.0
+	}
+	if sampleDays <= 0 {
+		return 0.3
+	}
+	return 0.3 + 0.7*float64(sampleDays)/float64(propIntelMatureSampleDays)
+}
+
+// assignFlavor reads the FT8 climatology for the same (band, region, slot) and
+// assigns one of three atypical flavors per R8. When the FT8 climatology is
+// unavailable, returns "atypical-wspr-only" with ft8Ref "unavailable" (R9).
+func assignFlavor(band, regionCode string, slot int, ft8Clim map[regionBaselineKey]regionCalendarStatRow) (flavor, ft8Ref string) {
+	base, ok := ft8Clim[regionBaselineKey{band, regionCode, slot}]
+	if !ok || base.SampleDays < propIntelMinSampleDays || base.StdDev <= 0 {
+		return "atypical-wspr-only", "unavailable"
+	}
+	// FT8 is "atypical" if its today count z-scores above the FT8 climatology.
+	if base.Today > 0 && base.StdDev > 0 {
+		ft8Z := (float64(base.Today) - base.Mean) / base.StdDev
+		if ft8Z >= propIntelAtypicalZThreshold {
+			return "atypical-both", "available"
 		}
 	}
-	return false
+	// FT8 effectively absent (no activity today or far below typical).
+	if base.Today == 0 || (base.Mean > 0 && float64(base.Today) < base.Mean*0.1) {
+		return "atypical-wspr-silent-ft8", "available"
+	}
+	return "atypical-wspr-only", "available"
 }
 
 // resolveRemoteEnd returns the remote locator and callsign (the end of the spot
@@ -508,10 +466,9 @@ func resolveRemoteEnd(m MQTTMessage, qthSet []string) (locator, callsign string,
 	return remoteLocator, remoteCall, true
 }
 
-// canonicalSource maps an MQTTMessage.Source / mode to the canonical
-// rbn/pskreporter/wspr label used in the response. dxcluster spots are folded
-// into "pskreporter" (they share the FT8/SSB SNR scale); only RBN and WSPR get
-// their own label.
+// canonicalSource maps an MQTTMessage.Source to the canonical label. In the
+// WSPR-primary engine, only "wspr" is used; the old FT8/DX-cluster/RBN labels
+// are kept for backward compatibility but the nowcast only processes WSPR.
 func canonicalSource(m MQTTMessage) string {
 	src := strings.ToLower(strings.TrimSpace(m.Source))
 	switch src {
@@ -522,7 +479,6 @@ func canonicalSource(m MQTTMessage) string {
 	case "dxcluster":
 		return "pskreporter"
 	default:
-		// Legacy mqtt ingest is PSKReporter.
 		return "pskreporter"
 	}
 }
@@ -562,53 +518,7 @@ func inScopeBandsOrdered(seen map[string]struct{}) []string {
 	return out
 }
 
-// poissonPOpen returns P(≥1 event) = 1 − e^(−λ) where λ = ratePerHour ×
-// (slotMinutes/60). A zero rate yields P(open)=0.
-func poissonPOpen(ratePerHour, slotMinutes float64) float64 {
-	if ratePerHour <= 0 {
-		return 0
-	}
-	lambda := ratePerHour * (slotMinutes / 60.0)
-	return 1.0 - math.Exp(-lambda)
-}
-
-// cellConfidence computes the nowcast confidence from unique-sender support
-// and source diversity. Returns a 0–1 value.
-//
-//	uniqueSenders ≥ 10 and ≥2 sources  → high (0.7–1.0)
-//	uniqueSenders ≥ 8  and 1 source     → moderate (0.4–0.6)
-//	uniqueSenders < 3                   → low (<0.3)
-//
-// Single-source cells are discounted by propIntelSingleSourceDiscount, but a
-// dense single-source cell (≥ propIntelMinSendersModConf senders) is lifted
-// back to at least moderate confidence.
-func cellConfidence(uniqueSenders, sourceCount int) float64 {
-	if uniqueSenders <= 0 {
-		return 0
-	}
-	// Support factor: saturates at propIntelMinSendersHighConf senders.
-	support := clamp01(float64(uniqueSenders) / float64(propIntelMinSendersHighConf))
-	// Diversity factor: 1 source → 0.5, 2 → 0.85, 3+ → 1.0.
-	var diversity float64
-	switch {
-	case sourceCount >= 3:
-		diversity = 1.0
-	case sourceCount == 2:
-		diversity = 0.85
-	default:
-		diversity = 0.5
-	}
-	conf := 0.5*support + 0.5*diversity
-	if sourceCount <= 1 {
-		conf *= propIntelSingleSourceDiscount
-		// A dense single-source cell should still reach moderate confidence.
-		if uniqueSenders >= propIntelMinSendersModConf {
-			conf = math.Max(conf, 0.45)
-		}
-	}
-	return clamp01(conf)
-}
-
+// mean returns the arithmetic mean of a float64 slice.
 func mean(v []float64) float64 {
 	if len(v) == 0 {
 		return 0
@@ -631,43 +541,31 @@ type regionBaselineKey struct {
 	slot   int
 }
 
-// loadRegionBaselines fetches the per-(band × region × slot) baseline from
-// Postgres when a store is configured. Returns an empty map in the no-PG path
-// (the engine then uses the live history rate only).
-func (e *propIntelEngine) loadRegionBaselines(now int64) map[regionBaselineKey]regionCalendarStatRow {
+// loadFT8Baselines fetches the FT8 per-(band × region × slot) climatology
+// from Postgres for the atypical flavor cross-reference (U4). Returns an
+// empty map when no store is configured.
+func (e *propIntelEngine) loadFT8Baselines(now int64) map[regionBaselineKey]regionCalendarStatRow {
 	if e == nil || e.baseline == nil {
 		return nil
 	}
-	// Fast path (RLock): serve a fresh success cache or a recent negative
-	// cache without touching Postgres. The region calendar is a 30-day
-	// climatology whose percentiles/mean drift negligibly within the TTL
-	// window, so one query is shared across many requests. The cached map is
-	// read-only after swap, so it is returned by reference. The negative
-	// cache prevents a slow/timed-out PG from pinning every request to the
-	// query timeout — without it, a persistently-failing query never populates
-	// the success cache, so the old code re-paid the full timeout every call.
-	e.baselineCacheMu.RLock()
-	if e.baselineCache != nil && now-e.baselineCacheAt < propIntelRegionBaselineCacheTTL {
-		cached := e.baselineCache
-		e.baselineCacheMu.RUnlock()
+	e.ft8CacheMu.RLock()
+	if e.ft8Cache != nil && now-e.ft8CacheAt < propIntelRegionBaselineCacheTTL {
+		cached := e.ft8Cache
+		e.ft8CacheMu.RUnlock()
 		return cached
 	}
-	if e.baselineCache == nil && e.baselineCacheErrAt != 0 && now-e.baselineCacheErrAt < propIntelRegionBaselineNegCacheTTL {
-		e.baselineCacheMu.RUnlock()
+	if e.ft8Cache == nil && e.ft8CacheErrAt != 0 && now-e.ft8CacheErrAt < propIntelRegionBaselineNegCacheTTL {
+		e.ft8CacheMu.RUnlock()
 		return nil
 	}
-	e.baselineCacheMu.RUnlock()
+	e.ft8CacheMu.RUnlock()
 
-	// Slow path: take the exclusive lock so only one goroutine pays the PG
-	// round-trip (and holds a PG connection). Concurrent callers wait, then
-	// pick up the freshly-cached result via the double-check below — this
-	// collapses a poll-burst into a single query instead of a herd.
-	e.baselineCacheMu.Lock()
-	defer e.baselineCacheMu.Unlock()
-	if e.baselineCache != nil && now-e.baselineCacheAt < propIntelRegionBaselineCacheTTL {
-		return e.baselineCache
+	e.ft8CacheMu.Lock()
+	defer e.ft8CacheMu.Unlock()
+	if e.ft8Cache != nil && now-e.ft8CacheAt < propIntelRegionBaselineCacheTTL {
+		return e.ft8Cache
 	}
-	if e.baselineCache == nil && e.baselineCacheErrAt != 0 && now-e.baselineCacheErrAt < propIntelRegionBaselineNegCacheTTL {
+	if e.ft8Cache == nil && e.ft8CacheErrAt != 0 && now-e.ft8CacheErrAt < propIntelRegionBaselineNegCacheTTL {
 		return nil
 	}
 
@@ -681,14 +579,9 @@ func (e *propIntelEngine) loadRegionBaselines(now int64) map[regionBaselineKey]r
 	defer cancel()
 	rows, err := st.regionCalendarStats(ctx, propIntelRegionBaselineDaysBack, now)
 	if err != nil {
-		// Negative-cache the failure. A stale success cache is a better prior
-		// than none, so serve it if we have one; otherwise degrade to no
-		// baseline — the nowcast is still computed, just without blend/sparse
-		// backfill. The neg-cache TTL bounds how long we serve stale/none
-		// before retrying PG.
-		e.baselineCacheErrAt = now
-		if e.baselineCache != nil {
-			return e.baselineCache
+		e.ft8CacheErrAt = now
+		if e.ft8Cache != nil {
+			return e.ft8Cache
 		}
 		return nil
 	}
@@ -696,9 +589,9 @@ func (e *propIntelEngine) loadRegionBaselines(now int64) map[regionBaselineKey]r
 	for _, r := range rows {
 		out[regionBaselineKey{r.Band, r.Region, r.SlotOfDay}] = r
 	}
-	e.baselineCache = out
-	e.baselineCacheAt = now
-	e.baselineCacheErrAt = 0
+	e.ft8Cache = out
+	e.ft8CacheAt = now
+	e.ft8CacheErrAt = 0
 	return out
 }
 
@@ -729,223 +622,12 @@ func regionDisplayName(code string) string {
 	return code
 }
 
-// detectSurges flags per-(band × region) cells whose live nowcast rate
-// z-scores above the memory-fallback baseline. Mutates `cells` in place by
-// setting cell.Surge for flagged cells.
-//
-// The baseline is the memory-fallback trailing baseline only: per-15-min
-// sub-window unique-sender rates across a trailing window that excludes the
-// live nowcast window, in the SAME units (unique senders / hour) and scope
-// (operator-local) as the live rate. The Postgres regionCalendarStats
-// baseline is intentionally NOT used for the z-score: it is a global, raw
-// (non-deduplicated) per-30-min-slot climatology in different units and
-// scope than the operator-local unique-sender live rate, so comparing them
-// produced false negatives (the global count dwarfs the local rate) and,
-// for sparse cells, false positives. The PG baseline is still used as the
-// nowcast prior in Evaluate (sparse cells and the live-rate blend).
-// Restoring a PG-backed surge z-score needs a per-operator unique-sender
-// baseline (future work). See KTD3/U2.
-//
-// z = (live_rate − baseline_rate) / baseline_stddev. A zero stddev yields no
-// surge (guard against division by zero; the baseline has no variance to
-// compare against). A cell is flagged when z ≥ threshold. Sparse cells (no
-// live spots → empty Sources) and cells with no live rate are skipped: a
-// cell with zero live senders cannot surge. The minimum-sample guard
-// (propIntelSurgeMinSamplesMem) suppresses cells whose baseline has too few
-// sub-windows to trust the stddev.
-func detectSurges(
-	cells []propIntelCell,
-	baselines map[propIntelCellKey]memorySurgeBaseline,
-	threshold float64,
-) {
-	if threshold <= 0 {
-		threshold = propIntelSurgeZThreshold
-	}
-	if baselines == nil {
-		return
-	}
-
-	// baselines is the memory-fallback trailing baseline precomputed by the
-	// merged history scan in Evaluate (see computeSurgeBaselines): per-15-min
-	// sub-window unique-sender rates across a trailing window that excludes
-	// the live nowcast window, in the SAME units (unique senders / hour) and
-	// scope (operator-local) as the live rate. The live window exclusion uses
-	// the request's nowcast window, not a hardcoded 15min, so a wider request
-	// (minutes>15) does not leak live signal into the baseline. The Postgres
-	// regionCalendarStats baseline is intentionally NOT used for the z-score
-	// (different units/scope; see the U2 note in Evaluate) — it is used as the
-	// nowcast prior.
-
-	for i := range cells {
-		c := &cells[i]
-		// Sparse cells (baseline prior only, no live spots) have empty
-		// Sources — they cannot surge (zero live senders). Skip them
-		// before any z-score: a sparse cell's ExpectedCount is the PG
-		// baseline mean (a global raw per-30-min count) in different
-		// units than the memory baseline, which would false-positive.
-		if len(c.Sources) == 0 {
-			continue
-		}
-		// Only cells with a nonzero nowcast rate can surge — a zero-rate
-		// cell has nothing to surge above.
-		if c.ExpectedCount <= 0 {
-			continue
-		}
-		liveRate := c.ExpectedCount
-
-		mb, ok := baselines[propIntelCellKey{c.Band, c.Region}]
-		if !ok || mb.n < propIntelSurgeMinSamplesMem {
-			continue
-		}
-		baseRate := mb.mean
-		baseStd := mb.stddev
-
-		// Guard against stddev=0: the baseline has no variance to compare
-		// against, so a z-score is undefined. Treat as no surge (U2).
-		if baseStd <= 0 {
-			continue
-		}
-
-		z := (liveRate - baseRate) / baseStd
-		if z < threshold {
-			continue
-		}
-
-		c.Surge = &SurgeInfo{
-			ZScore: round3(z),
-			Label:  "tune to " + c.Band + ", surge to " + regionDisplayName(c.Region),
-		}
-	}
-}
-
-// memorySurgeBaseline is the memory-fallback baseline (rate + stddev) for a
-// (band × region) cell, derived from per-15-minute sub-window rates across a
-// trailing 6-hour window that excludes the live nowcast window.
-type memorySurgeBaseline struct {
-	mean   float64
-	stddev float64
-	n      int
-}
-
-// surgeSubAcc and surgeCellSubs are the per-(band × region × sub-window)
-// unique-sender accumulators built during Evaluate's single merged history
-// scan (spots in the baseline window only). They were previously local to
-// memorySurgeBaselines; they are package-level now so Evaluate's scan can
-// populate them in the same pass as the nowcast accumulators, instead of a
-// second full walk of the history slice.
-type surgeSubAcc struct {
-	uniqueSenders map[string]struct{}
-}
-type surgeCellSubs struct {
-	subs map[int64]*surgeSubAcc
-}
-
-// computeSurgeBaselines turns the per-(band × region × sub-window)
-// accumulators built by Evaluate's merged scan into per-cell
-// (mean, stddev, n) baselines. It is the stats half of the old
-// memorySurgeBaselines with the history scan removed (the scan now happens
-// once in Evaluate) and a coverage gate added (#3): at default 60-min
-// hub.history retention the 6h baseline window covers only a few sub-windows
-// — below propIntelSurgeMinSamplesMem — so the z-score is never trustworthy.
-// Rather than run the per-cell stats loop every request only to have every
-// cell suppressed by the minimum-sample guard, return early with no
-// baselines when the covered window is too short. effectiveStart clamps the
-// window's left edge to the actual data coverage (oldest retained baseline
-// spot floored to its sub-window boundary) so pre-coverage sub-windows are
-// not synthesized as zero-activity samples.
-func computeSurgeBaselines(
-	acc map[propIntelCellKey]*surgeCellSubs,
-	baselineStart, nowcastCutoff int64,
-	haveOldest bool, oldestInRange int64,
-	subWindowSec int64,
-) map[propIntelCellKey]memorySurgeBaseline {
-	out := make(map[propIntelCellKey]memorySurgeBaseline, len(acc))
-	if len(acc) == 0 {
-		return out
-	}
-	if subWindowSec <= 0 {
-		subWindowSec = 900
-	}
-	subHours := float64(subWindowSec) / 3600.0
-	if subHours <= 0 {
-		subHours = 0.25
-	}
-	// effectiveStart: the oldest retained baseline spot floored to its
-	// sub-window boundary, never earlier than baselineStart. Sub-windows before
-	// this have no data; counting them as zeros would deflate the mean and let
-	// a few real sub-windows look like a surge.
-	effectiveStart := baselineStart
-	if haveOldest {
-		floored := oldestInRange - (oldestInRange-baselineStart)%subWindowSec
-		if floored > effectiveStart {
-			effectiveStart = floored
-		}
-	}
-	if effectiveStart >= nowcastCutoff {
-		return out
-	}
-	// Number of sub-windows actually covered by data: [effectiveStart,
-	// nowcastCutoff). Each sub-window (including zero-activity ones within the
-	// covered range) counts as one sample.
-	totalSubs := int((nowcastCutoff - effectiveStart) / subWindowSec)
-	if totalSubs < 1 {
-		totalSubs = 1
-	}
-	// #3 gate: at default retention the covered baseline window is shorter than
-	// the minimum-sample threshold, so no cell's z-score is trustworthy. Skip
-	// the per-cell stats loop entirely — the surge pass becomes a no-op rather
-	// than dead work on every request. Surge detection is only active when
-	// hub.history retention is long enough to supply a real baseline.
-	if totalSubs < propIntelSurgeMinSamplesMem {
-		return out
-	}
-	// startOffset: the sub-window index (relative to baselineStart) where data
-	// coverage begins. Sub-indices in cell.subs were computed against
-	// baselineStart, so iterate from startOffset (not 0) to avoid counting
-	// pre-coverage sub-windows as synthetic zeros.
-	startOffset := int64(0)
-	if haveOldest {
-		startOffset = (effectiveStart - baselineStart) / subWindowSec
-		if startOffset < 0 {
-			startOffset = 0
-		}
-	}
-	for key, cell := range acc {
-		rates := make([]float64, 0, totalSubs)
-		// Iterate the covered sub-window indices; missing entries within the
-		// covered range are zero-activity sub-windows and contribute rate 0.
-		for idx := startOffset; idx < startOffset+int64(totalSubs); idx++ {
-			sa, ok := cell.subs[idx]
-			if !ok {
-				rates = append(rates, 0)
-				continue
-			}
-			rates = append(rates, float64(len(sa.uniqueSenders))/subHours)
-		}
-		if len(rates) == 0 {
-			continue
-		}
-		meanRate := mean(rates)
-		var stddev float64
-		if len(rates) >= 2 {
-			var sumSqDiff float64
-			for _, r := range rates {
-				d := r - meanRate
-				sumSqDiff += d * d
-			}
-			// Sample standard deviation (n−1 denominator).
-			stddev = math.Sqrt(sumSqDiff / float64(len(rates)-1))
-		}
-		out[key] = memorySurgeBaseline{mean: meanRate, stddev: stddev, n: len(rates)}
-	}
-	return out
-}
-
 // propIntelHandler is the HTTP handler for /api/prop_intel. It follows the
 // dxConditionsHandler pattern: resolve QTH, parse minutes/cw_min_db/
-// surroundings, snapshot hub.history via binary-search + copy under RLock,
-// call the engine, JSON-encode. The `surge_threshold` query parameter
-// overrides the default z-score threshold for surge detection (U2).
+// surroundings, snapshot hub.history, call the engine, JSON-encode.
+// The `surge_threshold` query parameter overrides the default atypical
+// z-score threshold. The `from_here` query parameter filters to cells where
+// the operator's QTH is one end of any path.
 func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 	propIntelAccounting.requests.Add(1)
 	qth, surroundings := resolveQTHQuery(r)
@@ -972,43 +654,25 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// surge_threshold overrides the default z-score threshold for this
-	// request. Per-band/region overrides are deferred to v2 (KTD3).
-	surgeThreshold := propIntelSurgeZThreshold
+	atypicalThreshold := propIntelAtypicalZThreshold
 	if raw := strings.TrimSpace(r.URL.Query().Get("surge_threshold")); raw != "" {
 		if v, err := strconv.ParseFloat(raw, 64); err == nil && v > 0 {
-			surgeThreshold = v
+			atypicalThreshold = v
 		}
+	}
+
+	fromHere := false
+	if raw := strings.TrimSpace(r.URL.Query().Get("from_here")); raw == "true" {
+		fromHere = true
 	}
 
 	now := time.Now().Unix()
 	nowcastCutoff := now - int64(minutes)*60
-	baselineStart := now - int64(propIntelSurgeBaselineWindowMin)*60
-	// Decide how much history to copy. The nowcast needs [nowcastCutoff, now].
-	// The surge baseline needs the trailing [baselineStart, nowcastCutoff), but
-	// only when the retained history actually covers enough pre-nowcast data to
-	// build a trustworthy baseline (>= propIntelSurgeMinSamplesMem sub-windows).
-	// At default 60-min retention with a short `minutes`, the pre-nowcast data
-	// is far too short, so the engine's coverage gate suppresses the baseline
-	// anyway — copying the 6h window would allocate ~360MB for nothing. Copy
-	// only the nowcast window in that case; widen to the baseline window only
-	// when the oldest retained spot is old enough to matter.
-	copyCutoff := nowcastCutoff
-	minBaselineSec := int64(propIntelSurgeMinSamplesMem) * int64(propIntelNowcastSlotMin*60)
 	hub.RLock()
-	if len(hub.history) > 0 && hub.history[0].T <= nowcastCutoff-minBaselineSec && baselineStart < copyCutoff {
-		copyCutoff = baselineStart
-	}
 	idx := sort.Search(len(hub.history), func(i int) bool {
-		return hub.history[i].T >= copyCutoff
+		return hub.history[i].T >= nowcastCutoff
 	})
 	n := len(hub.history) - idx
-	// Reuse a pooled scratch slice (#4): the window can be ~1.8M entries
-	// (~360MB); allocating and GC-ing that on every request amplifies the cost
-	// of the evaluation pass. The buffer grows to fit and is returned after
-	// Evaluate, which reads the slice but does not retain it (string data lives
-	// in separate heap allocations, so reusing the struct backing array is
-	// safe).
 	bufp := propIntelHistoryPool.Get().(*[]MQTTMessage)
 	if cap(*bufp) < n {
 		*bufp = make([]MQTTMessage, n)
@@ -1020,24 +684,29 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 	hub.RUnlock()
 
 	engine := propIntel
-	resp := engine.Evaluate(qth, surroundings, minutes, cwMinDb, historyCopy, now, surgeThreshold)
+	resp := engine.Evaluate(qth, surroundings, minutes, cwMinDb, historyCopy, now, atypicalThreshold)
+	resp.FromHere = fromHere
 
-	// Count one surge-detection event per request (not per cell) so the
-	// prop_intel.surges_detected counter mirrors push.surges_detected,
-	// which NotifySurges increments once per request (U6). A single request
-	// may flag several (band × region) cells; counting per request keeps
-	// the two counters on the same granularity so a surge-to-push
-	// conversion rate is meaningful.
-	if surgePresent(resp.Cells) {
-		propIntelAccounting.surgesDetected.Add(1)
+	// Filter cells to from-here when the param is set.
+	if fromHere {
+		filtered := make([]propIntelCell, 0, len(resp.Cells))
+		for _, c := range resp.Cells {
+			if c.FromHere {
+				filtered = append(filtered, c)
+			}
+		}
+		resp.Cells = filtered
+	}
+
+	// Count atypical detection events per request.
+	for _, c := range resp.Cells {
+		if c.Atypical != nil {
+			propIntelAccounting.surgesDetected.Add(1)
+			break
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
-	// Return the scratch slice to the pool now that the response is fully
-	// encoded and Evaluate has finished reading it. Evaluate does not retain
-	// historyCopy (it only stores derived strings, whose backing bytes are
-	// independent heap allocations), so the struct backing array is safe to
-	// reuse.
 	propIntelHistoryPool.Put(bufp)
 }
