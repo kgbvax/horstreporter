@@ -461,6 +461,14 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_region_baseline_lookup;`,
 		},
 		{
+			name: "add WSPR receiver_callsign index",
+			sql:  `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dx_raw_spots_wspr_receiver ON dx_raw_spots (receiver_callsign, spot_time) WHERE source_type = 'wspr';`,
+		},
+		{
+			name: "add WSPR receiver_locator index",
+			sql:  `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dx_raw_spots_wspr_receiver_loc ON dx_raw_spots (receiver_locator, spot_time) WHERE source_type = 'wspr';`,
+		},
+		{
 			name: "tune autovacuum dx_baseline_global",
 			sql: `ALTER TABLE dx_baseline_global SET (
 				autovacuum_vacuum_scale_factor = 0.02,
@@ -1882,9 +1890,9 @@ func wsprReceiverMatch(qth string, start int64) (string, []any) {
 		return `substring(receiver_locator from 1 for 4) = $2`, []any{start, loc}
 	}
 	return `(receiver_callsign = $2
-			OR receiver_callsign LIKE $2 || '/%'
-			OR receiver_callsign LIKE '%/' || $2
-			OR receiver_callsign LIKE '%/' || $2 || '/%')`, []any{start, qth}
+			OR receiver_callsign LIKE ($2 || '/%')
+			OR receiver_callsign LIKE ('%/' || $2)
+			OR receiver_callsign LIKE ('%/' || $2 || '/%'))`, []any{start, qth}
 }
 
 // wsprHeardReportRow is one aggregated "who heard me" report: a hearing station
