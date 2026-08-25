@@ -422,68 +422,7 @@ func assignFlavor(band, regionCode string, slot int, ft8Clim map[regionBaselineK
 	return "atypical-wspr-only", "available"
 }
 
-// resolveRemoteEnd returns the remote locator and callsign (the end of the spot
-// not matching the QTH set), mirroring extractMatchedBandEvent's role logic.
-// ok=false if neither end matches or the remote locator is empty/non-locator.
-func resolveRemoteEnd(m MQTTMessage, qthSet []string) (locator, callsign string, ok bool) {
-	sc := strings.ToUpper(strings.TrimSpace(m.SC))
-	rc := strings.ToUpper(strings.TrimSpace(m.RC))
-	sl := strings.ToUpper(strings.TrimSpace(m.SL))
-	rl := strings.ToUpper(strings.TrimSpace(m.RL))
-	if sl == "" && rl == "" {
-		return "", "", false
-	}
-
-	isSender := false
-	isReceiver := false
-	for _, t := range qthSet {
-		if matchCall(sc, t) || (isLocator(t) && sl != "" && strings.HasPrefix(sl, t)) {
-			isSender = true
-		}
-		if matchCall(rc, t) || (isLocator(t) && rl != "" && strings.HasPrefix(rl, t)) {
-			isReceiver = true
-		}
-	}
-	if !isSender && !isReceiver {
-		return "", "", false
-	}
-
-	// If the operator is the sender, the remote is the receiver end and vice
-	// versa. If both ends match (e.g. surrounding squares overlap), prefer the
-	// receiver locator as the remote — matching matchAndCreateSpot's bias.
-	remoteLocator := rl
-	remoteCall := rc
-	if isSender && !isReceiver {
-		remoteLocator = rl
-		remoteCall = rc
-	} else if isReceiver && !isSender {
-		remoteLocator = sl
-		remoteCall = sc
-	}
-	if remoteLocator == "" || !isLocator(remoteLocator) {
-		return "", "", false
-	}
-	return remoteLocator, remoteCall, true
-}
-
-// canonicalSource maps an MQTTMessage.Source to the canonical label. In the
-// WSPR-primary engine, only "wspr" is used; the old FT8/DX-cluster/RBN labels
-// are kept for backward compatibility but the nowcast only processes WSPR.
-func canonicalSource(m MQTTMessage) string {
-	src := strings.ToLower(strings.TrimSpace(m.Source))
-	switch src {
-	case "rbn":
-		return "rbn"
-	case "wspr":
-		return "wspr"
-	case "dxcluster":
-		return "pskreporter"
-	default:
-		return "pskreporter"
-	}
-}
-
-// sortedSources returns the source set as a sorted slice for stable JSON.
+// propIntelRegionDisplayNames maps the 11-region codes to the display names
 func sortedSources(s map[string]struct{}) []string {
 	if len(s) == 0 {
 		return []string{}
