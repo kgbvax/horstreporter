@@ -221,16 +221,17 @@ func handleWSPRSpot(s wsprSpot, now int64, cfg wsprConfig) {
 	// live map draws receiver→transmitter paths; activity_by_bin matches
 	// callsign-targets on receiver_callsign (the transmitter being heard).
 	m := MQTTMessage{
-		RP:     s.SNR,
-		T:      ts,
-		SC:     strings.ToUpper(strings.TrimSpace(s.RxSign)),
-		SL:     strings.ToUpper(strings.TrimSpace(s.RxLoc)),
-		RC:     strings.ToUpper(strings.TrimSpace(s.TxSign)),
-		RL:     strings.ToUpper(strings.TrimSpace(s.TxLoc)),
-		B:      band,
-		MD:     "WSPR",
-		F:      float64(s.Frequency) / 1000.0, // Hz → kHz
-		Source: "wspr",
+		RP:      s.SNR,
+		T:       ts,
+		SC:      strings.ToUpper(strings.TrimSpace(s.RxSign)),
+		SL:      strings.ToUpper(strings.TrimSpace(s.RxLoc)),
+		RC:      strings.ToUpper(strings.TrimSpace(s.TxSign)),
+		RL:      strings.ToUpper(strings.TrimSpace(s.TxLoc)),
+		B:       band,
+		MD:      "WSPR",
+		F:       float64(s.Frequency) / 1000.0, // Hz → kHz
+		Source:  "wspr",
+		TXPower: s.Power,
 	}
 	if m.SC == "" || m.RC == "" {
 		return
