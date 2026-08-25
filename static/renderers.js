@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, hexToRgba, pillTextColor, regionForLocatorCached, isMyWsprSpot } from './utils.js';
+import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, hexToRgba, pillTextColor, regionForLocatorCached } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTimer } from './perf.js';
 
 // Rendered-state fingerprint for the grid-snr heat layer. Unlike the old
@@ -241,15 +241,10 @@ function renderWsprMarkers(wsprSpots) {
 
     wsprSpots.forEach((spot) => {
         if (!Number.isFinite(spot.lat) || !Number.isFinite(spot.lng)) return;
-        // Distinct style: small band-colored dots with a thin dashed border.
-        // Band color coding uses the canonical bandColors palette (same as the
-        // grid heat layer, DX-cluster markers, and band pills); the dashed
-        // border keeps WSPR visually separable from DX-cluster markers (solid
-        // white border + band fill).
-        const color = bandColors[spot.band] || bandColors.all;
+        // Distinct style: small teal/cyan dots with a thin dashed border.
         const marker = L.circleMarker([spot.lat, spot.lng], {
             color: '#0d6efd',
-            fillColor: color,
+            fillColor: '#17a2b8',
             radius: 3,
             weight: 1,
             opacity: 0.7,
@@ -262,75 +257,6 @@ function renderWsprMarkers(wsprSpots) {
         marker.bindTooltip(
             `<strong>WSPR beacon</strong><br>Band: ${escapeHtml(spot.band || '—')}<br>SNR: ${Number.isFinite(Number(spot.snr)) ? spot.snr + ' dB' : '—'}<br>TX: ${escapeHtml(spot.locator || '—')}<br>RX: ${escapeHtml(spot.reporterLocator || '—')}`,
             { direction: 'top', offset: [0, -4], opacity: 0.9, sticky: true }
-        );
-    });
-}
-
-// --- "My WSPR" reverse-beacon markers (who heard me) ------------------------
-// The operator's own WSPR transmissions, as reported by hearing stations. These
-// are the reverse-beacon view: a hearing station that reported the operator's
-// signal proves the path is open in that direction. Drawn as a distinct,
-// higher-emphasis layer (solid band-color border, slightly larger radius) so
-// the operator's own transmissions read separately from the all-WSPR layer.
-let wsprHeardMarkerFingerprint = '';
-
-export function clearWsprHeardMarkers() {
-    wsprHeardMarkerFingerprint = '';
-    if (state.wsprHeardLayer && map) {
-        map.removeLayer(state.wsprHeardLayer);
-    }
-    state.wsprHeardLayer = null;
-}
-
-function syncWsprHeardMarkers(wsprSpots) {
-    const qthEl = document.getElementById('qth');
-    const qth = qthEl?.value?.trim()?.toUpperCase() || '';
-    if (!qth) {
-        if (state.wsprHeardLayer) clearWsprHeardMarkers();
-        return;
-    }
-
-    const mySpots = wsprSpots.filter((s) => isMyWsprSpot(s, qth));
-    if (mySpots.length === 0) {
-        if (state.wsprHeardLayer) clearWsprHeardMarkers();
-        return;
-    }
-
-    // O(1) fingerprint (first/last spot) — see syncDxClusterMarkers.
-    const first = mySpots[0];
-    const last = mySpots[mySpots.length - 1];
-    const key = (s) => s ? `${s.locator}|${s.reporterLocator}|${s.band}|${s.snr}` : '';
-    const fingerprint = `${mySpots.length}:${key(first)}:${key(last)}`;
-    if (fingerprint === wsprHeardMarkerFingerprint && state.wsprHeardLayer) return;
-    clearWsprHeardMarkers();
-    wsprHeardMarkerFingerprint = fingerprint;
-    state.wsprHeardLayer = L.layerGroup().addTo(map);
-    incrementPerfCounter('mercator.layers.added', 1);
-    renderWsprHeardMarkers(mySpots);
-}
-
-function renderWsprHeardMarkers(mySpots) {
-    if (!Array.isArray(mySpots) || mySpots.length === 0 || !state.wsprHeardLayer) return;
-
-    mySpots.forEach((spot) => {
-        if (!Number.isFinite(spot.lat) || !Number.isFinite(spot.lng)) return;
-        const color = bandColors[spot.band] || bandColors.all;
-        // Higher-emphasis style: solid band-color border, slightly larger than
-        // the all-WSPR layer, so the operator's own transmissions stand out.
-        const marker = L.circleMarker([spot.lat, spot.lng], {
-            color: color,
-            fillColor: color,
-            radius: 5,
-            weight: 2,
-            opacity: 0.95,
-            fillOpacity: 0.7,
-            interactive: true,
-            bubblingMouseEvents: false
-        }).addTo(state.wsprHeardLayer);
-
-        marker.bindTooltip(
-            `<strong>Heard me</strong><br>Band: ${escapeHtml(spot.band || '—')}<br>SNR: ${Number.isFinite(Number(spot.snr)) ? spot.snr + ' dB' : '—'}<br>Heard by: ${escapeHtml(spot.sender || '—')}<br>Grid: ${escapeHtml(spot.reporterLocator || '—')}`,
-            { direction: 'top', offset: [0, -6], opacity: 0.95, sticky: true }
         );
     });
 }
@@ -399,7 +325,6 @@ export function updateMapVisualization(spots, maxMinutes) {
     // spot set changes — hovering must not flicker on every heatLayer rebuild.
     syncDxClusterMarkers(dxClusterSpots);
     syncWsprMarkers(wsprSpots);
-    syncWsprHeardMarkers(wsprSpots);
 
     if (document.getElementById('auto-zoom')?.checked) {
         const now = Date.now();

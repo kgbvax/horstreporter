@@ -514,7 +514,6 @@ func main() {
 	appMux.HandleFunc("/api/dx_conditions", dxConditionsHandler)
 	appMux.HandleFunc("/api/hot_bands", hotBandsHandler)
 	appMux.HandleFunc("/api/prop_intel", propIntelHandler)
-	appMux.HandleFunc("/api/wspr_heard", wsprHeardHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
 	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)
 	appMux.HandleFunc("/api/opmode/status", opModeStatusHandler)

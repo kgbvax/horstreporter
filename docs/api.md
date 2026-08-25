@@ -274,23 +274,6 @@ spotter_locator?, age_seconds, comment?, op_name?, country?,
 country_iso?}` — deduped to latest per (DX call, band), newest first; spots
 with freq ≤ 0 skipped. Requires DX cluster ingest to be enabled.
 
-### `GET /api/wspr_heard` — WSPR reverse-beacon ("who heard me")
-
-Params: `qth` (required, callsign or locator), `hours` (default 24, max 168),
-`baseline_days` (default 14), `current_window` (seconds, default 3600). CORS `*`.
-
-Response: JSON object `{qth, hours, matched_by, generated_at, reports,
-region_baseline}`. `matched_by` is `"callsign"` or `"locator"`. `reports` is
-the operator's own WSPR reception reports aggregated per (band, hearing
-station): `{band, hearing_callsign, hearing_locator, distance_km, snr_median,
-snr_max, snr_min, count, last_heard_at}`. `region_baseline` is the
-above/below-average view per (band, region): `{band, region, current_count,
-baseline_count, baseline_days, ratio}` where `baseline_count` is the
-time-of-day-aware mean (same hour-of-day over `baseline_days`) and `ratio =
-current_count / baseline_count`. Raw SNR + count are returned; the client
-applies the mode translation and power offset. Requires a Postgres store with
-WSPR rows (`source_type='wspr'`).
-
 ### `GET /api/stats` — server counters
 
 No params. Active connections, hub history size/minutes/KB, session totals

@@ -5,12 +5,11 @@ import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzi
 import { initUI, attachUITooltipEvents, initGridSnrLegend } from './ui.js';
 import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
 import { initWsprMatrix, updateWsprMatrix } from './wspr-matrix.js';
-import { initWsprHeard, updateWsprHeard } from './wspr-heard.js';
 import { initPropMatrix, clearDrillDown, updateDrillDownButton } from './prop-matrix.js';
 import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { initPushUI } from './push.js';
-import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, clearWsprMarkers, clearWsprHeardMarkers, resetRenderFingerprint } from './renderers.js';
+import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
@@ -55,7 +54,6 @@ function applyBandChange() {
     updateCurrentBandDisplay();
     updateBandLab({ force: true });
     updateWsprMatrix();
-    updateWsprHeard();
     scheduleRender();
     hotBandIndicator?.rerender();
     hotBandIndicator?.refresh();
@@ -735,7 +733,6 @@ function resumeFromSoftPause() {
     scheduleRender();
     updateBandLab({ force: true });
     updateWsprMatrix();
-    updateWsprHeard();
 }
 
 function syncSoftPauseWithVisibility() {
@@ -1323,12 +1320,6 @@ if (captureConfig?.enabled) {
             if (isAzimuthEnabled()) scheduleRender();
         },
     });
-    initWsprHeard({
-        onLayoutChange: () => {
-            // Same as WSPR: floating overlay, no map resize, just azimuth re-render.
-            if (isAzimuthEnabled()) scheduleRender();
-        },
-    });
     initPropMatrix({
         onLayoutChange: () => {
             // Same as WSPR: floating overlay, no map resize, just azimuth re-render.
@@ -1441,7 +1432,6 @@ export function scheduleRender() {
             state.renderPending = false;
             updateBandLab();
             updateWsprMatrix();
-            updateWsprHeard();
         });
     }, delay);
 }
@@ -1791,7 +1781,6 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         }
         clearDxClusterMarkers();
         clearWsprMarkers();
-        clearWsprHeardMarkers();
         resetRenderFingerprint();
         if (state.qthLayer) {
             map.removeLayer(state.qthLayer);
@@ -1803,8 +1792,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         if (status) status.innerHTML = 'Status: Not subscribed';
         setFaviconColor('#6c757d');
         updateBandLab({ force: true });
-        updateWsprMatrix();
-        updateWsprHeard();
+    updateWsprMatrix();
         return;
     }
 

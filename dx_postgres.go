@@ -3,15 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"horstreporter/internal/region"
 )
 
 const defaultDxPostgresDSN = "postgres://dxuser@localhost:5432/dxdata?sslmode=disable"
@@ -722,22 +719,22 @@ func dxPulseRegionBaselineKeysForSpot(ts int64, band string, senderLoc string, r
 	if sender4 == unknownSource4 && receiver4 == unknownSource4 {
 		return nil
 	}
-	senderRegion := string(region.FromLocator(senderLoc))
-	receiverRegion := string(region.FromLocator(receiverLoc))
+	senderRegion := string(dxPulseRegionForLocator(senderLoc))
+	receiverRegion := string(dxPulseRegionForLocator(receiverLoc))
 	slot := utcSlotOfDay(ts)
 	dayIndex := utcDayIndex(ts)
 
 	keys := make([]dxPulseRegionBaselineDailyKey, 0, 2)
 	seen := make(map[dxPulseRegionBaselineDailyKey]struct{}, 2)
-	appendKey := func(target4 string, regionName string) {
-		if target4 == unknownSource4 || regionName == "" || regionName == string(region.Unknown) {
+	appendKey := func(target4 string, region string) {
+		if target4 == unknownSource4 || region == "" || region == string(dxPulseRegionUnknown) {
 			return
 		}
 		key := dxPulseRegionBaselineDailyKey{
 			TargetGrid4: target4,
 			Band:        band,
 			SlotOfDay:   slot,
-			Region:      regionName,
+			Region:      region,
 			DayIndex:    dayIndex,
 		}
 		if _, ok := seen[key]; ok {
@@ -1866,226 +1863,4 @@ func (s *dxPostgresStore) regionCalendarStats(ctx context.Context, daysBack int,
 		out = append(out, r)
 	}
 	return out, rows.Err()
-}
-
-// wsprReceiverMatch builds the SQL predicate + args that match the operator's
-// own WSPR transmitter (the receiver end of a WSPR spot). A callsign QTH
-// matches receiver_callsign exactly or with prefix/suffix modifiers (mirrors
-// spot.go:matchCall); a locator QTH matches the 4-char receiver_locator prefix.
-// $1 is always the window start; the QTH is $2.
-func wsprReceiverMatch(qth string, start int64) (string, []any) {
-	if isLocator(qth) {
-		loc := qth
-		if len(loc) > 4 {
-			loc = loc[:4]
-		}
-		return `substring(receiver_locator from 1 for 4) = $2`, []any{start, loc}
-	}
-	return `(receiver_callsign = $2
-			OR receiver_callsign LIKE $2 || '/%'
-			OR receiver_callsign LIKE '%/' || $2
-			OR receiver_callsign LIKE '%/' || $2 || '/%')`, []any{start, qth}
-}
-
-// wsprHeardReportRow is one aggregated "who heard me" report: a hearing station
-// (sender) that reported the operator's own WSPR transmission on a band, with
-// the median/max/min SNR and report count over the window.
-type wsprHeardReportRow struct {
-	Band           string
-	HearingCall    string
-	HearingLocator string
-	SnrMedian      float64
-	SnrMax         int
-	SnrMin         int
-	Count          int64
-	LastHeardAt    int64
-}
-
-// wsprHeardReports returns the operator's own WSPR reception reports ("who
-// heard me") aggregated per (band, hearing station) over the last `hours`. The
-// operator's transmitter is matched by receiver_callsign (callsign QTH, with
-// prefix/suffix modifiers) or receiver_locator (locator QTH, 4-char prefix).
-func (s *dxPostgresStore) wsprHeardReports(ctx context.Context, qth string, hours int) ([]wsprHeardReportRow, error) {
-	if s == nil {
-		return nil, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if hours <= 0 {
-		hours = 24
-	}
-	if hours > 168 {
-		hours = 168
-	}
-	qth = strings.ToUpper(strings.TrimSpace(qth))
-	if qth == "" {
-		return nil, nil
-	}
-	now := time.Now().Unix()
-	start := now - int64(hours)*3600
-
-	where, args := wsprReceiverMatch(qth, start)
-
-	query := fmt.Sprintf(`
-		SELECT band, sender_callsign, sender_locator,
-		       percentile_cont(0.5) WITHIN GROUP (ORDER BY signal_report_db) AS snr_median,
-		       MAX(signal_report_db) AS snr_max,
-		       MIN(signal_report_db) AS snr_min,
-		       COUNT(*)::bigint,
-		       MAX(spot_time) AS last_heard_at
-		FROM dx_raw_spots
-		WHERE source_type = 'wspr'
-		  AND spot_time > $1
-		  AND %s
-		GROUP BY band, sender_callsign, sender_locator
-		ORDER BY band, snr_median DESC
-	`, where)
-
-	rows, err := s.pool.Query(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	out := make([]wsprHeardReportRow, 0, 64)
-	for rows.Next() {
-		var r wsprHeardReportRow
-		if err := rows.Scan(&r.Band, &r.HearingCall, &r.HearingLocator,
-			&r.SnrMedian, &r.SnrMax, &r.SnrMin, &r.Count, &r.LastHeardAt); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
-// wsprHeardRegionBaselineRow is one (band, region) cell of the "who heard me"
-// above/below-average view: the current-window count vs the time-of-day-aware
-// historical baseline.
-type wsprHeardRegionBaselineRow struct {
-	Band          string
-	Region        string
-	CurrentCount  int64
-	BaselineCount float64
-	BaselineDays  int
-	Ratio         float64
-}
-
-// wsprHeardRegionBaseline computes, per (band, region), the current-window count
-// of "who heard me" spots and the time-of-day-aware baseline: the mean count in
-// the same hour-of-day over the trailing `baselineDays`. Region is derived from
-// the hearing station's locator (sender_locator) via region.FromLocator.
-func (s *dxPostgresStore) wsprHeardRegionBaseline(ctx context.Context, qth string, baselineDays, currentWindowSec int) ([]wsprHeardRegionBaselineRow, error) {
-	if s == nil {
-		return nil, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if baselineDays <= 0 {
-		baselineDays = 14
-	}
-	if currentWindowSec <= 0 {
-		currentWindowSec = 3600
-	}
-	qth = strings.ToUpper(strings.TrimSpace(qth))
-	if qth == "" {
-		return nil, nil
-	}
-	now := time.Now().Unix()
-	start := now - int64(baselineDays)*24*3600
-
-	where, args := wsprReceiverMatch(qth, start)
-
-	query := fmt.Sprintf(`
-		SELECT band, sender_locator, spot_time
-		FROM dx_raw_spots
-		WHERE source_type = 'wspr'
-		  AND spot_time > $1
-		  AND %s
-	`, where)
-
-	rows, err := s.pool.Query(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	currentHour := int((now / 3600) % 24)
-	currentStart := now - int64(currentWindowSec)
-
-	type bandRegion struct{ band, region string }
-	type hourCell struct {
-		band, region string
-		hour         int
-	}
-	current := map[bandRegion]int64{}
-	total := map[hourCell]int64{}
-	days := map[hourCell]map[int64]struct{}{}
-
-	for rows.Next() {
-		var band, senderLoc string
-		var spotTime int64
-		if err := rows.Scan(&band, &senderLoc, &spotTime); err != nil {
-			return nil, err
-		}
-		reg := string(region.FromLocator(senderLoc))
-		if reg == "" || reg == string(region.Unknown) {
-			continue
-		}
-		if spotTime >= currentStart {
-			current[bandRegion{band, reg}]++
-		}
-		hc := hourCell{band, reg, int((spotTime / 3600) % 24)}
-		total[hc]++
-		if days[hc] == nil {
-			days[hc] = make(map[int64]struct{})
-		}
-		days[hc][utcDayIndex(spotTime)] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	// Collect the distinct (band, region) pairs seen in either the current
-	// window or the history, then emit one row each.
-	seen := make(map[bandRegion]struct{}, len(total)+len(current))
-	for hc := range total {
-		seen[bandRegion{hc.band, hc.region}] = struct{}{}
-	}
-	for br := range current {
-		seen[br] = struct{}{}
-	}
-
-	out := make([]wsprHeardRegionBaselineRow, 0, len(seen))
-	for br := range seen {
-		hc := hourCell{br.band, br.region, currentHour}
-		t := total[hc]
-		d := len(days[hc])
-		baseline := 0.0
-		if d > 0 {
-			baseline = float64(t) / float64(d)
-		}
-		cur := current[br]
-		ratio := 0.0
-		if baseline > 0 {
-			ratio = float64(cur) / baseline
-		}
-		out = append(out, wsprHeardRegionBaselineRow{
-			Band:          br.band,
-			Region:        br.region,
-			CurrentCount:  cur,
-			BaselineCount: baseline,
-			BaselineDays:  d,
-			Ratio:         ratio,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Band != out[j].Band {
-			return out[i].Band < out[j].Band
-		}
-		return out[i].Region < out[j].Region
-	})
-	return out, nil
 }
