@@ -248,6 +248,13 @@ func handleWSPRSpot(s wsprSpot, now int64, cfg wsprConfig) {
 		wsprAccounting.persistedSpots.Add(1)
 	}
 
+	// Feed the WSPR climatology accumulator (band × region × slot-of-day).
+	// This is the WSPR-native typical reference for atypical-surge detection,
+	// parallel to the FT8 dx_region_baseline_daily but keyed by WSPR spots.
+	if wsprClimatology != nil {
+		wsprClimatology.Observe(m)
+	}
+
 	if !isWSPRSpotUsableForLive(m) {
 		wsprAccounting.droppedNoLoc.Add(1)
 		if logLevel == "DEBUG" {

@@ -273,6 +273,17 @@ func (e *DxBaselineEngine) EnablePostgres(dsn string) error {
 	return nil
 }
 
+// Store returns the Postgres store if configured, or nil. Used by the WSPR
+// climatology engine to share the same store pool (for wspr_region_baseline_daily).
+func (e *DxBaselineEngine) Store() *dxPostgresStore {
+	if e == nil {
+		return nil
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.store
+}
+
 func (e *DxBaselineEngine) LoadRecentSpotCache(minutes int, now int64, includeDXCluster bool) ([]MQTTMessage, error) {
 	e.mu.RLock()
 	st := e.store

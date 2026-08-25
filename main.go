@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"flag"
 	"io/fs"
@@ -88,6 +89,7 @@ var embeddedCtyData []byte
 
 var compressStream bool
 var dxBaseline *DxBaselineEngine
+var wsprClimatology *WsprClimatologyEngine
 var streamAccounting = &streamAccountingState{}
 var propIntelAccounting = &propIntelAccountingState{}
 var pushAccounting = &pushAccountingState{}
@@ -228,6 +230,7 @@ func main() {
 	logMaxSize := flag.Int("log-max-size", 100, "Maximum size in megabytes of the log file before it gets rotated")
 	flag.IntVar(&maxClients, "max-clients", 150, "Maximum number of concurrent SSE clients (0 = unlimited)")
 	dxBaselineFile := flag.String("dx-baseline-file", "dx_baseline.json", "Path to persistent DX baseline bucket storage")
+	wsprClimatologyFile := flag.String("wspr-climatology-file", "wspr_climatology.json", "Path to persistent WSPR climatology bucket storage (JSONL fallback when Postgres is not configured)")
 	dxPostgresDSN := flag.String("dx-postgres-dsn", "", "Postgres DSN for DX baseline and raw spot storage (falls back to env DX_POSTGRES_DSN, then the built-in default; keep secrets out of argv via the env var)")
 	dxPostgresFailFast := flag.Bool("dx-postgres-fail-fast", true, "Exit immediately when Postgres init/migration fails")
 	horstpropURL := flag.String("horstprop-url", "http://127.0.0.1:9970", "Reverse-proxy /horstprop/* to this local horstprop scoring service (empty disables the mount)")
@@ -348,6 +351,12 @@ func main() {
 	// Postgres store (regionCalendarStats). Set up early so the handler
 	// always has a baseline reference even if EnablePostgres fails below.
 	propIntel.baseline = dxBaseline
+	// Construct the WSPR climatology engine. JSONL fallback path is always
+	// set; the Postgres store is wired after EnablePostgres succeeds.
+	wsprClimatology = newWsprClimatologyEngine(strings.TrimSpace(*wsprClimatologyFile))
+	if err := wsprClimatology.Load(); err != nil {
+		logInfo("WSPR climatology JSONL load failed (continuing with empty buckets): %v", err)
+	}
 	// Wire the DXCC cty.dat resolver into the baseline engine so the regional
 	// baseline can derive the operator's region for callsign targets (QRZ
 	// locator → region; fallback to DXCC entity centroid → region). The cty
@@ -361,6 +370,20 @@ func main() {
 		logInfo("DX postgres init failed (dsn=%s, fail-fast=false). Continuing with in-memory fallback: %v", maskDSN(dxPostgresDSNResolved), err)
 	} else {
 		logInfo("DX postgres initialized (dsn=%s)", maskDSN(dxPostgresDSNResolved))
+		// Wire the WSPR climatology to the same Postgres pool and ensure the
+		// wspr_region_baseline_daily table exists.
+		wsprClimatology.SetStore(dxBaseline.Store())
+		if st := dxBaseline.Store(); st != nil {
+			if err := st.ensureWsprRegionBaseline(context.Background()); err != nil {
+				logInfo("WSPR climatology table creation failed (continuing with in-memory fallback): %v", err)
+				wsprClimatology.SetStore(nil)
+			} else {
+				logInfo("WSPR climatology Postgres table ensured (wspr_region_baseline_daily)")
+				stopCh := make(chan struct{})
+				go wsprClimatology.FlushPendingAsync(30*time.Second, stopCh)
+				_ = stopCh
+			}
+		}
 		includeDXCluster := *dxClusterEnable
 		backfillMinutes := liveHistoryRetentionMinutes
 		if backfillMinutes <= 0 {
@@ -492,6 +515,15 @@ func main() {
 	go func() {
 		for range time.Tick(5 * time.Minute) {
 			pruneLiveHistory(time.Now().Unix(), liveHistoryRetentionMinutes)
+		}
+	}()
+
+	// WSPR climatology JSONL save loop (fallback when Postgres is nil).
+	go func() {
+		for range time.Tick(5 * time.Minute) {
+			if err := wsprClimatology.Save(); err != nil {
+				logDebug("WSPR climatology JSONL periodic save failed: %v", err)
+			}
 		}
 	}()
 
