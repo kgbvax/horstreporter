@@ -461,12 +461,20 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_region_baseline_lookup;`,
 		},
 		{
-			name: "add WSPR receiver_callsign index",
-			sql:  `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dx_raw_spots_wspr_receiver ON dx_raw_spots (receiver_callsign, spot_time) WHERE source_type = 'wspr';`,
+			name: "drop old WSPR receiver_callsign index",
+			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_raw_spots_wspr_receiver;`,
 		},
 		{
-			name: "add WSPR receiver_locator index",
-			sql:  `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dx_raw_spots_wspr_receiver_loc ON dx_raw_spots (receiver_locator, spot_time) WHERE source_type = 'wspr';`,
+			name: "drop old WSPR receiver_locator index",
+			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_raw_spots_wspr_receiver_loc;`,
+		},
+		{
+			name: "add WSPR time+receiver index",
+			sql:  `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dx_raw_spots_wspr_time_receiver ON dx_raw_spots (spot_time, receiver_callsign) WHERE source_type = 'wspr';`,
+		},
+		{
+			name: "add WSPR time+receiver_locator index",
+			sql:  `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dx_raw_spots_wspr_time_receiver_loc ON dx_raw_spots (spot_time, receiver_locator) WHERE source_type = 'wspr';`,
 		},
 		{
 			name: "tune autovacuum dx_baseline_global",
