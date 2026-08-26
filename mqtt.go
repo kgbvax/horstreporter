@@ -34,11 +34,11 @@ type MQTTMessage struct {
 	// surfaces via toStreamSpot.sourceType, never the raw MQTT payload.
 	Source string `json:"-"`
 
-	// TXPower is the reported transmitter power in milliwatts, populated only
-	// by the WSPR ingest path (wspr.go handleWSPRSpot). Zero for all other
-	// sources. Used by the WSPR propagation-intelligence nowcast to compute
-	// SSB/CW viability from a SNR+Power budget model. json:"-" — never in the
-	// raw MQTT payload; carried in hub.history for the nowcast.
+	// TXPower is the reported transmitter power in dBm (wspr.live convention).
+	// Populated only by the WSPR ingest path (wspr.go handleWSPRSpot). Zero
+	// for all other sources. Used by the WSPR propagation-intelligence nowcast
+	// to compute SSB/CW viability from a SNR+Power budget model. json:"-" —
+	// never in the raw MQTT payload; carried in hub.history for the nowcast.
 	TXPower int `json:"-"`
 }
 

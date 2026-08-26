@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -14,14 +15,15 @@ import (
 )
 
 // wsprClimatologyBucket is one accumulated count keyed by (band, slot, region).
-// The in-memory fallback uses this shape; the Postgres path uses
-// wspr_region_baseline_daily (same key, per-day-index breakdown).
+// The in-memory fallback tracks per-day-index counts so StdDev can be
+// computed; the Postgres path uses wspr_region_baseline_daily (same key).
 type wsprClimatologyBucket struct {
-	Band       string `json:"band"`
-	SlotOfDay  int    `json:"slot_of_day"`
-	Region     string `json:"region"`
-	Count      int64  `json:"count"`
-	SampleDays int    `json:"sample_days"`
+	Band       string         `json:"band"`
+	SlotOfDay  int            `json:"slot_of_day"`
+	Region     string          `json:"region"`
+	Count      int64           `json:"count"`      // total across all days (for backward compat in JSONL)
+	SampleDays int            `json:"sample_days"`
+	DayCounts  map[int64]int64 `json:"day_counts,omitempty"` // day_index → count (for stddev)
 }
 
 // wsprRegionCalendarStatRow mirrors regionCalendarStatRow but for the WSPR
@@ -65,9 +67,10 @@ type WsprClimatologyEngine struct {
 	pendingWsprCount   int
 
 	// statsCache mirrors the prop_intel region-baseline cache pattern.
-	statsCache     []wsprRegionCalendarStatRow
-	statsCacheAt   int64
-	statsCacheTTL  int64
+	statsCache       []wsprRegionCalendarStatRow
+	statsCacheAt     int64
+	statsCacheTTL    int64
+	statsCacheErrAt  int64 // unix seconds of the last PG failure; 0 when none/valid
 }
 
 // wsprRegionBaselineKey is the Postgres flush key for wspr_region_baseline_daily.
@@ -82,6 +85,11 @@ const (
 	wsprClimatologyVersion     = 1
 	wsprClimatologyStatsCacheTTL = 120 // seconds
 	wsprClimatologyDefaultDaysBack = 30
+	// wsprClimatologyMaxPending caps the pending flush queue to prevent
+	// unbounded memory growth during a Postgres outage. When the cap is
+	// exceeded, the oldest day indexes are dropped (data loss preferred
+	// over OOM).
+	wsprClimatologyMaxPending = 100000
 )
 
 func newWsprClimatologyEngine(path string) *WsprClimatologyEngine {
@@ -157,15 +165,16 @@ func (e *WsprClimatologyEngine) Observe(m MQTTMessage) {
 
 	b := e.buckets[key]
 	if b == nil {
-		b = &wsprClimatologyBucket{Band: band, SlotOfDay: slot, Region: string(reg)}
+		b = &wsprClimatologyBucket{Band: band, SlotOfDay: slot, Region: string(reg), DayCounts: make(map[int64]int64)}
 		e.buckets[key] = b
 	}
 	b.Count++
+	dayIndex := utcDayIndex(ts)
+	b.DayCounts[dayIndex]++
 
 	// Postgres flush queue.
 	st := e.store
 	if st != nil {
-		dayIndex := utcDayIndex(ts)
 		pk := wsprRegionBaselineKey{Band: band, SlotOfDay: slot, Region: string(reg), DayIndex: dayIndex}
 		e.pendingWsprRegion[pk]++
 		e.pendingWsprCount++
@@ -300,12 +309,17 @@ func (e *WsprClimatologyEngine) FlushPending(ctx context.Context) (int, error) {
 	}
 	err := st.FlushPendingWsprRegion(ctx, pending)
 	if err != nil {
-		// Re-enqueue on failure (mirrors mergePendingBack).
+		// Re-enqueue on failure (mirrors mergePendingBack), but cap growth
+		// to prevent OOM during a prolonged Postgres outage.
 		e.mu.Lock()
 		for k, v := range pending {
 			e.pendingWsprRegion[k] += v
 		}
 		e.pendingWsprCount += count
+		// If the pending queue exceeds the cap, drop oldest day indexes.
+		if e.pendingWsprCount > wsprClimatologyMaxPending {
+			e.pendingWsprRegion, e.pendingWsprCount = capPendingWsprRegion(e.pendingWsprRegion, wsprClimatologyMaxPending)
+		}
 		e.mu.Unlock()
 		return 0, err
 	}
@@ -385,8 +399,8 @@ func (s *dxPostgresStore) WsprRegionCalendarStats(ctx context.Context, daysBack 
 
 // RegionCalendarStats returns the WSPR climatology stats for the current slot,
 // cached for statsCacheTTL seconds. When Postgres is nil, computes from the
-// in-memory buckets (aggregated count / span → approximate mean; stddev is 0
-// since the in-memory fallback does not track per-day breakdown).
+// in-memory buckets. Includes single-flight + negative cache mirroring the
+// FT8 loadFT8Baselines pattern.
 func (e *WsprClimatologyEngine) RegionCalendarStats(ctx context.Context, daysBack int, now int64) []wsprRegionCalendarStatRow {
 	if e == nil {
 		return nil
@@ -398,19 +412,31 @@ func (e *WsprClimatologyEngine) RegionCalendarStats(ctx context.Context, daysBac
 		now = time.Now().Unix()
 	}
 
-	// Cache check.
+	// Fast path (RLock): serve from success cache or negative cache.
 	e.mu.RLock()
 	cacheAge := now - e.statsCacheAt
 	cached := e.statsCache
 	ttl := e.statsCacheTTL
+	errAge := now - e.statsCacheErrAt
 	e.mu.RUnlock()
 	if ttl > 0 && cacheAge >= 0 && cacheAge < ttl && cached != nil {
 		return cached
 	}
+	if cached == nil && e.statsCacheErrAt != 0 && errAge >= 0 && errAge < propIntelRegionBaselineNegCacheTTL {
+		return nil
+	}
 
-	e.mu.RLock()
+	// Slow path: exclusive lock so only one goroutine queries PG.
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ttl > 0 && (now-e.statsCacheAt) < ttl && e.statsCache != nil {
+		return e.statsCache
+	}
+	if e.statsCache == nil && e.statsCacheErrAt != 0 && (now-e.statsCacheErrAt) < propIntelRegionBaselineNegCacheTTL {
+		return nil
+	}
+
 	st := e.store
-	e.mu.RUnlock()
 
 	var rows []wsprRegionCalendarStatRow
 	if st != nil {
@@ -418,53 +444,102 @@ func (e *WsprClimatologyEngine) RegionCalendarStats(ctx context.Context, daysBac
 		rows, err = st.WsprRegionCalendarStats(ctx, daysBack, now)
 		if err != nil {
 			logDebug("WSPR climatology stats query failed: %v", err)
-			rows = e.regionCalendarStatsFromMemory(now)
+			e.statsCacheErrAt = now
+			// Serve stale cache if available, otherwise fall back to in-memory.
+			if e.statsCache != nil {
+				return e.statsCache
+			}
+			rows = e.regionCalendarStatsFromMemoryLocked(now)
 		}
 	} else {
-		rows = e.regionCalendarStatsFromMemory(now)
+		rows = e.regionCalendarStatsFromMemoryLocked(now)
 	}
 
-	e.mu.Lock()
 	e.statsCache = rows
 	e.statsCacheAt = now
-	e.mu.Unlock()
+	e.statsCacheErrAt = 0
 	return rows
 }
 
-// regionCalendarStatsFromMemory computes approximate climatology stats from
-// the in-memory buckets. Without per-day-index tracking, Mean is the
-// aggregated count divided by the span in days, StdDev is 0 (can't compute
-// sample stddev from a single aggregated count), and SampleDays is the span.
+// regionCalendarStatsFromMemory computes climatology stats from the in-memory
+// buckets. Uses per-day-index counts (DayCounts) to compute Mean and StdDev.
+// Caller must hold e.mu (RLock or Lock).
 func (e *WsprClimatologyEngine) regionCalendarStatsFromMemory(now int64) []wsprRegionCalendarStatRow {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+	return e.regionCalendarStatsFromMemoryLocked(now)
+}
+
+// regionCalendarStatsFromMemoryLocked is the lock-free variant. Caller must
+// hold e.mu (RLock or Lock).
+func (e *WsprClimatologyEngine) regionCalendarStatsFromMemoryLocked(now int64) []wsprRegionCalendarStatRow {
 	if len(e.buckets) == 0 {
 		return nil
 	}
-	spanDays := int64(1)
-	if e.firstEventAt > 0 && e.lastEventAt > e.firstEventAt {
-		spanDays = (e.lastEventAt - e.firstEventAt) / 86400
-		if spanDays < 1 {
-			spanDays = 1
-		}
-	}
+	today := utcDayIndex(now)
 	out := make([]wsprRegionCalendarStatRow, 0, len(e.buckets))
 	for _, b := range e.buckets {
-		if b == nil || b.Count == 0 {
+		if b == nil || len(b.DayCounts) == 0 {
 			continue
 		}
-		mean := float64(b.Count) / float64(spanDays)
+		// Compute mean and sample stddev from per-day counts.
+		counts := make([]float64, 0, len(b.DayCounts))
+		var todayCount int64
+		for dayIdx, c := range b.DayCounts {
+			counts = append(counts, float64(c))
+			if dayIdx == today {
+				todayCount = c
+			}
+		}
+		meanVal := mean(counts)
+		var stddev float64
+		if len(counts) >= 2 {
+			var sumSqDiff float64
+			for _, c := range counts {
+				d := c - meanVal
+				sumSqDiff += d * d
+			}
+			stddev = math.Sqrt(sumSqDiff / float64(len(counts)-1))
+		}
 		out = append(out, wsprRegionCalendarStatRow{
 			Band:       b.Band,
 			Region:     b.Region,
 			SlotOfDay:  b.SlotOfDay,
-			Mean:       mean,
-			StdDev:     0,
-			Today:      0,
-			SampleDays: int(spanDays),
+			Mean:       meanVal,
+			StdDev:     stddev,
+			Today:      todayCount,
+			SampleDays: len(counts),
 		})
 	}
 	return out
+}
+
+// capPendingWsprRegion drops the oldest day-index entries from the pending
+// map until it fits within maxKeys. This prevents unbounded growth during a
+// Postgres outage (data loss preferred over OOM).
+func capPendingWsprRegion(pending map[wsprRegionBaselineKey]int64, maxKeys int) (map[wsprRegionBaselineKey]int64, int) {
+	if len(pending) <= maxKeys {
+		return pending, len(pending)
+	}
+	// Find the median day index; drop entries below it.
+	var minDay, maxDay int64
+	for k := range pending {
+		if minDay == 0 || k.DayIndex < minDay {
+			minDay = k.DayIndex
+		}
+		if k.DayIndex > maxDay {
+			maxDay = k.DayIndex
+		}
+	}
+	cutoff := minDay + (maxDay-minDay)/2
+	out := make(map[wsprRegionBaselineKey]int64, maxKeys)
+	for k, v := range pending {
+		if k.DayIndex < cutoff {
+			continue
+		}
+		out[k] = v
+	}
+	return out, len(out)
 }
 
 // FlushPendingAsync is the goroutine loop that periodically flushes the

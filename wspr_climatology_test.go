@@ -108,9 +108,10 @@ func TestWsprClimatologyInMemoryStats(t *testing.T) {
 			if r.Mean <= 0 {
 				t.Errorf("mean = %f, want > 0", r.Mean)
 			}
-			// StdDev is 0 for in-memory fallback (no per-day breakdown).
+			// StdDev is 0 when all spots fall on a single day (1 sample,
+			// no variance). With multiple days of data, StdDev > 0.
 			if r.StdDev != 0 {
-				t.Errorf("in-memory stddev = %f, want 0 (no per-day breakdown)", r.StdDev)
+				t.Errorf("in-memory stddev = %f, want 0 (single-day test data)", r.StdDev)
 			}
 			found = true
 		}
@@ -162,14 +163,19 @@ func TestWsprClimatologyColdStart(t *testing.T) {
 	// not actual per-day counts.)
 	e := newWsprClimatologyEngine("")
 	// Simulate 5 days of events by setting firstEventAt 5 days ago.
-	fiveDaysAgo := int64(1786224360) - 5*86400
 	now := int64(1786224360)
-	e.firstEventAt = fiveDaysAgo
+	e.firstEventAt = now - 5*86400
 	e.lastEventAt = now
-	// Seed one bucket.
+	// Seed one bucket with per-day counts spanning 5 days.
 	slot := utcSlotOfDay(now)
+	today := utcDayIndex(now)
+	startDay := today - 5
+	dayCounts := make(map[int64]int64)
+	for d := startDay; d <= today; d++ {
+		dayCounts[d] = int64(2 + (d % 3)) // varying counts: 2, 3, 4, 2, 3, 4
+	}
 	e.buckets[wsprClimatologyKey("20m", slot, "JA")] = &wsprClimatologyBucket{
-		Band: "20m", SlotOfDay: slot, Region: "JA", Count: 10,
+		Band: "20m", SlotOfDay: slot, Region: "JA", Count: 12, DayCounts: dayCounts,
 	}
 
 	rows := e.regionCalendarStatsFromMemory(now)
@@ -178,6 +184,9 @@ func TestWsprClimatologyColdStart(t *testing.T) {
 		if r.Band == "20m" && r.Region == "JA" && r.SlotOfDay == slot {
 			if r.SampleDays < 5 {
 				t.Errorf("SampleDays = %d, want >= 5", r.SampleDays)
+			}
+			if r.StdDev <= 0 {
+				t.Errorf("StdDev = %f, want > 0 (per-day counts available)", r.StdDev)
 			}
 			found = true
 		}

@@ -16,7 +16,7 @@ import (
 // Intelligence Layer plan). It stores browser Push API subscriptions in an
 // in-memory map keyed by the subscription endpoint URL, alongside the
 // operator's QTH and per-(band × region) enable preferences. When
-// detectSurges (U2) flags a cell, the engine calls
+// the atypical detection in Evaluate flags a cell, the engine calls
 // pushStore.NotifySurges(cells, qth), which iterates subscriptions matching
 // the cell's (band, region) and sends a Web Push message via the
 // github.com/SherClockHolmes/webpush-go library.
@@ -406,7 +406,7 @@ type pushSurgePayload struct {
 
 // NotifySurges iterates the stored subscriptions and sends a push for
 // each subscription whose preferences match a surged cell's (band,
-// region). Called from the prop_intel engine after detectSurges runs.
+// region). Called from the prop_intel handler after atypical detection runs.
 // qth is the operator's QTH for the request (subscriptions are not
 // filtered by QTH in v1 — every subscription sees every surge it opted
 // into; QTH filtering is a v2 enhancement).

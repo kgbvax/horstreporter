@@ -519,13 +519,7 @@ func main() {
 	}()
 
 	// WSPR climatology JSONL save loop (fallback when Postgres is nil).
-	go func() {
-		for range time.Tick(5 * time.Minute) {
-			if err := wsprClimatology.Save(); err != nil {
-				logDebug("WSPR climatology JSONL periodic save failed: %v", err)
-			}
-		}
-	}()
+	go wsprClimatology.SaveLoop(5*time.Minute, nil)
 
 	appMux := http.NewServeMux()
 	var fileServer http.Handler

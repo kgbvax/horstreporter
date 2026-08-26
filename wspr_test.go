@@ -95,19 +95,19 @@ func TestHandleWSPRSpotTXPower(t *testing.T) {
 	cfg := wsprConfig{Enabled: true, Endpoint: "http://localhost", PollSeconds: 60, Verbose: false}
 	now := int64(1786224360)
 
-	// Happy path: Power 20 W (20000 mW) → TXPower 20000.
+	// Happy path: Power 20W = 43 dBm → TXPower 43.
 	handleWSPRSpot(wsprSpot{
 		Time: "2026-08-08 21:26:00", Band: 14, RxSign: "DL1ABC", RxLoc: "JO31",
 		TxSign: "KF5XYZ", TxLoc: "EM12", Distance: 8000, Frequency: 14097000,
-		Power: 20000, SNR: 5,
+		Power: 43, SNR: 5,
 	}, now, cfg)
 	hub.RLock()
 	if len(hub.history) != 1 {
 		hub.RUnlock()
 		t.Fatalf("expected 1 spot in hub.history, got %d", len(hub.history))
 	}
-	if got := hub.history[0].TXPower; got != 20000 {
-		t.Errorf("TXPower = %d, want 20000", got)
+	if got := hub.history[0].TXPower; got != 43 {
+		t.Errorf("TXPower = %d, want 43 (20W in dBm)", got)
 	}
 	if got := hub.history[0].Source; got != "wspr" {
 		t.Errorf("Source = %q, want wspr", got)

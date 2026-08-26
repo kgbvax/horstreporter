@@ -319,7 +319,9 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 	// Load the WSPR climatology for the atypical z-score.
 	var wsprClim map[regionBaselineKey]wsprRegionCalendarStatRow
 	if wsprClimatology != nil {
-		rows := wsprClimatology.RegionCalendarStats(context.Background(), propIntelRegionBaselineDaysBack, now)
+		ctx, cancel := context.WithTimeout(context.Background(), propIntelRegionBaselineQueryTimeout)
+		rows := wsprClimatology.RegionCalendarStats(ctx, propIntelRegionBaselineDaysBack, now)
+		cancel()
 		wsprClim = make(map[regionBaselineKey]wsprRegionCalendarStatRow, len(rows))
 		for _, r := range rows {
 			wsprClim[regionBaselineKey{r.Band, r.Region, r.SlotOfDay}] = r
@@ -330,10 +332,15 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 	ft8Clim := e.loadFT8Baselines(now)
 
 	cells := make([]propIntelCell, 0, len(acc))
+	// Use cwMinDb from the query param when valid; else use the default.
+	cwFloor := float64(propIntelCWFloorDb)
+	if cwMinDb >= -40 && cwMinDb <= 20 {
+		cwFloor = float64(cwMinDb)
+	}
 	for key, cell := range acc {
 		// SSB/CW flags from the best path budget.
 		ssbOpen := cell.hasPower && cell.bestBudgetSNR >= propIntelSSBFloorDb
-		cwOpen := cell.hasPower && cell.bestBudgetSNR >= propIntelCWFloorDb
+		cwOpen := cell.hasPower && cell.bestBudgetSNR >= cwFloor
 
 		// Rising slope: second half rate > first half rate * threshold.
 		rising := false
@@ -346,10 +353,13 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		}
 
 		// Atypical z-score against the WSPR climatology.
+		// The climatology Mean is the average per-day count for this (band,
+		// region, slot). Scale the live count to a per-slot extrapolation
+		// (spotCount * 30/minutes) so the z-score compares like-for-like.
 		var atypical *AtypicalInfo
 		if base, ok := wsprClim[regionBaselineKey{key.band, key.region, slot}]; ok {
 			if base.StdDev > 0 && base.SampleDays >= propIntelMinSampleDays {
-				liveRate := float64(cell.spotCount)
+				liveRate := float64(cell.spotCount) * (30.0 / float64(minutes))
 				z := (liveRate - base.Mean) / base.StdDev
 				if z >= atypicalThreshold {
 					conf := atypicalConfidence(base.SampleDays)
@@ -638,11 +648,28 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Count atypical detection events per request.
+	hasAtypical := false
 	for _, c := range resp.Cells {
 		if c.Atypical != nil {
 			propIntelAccounting.surgesDetected.Add(1)
+			hasAtypical = true
 			break
 		}
+	}
+
+	// Web Push: fan out atypical cells to push subscriptions. Runs in a
+	// goroutine so a slow push endpoint cannot block the response. The
+	// resp.Cells slice is owned by this response, so the goroutine can
+	// read it after the handler returns.
+	if hasAtypical {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logInfo("push goroutine panic: %v", r)
+				}
+			}()
+			pushStore.NotifySurges(resp.Cells, qth)
+		}()
 	}
 
 	w.Header().Set("Content-Type", "application/json")

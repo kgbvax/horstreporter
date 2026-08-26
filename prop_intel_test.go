@@ -163,6 +163,48 @@ func TestWsprNowcastEdgeNoClimatology(t *testing.T) {
 	}
 }
 
+// TestWsprNowcastAtypicalWithClimatology verifies the atypical z-score
+// fires when the live rate exceeds the climatology mean by >= threshold.
+// Seeds wsprClimatology with per-day counts, then sends a burst of WSPR
+// spots that exceed the typical rate.
+func TestWsprNowcastAtypicalWithClimatology(t *testing.T) {
+	// Seed the WSPR climatology global with 10 days of data for 20m/EU
+	// at the slot corresponding to our test timestamp.
+	now := int64(1700000000)
+	slot := utcSlotOfDay(now)
+	today := utcDayIndex(now)
+	savedClim := wsprClimatology
+	defer func() { wsprClimatology = savedClim }()
+	wsprClimatology = newWsprClimatologyEngine("")
+	dayCounts := make(map[int64]int64)
+	for d := today - 10; d < today; d++ {
+		dayCounts[d] = int64(3 + (d % 4)) // varying counts: 3-6 per day
+	}
+	wsprClimatology.buckets[wsprClimatologyKey("20m", slot, "EU")] = &wsprClimatologyBucket{
+		Band: "20m", SlotOfDay: slot, Region: "EU", Count: 50, DayCounts: dayCounts,
+	}
+
+	// Send 20 WSPR spots in 15 min — extrapolated to 40/slot, well above
+	// the mean of 5 with nonzero stddev.
+	e := &propIntelEngine{}
+	var history []MQTTMessage
+	for i := 0; i < 20; i++ {
+		history = append(history, makeWSPRSpot(now-int64(i*30), "20m", "JO62", "JO31", 5, 43))
+	}
+
+	resp := e.Evaluate("JO31", false, 15, -15, history, now, 2.0)
+	cell := findCell(t, resp, "20m", "EU")
+	if cell.Atypical == nil {
+		t.Fatal("Atypical = nil, want non-nil (live rate exceeds climatology mean)")
+	}
+	if cell.Atypical.ZScore < 2.0 {
+		t.Errorf("ZScore = %f, want >= 2.0", cell.Atypical.ZScore)
+	}
+	if cell.Atypical.Confidence <= 0 {
+		t.Errorf("Confidence = %f, want > 0", cell.Atypical.Confidence)
+	}
+}
+
 // TestAtypicalConfidence verifies the confidence curve scales from 0.3 at 1
 // day to 1.0 at propIntelMatureSampleDays.
 func TestAtypicalConfidence(t *testing.T) {

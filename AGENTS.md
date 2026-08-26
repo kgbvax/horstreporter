@@ -8,10 +8,11 @@
 
 ## Current core behavior
 - MQTT ingest subscribes to `pskr/filter/v2/#`, reconstructs omitted fields from topic segments, and currently keeps **FT8/FT4** reports.
-- Optional ingests: **DX-cluster** (TCP), **RBN** (CW/RTTY telnet), **WSPR** (wspr.live ClickHouse HTTP poller). RBN and WSPR are reference-only — they feed the live stream + activity chart but are kept out of the FT8-calibrated conditions baseline (`isNonConditionsMode`).
+- Optional ingests: **DX-cluster** (TCP), **RBN** (CW/RTTY telnet), **WSPR** (wspr.live ClickHouse HTTP poller). RBN is reference-only (feeds the live stream + activity chart, kept out of the FT8-calibrated conditions baseline). WSPR now feeds a dedicated **WSPR climatology** (band x region x slot-of-day, persistent) and drives the WSPR propagation-intelligence engine (`prop_intel.go`) which replaced the old FT8 nowcast.
 - Streaming API pushes filtered spots over SSE.
 - History is retained in-memory (rolling window, pruned periodically) and used both for initial stream backfill and stats.
 - Optional DX baseline engine tracks historical band conditions and serves current DX potential scoring.
+- WSPR propagation-intelligence engine (`prop_intel.go`) nowcasts per (band x 11 DXPulse region) from WSPR spots: SSB/CW openness (SNR+Power budget), rising slope, atypical z-score (vs WSPR climatology), three-flavor atypical label (FT8 cross-reference), and a from-here view. Served via `/api/prop_intel`.
 
 ## Architecture boundaries
 - Backend core files:
@@ -21,6 +22,8 @@
   - `spot.go` (spot model + matching/locator utilities)
   - `server.go` (HTTP handlers)
   - `dx_conditions.go` (DX baseline + scoring engine)
+  - `wspr_climatology.go` (WSPR climatology accumulator + Postgres/JSONL persistence)
+  - `prop_intel.go` (WSPR propagation-intelligence nowcast engine)
 - Frontend core files:
   - `static/app.js` (app boot, stream lifecycle, projection/style gating, options wiring)
   - `static/renderers.js` (Mercator map rendering modes)
@@ -59,7 +62,11 @@
   - `-port`, `-dev`, `-compress`, `-max-clients`
   - `-record-spots` (JSONL recorder)
   - `-dx-baseline-file` (persistent DX baseline buckets)
+  - `-wspr-climatology-file` (persistent WSPR climatology JSONL fallback)
   - TLS: `-cert`/`-key` or `-domain` (Let's Encrypt)
+
+## API versioning notes
+- `/api/prop_intel` response shape was changed in-place (breaking) when the engine was rewritten from FT8 to WSPR-primary. Old fields (`p_open`, `expected_count`, `confidence`, `surge`) were replaced by `ssb_open`, `cw_open`, `rising`, `atypical`, `from_here`, `spot_count`. The `surge_threshold` query param now controls the atypical z-score threshold (same default 2.0, different semantics). This is a first-party-only endpoint; no versioned v2 path is maintained.
 
 ## Quick commands agents should use
 - Backend tests: `go test ./...`
