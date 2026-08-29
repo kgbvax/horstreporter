@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 // wspr-matrix.js imports state.js / utils.js / panel-drag.js at module load;
 // utils is mocked to keep the region columns and band palette test-local
@@ -73,6 +74,45 @@ describe('wspr-matrix cellColor heat ramp', () => {
             const l = luminance(parseRgb(cellColor(i / 20)));
             expect(l).toBeGreaterThan(prev);
             prev = l;
+        }
+    });
+});
+
+// The .wspr-badge-* flag chips sit ON the teal heat cells, so each bg/fg pair
+// in style.css must hold WCAG AA on its own (0.65rem bold = normal-size text).
+// Guards the dark-ink badge fix (white on green/teal/orange was 2.6-3.1:1).
+describe('wspr-matrix badge contrast (style.css)', () => {
+    const css = readFileSync('static/style.css', 'utf8'); // vitest runs from the repo root
+    const section = css.slice(css.indexOf('/* WSPR matrix flag badges'), css.indexOf('.wspr-matrix-legend'));
+    const rules = [...section.matchAll(/\.wspr-badge[\w-]*\s*\{[^}]*\}/g)]
+        .map((m) => m[0])
+        .filter((rule) => !rule.includes('inline-block')); // skip the sizing-only base rule
+
+    const parseColor = (rule, prop) => {
+        const m = rule.match(new RegExp(`${prop}:\\s*([^;]+)`));
+        if (!m) return null;
+        const v = m[1].trim();
+        if (v.startsWith('#')) {
+            const h = v.slice(1);
+            if (h.length === 3) return [0, 1, 2].map((i) => parseInt(h[i] + h[i], 16));
+            return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+        }
+        return null; // var() etc. — not asserted here
+    };
+
+    it('covers every badge variant', () => {
+        expect(rules.length).toBeGreaterThanOrEqual(8);
+    });
+
+    it('keeps badge text at WCAG AA against its own background', () => {
+        for (const rule of rules) {
+            const bg = parseColor(rule, 'background');
+            const fg = parseColor(rule, 'color');
+            expect(bg, rule).not.toBeNull();
+            expect(fg, rule).not.toBeNull();
+            const fgL = luminance(fg);
+            const ratio = (Math.max(fgL, luminance(bg)) + 0.05) / (Math.min(fgL, luminance(bg)) + 0.05);
+            expect(ratio, rule).toBeGreaterThanOrEqual(4.5);
         }
     });
 });

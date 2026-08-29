@@ -674,7 +674,18 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     color: transparent;
 }
 
-/* WSPR matrix flag badges */
+/* Dark theme: the solid teal chips meet the dark panel at only ~1.1-1.3:1 at
+   the low-activity end, so the light-theme 14% inset ring is too faint to mark
+   the chip boundary; 45% keeps the ring >=3:1 against every chip (WCAG 1.4.11)
+   without touching the light theme, where chips already sit >=5:1 on the panel. */
+body[data-theme="dark"] .wspr-matrix-cell {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 45%, transparent);
+}
+
+/* WSPR matrix flag badges. Badges sit ON the teal heat chips, so each needs
+   (a) >=4.5:1 text-vs-own-bg (dark ink on the light backgrounds — white only
+   survives on #dc3545/#6f42c1) and (b) a silhouette distinct from the chip
+   (hairline light ring; the purple from-here is ~1.1:1 against bright chips). */
 .wspr-badge {
     display: inline-block;
     font-size: 0.65rem;
@@ -684,15 +695,16 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     border-radius: 2px;
     line-height: 1.2;
     vertical-align: middle;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
 }
-.wspr-badge-ssb { background: #28a745; color: #fff; }
-.wspr-badge-cw { background: #17a2b8; color: #fff; }
-.wspr-badge-rising { background: #ffc107; color: #333; }
-.wspr-badge-atypical { background: #fd7e14; color: #fff; }
-.wspr-badge-atypical-atypical-both { background: #28a745; color: #fff; }
-.wspr-badge-atypical-atypical-wspr-silent-ft8 { background: #dc3545; color: #fff; }
+.wspr-badge-ssb { background: #28a745; color: #1a1a1a; }        /* 5.6:1 */
+.wspr-badge-cw { background: #17a2b8; color: #1a1a1a; }         /* 5.7:1 */
+.wspr-badge-rising { background: #ffc107; color: #333; }        /* 7.8:1 */
+.wspr-badge-atypical { background: #fd7e14; color: #1a1a1a; }   /* 6.8:1 */
+.wspr-badge-atypical-atypical-both { background: #28a745; color: #1a1a1a; }
+.wspr-badge-atypical-atypical-wspr-silent-ft8 { background: #dc3545; color: #fff; }  /* 4.5:1 */
 .wspr-badge-atypical-atypical-wspr-only { background: #ffc107; color: #333; }
-.wspr-badge-from-here { background: #6f42c1; color: #fff; }
+.wspr-badge-from-here { background: #6f42c1; color: #fff; }     /* 6.5:1 */
 .wspr-matrix-legend { margin-top: 4px; padding: 2px 4px; }
 .wspr-matrix-from-here-toggle {
     cursor: pointer;
@@ -705,7 +717,8 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 }
 .wspr-matrix-from-here-toggle.is-active {
     background: var(--accent-color, #17a2b8);
-    color: #fff;
+    /* Dark ink on the light accent: white drops to 2.2-3.3:1 in both themes. */
+    color: #1a1a1a;
 }
 
 /* Propagation Intelligence matrix panel (mirrors .wspr-matrix-* layout,
