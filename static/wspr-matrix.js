@@ -16,18 +16,45 @@ const POLL_INTERVAL_MS = 45000;
 
 const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
 
-// Cell heat ramp: deep teal (low activity) → brighter teal (high activity).
-// Both endpoints hold white text at WCAG AA (5.1:1 at the bright end) — the
-// old low-alpha rgba() washed out against light panel backgrounds.
-const CELL_COLOR_LOW = [10, 61, 71];    // #0a3d47
-const CELL_COLOR_HIGH = [17, 121, 138];  // #11798a
+// Cell heat ramps. Activity maps to *distance from the panel background* in
+// both themes — the perceptual trick that makes the gradient read at a glance:
+//   light theme: pale aqua (sparse) → deep teal (peak), chips darken
+//   dark theme:  deep teal (sparse) → luminous aqua (peak), chips brighten
+// Each ramp spans ~50 L* (the old single-direction teal ramp capped at ~23 L*
+// by white text, so everything above ~5 spots looked identical). sqrt() still
+// spreads the low end so 1-2 spots don't collapse onto the sparse shade.
+const CELL_COLOR_LIGHT = { low: [159, 217, 226], high: [8, 55, 67] }; // #9fd9e2 → #083743
+const CELL_COLOR_DARK = { low: [13, 71, 83], high: [127, 220, 234] }; // #0d4753 → #7fdcea
 
-// Map a 0..1 activity intensity to a solid background color. sqrt() spreads
-// the low end so 1-2 spots don't collapse onto the darkest shade.
-function cellColor(intensity) {
+// Numerals flip ink at the luminance where white/black cross (~0.179); pure
+// black/white inks keep >= 4.58:1 on every shade either side of the switch —
+// a mid-luminance teal would fail AA with both inks, which is why the switch
+// uses #000 rather than the softer #1a1a1a used by the flag badges.
+const WHITE_INK = 'rgb(255, 255, 255)';
+const BLACK_INK = 'rgb(0, 0, 0)';
+
+function rgbLuminance([r, g, b]) {
+    const lin = (c) => {
+        const s = c / 255;
+        return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+// Map a 0..1 activity intensity to a solid background color for the theme.
+function cellColor(intensity, theme = 'light') {
+    const { low, high } = theme === 'dark' ? CELL_COLOR_DARK : CELL_COLOR_LIGHT;
     const t = Math.sqrt(Math.max(0, Math.min(1, intensity)));
-    const rgb = CELL_COLOR_LOW.map((c, i) => Math.round(c + (CELL_COLOR_HIGH[i] - c) * t));
+    const rgb = low.map((c, i) => Math.round(c + (high[i] - c) * t));
     return `rgb(${rgb.join(', ')})`;
+}
+
+// Pick the numeral ink for a chip color: whichever of white/black is AA-safe.
+function cellInk(rgb) {
+    const l = typeof rgb === 'string'
+        ? rgbLuminance(rgb.match(/\d+/g).map(Number))
+        : rgbLuminance(rgb);
+    return l <= 0.179 ? WHITE_INK : BLACK_INK;
 }
 
 // Mode badge shows only the top mode: SSB beats CW (if SSB is open, phone
@@ -164,12 +191,13 @@ function renderMatrix(body, data) {
     }
     activeBands.sort((a, b) => BAND_ORDER.indexOf(a) - BAND_ORDER.indexOf(b));
 
-    // Fingerprint for skip-rebuild.
+    // Fingerprint for skip-rebuild (theme included: a toggle re-shades chips).
+    const theme = document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
     const matrixKey = activeBands
         .map((b) => `${b}:${Array.from(matrix.get(b).entries()).sort().map(([r, c]) => `${r}${c.spot_count}${c.ssb_open?'S':''}${c.cw_open?'C':''}${c.rising?'R':''}${c.atypical?c.atypical.flavor:''}`).join('')}`)
         .join('|');
-    if (matrixKey === runtime.lastMatrixKey) return;
-    runtime.lastMatrixKey = matrixKey;
+    if (`${theme}|${matrixKey}` === runtime.lastMatrixKey) return;
+    runtime.lastMatrixKey = `${theme}|${matrixKey}`;
 
     const maxCount = Math.max(...cells.map((c) => c.spot_count || 0), 1);
 
@@ -205,18 +233,21 @@ function renderMatrix(body, data) {
                 if (cell.rising) titleParts.push('rising');
                 if (cell.atypical) titleParts.push(`atypical z=${cell.atypical.z_score} (${cell.atypical.flavor})`);
                 if (cell.from_here) titleParts.push('from-here');
-                html += `<td class="wspr-matrix-cell" style="background: ${cellColor(intensity)}" title="${titleParts.join(', ')}">${cell.spot_count}${badges}${atypicalBadge}${fromHereMark}</td>`;
+                const bg = cellColor(intensity, theme);
+                html += `<td class="wspr-matrix-cell" style="background: ${bg}; color: ${cellInk(bg)}" title="${titleParts.join(', ')}">${cell.spot_count}${badges}${atypicalBadge}${fromHereMark}</td>`;
             }
         }
         html += '</tr>';
     }
     html += '</tbody></table>';
-    html += '<div class="wspr-matrix-legend small text-muted"><span class="wspr-badge wspr-badge-ssb">S</span>=SSB <span class="wspr-badge wspr-badge-cw">C</span>=CW (top mode) <span class="wspr-badge wspr-badge-rising">&uarr;</span>=rising <span class="wspr-badge wspr-badge-atypical">!</span>=atypical *=from-here</div>';
+    html += '<div class="wspr-matrix-legend small text-muted"><span class="wspr-heat-scale" aria-hidden="true"></span>=spots: few &rarr; many <span class="wspr-badge wspr-badge-ssb">S</span>=SSB <span class="wspr-badge wspr-badge-cw">C</span>=CW (top mode) <span class="wspr-badge wspr-badge-rising">&uarr;</span>=rising <span class="wspr-badge wspr-badge-atypical">!</span>=atypical *=from-here</div>';
     body.innerHTML = html;
 }
 
 // Test hooks (mirrors the prop-matrix.js __test convention).
 export const __test = {
     cellColor,
+    cellInk,
+    rgbLuminance,
     topModeBadges,
 };

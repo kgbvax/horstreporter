@@ -11,7 +11,7 @@ vi.mock('../static/utils.js', () => ({
 
 import { __test } from '../static/wspr-matrix.js';
 
-const { cellColor, topModeBadges } = __test;
+const { cellColor, cellInk, topModeBadges } = __test;
 
 // WCAG relative luminance + contrast ratio, for asserting that every step of
 // the heat ramp keeps the white spot count readable (AA, >=4.5:1).
@@ -50,30 +50,56 @@ describe('wspr-matrix topModeBadges', () => {
 });
 
 describe('wspr-matrix cellColor heat ramp', () => {
-    it('hits the ramp endpoints at 0 and 1', () => {
-        expect(cellColor(0)).toBe('rgb(10, 61, 71)');
-        expect(cellColor(1)).toBe('rgb(17, 121, 138)');
+    // Panel background approximations: --bg-color composites to near-white in
+    // the light theme and near-black in the dark theme.
+    const PANEL_LUMINANCE = { light: 1.0, dark: 0.022 };
+
+    it('hits the ramp endpoints at 0 and 1 per theme', () => {
+        expect(cellColor(0, 'light')).toBe('rgb(159, 217, 226)');
+        expect(cellColor(1, 'light')).toBe('rgb(8, 55, 67)');
+        expect(cellColor(0, 'dark')).toBe('rgb(13, 71, 83)');
+        expect(cellColor(1, 'dark')).toBe('rgb(127, 220, 234)');
     });
 
     it('clamps out-of-range intensities', () => {
-        expect(cellColor(-2)).toBe(cellColor(0));
-        expect(cellColor(5)).toBe(cellColor(1));
+        expect(cellColor(-2, 'light')).toBe(cellColor(0, 'light'));
+        expect(cellColor(5, 'dark')).toBe(cellColor(1, 'dark'));
     });
 
-    it('keeps white text at WCAG AA across the whole ramp', () => {
-        for (let i = 0; i <= 20; i++) {
-            const intensity = i / 20;
-            const ratio = contrastWithWhite(parseRgb(cellColor(intensity)));
-            expect(ratio, `intensity ${intensity}`).toBeGreaterThanOrEqual(4.5);
+    it('defaults to the light theme (backward-compatible call sites)', () => {
+        expect(cellColor(0)).toBe(cellColor(0, 'light'));
+    });
+
+    it('moves chips AWAY from the panel as activity rises, in both themes', () => {
+        for (const theme of ['light', 'dark']) {
+            let prevDist = -1;
+            for (let i = 0; i <= 20; i++) {
+                const l = luminance(parseRgb(cellColor(i / 20, theme)));
+                const dist = Math.abs(l - PANEL_LUMINANCE[theme]);
+                expect(dist, `${theme} intensity ${i}`).toBeGreaterThan(prevDist);
+                prevDist = dist;
+            }
         }
     });
 
-    it('brightens monotonically with activity', () => {
-        let prev = -1;
-        for (let i = 0; i <= 20; i++) {
-            const l = luminance(parseRgb(cellColor(i / 20)));
-            expect(l).toBeGreaterThan(prev);
-            prev = l;
+    it('spans at least 40 L* so the gradient is actually perceivable', () => {
+        for (const theme of ['light', 'dark']) {
+            const lo = luminance(parseRgb(cellColor(0, theme)));
+            const hi = luminance(parseRgb(cellColor(1, theme)));
+            // L* ≈ 116 * sqrt(luminance) − 16; assert the span, not the exact L*.
+            expect(Math.abs(hi - lo), theme).toBeGreaterThanOrEqual(0.32);
+        }
+    });
+
+    it('keeps numerals at WCAG AA with the selected ink across both ramps', () => {
+        for (const theme of ['light', 'dark']) {
+            for (let i = 0; i <= 40; i++) {
+                const bg = parseRgb(cellColor(i / 40, theme));
+                const ink = parseRgb(cellInk(bg));
+                const bgL = luminance(bg), inkL = luminance(ink);
+                const ratio = (Math.max(bgL, inkL) + 0.05) / (Math.min(bgL, inkL) + 0.05);
+                expect(ratio, `${theme} intensity ${i / 40} on rgb(${bg})`).toBeGreaterThanOrEqual(4.5);
+            }
         }
     });
 });
