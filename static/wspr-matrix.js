@@ -16,6 +16,29 @@ const POLL_INTERVAL_MS = 45000;
 
 const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
 
+// Cell heat ramp: deep teal (low activity) → brighter teal (high activity).
+// Both endpoints hold white text at WCAG AA (5.1:1 at the bright end) — the
+// old low-alpha rgba() washed out against light panel backgrounds.
+const CELL_COLOR_LOW = [10, 61, 71];    // #0a3d47
+const CELL_COLOR_HIGH = [17, 121, 138];  // #11798a
+
+// Map a 0..1 activity intensity to a solid background color. sqrt() spreads
+// the low end so 1-2 spots don't collapse onto the darkest shade.
+function cellColor(intensity) {
+    const t = Math.sqrt(Math.max(0, Math.min(1, intensity)));
+    const rgb = CELL_COLOR_LOW.map((c, i) => Math.round(c + (CELL_COLOR_HIGH[i] - c) * t));
+    return `rgb(${rgb.join(', ')})`;
+}
+
+// Mode badge shows only the top mode: SSB beats CW (if SSB is open, phone
+// wins the band, so the CW badge is dropped for glanceability). Full detail
+// stays in the cell tooltip.
+function topModeBadges(cell) {
+    if (cell.ssb_open) return '<span class="wspr-badge wspr-badge-ssb">S</span>';
+    if (cell.cw_open) return '<span class="wspr-badge wspr-badge-cw">C</span>';
+    return '';
+}
+
 const runtime = {
     enabled: false,
     fromHere: false,
@@ -166,10 +189,7 @@ function renderMatrix(body, data) {
                 html += '<td class="wspr-matrix-cell-empty"></td>';
             } else {
                 const intensity = Math.min(1, cell.spot_count / maxCount);
-                const alpha = 0.2 + intensity * 0.7;
-                let badges = '';
-                if (cell.ssb_open) badges += '<span class="wspr-badge wspr-badge-ssb">S</span>';
-                if (cell.cw_open) badges += '<span class="wspr-badge wspr-badge-cw">C</span>';
+                let badges = topModeBadges(cell);
                 if (cell.rising) badges += '<span class="wspr-badge wspr-badge-rising">&uarr;</span>';
                 let atypicalBadge = '';
                 if (cell.atypical) {
@@ -185,12 +205,18 @@ function renderMatrix(body, data) {
                 if (cell.rising) titleParts.push('rising');
                 if (cell.atypical) titleParts.push(`atypical z=${cell.atypical.z_score} (${cell.atypical.flavor})`);
                 if (cell.from_here) titleParts.push('from-here');
-                html += `<td class="wspr-matrix-cell" style="background: rgba(23, 162, 184, ${alpha})" title="${titleParts.join(', ')}">${cell.spot_count}${badges}${atypicalBadge}${fromHereMark}</td>`;
+                html += `<td class="wspr-matrix-cell" style="background: ${cellColor(intensity)}" title="${titleParts.join(', ')}">${cell.spot_count}${badges}${atypicalBadge}${fromHereMark}</td>`;
             }
         }
         html += '</tr>';
     }
     html += '</tbody></table>';
-    html += '<div class="wspr-matrix-legend small text-muted"><span class="wspr-badge wspr-badge-ssb">S</span>=SSB <span class="wspr-badge wspr-badge-cw">C</span>=CW <span class="wspr-badge wspr-badge-rising">&uarr;</span>=rising <span class="wspr-badge wspr-badge-atypical">!</span>=atypical *=from-here</div>';
+    html += '<div class="wspr-matrix-legend small text-muted"><span class="wspr-badge wspr-badge-ssb">S</span>=SSB <span class="wspr-badge wspr-badge-cw">C</span>=CW (top mode) <span class="wspr-badge wspr-badge-rising">&uarr;</span>=rising <span class="wspr-badge wspr-badge-atypical">!</span>=atypical *=from-here</div>';
     body.innerHTML = html;
 }
+
+// Test hooks (mirrors the prop-matrix.js __test convention).
+export const __test = {
+    cellColor,
+    topModeBadges,
+};

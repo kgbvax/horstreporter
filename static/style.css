@@ -665,6 +665,9 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     color: #fff;
     font-weight: 600;
     border-radius: 3px;
+    /* Faint ring keeps the darkest (low-activity) chips defined against
+       dark panel backgrounds; the ramp itself always carries white text. */
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 14%, transparent);
 }
 
 .wspr-matrix-cell-empty {
