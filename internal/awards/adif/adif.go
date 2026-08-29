@@ -78,19 +78,6 @@ func Parse(r io.Reader, emit func(Record)) error {
 	}
 }
 
-// ParseAll reads every record into a slice. Convenience for tests and small logs.
-func ParseAll(s string) ([]Record, error) {
-	var out []Record
-	err := Parse(strings.NewReader(s), func(rec Record) {
-		cp := make(Record, len(rec))
-		for k, v := range rec {
-			cp[k] = v
-		}
-		out = append(out, cp)
-	})
-	return out, err
-}
-
 // skipToTag consumes bytes until the next '<' (left in place is the byte AFTER
 // '<', i.e. the tag interior begins). Returns io.EOF if no further tag exists.
 func skipToTag(br *bufio.Reader) error {

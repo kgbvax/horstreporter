@@ -81,12 +81,3 @@ func dxPulseRegionForLatLng(lat, lng float64) dxPulseRegion {
 	}
 	return dxPulseRegionUnknown
 }
-
-// utcDayIndex floors a unix timestamp to a day number (negative-safe).
-func utcDayIndex(ts int64) int64 {
-	const secPerDay = int64(24 * 60 * 60)
-	if ts >= 0 {
-		return ts / secPerDay
-	}
-	return (ts - (secPerDay - 1)) / secPerDay
-}

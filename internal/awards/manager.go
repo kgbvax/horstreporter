@@ -20,7 +20,6 @@ type Manager struct {
 	cfg     Config
 	store   *store.Store
 	sources []source.Source
-	trigs   []chan struct{} // per-source manual-refresh signals (buffered, size 1)
 
 	mu         sync.RWMutex
 	snaps      map[string]*source.Snapshot
@@ -55,10 +54,6 @@ func New(cfg Config) (*Manager, error) {
 	if cfg.POTAEnabled() {
 		m.sources = append(m.sources, source.NewPOTA(cfg.POTABaseURL, cfg.POTACall, cfg.POTAToken, cfg.POTAInterval))
 	}
-	m.trigs = make([]chan struct{}, len(m.sources))
-	for i := range m.trigs {
-		m.trigs[i] = make(chan struct{}, 1)
-	}
 
 	// Warm the index from persisted snapshots so we serve immediately after a
 	// restart (no goroutines running yet; lock held trivially).
@@ -72,12 +67,12 @@ func New(cfg Config) (*Manager, error) {
 // context.Background() (it has no graceful-shutdown context); goroutines exit when
 // the process does.
 func (m *Manager) Run(ctx context.Context) {
-	for i, src := range m.sources {
-		go m.sourceLoop(ctx, src, m.trigs[i])
+	for _, src := range m.sources {
+		go m.sourceLoop(ctx, src)
 	}
 }
 
-func (m *Manager) sourceLoop(ctx context.Context, src source.Source, trigger <-chan struct{}) {
+func (m *Manager) sourceLoop(ctx context.Context, src source.Source) {
 	m.refreshOne(ctx, src)
 	t := time.NewTicker(src.MinInterval())
 	defer t.Stop()
@@ -86,8 +81,6 @@ func (m *Manager) sourceLoop(ctx context.Context, src source.Source, trigger <-c
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			m.refreshOne(ctx, src)
-		case <-trigger:
 			m.refreshOne(ctx, src)
 		}
 	}
@@ -162,16 +155,6 @@ func (m *Manager) Degraded() bool {
 func (m *Manager) RefreshNow(ctx context.Context) {
 	for _, src := range m.sources {
 		m.refreshOne(ctx, src)
-	}
-}
-
-// TriggerRefresh signals every source to refresh now (non-blocking).
-func (m *Manager) TriggerRefresh() {
-	for _, ch := range m.trigs {
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
 	}
 }
 

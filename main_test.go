@@ -1471,63 +1471,34 @@ func TestPropIntelIntegration(t *testing.T) {
 		pushStore.configure("", "", "", false)
 	}()
 
-	// Seed hub.history with a dense burst of 20m spots into the Caribbean
-	// region (CAR) from a JO32 operator. The surge detector compares the
-	// live 15-min rate against the trailing 6h baseline; we craft the
-	// baseline to be quiet (a few low-rate sub-windows) and the live
-	// window to be loud so a surge is flagged.
+	// Seed hub.history with WSPR spots into the Caribbean region (CAR)
+	// from a JO32 operator. The new WSPR nowcast processes WSPR spots only.
+	// The atypical flag requires a WSPR climatology which is not available
+	// in this test (no Postgres), so we verify the response shape and push
+	// fan-out separately.
 	now := time.Now().Unix()
 	const liveSenders = 12
 	history := make([]MQTTMessage, 0, 200)
-	// Live nowcast window: 12 unique senders in the last 5 minutes, all
+	// Live nowcast window: 12 WSPR spots in the last 5 minutes, all
 	// 20m → CAR (remote locator in a Caribbean grid square, e.g. FK88).
-	// The remote locator must be a valid 4-char Maidenhead (isLocator
-	// requires the first 4 chars to be AA00-form). We cycle the 4th
-	// char through digits 0-9 then reuse, and the receiver callsign
-	// stays unique via a letter suffix so dedup counts 12 senders.
 	rlChar := func(i int) byte {
 		d := i % 10
 		return byte('0' + d)
 	}
 	for i := 0; i < liveSenders; i++ {
 		history = append(history, MQTTMessage{
-			T:  now - int64(60+i*5),
-			SC: "DL1AAA",
-			RC: "FK8" + string(rlChar(i)) + string(rune('A'+i)),
-			SL: "JO32",
-			RL: "FK8" + string(rlChar(i)) + "A",
-			RP: -10,
-			B:  "20m",
-			MD: "FT8",
+			T:       now - int64(60+i*5),
+			SC:      "DL1AAA",
+			RC:      "FK8" + string(rlChar(i)) + string(rune('A'+i)),
+			SL:      "JO32",
+			RL:      "FK8" + string(rlChar(i)) + "A",
+			RP:      -10,
+			B:       "20m",
+			MD:      "WSPR",
+			Source:  "wspr",
+			TXPower: 43, // 20W in dBm
 		})
 	}
-	// Trailing 6h baseline: a handful of low-activity 15-min sub-windows
-	// with a single unique sender each, so the baseline mean is low and
-	// the stddev is nonzero (otherwise the surge guard suppresses the
-	// z-score). Spread them across the 6h window excluding the live 15 min.
-	for subIdx := 0; subIdx < 12; subIdx++ {
-		t0 := now - int64(6*3600) + int64(subIdx*30*60)
-		if t0 > now-int64(15*60) {
-			t0 = now - int64(6*3600)
-		}
-		history = append(history, MQTTMessage{
-			T:  t0,
-			SC: "DL1AAA",
-			RC: "FK80XY",
-			SL: "JO32",
-			RL: "FK80",
-			RP: -15,
-			B:  "20m",
-			MD: "FT8",
-		})
-	}
-	// Pad a couple of zero-activity sub-windows by adding nothing for them;
-	// the memory-fallback baseline treats missing sub-windows as rate 0,
-	// which both lowers the mean and adds variance (helps the stddev > 0
-	// guard).
-	// Production hub.history is always T-sorted (real-time append + front
-	// prune); the handler's sort.Search cutoff and oldest-spot check rely on
-	// that invariant, so sort the fixture to match.
 	sort.Slice(history, func(i, j int) bool { return history[i].T < history[j].T })
 	hub.Lock()
 	hub.history = history
@@ -1575,13 +1546,18 @@ func TestPropIntelIntegration(t *testing.T) {
 			QTH   string   `json:"qth"`
 			Bands []string `json:"bands"`
 			Cells []struct {
-				Band   string  `json:"band"`
-				Region string  `json:"region"`
-				POpen  float64 `json:"p_open"`
-				Surge  *struct {
-					ZScore float64 `json:"z_score"`
-					Label  string  `json:"label"`
-				} `json:"surge,omitempty"`
+				Band     string `json:"band"`
+				Region   string `json:"region"`
+				SSBOpen  bool   `json:"ssb_open"`
+				CWOpen   bool   `json:"cw_open"`
+				Rising   bool   `json:"rising"`
+				FromHere bool   `json:"from_here"`
+				SpotCount int   `json:"spot_count"`
+				Atypical *struct {
+					ZScore     float64 `json:"z_score"`
+					Confidence float64 `json:"confidence"`
+					Flavor     string  `json:"flavor"`
+				} `json:"atypical,omitempty"`
 			} `json:"cells"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
@@ -1598,29 +1574,37 @@ func TestPropIntelIntegration(t *testing.T) {
 			if len(data.Bands) == 0 {
 				t.Errorf("prop_intel response bands empty; expected at least 20m")
 			}
-			// At least one cell must have p_open > 0 (the live window
-			// had 12 senders).
-			anyPOpen := false
+			// At least one cell must have spot_count > 0 (the live window
+			// had WSPR spots).
+			anySpots := false
 			for _, c := range data.Cells {
-				if c.POpen > 0 {
-					anyPOpen = true
+				if c.SpotCount > 0 {
+					anySpots = true
 					break
 				}
 			}
-			if !anyPOpen {
-				t.Errorf("prop_intel response: no cell with p_open > 0 (cells=%d)", len(data.Cells))
+			if !anySpots {
+				t.Errorf("prop_intel response: no cell with spot_count > 0 (cells=%d)", len(data.Cells))
 			}
 		}
 	}
 
-	// Poll the mock push send for up to 2s — the surge fan-out runs in a
-	// goroutine and may land after the HTTP response returns.
+	// The WSPR nowcast does not flag atypical without a climatology (no
+	// Postgres in this test). Trigger the push fan-out directly by calling
+	// NotifySurges with an atypical cell, to verify the push mechanism still
+	// works end-to-end through the subscribed endpoint.
+	pushStore.NotifySurges([]propIntelCell{
+		{Band: "20m", Region: "CAR", Atypical: &AtypicalInfo{ZScore: 7.0, Flavor: "atypical-wspr-only"}},
+	}, "JO32")
+
+	// Poll the mock push send for up to 2s — the push fan-out runs in a
+	// goroutine and may land after the call returns.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && mock.count() < 1 {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if got := mock.count(); got < 1 {
-		t.Fatalf("expected at least 1 push sent after surge, got %d (surge may not have fired)", got)
+		t.Fatalf("expected at least 1 push sent after NotifySurges, got %d", got)
 	}
 
 	// Verify /api/stats includes the prop_intel and push blocks.
@@ -1663,11 +1647,13 @@ func TestPropIntelIntegration(t *testing.T) {
 	if gotErrs != 0 {
 		t.Errorf("stats prop_intel.errors delta = %d, want 0", gotErrs)
 	}
-	// The live window was crafted to surge 20m:CAR, so at least one
-	// surge should have been detected across the 3 calls.
+	// The WSPR nowcast does not flag atypical without a climatology (no
+	// Postgres in this test), so prop_intel.surges_detected should be 0.
+	// The push fan-out was triggered directly via NotifySurges above, so
+	// push.surges_detected and push.push_sent should reflect that.
 	gotSurges := stats.PropIntel.SurgesDetected - origPropIntelSurges
-	if gotSurges < 1 {
-		t.Errorf("stats prop_intel.surges_detected delta = %d, want >= 1", gotSurges)
+	if gotSurges != 0 {
+		t.Errorf("stats prop_intel.surges_detected delta = %d, want 0 (no climatology)", gotSurges)
 	}
 	// Push accounting: surges_detected >= 1, push_sent >= 1.
 	gotPushSurges := stats.Push.SurgesDetected - origPushSurges

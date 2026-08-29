@@ -73,3 +73,63 @@ func TestIsNonConditionsModeWSPR(t *testing.T) {
 		t.Error("isNonConditionsMode(wspr) = false, want true (case-insensitive)")
 	}
 }
+
+func TestHandleWSPRSpotTXPower(t *testing.T) {
+	// U1: TXPower from wsprSpot.Power must land on the MQTTMessage so the
+	// nowcast can compute SSB/CW viability from SNR+Power. We verify via the
+	// live broadcast path: handleWSPRSpot appends to hub.history, where we
+	// can read TXPower back.
+	savedClients := hub.clients
+	savedHistory := hub.history
+	defer func() {
+		hub.Lock()
+		hub.clients = savedClients
+		hub.history = savedHistory
+		hub.Unlock()
+	}()
+	hub.Lock()
+	hub.clients = map[*Client]bool{}
+	hub.history = nil
+	hub.Unlock()
+
+	cfg := wsprConfig{Enabled: true, Endpoint: "http://localhost", PollSeconds: 60, Verbose: false}
+	now := int64(1786224360)
+
+	// Happy path: Power 20W = 43 dBm → TXPower 43.
+	handleWSPRSpot(wsprSpot{
+		Time: "2026-08-08 21:26:00", Band: 14, RxSign: "DL1ABC", RxLoc: "JO31",
+		TxSign: "KF5XYZ", TxLoc: "EM12", Distance: 8000, Frequency: 14097000,
+		Power: 43, SNR: 5,
+	}, now, cfg)
+	hub.RLock()
+	if len(hub.history) != 1 {
+		hub.RUnlock()
+		t.Fatalf("expected 1 spot in hub.history, got %d", len(hub.history))
+	}
+	if got := hub.history[0].TXPower; got != 43 {
+		t.Errorf("TXPower = %d, want 43 (20W in dBm)", got)
+	}
+	if got := hub.history[0].Source; got != "wspr" {
+		t.Errorf("Source = %q, want wspr", got)
+	}
+	hub.RUnlock()
+
+	// Edge case: Power 0 (missing) → TXPower 0.
+	hub.Lock()
+	hub.history = nil
+	hub.Unlock()
+	handleWSPRSpot(wsprSpot{
+		Time: "2026-08-08 21:26:00", Band: 14, RxSign: "DL1ABC", RxLoc: "JO31",
+		TxSign: "KF5XYZ", TxLoc: "EM12", Distance: 8000, Frequency: 14097000,
+		Power: 0, SNR: 2,
+	}, now, cfg)
+	hub.RLock()
+	if len(hub.history) != 1 {
+		hub.RUnlock()
+		t.Fatalf("expected 1 spot after Power=0 case, got %d", len(hub.history))
+	}
+	if got := hub.history[0].TXPower; got != 0 {
+		t.Errorf("TXPower = %d, want 0 for missing power", got)
+	}
+	hub.RUnlock()
+}

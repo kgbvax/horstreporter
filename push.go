@@ -16,7 +16,7 @@ import (
 // Intelligence Layer plan). It stores browser Push API subscriptions in an
 // in-memory map keyed by the subscription endpoint URL, alongside the
 // operator's QTH and per-(band × region) enable preferences. When
-// detectSurges (U2) flags a cell, the engine calls
+// the atypical detection in Evaluate flags a cell, the engine calls
 // pushStore.NotifySurges(cells, qth), which iterates subscriptions matching
 // the cell's (band, region) and sends a Web Push message via the
 // github.com/SherClockHolmes/webpush-go library.
@@ -377,13 +377,6 @@ func (s *pushSubscriptionStore) snapshot() []*pushSubscription {
 	return out
 }
 
-// size returns the current subscription count.
-func (s *pushSubscriptionStore) size() int {
-	s.RLock()
-	defer s.RUnlock()
-	return len(s.subs)
-}
-
 // matches reports whether a subscription wants pushes for the given
 // (band, region). The "all" preference enables every surge; otherwise
 // the per-(band:region) map is consulted. An empty preference map with
@@ -413,7 +406,7 @@ type pushSurgePayload struct {
 
 // NotifySurges iterates the stored subscriptions and sends a push for
 // each subscription whose preferences match a surged cell's (band,
-// region). Called from the prop_intel engine after detectSurges runs.
+// region). Called from the prop_intel handler after atypical detection runs.
 // qth is the operator's QTH for the request (subscriptions are not
 // filtered by QTH in v1 — every subscription sees every surge it opted
 // into; QTH filtering is a v2 enhancement).
@@ -427,10 +420,10 @@ func (s *pushSubscriptionStore) NotifySurges(cells []propIntelCell, qth string) 
 	if !s.isEnabled() {
 		return
 	}
-	// Collect the surged cells once.
+	// Collect the atypical cells once.
 	var surges []propIntelCell
 	for _, c := range cells {
-		if c.Surge != nil {
+		if c.Atypical != nil {
 			surges = append(surges, c)
 		}
 	}
@@ -439,7 +432,7 @@ func (s *pushSubscriptionStore) NotifySurges(cells []propIntelCell, qth string) 
 	}
 	// U6: count surge fan-out events so /api/stats can report the
 	// surge-to-push conversion rate. One increment per NotifySurges call
-	// that had at least one surged cell, regardless of how many
+	// that had at least one atypical cell, regardless of how many
 	// subscriptions matched — this mirrors the prop_intel.surgesDetected
 	// granularity (per-request, not per-cell).
 	pushAccounting.surgesDetected.Add(1)
@@ -452,8 +445,8 @@ func (s *pushSubscriptionStore) NotifySurges(cells []propIntelCell, qth string) 
 			s.sendPushNotification(sub, pushSurgePayload{
 				Band:   c.Band,
 				Region: c.Region,
-				Label:  c.Surge.Label,
-				ZScore: c.Surge.ZScore,
+				Label:  "tune to " + c.Band + ", atypical to " + regionDisplayName(c.Region),
+				ZScore: c.Atypical.ZScore,
 			})
 		}
 	}

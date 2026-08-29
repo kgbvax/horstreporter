@@ -91,25 +91,3 @@ func TestParseDailySolarIndicesF107(t *testing.T) {
 		})
 	}
 }
-
-func TestXrayClassFromFlux(t *testing.T) {
-	cases := []struct {
-		flux float64
-		want string
-	}{
-		{0, ""},
-		{1e-8, "A1.0"},
-		{1e-7, "B1.0"},
-		{5e-7, "B5.0"},
-		{3e-6, "C3.0"},
-		{2e-5, "M2.0"},
-		{1e-4, "X1.0"},
-		{5e-4, "X5.0"},
-	}
-	for _, c := range cases {
-		got := xrayClassFromFlux(c.flux)
-		if got != c.want {
-			t.Errorf("xrayClassFromFlux(%g) = %q, want %q", c.flux, got, c.want)
-		}
-	}
-}

@@ -83,13 +83,6 @@ type wsprJSONResponse struct {
 	Data []wsprSpot `json:"data"`
 }
 
-// wsprInScopeBands are the wspr.live band codes HorstReporter analyses
-// (160m–2m). Out-of-scope (LF/MF/70cm/23cm) are skipped.
-var wsprInScopeBands = map[int]struct{}{
-	1: {}, 3: {}, 5: {}, 7: {}, 10: {}, 14: {}, 18: {}, 21: {}, 24: {}, 28: {},
-	50: {}, 70: {}, 144: {},
-}
-
 // bandFromWSPR maps a wspr.live band code to the HorstReporter band string.
 // Returns "" for out-of-scope bands.
 func bandFromWSPR(band int) string {
@@ -228,16 +221,17 @@ func handleWSPRSpot(s wsprSpot, now int64, cfg wsprConfig) {
 	// live map draws receiver→transmitter paths; activity_by_bin matches
 	// callsign-targets on receiver_callsign (the transmitter being heard).
 	m := MQTTMessage{
-		RP:     s.SNR,
-		T:      ts,
-		SC:     strings.ToUpper(strings.TrimSpace(s.RxSign)),
-		SL:     strings.ToUpper(strings.TrimSpace(s.RxLoc)),
-		RC:     strings.ToUpper(strings.TrimSpace(s.TxSign)),
-		RL:     strings.ToUpper(strings.TrimSpace(s.TxLoc)),
-		B:      band,
-		MD:     "WSPR",
-		F:      float64(s.Frequency) / 1000.0, // Hz → kHz
-		Source: "wspr",
+		RP:      s.SNR,
+		T:       ts,
+		SC:      strings.ToUpper(strings.TrimSpace(s.RxSign)),
+		SL:      strings.ToUpper(strings.TrimSpace(s.RxLoc)),
+		RC:      strings.ToUpper(strings.TrimSpace(s.TxSign)),
+		RL:      strings.ToUpper(strings.TrimSpace(s.TxLoc)),
+		B:       band,
+		MD:      "WSPR",
+		F:       float64(s.Frequency) / 1000.0, // Hz → kHz
+		Source:  "wspr",
+		TXPower: s.Power,
 	}
 	if m.SC == "" || m.RC == "" {
 		return
@@ -252,6 +246,13 @@ func handleWSPRSpot(s wsprSpot, now int64, cfg wsprConfig) {
 		freq := m.F
 		dxBaseline.PersistRawSpot(m, "wspr", m.SC, &freq, "")
 		wsprAccounting.persistedSpots.Add(1)
+	}
+
+	// Feed the WSPR climatology accumulator (band × region × slot-of-day).
+	// This is the WSPR-native typical reference for atypical-surge detection,
+	// parallel to the FT8 dx_region_baseline_daily but keyed by WSPR spots.
+	if wsprClimatology != nil {
+		wsprClimatology.Observe(m)
 	}
 
 	if !isWSPRSpotUsableForLive(m) {

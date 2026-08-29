@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"horstreporter/internal/cty"
+	"horstreporter/internal/region"
 )
 
 const (
@@ -270,6 +271,17 @@ func (e *DxBaselineEngine) EnablePostgres(dsn string) error {
 	e.store = st
 	e.mu.Unlock()
 	return nil
+}
+
+// Store returns the Postgres store if configured, or nil. Used by the WSPR
+// climatology engine to share the same store pool (for wspr_region_baseline_daily).
+func (e *DxBaselineEngine) Store() *dxPostgresStore {
+	if e == nil {
+		return nil
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.store
 }
 
 func (e *DxBaselineEngine) LoadRecentSpotCache(minutes int, now int64, includeDXCluster bool) ([]MQTTMessage, error) {
@@ -841,7 +853,7 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 		if ev.direction != "" {
 			acc.directionBins[ev.direction]++
 		}
-		if r := dxPulseRegionForLocator(ev.remote4); r != "" && r != dxPulseRegionUnknown {
+		if r := region.FromLocator(ev.remote4); r != "" && r != region.Unknown {
 			acc.regionBins[string(r)]++
 		}
 	}
@@ -868,7 +880,7 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 		var baselineActivityBySlot []float64
 		var baselineSlotUsedByCluster []bool
 		if st == nil {
-			baselineActivity, clusterBaselineUsed = baselineActivityForBand(aggGlobalBuckets, aggClusterBuckets, operatorCluster, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM)
+			baselineActivity, _ = baselineActivityForBand(aggGlobalBuckets, aggClusterBuckets, operatorCluster, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM)
 			baselineSupport = baselineSupportForBand(aggGlobalBuckets, aggClusterBuckets, operatorCluster, band, resp.CurrentSlotOfDay)
 			q25, q75, clusterBaselineUsed, quantileOK = baselineScoreQuantilesForBand(aggGlobalBuckets, aggClusterBuckets, operatorCluster, band, resp.CurrentSlotOfDay)
 			baselineActivityBySlot, baselineSlotUsedByCluster = baselineActivityForBandAllSlots(aggGlobalBuckets, aggClusterBuckets, operatorCluster, band, resp.BaselineHistoryM)
@@ -1762,6 +1774,15 @@ func baselineSupportForBand(global, clusterBuckets map[string]*baselineBucket, o
 func utcSlotOfDay(ts int64) int {
 	t := time.Unix(ts, 0).UTC()
 	return t.Hour()*2 + t.Minute()/30
+}
+
+// utcDayIndex floors a unix timestamp to a day number (negative-safe).
+func utcDayIndex(ts int64) int64 {
+	const secPerDay = int64(24 * 60 * 60)
+	if ts >= 0 {
+		return ts / secPerDay
+	}
+	return (ts - (secPerDay - 1)) / secPerDay
 }
 
 // unknownSource4 is the sentinel for a missing/short source locator. Used by

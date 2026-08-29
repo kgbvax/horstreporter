@@ -52,17 +52,6 @@ func LocatorToLatLng(locator string) (float64, float64) {
 	return lat, lng
 }
 
-// LocatorSquareXY maps a 4+ char locator to integer grid-square coordinates.
-func LocatorSquareXY(locator string) (x, y int, ok bool) {
-	if !IsLocator(locator) {
-		return 0, 0, false
-	}
-	loc := strings.ToUpper(locator[:4])
-	x = int(loc[0]-'A')*10 + int(loc[2]-'0')
-	y = int(loc[1]-'A')*10 + int(loc[3]-'0')
-	return x, y, true
-}
-
 // SquareXYToLocator converts grid-square coordinates back to a 4-char locator.
 func SquareXYToLocator(x, y int) string {
 	return string([]byte{byte('A' + x/10), byte('A' + y/10), byte('0' + x%10), byte('0' + y%10)})
@@ -141,24 +130,6 @@ func normalizeLon(lon float64) float64 {
 		lon -= 360
 	}
 	return lon
-}
-
-// GetSurroundingSquares returns the target square and its 8 neighbours.
-func GetSurroundingSquares(locator string) []string {
-	cx, cy, ok := LocatorSquareXY(locator)
-	if !ok {
-		return []string{locator}
-	}
-	var res []string
-	for dx := -1; dx <= 1; dx++ {
-		for dy := -1; dy <= 1; dy++ {
-			nx, ny := cx+dx, cy+dy
-			if nx >= 0 && nx < 180 && ny >= 0 && ny < 180 {
-				res = append(res, SquareXYToLocator(nx, ny))
-			}
-		}
-	}
-	return res
 }
 
 // LatLngToLocator4 converts a lat/lon pair to a 4-character Maidenhead square.

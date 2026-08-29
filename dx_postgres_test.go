@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 	"time"
+
+	"horstreporter/internal/region"
 )
 
 func TestDxPulseRegionBaselineKeysForSpot(t *testing.T) {
@@ -26,10 +28,10 @@ func TestDxPulseRegionBaselineKeysForSpot(t *testing.T) {
 			if key.DayIndex != utcDayIndex(ts) {
 				t.Fatalf("expected day index %d, got %d", utcDayIndex(ts), key.DayIndex)
 			}
-			if key.TargetGrid4 == "FN31" && key.Region == string(dxPulseRegionEU) {
+			if key.TargetGrid4 == "FN31" && key.Region == string(region.EU) {
 				foundFn31EU = true
 			}
-			if key.TargetGrid4 == "JO32" && key.Region == string(dxPulseRegionNA) {
+			if key.TargetGrid4 == "JO32" && key.Region == string(region.NA) {
 				foundJo32NA = true
 			}
 		}
@@ -43,7 +45,7 @@ func TestDxPulseRegionBaselineKeysForSpot(t *testing.T) {
 		if len(keys) != 1 {
 			t.Fatalf("expected 1 deduplicated key, got %d: %+v", len(keys), keys)
 		}
-		if keys[0].TargetGrid4 != "JO32" || keys[0].Region != string(dxPulseRegionEU) {
+		if keys[0].TargetGrid4 != "JO32" || keys[0].Region != string(region.EU) {
 			t.Fatalf("unexpected deduplicated key: %+v", keys[0])
 		}
 	})

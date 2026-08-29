@@ -69,9 +69,13 @@ const graylineOverlayCache = {
 let lightTileLayer = null;
 let darkTileLayer = null;
 
+// CARTO basemaps require an API key (free tier, registered for this domain;
+// browser-side keys are public by design — see carto.com/basemaps/apikey).
+const CARTO_BASEMAP_KEY = 'cb1_2ido_1_ddfcebbc104568d5e020fd32';
+
 function getLightTileLayer() {
     if (!lightTileLayer) {
-        lightTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        lightTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png?key=' + CARTO_BASEMAP_KEY, {
             maxZoom: 18,
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
         });
@@ -81,7 +85,7 @@ function getLightTileLayer() {
 
 function getDarkTileLayer() {
     if (!darkTileLayer) {
-        darkTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        darkTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=' + CARTO_BASEMAP_KEY, {
             maxZoom: 18,
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
         });

@@ -289,63 +289,6 @@ func drapTextGet(client *http.Client, url string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(res.Body, 1<<20))
 }
 
-// fetchSWPCJsonSeries parses the NOAA SWPC JSON table format: first row is a
-// header, each subsequent row is []string. It returns the most recent rows (one
-// per distinct time tag) capped to avoid storing stale history on first fetch.
-func fetchSWPCJsonSeries(client *http.Client, url, seriesName, valueCol string, parse func(string) (float64, bool)) ([]proplabSWRow, error) {
-	body, err := httpGet(client, url)
-	if err != nil {
-		return nil, err
-	}
-	var table [][]string
-	if err := json.Unmarshal(body, &table); err != nil {
-		return nil, err
-	}
-	if len(table) < 2 {
-		return nil, fmt.Errorf("empty table")
-	}
-	header := table[0]
-	colIdx := -1
-	timeIdx := -1
-	for i, h := range header {
-		switch strings.ToLower(h) {
-		case strings.ToLower(valueCol):
-			colIdx = i
-		case "time_tag":
-			timeIdx = i
-		}
-	}
-	if colIdx < 0 {
-		return nil, fmt.Errorf("value column %q not found", valueCol)
-	}
-	if timeIdx < 0 {
-		return nil, fmt.Errorf("time_tag column not found")
-	}
-
-	rows := make([]proplabSWRow, 0, len(table)-1)
-	seen := make(map[int64]bool)
-	for i := len(table) - 1; i > 0; i-- {
-		r := table[i]
-		if len(r) <= colIdx || len(r) <= timeIdx {
-			continue
-		}
-		ts, ok := parseSWPCTime(r[timeIdx])
-		if !ok || seen[ts] {
-			continue
-		}
-		seen[ts] = true
-		v, ok := parse(r[colIdx])
-		if !ok {
-			continue
-		}
-		rows = append(rows, proplabSWRow{Series: seriesName, ObsTime: ts, Value: v})
-		if len(rows) >= 10 {
-			break
-		}
-	}
-	return rows, nil
-}
-
 func httpGet(client *http.Client, url string) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -427,25 +370,4 @@ func parseDailySolarIndicesF107(text string) (float64, int64, bool) {
 		return 0, 0, false
 	}
 	return bestFlux, bestTime, true
-}
-
-// xrayClassFromFlux converts GOES X-ray flux in W/m^2 to a class string like "M5.2".
-func xrayClassFromFlux(flux float64) string {
-	if flux <= 0 {
-		return ""
-	}
-	// NOAA classes: A < 1e-7, B 1e-7..1e-6, C 1e-6..1e-5, M 1e-5..1e-4, X >= 1e-4.
-	// The magnitude within a class is flux / class_floor.
-	switch {
-	case flux < 1e-7:
-		return fmt.Sprintf("A%.1f", flux/1e-8)
-	case flux < 1e-6:
-		return fmt.Sprintf("B%.1f", flux/1e-7)
-	case flux < 1e-5:
-		return fmt.Sprintf("C%.1f", flux/1e-6)
-	case flux < 1e-4:
-		return fmt.Sprintf("M%.1f", flux/1e-5)
-	default:
-		return fmt.Sprintf("X%.1f", flux/1e-4)
-	}
 }

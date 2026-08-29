@@ -61,15 +61,47 @@ function applyBandChange() {
     refreshBandPills();
 }
 
-// Re-connect the live stream when band/SNR filters change, so the server can
-// start sending only the spots that match the new filter. Mirrors the
-// surroundings-changed restart pattern.
+// Returns true if the current control settings (enabled bands + SNR filter)
+// differ from what the active SSE connection is already fetching. When they
+// match, a filter change can be handled purely client-side without discarding
+// data or hitting the server.
+function streamFilterNeedsReconnect() {
+    const enabled = getEnabledBands();
+    const minSnrMode = getMinSnrMode();
+    const ssbMinDb = minSnrMode === 'ssb' ? (document.getElementById('ssb-min-db')?.value || '0') : null;
+    const cwMinDb = minSnrMode === 'cw' ? (document.getElementById('cw-min-db')?.value || '-15') : null;
+    const current = state.streamedFilter;
+    if (!current) return true;
+    for (const band of enabled) {
+        if (!current.bands.has(band)) return true;
+    }
+    if (minSnrMode !== current.minSnrMode) return true;
+    if (ssbMinDb !== current.ssbMinDb) return true;
+    if (cwMinDb !== current.cwMinDb) return true;
+    return false;
+}
+
+// Re-connect the live stream when band/SNR filters change ONLY if the new
+// filter requires data we aren't already receiving. Disabling bands is a
+// client-side render filter; enabling a previously-unseen band or changing the
+// SNR threshold restarts the stream but preserves existing spots so the map
+// never flashes empty.
 function restartStreamIfSubscribed() {
     const btnSubmit = document.getElementById('btn-submit');
-    if (btnSubmit && isStreaming(btnSubmit)) {
-        setSubmitMode(btnSubmit, 'go');
-        document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    if (!btnSubmit || !isStreaming(btnSubmit)) return;
+
+    if (!streamFilterNeedsReconnect()) {
+        // Server already sends everything matching the current filter; just
+        // re-apply it client-side.
+        updateBandLab({ force: true });
+        updateWsprMatrix();
+        scheduleRender();
+        return;
     }
+
+    // Filter changed in a way the server needs to know about. Restart while
+    // keeping current data visible.
+    startLiveStream(true);
 }
 
 function stopBandCycle() {
@@ -1506,6 +1538,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 document.getElementById('qth')?.addEventListener('input', () => {
+    state.qth = document.getElementById('qth')?.value?.trim()?.toUpperCase() || '';
     syncProjectionCenterToActiveQth();
 });
 document.getElementById('cycle-time')?.addEventListener('input', (e) => {
@@ -1759,43 +1792,10 @@ document.getElementById('qth')?.addEventListener('keydown', (e) => {
     }
 });
 
-document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (!map) return;
-
-    const btnSubmit = document.getElementById('btn-submit');
-
-    if (btnSubmit && isStreaming(btnSubmit)) {
-        if (state.eventSource) {
-            state.eventSource.close();
-            state.eventSource = null;
-        }
-        if (state.renderInterval) {
-            clearInterval(state.renderInterval);
-            state.renderInterval = null;
-        }
-        state.liveSpots = [];
-        if (state.heatLayer) {
-            map.removeLayer(state.heatLayer);
-            state.heatLayer = null;
-        }
-        clearDxClusterMarkers();
-        clearWsprMarkers();
-        resetRenderFingerprint();
-        if (state.qthLayer) {
-            map.removeLayer(state.qthLayer);
-            state.qthLayer = null;
-        }
-
-        setSubmitMode(btnSubmit, 'go');
-        const status = document.getElementById('stream-status');
-        if (status) status.innerHTML = 'Status: Not subscribed';
-        setFaviconColor('#6c757d');
-        updateBandLab({ force: true });
-    updateWsprMatrix();
-        return;
-    }
-
+// Start (or restart) the live SSE stream. When preserveData is true, existing
+// spots and overlays are kept on screen while the new connection's history dump
+// is merged in, so band changes never create an empty-map flash.
+function startLiveStream(preserveData = false) {
     const qth = document.getElementById('qth')?.value.trim().toUpperCase() || '';
     const minutes = document.getElementById('minutes')?.value || 15;
 
@@ -1804,25 +1804,28 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         return;
     }
 
+    state.qth = qth;
     localStorage.setItem('qth', qth);
     localStorage.setItem('minutes', minutes);
 
-    console.log(`Starting live stream for qth: '${qth}'`);
+    console.log(`Starting live stream for qth: '${qth}'${preserveData ? ' (preserving data)' : ''}`);
 
     if (state.eventSource) state.eventSource.close();
     if (state.renderInterval) clearInterval(state.renderInterval);
 
-    state.liveSpots = [];
-    if (state.heatLayer) {
-        map.removeLayer(state.heatLayer);
-        state.heatLayer = null;
-    }
-    clearDxClusterMarkers();
-    resetRenderFingerprint();
+    if (!preserveData) {
+        state.liveSpots = [];
+        if (state.heatLayer) {
+            map.removeLayer(state.heatLayer);
+            state.heatLayer = null;
+        }
+        clearDxClusterMarkers();
+        resetRenderFingerprint();
 
-    if (state.qthLayer) {
-        map.removeLayer(state.qthLayer);
-        state.qthLayer = null;
+        if (state.qthLayer) {
+            map.removeLayer(state.qthLayer);
+            state.qthLayer = null;
+        }
     }
 
     const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(qth);
@@ -1866,15 +1869,29 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
     if (enabledBands.length) {
         params.append('enabled_bands', enabledBands.join(','));
     }
+
     const minSnrMode = getMinSnrMode();
+    let ssbMinDb = null;
+    let cwMinDb = null;
     if (minSnrMode && minSnrMode !== 'none') {
         params.append('min_snr_mode', minSnrMode);
         if (minSnrMode === 'ssb') {
-            params.append('ssb_min_db', document.getElementById('ssb-min-db')?.value || '0');
+            ssbMinDb = document.getElementById('ssb-min-db')?.value || '0';
+            params.append('ssb_min_db', ssbMinDb);
         } else if (minSnrMode === 'cw') {
-            params.append('cw_min_db', document.getElementById('cw-min-db')?.value || '-15');
+            cwMinDb = document.getElementById('cw-min-db')?.value || '-15';
+            params.append('cw_min_db', cwMinDb);
         }
     }
+    // Remember the exact filter this connection is fetching, so later band/SNR
+    // toggles can be handled client-side when the server already sends everything
+    // we need.
+    state.streamedFilter = {
+        bands: new Set(enabledBands),
+        minSnrMode,
+        ssbMinDb,
+        cwMinDb,
+    };
 
     const statusEl = document.getElementById('stream-status');
     const currentSub = `QTH: ${qth}`;
@@ -1883,6 +1900,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
     let lastStatusUpdate = 0;
     statusEl.innerHTML = `Status: Connecting to ${currentSub}...`;
 
+    const btnSubmit = document.getElementById('btn-submit');
     if (btnSubmit) setSubmitMode(btnSubmit, 'stop');
 
     function formatBytes(bytes) {
@@ -1899,22 +1917,38 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         if (showBtn) showBtn.style.display = 'block';
     }
 
+    // When preserving data, seed a deduplication set from the existing spots so
+    // the new connection's history dump doesn't create stacked duplicate markers.
+    function spotKey(spot) {
+        const band = String(spot.band || '').toLowerCase();
+        const src = String(spot.sourceType || '').toLowerCase();
+        const sender = String(spot.sender || '').toUpperCase();
+        const receiver = String(spot.receiver || '').toUpperCase();
+        // Bucket age to ~5 s to tolerate timestamp drift between history dumps.
+        // Prefer the server-stamped receive age if already stamped; the prune
+        // mutates ageSeconds, so __recvAge is the stable value.
+        const age = spot.__recvAge ?? spot.ageSeconds ?? 0;
+        const ageBucket = Math.floor(age / 5);
+        return `${src}|${band}|${sender}|${receiver}|${ageBucket}|${spot.snr ?? ''}`;
+    }
+    const seenKeys = preserveData ? new Set(state.liveSpots.map(spotKey)) : null;
+
     state.eventSource = new EventSource(`/api/stream?${params.toString()}`);
     setFaviconColor('#ffa500'); // Orange for connecting/waiting
     hotBandIndicator?.refresh();
     horstKevin?.refresh();
-    
+
     let historyLoading = true;
 
     state.eventSource.onopen = () => {
-        console.log("Connected to live MQTT stream");
+        console.log(`Connected to live MQTT stream${preserveData ? ' (preserving data)' : ''}`);
         // On auto-reconnect EventSource re-sends a history dump before live
         // frames. Reset the loading flag so that dump is also suppressed from
         // rendering (and the 5s prune is gated) until history_end fires —
         // otherwise a reconnect paints the dump in chunks mid-stream. Harmless
         // on the initial connect (historyLoading is already true).
         historyLoading = true;
-        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: orange;">(Fetching history...)</span> <div class="spinner"></div>`;
+        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: orange;">${preserveData ? '(Updating band data...)' : '(Fetching history...)'}</span> <div class="spinner"></div>`;
         setFaviconColor('#ffa500'); // Orange until data arrives
     };
 
@@ -1926,6 +1960,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
             state.renderInterval = null;
         }
         historyLoading = false;
+        state.streamedFilter = null;
         statusEl.innerHTML = `Status: <span style="color: red;">${e.data}</span>`;
         setFaviconColor('#dc3545'); // Red for error
         if (btnSubmit) setSubmitMode(btnSubmit, 'go');
@@ -1954,6 +1989,13 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
             console.warn('Malformed spot frame, skipping:', err, e.data);
             return;
         }
+
+        if (seenKeys) {
+            const key = spotKey(spot);
+            if (seenKeys.has(key)) return;
+            seenKeys.add(key);
+        }
+
         // Cap liveSpots: drop oldest-arrived in a batch when over the limit so a
         // hot-band burst between 5s prunes can't grow memory unbounded.
         if (state.liveSpots.length >= MAX_LIVE_SPOTS) {
@@ -1972,7 +2014,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         // Throttle DOM text updates to max ~4 times a second
         const now = Date.now();
         if (now - lastStatusUpdate > 250) {
-            if (historyLoading) {
+            if (historyLoading && !preserveData) {
                 statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: orange;">Fetching history (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span> <div class="spinner"></div>`;
             } else {
                 statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span>`;
@@ -1980,7 +2022,9 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
             lastStatusUpdate = now;
         }
 
-        if (!historyLoading) {
+        // While preserving data we keep the map live (no empty flash); for fresh
+        // starts we still suppress the chunky history dump until history_end.
+        if (!historyLoading || preserveData) {
             scheduleRender();
         }
     };
@@ -2001,6 +2045,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
                 state.renderInterval = null;
             }
             historyLoading = false;
+            state.streamedFilter = null;
             statusEl.innerHTML = `Status: <span style="color: red;">Connection error / Disconnected</span>`;
             setFaviconColor('#dc3545'); // Red for error
             if (btnSubmit) setSubmitMode(btnSubmit, 'go');
@@ -2014,12 +2059,10 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 
     state.renderInterval = setInterval(() => {
         if (state.softPaused) return;
-        // Don't prune/age during the history dump: the dump delivers many spots
-        // old→new over (potentially) multiple 5s ticks, and pruning mid-dump
-        // both races the in-flight frames and paints a half-loaded grid.
-        // historyLoading is reset to true on reconnect (onopen) for the same
-        // reason, and cleared at history_end.
-        if (historyLoading) return;
+        // Prune/age continuously when preserving data so existing spots don't
+        // freeze on screen while the new band's history loads. For fresh starts,
+        // keep suppressing during the history dump to avoid a half-loaded grid.
+        if (historyLoading && !preserveData) return;
 
         if (state.liveSpots.length > 0) {
             // Read the live Max Spot Age slider value rather than the `minutes`
@@ -2033,6 +2076,47 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
             scheduleRender();
         }
     }, 5000);
+}
+
+document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!map) return;
+
+    const btnSubmit = document.getElementById('btn-submit');
+
+    if (btnSubmit && isStreaming(btnSubmit)) {
+        if (state.eventSource) {
+            state.eventSource.close();
+            state.eventSource = null;
+        }
+        if (state.renderInterval) {
+            clearInterval(state.renderInterval);
+            state.renderInterval = null;
+        }
+        state.liveSpots = [];
+        if (state.heatLayer) {
+            map.removeLayer(state.heatLayer);
+            state.heatLayer = null;
+        }
+        clearDxClusterMarkers();
+        clearWsprMarkers();
+        resetRenderFingerprint();
+        if (state.qthLayer) {
+            map.removeLayer(state.qthLayer);
+            state.qthLayer = null;
+        }
+        state.streamedFilter = null;
+
+        setSubmitMode(btnSubmit, 'go');
+        const status = document.getElementById('stream-status');
+        if (status) status.innerHTML = 'Status: Not subscribed';
+        setFaviconColor('#6c757d');
+        updateBandLab({ force: true });
+        updateWsprMatrix();
+        return;
+    }
+
+    startLiveStream(false);
 });
 
 document.addEventListener('visibilitychange', syncSoftPauseWithVisibility);

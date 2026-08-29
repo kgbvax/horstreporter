@@ -34,18 +34,6 @@ func TestLocatorClusterAnchor(t *testing.T) {
 	}
 }
 
-// TestGetSquaresInCluster returns 36 squares for a valid locator.
-func TestGetSquaresInCluster(t *testing.T) {
-	squares := getSquaresInCluster("JO62")
-	if len(squares) != 36 {
-		t.Fatalf("getSquaresInCluster(JO62) = %d squares, want 36", len(squares))
-	}
-	// Non-locator passes through.
-	if got := getSquaresInCluster("W1AW"); len(got) != 1 || got[0] != "W1AW" {
-		t.Errorf("getSquaresInCluster(W1AW) = %v, want [W1AW]", got)
-	}
-}
-
 // TestLegacyV5SnapshotLoadCollapsesSource4 writes a synthetic v5 snapshot
 // with source4 in the key, then loads it and checks that the global buckets
 // merge correctly. (The per-call and 11-region tiers were removed in v8;
