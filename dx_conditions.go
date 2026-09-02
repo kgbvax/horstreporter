@@ -911,10 +911,17 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 		}
 
 		// Prefer the Postgres aggregate; fall back to in-memory binning from
-		// `events` when the map is unavailable (no store, query failed, or band
-		// had no matched rows in the window).
+		// `events` when the map has no series for this band (no store, query
+		// failed/returned nothing, or the band's only spots are newer than the
+		// last raw-spot flush). The ring snapshot is taken lazily here (once)
+		// so the common all-bands-present path never pays the ~ring-size copy.
 		activityByBin := activityByBinMap[band]
 		if activityByBin == nil {
+			if st != nil && events == nil {
+				e.mu.RLock()
+				events = e.snapshotEventsLocked()
+				e.mu.RUnlock()
+			}
 			activityByBin = buildBandActivityByBin(events, qthSet, band, cwMinDb, minutes, now)
 		}
 		// Sparkline = the activity series normalised to 0..100 (max-scaling),
@@ -1071,8 +1078,18 @@ func roundFloats2(v []float64) []float64 {
 	return out
 }
 
+// maxPlausibleBaselineSpotsPerMin bounds an honest baseline activity rate (the
+// cluster/global network aggregate per band+slot; observed prod values run
+// 100–1000/min). Rates far above this are corrupt baselines (see
+// maxPlausibleBaselineCount in dx_postgres.go — the historic mergePendingBack
+// double-merge left prod counts around ±1e15) and are treated as missing so
+// they can't pin activityNorm to 0 (positive corruption) or inflate it via
+// the no-baseline fallback (negative corruption).
+const maxPlausibleBaselineSpotsPerMin = 1e6
+
 func activityScoreNorm(spotsPerMin, baselineActivity float64) float64 {
-	if baselineActivity <= 0 {
+	// Missing OR implausible baseline → absolute-rate normalisation.
+	if baselineActivity <= 0 || baselineActivity > maxPlausibleBaselineSpotsPerMin {
 		return clamp01(spotsPerMin / 2.0)
 	}
 	ratio := spotsPerMin / math.Max(0.05, baselineActivity)

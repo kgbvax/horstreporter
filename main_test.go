@@ -974,9 +974,12 @@ func TestSumPairs(t *testing.T) {
 	if got := sumPairs(nil); got != 0 {
 		t.Fatalf("nil → 0, got %d", got)
 	}
-	pairs := []baselinePair{{Count: 10}, {Count: 0}, {Count: 5}, {Count: -3}}
-	if got := sumPairs(pairs); got != 12 {
-		t.Fatalf("sum = %d, want 12", got)
+	// Only plausible pairs count: zero/negative (wrapped by the historic
+	// double-merge corruption) and >maxPlausibleBaselineCount (overflowed)
+	// are skipped, never summed or wrapped.
+	pairs := []baselinePair{{Count: 10}, {Count: 0}, {Count: 5}, {Count: -3}, {Count: 1 << 62}}
+	if got := sumPairs(pairs); got != 15 {
+		t.Fatalf("sum = %d, want 15 (10 + 5, corrupt pairs skipped)", got)
 	}
 }
 
@@ -1546,14 +1549,14 @@ func TestPropIntelIntegration(t *testing.T) {
 			QTH   string   `json:"qth"`
 			Bands []string `json:"bands"`
 			Cells []struct {
-				Band     string `json:"band"`
-				Region   string `json:"region"`
-				SSBOpen  bool   `json:"ssb_open"`
-				CWOpen   bool   `json:"cw_open"`
-				Rising   bool   `json:"rising"`
-				FromHere bool   `json:"from_here"`
-				SpotCount int   `json:"spot_count"`
-				Atypical *struct {
+				Band      string `json:"band"`
+				Region    string `json:"region"`
+				SSBOpen   bool   `json:"ssb_open"`
+				CWOpen    bool   `json:"cw_open"`
+				Rising    bool   `json:"rising"`
+				FromHere  bool   `json:"from_here"`
+				SpotCount int    `json:"spot_count"`
+				Atypical  *struct {
 					ZScore     float64 `json:"z_score"`
 					Confidence float64 `json:"confidence"`
 					Flavor     string  `json:"flavor"`
@@ -1729,5 +1732,64 @@ func TestPropIntelStatsAccounting(t *testing.T) {
 	}
 	if got := stats.PropIntel.Errors - origErrs; got != 0 {
 		t.Errorf("stats prop_intel.errors delta = %d, want 0", got)
+	}
+}
+
+func TestSumPairsSkipsImplausible(t *testing.T) {
+	// Corrupt baseline counts (historic mergePendingBack double-merge left
+	// prod rows near ±2^62) must be skipped, not summed or wrapped.
+	mixed := []baselinePair{
+		{DistanceTier: 0, SnrTier: 0, Count: 100},
+		{DistanceTier: 1, SnrTier: 1, Count: 200},
+		{DistanceTier: 4, SnrTier: 3, Count: 1 << 62},    // overflowed
+		{DistanceTier: 2, SnrTier: 2, Count: -(1 << 50)}, // wrapped negative
+	}
+	if got := sumPairs(mixed); got != 300 {
+		t.Fatalf("sumPairs = %d, want 300 (corrupt pairs skipped)", got)
+	}
+}
+
+func TestQuantilesFromPairsSkipsCorrupt(t *testing.T) {
+	// The honest distribution from TestQuantilesFromPairs…
+	honest := []baselinePair{
+		{DistanceTier: 3, SnrTier: 0, Count: 100},
+		{DistanceTier: 2, SnrTier: 0, Count: 100},
+		{DistanceTier: 1, SnrTier: 0, Count: 100},
+		{DistanceTier: 0, SnrTier: 0, Count: 100},
+	}
+	q25, q75, ok := quantilesFromPairs(honest)
+	if !ok || math.Abs(q25-35.0) > 1e-6 || math.Abs(q75-57.5) > 1e-6 {
+		t.Fatalf("honest pairs: q25=%f q75=%f ok=%v, want 35/57.5/true", q25, q75, ok)
+	}
+
+	// …must be unchanged when a corrupt overflowed pair is mixed in: one bad
+	// row may not own the weighted distribution (previously its count made
+	// every honest pair's activityNorm ≈ 0 and its weight dominated q25/q75).
+	withCorrupt := append(append([]baselinePair{}, honest...),
+		baselinePair{DistanceTier: 4, SnrTier: 3, Count: 1 << 62})
+	q25c, q75c, okc := quantilesFromPairs(withCorrupt)
+	if !okc || math.Abs(q25c-q25) > 1e-6 || math.Abs(q75c-q75) > 1e-6 {
+		t.Fatalf("corrupt pair changed quantiles: q25=%f q75=%f ok=%v (want unchanged 35/57.5/true)", q25c, q75c, okc)
+	}
+
+	// Only corrupt pairs → no usable quantiles.
+	if _, _, ok := quantilesFromPairs([]baselinePair{{DistanceTier: 4, SnrTier: 3, Count: 1 << 62}}); ok {
+		t.Fatalf("all-corrupt pairs → ok=true, want false")
+	}
+}
+
+func TestActivityScoreNormImplausibleBaseline(t *testing.T) {
+	// Sane baseline → relative normalisation.
+	if got := activityScoreNorm(3, 6); got != 0.25 {
+		t.Fatalf("activityScoreNorm(3, 6) = %f, want 0.25", got)
+	}
+	// Missing, negative-wrapped, and overflowed baselines (corrupt
+	// dx_baseline_cluster rows) all fall back to absolute-rate normalisation —
+	// the old code pinned positive-corrupt slots to 0 activity credit and
+	// let negative-corrupt slots inflate it via the <=0 branch.
+	for _, base := range []float64{0, -3.3e15, 1.9e15, 1e6 + 1} {
+		if got := activityScoreNorm(3, base); got != clamp01(3.0/2.0) {
+			t.Fatalf("activityScoreNorm(3, %g) = %f, want clamp01(1.5) = 1", base, got)
+		}
 	}
 }

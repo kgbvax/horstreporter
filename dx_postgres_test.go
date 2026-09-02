@@ -59,3 +59,46 @@ func TestDxPulseRegionBaselineKeysForSpot(t *testing.T) {
 		}
 	})
 }
+
+func TestMergePendingBackMergesOnce(t *testing.T) {
+	// Regression: mergePendingBack used to iterate the cluster map twice,
+	// doubling pending cluster deltas on every failed flush. Compounding
+	// across a PG outage (2s flush ticker) this grew counts to ~2^62 before
+	// int64 wrap — the corrupted dx_baseline_cluster rows seen on prod.
+	s := &dxPostgresStore{
+		pendingGlobal:  make(map[baselineGlobalKey]baselineDelta),
+		pendingRegion:  make(map[dxPulseRegionBaselineDailyKey]int64),
+		pendingCluster: make(map[clusterBaselineKey]baselineDelta),
+	}
+	gk := baselineGlobalKey{Band: "40m", SlotOfDay: 39}
+	ck := clusterBaselineKey{ClusterAnchor: "JN68", Band: "40m", SlotOfDay: 39}
+	rk := dxPulseRegionBaselineDailyKey{TargetGrid4: "JO62", Band: "40m", Region: "EU"}
+
+	s.mergePendingBack(
+		map[baselineGlobalKey]baselineDelta{gk: {Count: 3}},
+		map[dxPulseRegionBaselineDailyKey]int64{rk: 5},
+		map[clusterBaselineKey]baselineDelta{ck: {Count: 7}},
+	)
+	if got := s.pendingCluster[ck].Count; got != 7 {
+		t.Fatalf("cluster delta merged more than once: count=%d, want 7", got)
+	}
+	if got := s.pendingGlobal[gk].Count; got != 3 {
+		t.Fatalf("global delta = %d, want 3", got)
+	}
+	if got := s.pendingRegion[rk]; got != 5 {
+		t.Fatalf("region delta = %d, want 5", got)
+	}
+	if s.pendingCount != 3 {
+		t.Fatalf("pendingCount = %d, want 3 (one per requeued entry)", s.pendingCount)
+	}
+
+	// A second failed flush requeues the same deltas again (once).
+	s.mergePendingBack(
+		map[baselineGlobalKey]baselineDelta{gk: {Count: 3}},
+		map[dxPulseRegionBaselineDailyKey]int64{rk: 5},
+		map[clusterBaselineKey]baselineDelta{ck: {Count: 7}},
+	)
+	if got := s.pendingCluster[ck].Count; got != 14 {
+		t.Fatalf("cluster delta after two requeues = %d, want 14", got)
+	}
+}

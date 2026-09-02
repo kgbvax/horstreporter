@@ -281,12 +281,6 @@ func (s *dxPostgresStore) mergePendingBack(global map[baselineGlobalKey]baseline
 		s.pendingRegion[k] += v
 		s.pendingCount++
 	}
-	for k, d := range cluster {
-		e := s.pendingCluster[k]
-		e.Count += d.Count
-		s.pendingCluster[k] = e
-		s.pendingCount++
-	}
 }
 
 func (s *dxPostgresStore) initSchema(ctx context.Context) error {
@@ -407,6 +401,18 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_spot_time ON dx_raw_spots (spot_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_band_spot_time ON dx_raw_spots (band, spot_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_source_type_spot_time ON dx_raw_spots (source_type, spot_time);`,
+		// Locator-prefix indexes for activityByBinForTargets /
+		// recent24hBandSlotCountsForTokens: `locator LIKE 'PREFIX%'` is
+		// btree-sargable under text_pattern_ops (works regardless of database
+		// collation), turning the target-filtered chart/rose queries from
+		// full-window filter scans (6s ctx timeout at ≥90-min windows on the
+		// prod box) into BitmapOr index scans. On a large existing table run
+		// scripts/migrate_add_locator_prefix_indexes.sql (CONCURRENTLY, no
+		// ingest lock) BEFORE deploying a binary that includes this — the IF
+		// NOT EXISTS here then no-ops; otherwise startup builds them serially,
+		// blocking raw-spot inserts for the build's duration.
+		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_sender_loc_time ON dx_raw_spots (sender_locator text_pattern_ops, spot_time);`,
+		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_receiver_loc_time ON dx_raw_spots (receiver_locator text_pattern_ops, spot_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_spot_geom ON dx_raw_spots USING GIST (spot_geom);`,
 		`CREATE TABLE IF NOT EXISTS dx_region_baseline_daily (
 			target_grid4 TEXT NOT NULL,
@@ -1079,11 +1085,34 @@ func scanBandSlotPairs(rows pgx.Rows) (map[bandSlotKey][]baselinePair, error) {
 	return idx, rows.Err()
 }
 
+// maxPlausibleBaselineCount bounds an honest per-(distance_tier, snr_tier)
+// baseline count. Counts are per-spot increments (≤2 per spot, one per end) on
+// a 30-min slot, so even a wildly generous 1e6 spots/min feed stays 4+ orders
+// below this over a year. The historic mergePendingBack double-merge bug
+// inflated dx_baseline_cluster counts to ~2^62 before int64 wrap (some wrapped
+// negative); read sites treat anything outside this bound as corrupt data and
+// skip it rather than folding it into scores/quantiles. Paired with the
+// prod-side canary: rows with count < 0 OR count > maxPlausibleBaselineCount
+// should be investigated, not trusted.
+const maxPlausibleBaselineCount = int64(1) << 30 // ~1.07e9
+
+// plausibleBaselinePair reports whether one baseline pair's count is sane
+// enough to feed scoring. Corrupt pairs (overflowed or wrapped counts) are
+// excluded so a single bad row can't own activity/support/quantiles.
+func plausibleBaselinePair(p baselinePair) bool {
+	return p.Count > 0 && p.Count <= maxPlausibleBaselineCount
+}
+
 // sumPairs returns the total count across pairs — the numerator for both
-// activity (spots/min after normalisation) and support.
+// activity (spots/min after normalisation) and support. Implausible pairs
+// (see maxPlausibleBaselineCount) are skipped so corrupt rows can't swamp or
+// wrap the sum.
 func sumPairs(pairs []baselinePair) int64 {
 	var sum int64
 	for _, p := range pairs {
+		if !plausibleBaselinePair(p) {
+			continue
+		}
 		sum += p.Count
 	}
 	return sum
@@ -1105,14 +1134,16 @@ func pairsForBandSlot(clusterIdx, globalIdx map[bandSlotKey][]baselinePair, band
 // per-(distance_tier, snr_tier) pairs. Lifted verbatim from the old
 // baselineQuantilesForBand so the collapsed path produces identical values.
 // Returns ok=false when there are no pairs or total support is below
-// dxMinBaselineQuantileSupport.
+// dxMinBaselineQuantileSupport. Implausible pairs (see maxPlausibleBaselineCount)
+// are excluded — one corrupt row would otherwise collapse the whole weighted
+// distribution onto its own score and own q25/q75.
 func quantilesFromPairs(pairs []baselinePair) (q25, q75 float64, ok bool) {
 	if len(pairs) == 0 {
 		return 0, 0, false
 	}
 	maxCount := int64(0)
 	for _, p := range pairs {
-		if p.Count > maxCount {
+		if plausibleBaselinePair(p) && p.Count > maxCount {
 			maxCount = p.Count
 		}
 	}
@@ -1124,7 +1155,7 @@ func quantilesFromPairs(pairs []baselinePair) (q25, q75 float64, ok bool) {
 	items := make([]item, 0, len(pairs))
 	var totalWeight int64
 	for _, p := range pairs {
-		if p.Count <= 0 {
+		if !plausibleBaselinePair(p) {
 			continue
 		}
 		distanceNorm := clamp01(float64(p.DistanceTier) / 4.0)
@@ -1187,7 +1218,7 @@ func (s *dxPostgresStore) baselineP90DistanceForBand(operatorCluster, band strin
 			return 0, false, err
 		}
 		for _, p := range clusterPairs {
-			if p.DistanceTier < 0 || p.DistanceTier > 4 || p.Count <= 0 {
+			if p.DistanceTier < 0 || p.DistanceTier > 4 || !plausibleBaselinePair(p) {
 				continue
 			}
 			tiers[p.DistanceTier] += p.Count
@@ -1200,7 +1231,7 @@ func (s *dxPostgresStore) baselineP90DistanceForBand(operatorCluster, band strin
 			return 0, false, err
 		}
 		for _, p := range globalPairs {
-			if p.DistanceTier < 0 || p.DistanceTier > 4 || p.Count <= 0 {
+			if p.DistanceTier < 0 || p.DistanceTier > 4 || !plausibleBaselinePair(p) {
 				continue
 			}
 			tiers[p.DistanceTier] += p.Count
@@ -1234,15 +1265,19 @@ func (s *dxPostgresStore) clusterBandPairs(ctx context.Context, clusterAnchor, b
 
 // activityByBinForTargets returns raw spots/min per (band, time-bin) over the
 // selected `minutes` window, target-filtered the same way the live stream
-// matches (callsign or 4-char locator prefix). This is the Postgres-backed
-// source for the Band Stats "Reports over time" chart bars.
+// matches (callsign or locator prefix — a 6-char target like JO62QM matches
+// locators extending it, mirroring strings.HasPrefix in extractMatchedBandEvent).
+// This is the Postgres-backed source for the Band Stats "Reports over time"
+// chart bars.
 //
 // Unlike recentEvents (which materializes every raw row in the window and
 // chokes on a high-volume feed, leaving the in-memory fallback holding only
 // ~10 min), this aggregates server-side via GROUP BY band, bin and returns
 // ~12 × #bands rows, so it stays fast and bounded even when dx_raw_spots holds
 // tens of millions of rows. Predicate mirrors recent24hBandSlotCountsForTokens.
-// minutes<=0 or no targets → nil map (caller falls back to in-memory binning).
+// minutes<=0, no targets, or zero matched rows → nil map (caller falls back to
+// in-memory binning; an empty non-nil map would defeat that fallback and
+// render all-zero charts next to non-zero live report counts).
 func (s *dxPostgresStore) activityByBinForTargets(targets []string, cwMinDb, minutes int, now int64) (map[string][]float64, error) {
 	if s == nil || minutes <= 0 || now <= 0 {
 		return nil, nil
@@ -1262,6 +1297,17 @@ func (s *dxPostgresStore) activityByBinForTargets(targets []string, cwMinDb, min
 	}
 	if len(norm) == 0 {
 		return nil, nil
+	}
+	// Locator targets are matched with prefix semantics via LIKE 'target%': a
+	// 4-char target behaves exactly like the old substring(1 for 4) equality,
+	// while longer targets (6-char qth like JO62QM) match locators extending
+	// them — the old substring equality could never match those, starving the
+	// chart for any operator with a 6-char qth. Prefix LIKE is btree-sargable
+	// via the text_pattern_ops indexes on the locator columns, so large
+	// windows don't degrade into full-window filter scans.
+	locatorPats := make([]string, len(norm))
+	for i, t := range norm {
+		locatorPats[i] = t + "%"
 	}
 
 	const bins = 12
@@ -1284,10 +1330,10 @@ func (s *dxPostgresStore) activityByBinForTargets(targets []string, cwMinDb, min
 		  AND signal_report_db >= $5
 		  AND (sender_callsign = ANY($3)
 		    OR receiver_callsign = ANY($3)
-		    OR substring(sender_locator from 1 for 4) = ANY($3)
-		    OR substring(receiver_locator from 1 for 4) = ANY($3))
+		    OR sender_locator LIKE ANY($6)
+		    OR receiver_locator LIKE ANY($6))
 		GROUP BY band, bin
-	`, windowStart, binSec, norm, now, cwMinDb)
+	`, windowStart, binSec, norm, now, cwMinDb, locatorPats)
 	if err != nil {
 		return nil, err
 	}
@@ -1314,7 +1360,17 @@ func (s *dxPostgresStore) activityByBinForTargets(targets []string, cwMinDb, min
 		}
 		series[bin] += float64(count) / binMinutes
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		// Zero matched rows reads as "no data" (nil), not an empty success:
+		// Evaluate treats a non-nil map as authoritative and never snapshots
+		// the in-memory event ring, so an empty map here would starve the
+		// per-band fallback into all-zero chart bins.
+		return nil, nil
+	}
+	return out, nil
 }
 
 func (s *dxPostgresStore) baselineStats(now int64) (int, int, int, error) {
@@ -1538,7 +1594,8 @@ type recent24hBandSlotRow struct {
 
 // recent24hBandSlotCountsForTokens returns spot counts per (band, slot_of_day)
 // for the 24h ending at `now`, restricted to spots whose sender/receiver
-// callsign or 4-char locator prefix matches one of the supplied tokens.
+// callsign or locator prefix matches one of the supplied tokens (a 6-char
+// token matches locators extending it, mirroring the live stream's HasPrefix).
 // Used to populate the target+recent_24h and target+compare paths so the
 // rose has data immediately after a restart (the in-memory event buffer
 // takes hours to accumulate 24h of spots at typical rates).
@@ -1565,6 +1622,13 @@ func (s *dxPostgresStore) recent24hBandSlotCountsForTokens(tokens []string, now 
 	if len(norm) == 0 {
 		return nil, nil
 	}
+	// Prefix LIKE, matching activityByBinForTargets (see note there): keeps
+	// 4-char tokens identical to the old substring equality while letting
+	// longer tokens match locators extending them.
+	locatorPats := make([]string, len(norm))
+	for i, t := range norm {
+		locatorPats[i] = t + "%"
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	start := now - 24*60*60
@@ -1576,10 +1640,10 @@ func (s *dxPostgresStore) recent24hBandSlotCountsForTokens(tokens []string, now 
 		WHERE spot_time BETWEEN $1 AND $2
 		  AND (sender_callsign = ANY($3)
 		    OR receiver_callsign = ANY($3)
-		    OR substring(sender_locator from 1 for 4) = ANY($3)
-		    OR substring(receiver_locator from 1 for 4) = ANY($3))
+		    OR sender_locator LIKE ANY($4)
+		    OR receiver_locator LIKE ANY($4))
 		GROUP BY band, slot_of_day
-	`, start, now, norm)
+	`, start, now, norm, locatorPats)
 	if err != nil {
 		return nil, err
 	}
