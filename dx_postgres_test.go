@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -100,5 +101,97 @@ func TestMergePendingBackMergesOnce(t *testing.T) {
 	)
 	if got := s.pendingCluster[ck].Count; got != 14 {
 		t.Fatalf("cluster delta after two requeues = %d, want 14", got)
+	}
+}
+
+func TestSplitTargetTokens(t *testing.T) {
+	locators, calls := splitTargetTokens([]string{
+		"JO62", "JO62QM", "JO62QM31", "DL1ABC", "K1ABC", "JO_2", "%", "", "DL",
+	})
+	wantLoc := map[string]bool{"JO62": true, "JO62QM": true, "JO62QM31": true}
+	if len(locators) != len(wantLoc) {
+		t.Fatalf("locators = %v, want %v", locators, wantLoc)
+	}
+	for _, l := range locators {
+		if !wantLoc[l] {
+			t.Fatalf("unexpected locator token %q", l)
+		}
+	}
+	wantCalls := map[string]bool{"DL1ABC": true, "K1ABC": true, "JO_2": true, "%": true, "": true, "DL": true}
+	if len(calls) != len(wantCalls) {
+		t.Fatalf("calls = %v, want %v", calls, wantCalls)
+	}
+	for _, c := range calls {
+		if !wantCalls[c] {
+			t.Fatalf("unexpected callsign token %q", c)
+		}
+	}
+}
+
+func TestLocatorPrefixRange(t *testing.T) {
+	// The range [lo, hi) must hold exactly the strings extending the prefix
+	// (HasPrefix semantics) under byte-wise pattern-op ordering.
+	cases := []struct {
+		prefix, lo, hi string
+		in, out        []string
+	}{
+		{prefix: "JO62", lo: "JO62", hi: "JO63",
+			in: []string{"JO62", "JO620", "JO62AB", "JO62QM31"}, out: []string{"JO6", "JO63", "JO63AB"}},
+		{prefix: "JO62QM", lo: "JO62QM", hi: "JO62QN",
+			in: []string{"JO62QM", "JO62QM31", "JO62QMAA"}, out: []string{"JO62", "JO62QL", "JO62QN"}},
+	}
+	for _, c := range cases {
+		lo, hi, ok := locatorPrefixRange(c.prefix)
+		if !ok || lo != c.lo || hi != c.hi {
+			t.Fatalf("locatorPrefixRange(%q) = (%q, %q, %v), want (%q, %q, true)", c.prefix, lo, hi, ok, c.lo, c.hi)
+		}
+		for _, s := range c.in {
+			if !(s >= lo && s < hi) {
+				t.Fatalf("locatorPrefixRange(%q): %q should be in [%q, %q)", c.prefix, s, lo, hi)
+			}
+		}
+		for _, s := range c.out {
+			if s >= lo && s < hi {
+				t.Fatalf("locatorPrefixRange(%q): %q should NOT be in [%q, %q)", c.prefix, s, lo, hi)
+			}
+		}
+	}
+}
+
+func TestAppendTargetArms(t *testing.T) {
+	// Pure-locator targets → only indexable range arms, no callsign arm (a
+	// non-indexable OR arm would force the planner back to a filter scan).
+	locators, calls := splitTargetTokens([]string{"JO62QM"})
+	if len(calls) != 0 {
+		t.Fatalf("JO62QM should classify as locator, got calls=%v", calls)
+	}
+	arms := make([]string, 0, 2)
+	args := []any{int64(1), int64(2)}
+	arms, args, _ = appendTargetArms(arms, args, len(args)+1, locators, calls)
+	if len(arms) != 1 {
+		t.Fatalf("expected 1 range arm, got %d: %v", len(arms), arms)
+	}
+	if strings.Contains(arms[0], "ANY") {
+		t.Fatalf("locator-only targets must not produce a callsign arm: %v", arms)
+	}
+	if !strings.Contains(arms[0], "~>=~ $3") || !strings.Contains(arms[0], "~<~ $4") {
+		t.Fatalf("range arm should use params $3/$4 (after 2 leading args): %v", arms)
+	}
+	if len(args) != 4 || args[2] != "JO62QM" || args[3] != "JO62QN" {
+		t.Fatalf("args = %v, want [1 2 JO62QM JO62QN]", args)
+	}
+
+	// Mixed targets → range arm + callsign arm with the callsign list last.
+	arms = nil
+	args = []any{int64(1)}
+	arms, args, _ = appendTargetArms(arms, args, len(args)+1, []string{"JO62"}, []string{"DL1ABC"})
+	if len(arms) != 2 {
+		t.Fatalf("expected 2 arms, got %v", arms)
+	}
+	if !strings.Contains(arms[1], "= ANY($4)") {
+		t.Fatalf("callsign arm should use param $4 (after 1 leading arg + 2 range args): %v", arms)
+	}
+	if got, ok := args[3].([]string); !ok || len(got) != 1 || got[0] != "DL1ABC" {
+		t.Fatalf("callsign arg = %v, want [DL1ABC]", args[3])
 	}
 }

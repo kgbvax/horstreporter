@@ -743,8 +743,9 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 	// time series per band for the chart bars AND the trend/sparkline. Built
 	// once for all bands via one bounded GROUP BY query so a high-volume
 	// dx_raw_spots table can't truncate it (the old recentEvents row-
-	// materialisation path did). nil when there's no store or the query fails;
-	// the per-band loop then falls back to in-memory binning from `events`.
+	// materialisation path did). nil when there's no store, the query fails,
+	// or zero rows matched; the per-band loop then lazily snapshots the
+	// in-memory event ring and falls back to in-memory binning (see the loop).
 	var activityByBinMap map[string][]float64
 	if st != nil {
 		if m, err := st.activityByBinForTargets(qthSet, cwMinDb, minutes, now); err == nil {
@@ -768,14 +769,11 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 			logDebug("dx allBandBaselinePairs failed (per-band baseline falls back to zero): %v", err)
 		}
 	}
-	// Only when the Postgres aggregate failed: snapshot the in-memory event ring
-	// so the per-band buildBandActivityByBin fallback has data. Skipped on the
-	// common prod path to avoid the ~80MB ring copy.
-	if st != nil && activityByBinMap == nil {
-		e.mu.RLock()
-		events = e.snapshotEventsLocked()
-		e.mu.RUnlock()
-	}
+	// The per-band loop below snapshots the event ring lazily (only when the
+	// Postgres aggregate lacks a band) instead of eagerly here: an eager copy
+	// would fire on every request whose targets matched zero raw rows —
+	// including the common "genuinely quiet grid" case that returns before the
+	// loop and would never consume the ~ring-size copy.
 
 	cutoff := now - int64(minutes*60)
 	bandAcc := make(map[string]*bandAccumulator)

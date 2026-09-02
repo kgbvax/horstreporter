@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -402,11 +403,11 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_band_spot_time ON dx_raw_spots (band, spot_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_source_type_spot_time ON dx_raw_spots (source_type, spot_time);`,
 		// Locator-prefix indexes for activityByBinForTargets /
-		// recent24hBandSlotCountsForTokens: `locator LIKE 'PREFIX%'` is
-		// btree-sargable under text_pattern_ops (works regardless of database
-		// collation), turning the target-filtered chart/rose queries from
-		// full-window filter scans (6s ctx timeout at ≥90-min windows on the
-		// prod box) into BitmapOr index scans. On a large existing table run
+		// recent24hBandSlotCountsForTokens: their ~>=~/~<~ prefix-range arms
+		// are members of the text_pattern_ops opfamily (collation-
+		// independent), so the planner BitmapOr's them into index scans
+		// instead of full-window filter scans (which blew the 6s ctx timeout
+		// at ≥90-min windows on the prod box). On a large existing table run
 		// scripts/migrate_add_locator_prefix_indexes.sql (CONCURRENTLY, no
 		// ingest lock) BEFORE deploying a binary that includes this — the IF
 		// NOT EXISTS here then no-ops; otherwise startup builds them serially,
@@ -1263,6 +1264,86 @@ func (s *dxPostgresStore) clusterBandPairs(ctx context.Context, clusterAnchor, b
 	return out, rows.Err()
 }
 
+// locatorTargetRE matches a strict Maidenhead locator token (4–10 chars:
+// field, square, optional subsquare/extended pairs). Only tokens matching
+// this may match the locator columns of dx_raw_spots: the charset excludes
+// SQL LIKE metacharacters (%/_/backslash — a raw-qth qth of "%" must not
+// become a wildcard), and byte-range bounds derived from it reproduce
+// exactly the live stream's isLocator+HasPrefix semantics (a token matches
+// locators that extend it). Everything else (callsigns, malformed input)
+// is matched only against the callsign columns with plain equality.
+var locatorTargetRE = regexp.MustCompile(`^[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2}(?:[A-X]{2})?)?)?$`)
+
+// splitTargetTokens partitions normalized (uppercased, deduplicated) target
+// tokens into strict locator tokens and callsign candidates.
+func splitTargetTokens(norm []string) (locators, calls []string) {
+	for _, t := range norm {
+		if locatorTargetRE.MatchString(t) {
+			locators = append(locators, t)
+		} else {
+			calls = append(calls, t)
+		}
+	}
+	return locators, calls
+}
+
+// locatorPrefixRange returns byte-range bounds [lo, hi) under the
+// text_pattern_ops comparison order such that `s ~>=~ lo AND s ~<~ hi` holds
+// iff s starts with prefix — the sargable equivalent of s LIKE 'prefix%'.
+// hi is the prefix with its final byte incremented; the ASCII charset
+// guaranteed by locatorTargetRE makes wrap-around impossible (ok=false only
+// for the defensive 0xFF edge, in which case the caller emits an unbounded
+// ~>=~ lo arm).
+//
+// Ranges are used instead of LIKE because PostgreSQL only rewrites LIKE into
+// index range quals when the pattern is a plan-time constant — `col LIKE
+// ANY($param)` from pgx is never index-sargable, while param-bounded
+// ~>=~/~<~ comparisons are members of the text_pattern_ops opfamily and use
+// the (locator, spot_time) indexes with any bound source.
+func locatorPrefixRange(prefix string) (lo, hi string, ok bool) {
+	if prefix == "" {
+		return "", "", false
+	}
+	last := prefix[len(prefix)-1]
+	if last == 0xFF {
+		return prefix, "", false
+	}
+	return prefix, prefix[:len(prefix)-1] + string(last+1), true
+}
+
+// appendTargetArms builds the OR-ed target-match predicate shared by
+// activityByBinForTargets and recent24hBandSlotCountsForTokens, appending
+// placeholders' args and returning the next free placeholder index. Caller
+// seeds args with its own leading parameters and passes that count as idx.
+//
+// Locator tokens become indexable ~>=~/~<~ prefix-range arms over both
+// locator columns (BitmapOr-able); callsign tokens become = ANY arms — kept
+// ONLY when non-locator tokens exist, because one non-indexable OR arm would
+// otherwise force the planner back to a full-window filter scan for every
+// request, even pure-locator ones.
+func appendTargetArms(arms []string, args []any, idx int, locators, calls []string) ([]string, []any, int) {
+	for _, t := range locators {
+		lo, hi, _ := locatorPrefixRange(t)
+		loIdx := idx
+		args = append(args, lo)
+		idx++
+		if hi == "" {
+			arms = append(arms, fmt.Sprintf("(sender_locator ~>=~ $%[1]d OR receiver_locator ~>=~ $%[1]d)", loIdx))
+			continue
+		}
+		hiIdx := idx
+		args = append(args, hi)
+		idx++
+		arms = append(arms, fmt.Sprintf("((sender_locator ~>=~ $%[1]d AND sender_locator ~<~ $%[2]d) OR (receiver_locator ~>=~ $%[1]d AND receiver_locator ~<~ $%[2]d))", loIdx, hiIdx))
+	}
+	if len(calls) > 0 {
+		args = append(args, calls)
+		arms = append(arms, fmt.Sprintf("(sender_callsign = ANY($%[1]d) OR receiver_callsign = ANY($%[1]d))", idx))
+		idx++
+	}
+	return arms, args, idx
+}
+
 // activityByBinForTargets returns raw spots/min per (band, time-bin) over the
 // selected `minutes` window, target-filtered the same way the live stream
 // matches (callsign or locator prefix — a 6-char target like JO62QM matches
@@ -1298,17 +1379,13 @@ func (s *dxPostgresStore) activityByBinForTargets(targets []string, cwMinDb, min
 	if len(norm) == 0 {
 		return nil, nil
 	}
-	// Locator targets are matched with prefix semantics via LIKE 'target%': a
-	// 4-char target behaves exactly like the old substring(1 for 4) equality,
-	// while longer targets (6-char qth like JO62QM) match locators extending
-	// them — the old substring equality could never match those, starving the
-	// chart for any operator with a 6-char qth. Prefix LIKE is btree-sargable
-	// via the text_pattern_ops indexes on the locator columns, so large
-	// windows don't degrade into full-window filter scans.
-	locatorPats := make([]string, len(norm))
-	for i, t := range norm {
-		locatorPats[i] = t + "%"
-	}
+	// Locator targets match with prefix semantics via sargable ~>=~/~<~ byte
+	// ranges (see appendTargetArms): a 4-char target behaves exactly like the
+	// old substring(1 for 4) equality, while longer targets (6-char qth like
+	// JO62QM) match locators extending them — the old substring equality
+	// could never match those, starving the chart for any operator with a
+	// 6-char qth.
+	locators, calls := splitTargetTokens(norm)
 
 	const bins = 12
 	windowSec := int64(minutes) * 60
@@ -1319,21 +1396,22 @@ func (s *dxPostgresStore) activityByBinForTargets(targets []string, cwMinDb, min
 	binMinutes := float64(binSec) / 60.0
 	windowStart := now - windowSec
 
+	args := []any{windowStart, binSec, now, cwMinDb}
+	arms := make([]string, 0, len(locators)+1)
+	arms, args, _ = appendTargetArms(arms, args, len(args)+1, locators, calls)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 		SELECT band,
 		       ((spot_time - $1) / $2)::int AS bin,
 		       COUNT(*)::bigint
 		FROM dx_raw_spots
-		WHERE spot_time BETWEEN $1 AND $4
-		  AND signal_report_db >= $5
-		  AND (sender_callsign = ANY($3)
-		    OR receiver_callsign = ANY($3)
-		    OR sender_locator LIKE ANY($6)
-		    OR receiver_locator LIKE ANY($6))
+		WHERE spot_time BETWEEN $1 AND $3
+		  AND signal_report_db >= $4
+		  AND (%s)
 		GROUP BY band, bin
-	`, windowStart, binSec, norm, now, cwMinDb, locatorPats)
+	`, strings.Join(arms, "\n\t\t    OR ")), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1622,28 +1700,25 @@ func (s *dxPostgresStore) recent24hBandSlotCountsForTokens(tokens []string, now 
 	if len(norm) == 0 {
 		return nil, nil
 	}
-	// Prefix LIKE, matching activityByBinForTargets (see note there): keeps
-	// 4-char tokens identical to the old substring equality while letting
-	// longer tokens match locators extending them.
-	locatorPats := make([]string, len(norm))
-	for i, t := range norm {
-		locatorPats[i] = t + "%"
-	}
+	// Same sargable prefix-range matching as activityByBinForTargets (see
+	// appendTargetArms): strict-locator tokens match locators extending them,
+	// everything else stays on the callsign-equality arm.
+	locators, calls := splitTargetTokens(norm)
+	args := []any{now - 24*60*60, now}
+	arms := make([]string, 0, len(locators)+1)
+	arms, args, _ = appendTargetArms(arms, args, len(args)+1, locators, calls)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	start := now - 24*60*60
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 		SELECT band,
-		       ((spot_time / 1800) % 48)::int AS slot_of_day,
+		       ((spot_time / 1800) %% 48)::int AS slot_of_day,
 		       COUNT(*)::bigint
 		FROM dx_raw_spots
 		WHERE spot_time BETWEEN $1 AND $2
-		  AND (sender_callsign = ANY($3)
-		    OR receiver_callsign = ANY($3)
-		    OR sender_locator LIKE ANY($4)
-		    OR receiver_locator LIKE ANY($4))
+		  AND (%s)
 		GROUP BY band, slot_of_day
-	`, start, now, norm, locatorPats)
+	`, strings.Join(arms, "\n\t\t    OR ")), args...)
 	if err != nil {
 		return nil, err
 	}
