@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // makeWSPRSpot builds a WSPR MQTTMessage for testing. powerDbm is the TX
@@ -265,5 +268,286 @@ func TestAssignFlavorSilentFT8(t *testing.T) {
 	}
 	if ref != "available" {
 		t.Errorf("ft8Ref = %q, want available", ref)
+	}
+}
+
+// TestPropIntelResponseRegionNamesAndBandOrder verifies the payload fields
+// the mobile app fills its matrix canvas from: region_names covers all 11
+// region codes, band_order is the full canonical list, and bands (with-data
+// only) is a subset of it.
+func TestPropIntelResponseRegionNamesAndBandOrder(t *testing.T) {
+	e := &propIntelEngine{}
+	now := int64(1700000000)
+	history := []MQTTMessage{makeWSPRSpot(now, "20m", "JO62", "JO31", 5, 43)}
+
+	resp := e.Evaluate("JO31", false, 15, -15, history, now, 2.0)
+
+	if len(resp.RegionNames) != len(resp.Regions) {
+		t.Errorf("RegionNames has %d entries, want %d (one per region)", len(resp.RegionNames), len(resp.Regions))
+	}
+	for _, code := range resp.Regions {
+		if name, ok := resp.RegionNames[code]; !ok || name == "" {
+			t.Errorf("RegionNames[%q] = %q, ok=%v; want a non-empty display name", code, name, ok)
+		}
+	}
+	if len(resp.BandOrder) != len(propIntelBandOrder) {
+		t.Fatalf("BandOrder has %d entries, want %d", len(resp.BandOrder), len(propIntelBandOrder))
+	}
+	for i, b := range resp.BandOrder {
+		if b != propIntelBandOrder[i] {
+			t.Errorf("BandOrder[%d] = %q, want %q", i, b, propIntelBandOrder[i])
+		}
+	}
+	orderSet := make(map[string]bool, len(resp.BandOrder))
+	for _, b := range resp.BandOrder {
+		orderSet[b] = true
+	}
+	for _, b := range resp.Bands {
+		if !orderSet[b] {
+			t.Errorf("Bands contains %q, which is not in BandOrder", b)
+		}
+	}
+	if len(resp.Bands) != 1 || resp.Bands[0] != "20m" {
+		t.Errorf("Bands = %v, want [20m] (bands with live data only)", resp.Bands)
+	}
+}
+
+// TestPropIntelSummarizeQuiet verifies the empty-window summary: quiet kind
+// with the explicit no-paths headline, empty grid and band list.
+func TestPropIntelSummarizeQuiet(t *testing.T) {
+	resp := propIntelResponse{Bands: []string{}, Cells: []propIntelCell{}}
+	sum := propIntelSummarize(resp)
+	if sum.HeadlineKind != "quiet" {
+		t.Errorf("HeadlineKind = %q, want quiet", sum.HeadlineKind)
+	}
+	if sum.Headline != "No WSPR paths in the window" {
+		t.Errorf("Headline = %q, want the no-paths headline", sum.Headline)
+	}
+	if len(sum.Grid) != 0 || len(sum.TopBands) != 0 {
+		t.Errorf("Grid/TopBands = %d/%d entries, want 0/0", len(sum.Grid), len(sum.TopBands))
+	}
+}
+
+// TestPropIntelSummarizeActiveQuiet verifies the busy-but-boring case: cells
+// exist, nothing rising or atypical → quiet kind with the band count.
+func TestPropIntelSummarizeActiveQuiet(t *testing.T) {
+	resp := propIntelResponse{
+		Bands: []string{"20m", "40m"},
+		Cells: []propIntelCell{
+			{Band: "20m", Region: "EU", SpotCount: 5},
+			{Band: "40m", Region: "NA", SpotCount: 3},
+		},
+	}
+	sum := propIntelSummarize(resp)
+	if sum.HeadlineKind != "quiet" {
+		t.Errorf("HeadlineKind = %q, want quiet", sum.HeadlineKind)
+	}
+	if sum.Headline != "2 bands active, none rising" {
+		t.Errorf("Headline = %q, want the band count headline", sum.Headline)
+	}
+}
+
+// TestPropIntelSummarizeRisingHeadline verifies the rising headline prefers
+// open paths (a rising open cell beats a rising-but-closed busier cell).
+func TestPropIntelSummarizeRisingHeadline(t *testing.T) {
+	resp := propIntelResponse{
+		Bands: []string{"20m", "40m"},
+		Cells: []propIntelCell{
+			{Band: "20m", Region: "EU", SSBOpen: true, Rising: true, SpotCount: 5},
+			{Band: "40m", Region: "NA", Rising: true, SpotCount: 50},
+		},
+	}
+	sum := propIntelSummarize(resp)
+	if sum.HeadlineKind != "rising" {
+		t.Errorf("HeadlineKind = %q, want rising", sum.HeadlineKind)
+	}
+	if sum.Headline != "20m rising toward Europe" {
+		t.Errorf("Headline = %q, want the open rising cell's headline", sum.Headline)
+	}
+}
+
+// TestPropIntelSummarizeAtypicalWins verifies headline precedence: atypical
+// beats rising, and among atypical cells the higher confidence wins even
+// with a lower z-score.
+func TestPropIntelSummarizeAtypicalWins(t *testing.T) {
+	resp := propIntelResponse{
+		Bands: []string{"10m", "20m"},
+		Cells: []propIntelCell{
+			{Band: "20m", Region: "EU", SSBOpen: true, Rising: true, SpotCount: 5},
+			{Band: "10m", Region: "SA", Rising: true, SpotCount: 8,
+				Atypical: &AtypicalInfo{ZScore: 3.2, Confidence: 0.8, Flavor: "atypical-both"}},
+			{Band: "15m", Region: "AF", SpotCount: 2,
+				Atypical: &AtypicalInfo{ZScore: 9.9, Confidence: 0.5, Flavor: "atypical-wspr-only"}},
+		},
+	}
+	sum := propIntelSummarize(resp)
+	if sum.HeadlineKind != "atypical" {
+		t.Errorf("HeadlineKind = %q, want atypical", sum.HeadlineKind)
+	}
+	if sum.Headline != "10m atypical surge to South America (z=3.2)" {
+		t.Errorf("Headline = %q, want the higher-confidence atypical cell", sum.Headline)
+	}
+}
+
+// TestPropIntelSummarizeGridAndTopBands verifies the compact grid (intensity
+// relative to the busiest cell, flag bitmask) and the top-bands aggregation
+// (busiest band first, regions busiest-first, mode/rising rollup, max 4).
+func TestPropIntelSummarizeGridAndTopBands(t *testing.T) {
+	resp := propIntelResponse{
+		Bands: []string{"20m", "40m"},
+		Cells: []propIntelCell{
+			{Band: "20m", Region: "NA", SSBOpen: true, Rising: true, SpotCount: 10},
+			{Band: "20m", Region: "EU", CWOpen: true, SpotCount: 5},
+			{Band: "40m", Region: "NA", FromHere: true, SpotCount: 3},
+		},
+	}
+	sum := propIntelSummarize(resp)
+
+	if len(sum.Grid) != 3 {
+		t.Fatalf("Grid has %d entries, want 3", len(sum.Grid))
+	}
+	wantGrid := map[string]propIntelGridCell{
+		"20m/NA": {Band: "20m", Region: "NA", Intensity: 1.0, Flags: propIntelFlagSSB | propIntelFlagRising},
+		"20m/EU": {Band: "20m", Region: "EU", Intensity: 0.5, Flags: propIntelFlagCW},
+		"40m/NA": {Band: "40m", Region: "NA", Intensity: 0.3, Flags: propIntelFlagFromHere},
+	}
+	for _, gc := range sum.Grid {
+		want, ok := wantGrid[gc.Band+"/"+gc.Region]
+		if !ok {
+			t.Errorf("unexpected grid cell %s/%s", gc.Band, gc.Region)
+			continue
+		}
+		if gc.Intensity != want.Intensity {
+			t.Errorf("grid %s/%s intensity = %v, want %v", gc.Band, gc.Region, gc.Intensity, want.Intensity)
+		}
+		if gc.Flags != want.Flags {
+			t.Errorf("grid %s/%s flags = %#x, want %#x", gc.Band, gc.Region, gc.Flags, want.Flags)
+		}
+	}
+
+	if len(sum.TopBands) != 2 {
+		t.Fatalf("TopBands has %d entries, want 2", len(sum.TopBands))
+	}
+	first := sum.TopBands[0]
+	if first.Band != "20m" || first.Spots != 15 {
+		t.Errorf("TopBands[0] = %+v, want 20m with 15 spots (busiest first)", first)
+	}
+	if len(first.Regions) != 2 || first.Regions[0] != "NA" || first.Regions[1] != "EU" {
+		t.Errorf("20m regions = %v, want [NA EU] busiest-first", first.Regions)
+	}
+	if !first.SSB || !first.CW || !first.Rising {
+		t.Errorf("20m rollup ssb/cw/rising = %v/%v/%v, want all true", first.SSB, first.CW, first.Rising)
+	}
+	if sum.TopBands[1].Band != "40m" {
+		t.Errorf("TopBands[1].Band = %q, want 40m", sum.TopBands[1].Band)
+	}
+}
+
+// setHubHistory replaces the rolling history for handler tests.
+func setHubHistory(t *testing.T, history []MQTTMessage) {
+	t.Helper()
+	hub.Lock()
+	hub.history = history
+	hub.Unlock()
+	t.Cleanup(func() {
+		hub.Lock()
+		hub.history = nil
+		hub.Unlock()
+	})
+}
+
+// resetPropIntelSummaryCache clears the summary handler's single-entry cache
+// so handler tests don't bleed into each other.
+func resetPropIntelSummaryCache() {
+	propIntelSummaryCache.mu.Lock()
+	propIntelSummaryCache.key = ""
+	propIntelSummaryCache.body = nil
+	propIntelSummaryCache.at = time.Time{}
+	propIntelSummaryCache.mu.Unlock()
+}
+
+// TestPropIntelSummaryHandler verifies the summary endpoint end to end:
+// seeded history reduces to the widget payload, the qth-less request 400s,
+// and the response carries the 60s cache header.
+func TestPropIntelSummaryHandler(t *testing.T) {
+	resetPropIntelSummaryCache()
+	now := time.Now().Unix()
+	setHubHistory(t, []MQTTMessage{
+		makeWSPRSpot(now-60, "20m", "JO62", "JO31", 5, 43),
+		makeWSPRSpot(now-30, "20m", "JO62", "JO31", 5, 43),
+	})
+
+	req := httptest.NewRequest("GET", "/api/prop_intel/summary?qth=JO31", nil)
+	rr := httptest.NewRecorder()
+	propIntelSummaryHandler(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("Cache-Control"); got != "max-age=60" {
+		t.Errorf("Cache-Control = %q, want max-age=60", got)
+	}
+	var sum propIntelSummaryResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &sum); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if sum.QTH != "JO31" {
+		t.Errorf("QTH = %q, want JO31", sum.QTH)
+	}
+	if len(sum.Grid) != 1 || sum.Grid[0].Band != "20m" || sum.Grid[0].Region != "EU" {
+		t.Errorf("Grid = %+v, want one 20m/EU cell", sum.Grid)
+	}
+	if len(sum.TopBands) != 1 || sum.TopBands[0].Band != "20m" {
+		t.Errorf("TopBands = %+v, want one 20m entry", sum.TopBands)
+	}
+
+	req400 := httptest.NewRequest("GET", "/api/prop_intel/summary", nil)
+	rr400 := httptest.NewRecorder()
+	propIntelSummaryHandler(rr400, req400)
+	if rr400.Code != 400 {
+		t.Errorf("status without qth = %d, want 400", rr400.Code)
+	}
+}
+
+// TestPropIntelSummaryHandlerCache verifies the single-entry cache: within
+// the TTL a repeat query serves the cached bytes even when history changed,
+// and a different query string recomputes.
+func TestPropIntelSummaryHandlerCache(t *testing.T) {
+	resetPropIntelSummaryCache()
+	now := time.Now().Unix()
+	setHubHistory(t, []MQTTMessage{makeWSPRSpot(now-60, "20m", "JO62", "JO31", 5, 43)})
+
+	first := httptest.NewRecorder()
+	propIntelSummaryHandler(first, httptest.NewRequest("GET", "/api/prop_intel/summary?qth=JO31", nil))
+	if first.Code != 200 {
+		t.Fatalf("first call status = %d", first.Code)
+	}
+
+	// Change the history between calls: a cache hit must not reflect it.
+	setHubHistoryWithoutReset := []MQTTMessage{makeWSPRSpot(now-60, "40m", "JO62", "JO31", 5, 43)}
+	hub.Lock()
+	hub.history = setHubHistoryWithoutReset
+	hub.Unlock()
+
+	second := httptest.NewRecorder()
+	propIntelSummaryHandler(second, httptest.NewRequest("GET", "/api/prop_intel/summary?qth=JO31", nil))
+	if second.Code != 200 {
+		t.Fatalf("second call status = %d", second.Code)
+	}
+	if second.Body.String() != first.Body.String() {
+		t.Errorf("cached body changed:\nfirst: %s\nsecond: %s", first.Body.String(), second.Body.String())
+	}
+
+	// A different query key recomputes and reflects the new history.
+	third := httptest.NewRecorder()
+	propIntelSummaryHandler(third, httptest.NewRequest("GET", "/api/prop_intel/summary?qth=JO31&from_here=true", nil))
+	if third.Code != 200 {
+		t.Fatalf("third call status = %d", third.Code)
+	}
+	var sum propIntelSummaryResponse
+	if err := json.Unmarshal(third.Body.Bytes(), &sum); err != nil {
+		t.Fatalf("decode third response: %v", err)
+	}
+	if len(sum.Grid) != 1 || sum.Grid[0].Band != "40m" {
+		t.Errorf("recomputed grid = %+v, want one 40m cell (new history)", sum.Grid)
 	}
 }

@@ -107,9 +107,20 @@ Canonical reference: `docs/api.md` (includes response shapes, caches, and explic
 
 - `GET /api/stream` — SSE; params: `qth`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `qth`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed)
 - `GET /api/dx_conditions` — DX score/conditions per band; params: `qth`, `minutes`, `surroundings`, `cw_min_db`
+- `GET /api/prop_intel` — WSPR propagation-intelligence nowcast per (band × region); params: `qth`, `minutes`, `surroundings`, `cw_min_db`, `surge_threshold`, `from_here`. Sibling summary endpoint `GET /api/prop_intel/summary` (60s cached) feeds the mobile app's home-screen widgets
 - `GET /api/stats` — active connections, history size/minutes
 - `GET /api/capture_snapshot` — deterministic filtered spot snapshot for server-driven frame capture
 - `GET /dxlens/` — DXLens module UI (reads HorstReporter's in-memory baseline via adapter)
+
+## Related repositories
+
+- `../horstapp` — sibling Flutter mobile app (iOS primary + Android) consuming this
+  backend read-only over HTTPS: propagation-intelligence overview (band × region
+  matrix, band detail from `/api/dx_conditions`) plus native iOS/Android home-screen
+  widgets fed by `/api/prop_intel/summary`. Same sibling pattern as `../dxlens`.
+  Visual language is ported from `static/wspr-matrix.js` — when changing the chip
+  ramps, ink flip, or badge glyphs there, mirror the change in the app's
+  `lib/core/theme/matrix_style.dart` and the widget's Swift/Kotlin constants.
 
 ## What to avoid
 

@@ -128,18 +128,21 @@ baseline_p90_distance_km?, distance_ratio?, trend, trend_delta, status}]}`.
 
 ### `GET /api/prop_intel` — propagation intelligence nowcast
 
-Per-(band × region) nowcast of P(open), expected spot count, and
-confidence. Reuses the dxPulse 11-region classifier for the region axis and
-the Postgres `regionCalendarStats` baseline when a store is configured.
-Stateless beyond the `dxBaseline` singleton and `hub.history` ring; every
-request re-derives its cells from a snapshotted history window. See
-`prop_intel.go`.
+Per-(band × region) WSPR nowcast of SSB/CW openness, rising slope, and
+atypical-surge detection against the WSPR climatology
+(`wspr_region_baseline_daily`). WSPR spots are the only source; cells are
+emitted only for (band × region) pairs with live spots in the window —
+clients fill the full `band_order` × `regions` canvas themselves. Reuses the
+dxPulse 11-region classifier for the region axis. Stateless beyond the
+`dxBaseline` singleton (FT8 cross-reference), the `wsprClimatology`
+singleton, and the `hub.history` ring; every request re-derives its cells
+from a snapshotted history window. See `prop_intel.go`.
 
 Params: `qth` (required), `surroundings`, `minutes` (default 15,
 max 180), `cw_min_db` (default -15), `surge_threshold` (float, default
-2.0 — z-score above which a cell is flagged as a surge; invalid or <= 0
-values are silently ignored and reset to the default; per-band/region
-overrides are deferred to v2).
+2.0 — z-score above which a cell is flagged atypical; invalid or <= 0
+values are silently reset to the default), `from_here` (`true` filters
+cells to those where the operator's QTH is one end of any path).
 
 Response:
 ```
@@ -147,46 +150,92 @@ Response:
   "qth": "JO32",
   "minutes": 15,
   "now": 1734567890,
-  "bands": ["20m", "10m", ...],
-  "regions": ["EU", "NA", "SA", "AF", "AS", "OC", "AN", "JA", "VK", "KH6", "CAR"],
+  "from_here": false,
+  "bands": ["20m", "10m"],
+  "band_order": ["160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m",
+                 "12m", "10m", "6m", "4m", "2m"],
+  "regions": ["EU", "NA", "SA", "AF", "AS", "JA", "OC", "VK", "KH6", "CAR", "AN"],
+  "region_names": {"EU": "Europe", "NA": "North America", ...},
   "cells": [
     {
       "band": "20m",
       "region": "CAR",
-      "p_open": 0.834,
-      "expected_count": 4.2,
-      "confidence": 0.71,
-      "sources": ["rbn", "pskreporter"],
-      "surge": { "z_score": 3.2, "label": "tune to 20m, surge to Caribbean" }
+      "ssb_open": true,
+      "cw_open": true,
+      "rising": false,
+      "atypical": {
+        "z_score": 3.2,
+        "confidence": 0.71,
+        "flavor": "atypical-both",
+        "ft8_cross_ref": "available"
+      },
+      "from_here": false,
+      "sources": ["wspr"],
+      "spot_count": 42
     }
   ]
 }
 ```
 
-- `p_open` = P(≥1 spot in the next 15-minute slot) = 1 − e^(−λ) with
-  λ = rate_per_hour × (15/60). `expected_count` is the rate per hour.
-- `confidence` ∈ [0,1] is a function of unique-sender support and source
-  diversity; single-source cells are discounted, dense single-source
-  cells are lifted to moderate.
-- Sparse cells (band seen in the window with a region baseline but no
-  live spots) are still emitted with a low-confidence (0.15) prior so
-  the frontend can render the full 11-region grid.
-- `surge` is present only when the cell's live rate z-scores above the
-  memory-fallback baseline: per-15-minute sub-window unique-sender rates
-  across a trailing 6h window that excludes the live nowcast window, in the
-  same units/scope (operator-local unique senders/hour) as the live rate.
-  (The Postgres `regionCalendarStats` climatology is a global, raw
-  per-30-min count in different units/scope and is NOT used for the z-score;
-  it is still used as the nowcast prior. A per-operator unique-sender PG
-  baseline would be needed to restore a PG-backed surge z-score.)
-  Suppressed for sparse cells (no live spots), when the baseline has fewer
-  than 10 covered sub-windows (`propIntelSurgeMinSamplesMem`), or when the
-  baseline stddev is zero.
-- When at least one cell surges, the engine fans out Web Push
+- `bands` lists only the bands with live spots in the window;
+  `band_order` is the full canonical 13-band list (160m…2m) so clients can
+  render the full matrix canvas.
+- `regions` always lists all 11 region codes; `region_names` maps them to
+  display names.
+- `ssb_open` / `cw_open`: the best path in the cell has enough budget for a
+  100W SSB (+10 dB) / CW (`cw_min_db`, default -5 dB floor) signal:
+  `effective_snr = wspr_snr + (50 dBm − tx_power_dbm)`. Cells whose spots
+  carry no TX power exist but never flag SSB/CW open.
+- `rising`: second-half vs first-half spot counts of the window; ratio ≥ 1.5
+  (or spots only in the second half).
+- `atypical` is present only when the live rate (extrapolated to the
+  30-min slot) z-scores at least `surge_threshold` above the WSPR
+  climatology mean for the same (band, region, slot), with ≥ 3 sample days
+  and nonzero stddev. `confidence` scales 0.3→1.0 with climatology depth.
+  `flavor` cross-references the FT8 climatology
+  (`dx_region_baseline_daily`): `atypical-both` (FT8 also hot),
+  `atypical-wspr-silent-ft8` (FT8 quiet), `atypical-wspr-only` otherwise;
+  `ft8_cross_ref` notes whether that comparison was `available`.
+- When at least one cell is atypical, the engine fans out Web Push
   notifications to matching subscriptions asynchronously (see
   `/api/push/*`); the push send never blocks this response.
 - Counters are surfaced in `/api/stats` under `prop_intel.requests`,
   `prop_intel.errors`, `prop_intel.surges_detected`.
+
+### `GET /api/prop_intel/summary` — compact widget payload
+
+Same engine and query parameters as `/api/prop_intel`, reduced to the
+precomputed glance used by the mobile app's iOS/Android home-screen widgets
+(the widget extension fetches this directly when the data shared by the
+app is stale). The response is cached for 60s (single entry, keyed on the
+raw query) and served with `Cache-Control: max-age=60`.
+
+Response:
+```
+{
+  "now": 1734567890,
+  "qth": "JO32",
+  "minutes": 15,
+  "from_here": false,
+  "headline": "20m atypical surge to Caribbean (z=3.2)",
+  "headline_kind": "atypical",
+  "top_bands": [
+    {"band": "20m", "regions": ["EU", "NA"], "ssb": true, "cw": true,
+     "rising": false, "spots": 37}
+  ],
+  "grid": [{"b": "20m", "r": "NA", "i": 0.62, "f": 7}]
+}
+```
+
+- `headline` / `headline_kind`: the single most newsworthy cell — atypical
+  (highest confidence, ties on z-score) beats rising (open paths
+  preferred) beats a quiet band count. `headline_kind` is `atypical`,
+  `rising`, or `quiet`.
+- `top_bands`: up to 4 bands, busiest first, with rolled-up mode/rising
+  flags and the live regions busiest-first.
+- `grid`: one entry per live cell; `i` is the spot count relative to the
+  busiest cell (0–1, 2 decimals — the chip-ramp input), `f` is a flag
+  bitmask: ssb=1, cw=2, rising=4, atypical=8, from_here=16.
 
 ### `GET /api/push/vapid-public-key` — Web Push public key
 

@@ -122,6 +122,33 @@ Indexes:
 
 ---
 
+### `wspr_region_baseline_daily`
+
+Daily aggregated WSPR climatology by band/time-slot/region. Written by the
+WSPR climatology accumulator (`wspr_climatology.go`) from the optional WSPR
+ingest; read by the propagation-intelligence engine
+(`/api/prop_intel`) for the atypical z-score. Unlike
+`dx_region_baseline_daily` it has no target axis — it is a global mesh
+climatology (the receiver's region), matching the engine's global view.
+
+| Column | Type | Null | Notes |
+|---|---|---|---|
+| `band` | `TEXT` | NOT NULL | Band token |
+| `slot_of_day` | `INTEGER` | NOT NULL | UTC slot bucket (30-min) |
+| `region` | `TEXT` | NOT NULL | Receiver's region bucket |
+| `day_index` | `BIGINT` | NOT NULL | UTC day index |
+| `spot_count` | `BIGINT` | NOT NULL | Count of WSPR spots in that bucket |
+
+Primary key:
+
+- `(band, slot_of_day, region, day_index)`
+
+Writes are upserts (`ON CONFLICT ... DO UPDATE`) accumulating into the
+current day's row from a capped in-memory pending queue, with a JSONL
+fallback (`wspr_climatology.json`) when Postgres is not configured.
+
+---
+
 ### `dx_meta`
 
 Generic metadata key/value table.

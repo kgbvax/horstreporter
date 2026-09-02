@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"sort"
@@ -61,19 +62,27 @@ const (
 	// so the effective SNR for a 100W signal is:
 	//   effective_snr = wspr_snr + (wspr_power_dbm - reference_power_dbm)
 	// where reference_power_dbm = 10*log10(100W/1mW) = 50 dBm.
-	propIntelReferencePowerW = 100.0
+	propIntelReferencePowerW   = 100.0
 	propIntelReferencePowerDbm = 50.0 // 10*log10(100W / 1mW)
 )
 
 // propIntelResponse is the JSON envelope returned by /api/prop_intel.
 type propIntelResponse struct {
-	QTH      string          `json:"qth"`
-	Minutes  int             `json:"minutes"`
-	Now      int64           `json:"now"`
-	FromHere bool            `json:"from_here"`
-	Bands    []string        `json:"bands"`
-	Regions  []string        `json:"regions"`
-	Cells    []propIntelCell `json:"cells"`
+	QTH      string `json:"qth"`
+	Minutes  int    `json:"minutes"`
+	Now      int64  `json:"now"`
+	FromHere bool   `json:"from_here"`
+	// Bands lists only the bands with live spots in the window.
+	Bands []string `json:"bands"`
+	// BandOrder is the full canonical in-scope band list (160m…2m) so
+	// clients (mobile app) can fill the full matrix canvas client-side.
+	BandOrder []string `json:"band_order"`
+	// Regions lists all 11 region codes, always in region.AllRegions() order.
+	Regions []string `json:"regions"`
+	// RegionNames maps region codes to operator-facing display names so
+	// clients don't hardcode the mapping.
+	RegionNames map[string]string `json:"region_names"`
+	Cells       []propIntelCell   `json:"cells"`
 }
 
 // propIntelCell is one (band × region) row in the WSPR nowcast. Each cell
@@ -195,12 +204,14 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 	}
 
 	resp := propIntelResponse{
-		QTH:     qth,
-		Minutes: minutes,
-		Now:     now,
-		Bands:   []string{},
-		Regions: allRegionStrings(),
-		Cells:   []propIntelCell{},
+		QTH:         qth,
+		Minutes:     minutes,
+		Now:         now,
+		Bands:       []string{},
+		BandOrder:   append([]string(nil), propIntelBandOrder...),
+		Regions:     allRegionStrings(),
+		RegionNames: regionDisplayNames(),
+		Cells:       []propIntelCell{},
 	}
 
 	if qth == "" {
@@ -375,14 +386,14 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		}
 
 		cells = append(cells, propIntelCell{
-			Band:     key.band,
-			Region:   key.region,
-			SSBOpen:  ssbOpen,
-			CWOpen:   cwOpen,
-			Rising:   rising,
-			Atypical: atypical,
-			FromHere: cell.fromHere,
-			Sources:  sortedSources(cell.sources),
+			Band:      key.band,
+			Region:    key.region,
+			SSBOpen:   ssbOpen,
+			CWOpen:    cwOpen,
+			Rising:    rising,
+			Atypical:  atypical,
+			FromHere:  cell.fromHere,
+			Sources:   sortedSources(cell.sources),
 			SpotCount: cell.spotCount,
 		})
 	}
@@ -432,7 +443,7 @@ func assignFlavor(band, regionCode string, slot int, ft8Clim map[regionBaselineK
 	return "atypical-wspr-only", "available"
 }
 
-// propIntelRegionDisplayNames maps the 11-region codes to the display names
+// sortedSources returns the source tags as a sorted slice.
 func sortedSources(s map[string]struct{}) []string {
 	if len(s) == 0 {
 		return []string{}
@@ -454,12 +465,16 @@ func allRegionStrings() []string {
 	return out
 }
 
+// propIntelBandOrder is the canonical in-scope band list in HF→VHF order
+// (160m…2m). Shared by inScopeBandsOrdered and the band_order response
+// field so the mobile app can fill the full matrix canvas client-side.
+var propIntelBandOrder = []string{"160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m"}
+
 // inScopeBandsOrdered returns the in-scope bands that appear in `seen`, in the
 // canonical HF→VHF order (160m…2m), so the response band list is stable.
 func inScopeBandsOrdered(seen map[string]struct{}) []string {
-	order := []string{"160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m"}
 	out := make([]string, 0, len(seen))
-	for _, b := range order {
+	for _, b := range propIntelBandOrder {
 		if _, ok := seen[b]; ok {
 			out = append(out, b)
 		}
@@ -571,51 +586,69 @@ func regionDisplayName(code string) string {
 	return code
 }
 
-// propIntelHandler is the HTTP handler for /api/prop_intel. It follows the
-// dxConditionsHandler pattern: resolve QTH, parse minutes/cw_min_db/
-// surroundings, snapshot hub.history, call the engine, JSON-encode.
-// The `surge_threshold` query parameter overrides the default atypical
-// z-score threshold. The `from_here` query parameter filters to cells where
-// the operator's QTH is one end of any path.
-func propIntelHandler(w http.ResponseWriter, r *http.Request) {
-	propIntelAccounting.requests.Add(1)
-	qth, surroundings := resolveQTHQuery(r)
-	if qth == "" {
-		propIntelAccounting.errors.Add(1)
-		http.Error(w, "qth required", http.StatusBadRequest)
-		return
+// regionDisplayNames returns a copy of the full code→name map, suitable for
+// embedding in a response (callers must not retain or mutate the original).
+func regionDisplayNames() map[string]string {
+	out := make(map[string]string, len(propIntelRegionDisplayNames))
+	for k, v := range propIntelRegionDisplayNames {
+		out[k] = v
 	}
+	return out
+}
 
-	minutes := propIntelNowcastWindowMin
+// propIntelParams holds the query parameters shared by the /api/prop_intel
+// and /api/prop_intel/summary handlers.
+type propIntelParams struct {
+	qth               string
+	surroundings      bool
+	minutes           int
+	cwMinDb           int
+	atypicalThreshold float64
+	fromHere          bool
+}
+
+// parsePropIntelParams resolves and validates the shared query parameters
+// (qth, minutes, cw_min_db, surge_threshold, from_here). Returns ok=false
+// when qth is missing.
+func parsePropIntelParams(r *http.Request) (propIntelParams, bool) {
+	p := propIntelParams{
+		minutes:           propIntelNowcastWindowMin,
+		cwMinDb:           defaultDxCwViableMinDb,
+		atypicalThreshold: propIntelAtypicalZThreshold,
+	}
+	p.qth, p.surroundings = resolveQTHQuery(r)
+	if p.qth == "" {
+		return p, false
+	}
 	if raw := strings.TrimSpace(r.URL.Query().Get("minutes")); raw != "" {
 		if m, err := strconv.Atoi(raw); err == nil && m > 0 {
-			minutes = m
+			p.minutes = m
 		}
 	}
-	if minutes > maxDxWindowMinutes {
-		minutes = maxDxWindowMinutes
+	if p.minutes > maxDxWindowMinutes {
+		p.minutes = maxDxWindowMinutes
 	}
-
-	cwMinDb := defaultDxCwViableMinDb
 	if raw := strings.TrimSpace(r.URL.Query().Get("cw_min_db")); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil {
-			cwMinDb = v
+			p.cwMinDb = v
 		}
 	}
-
-	atypicalThreshold := propIntelAtypicalZThreshold
 	if raw := strings.TrimSpace(r.URL.Query().Get("surge_threshold")); raw != "" {
 		if v, err := strconv.ParseFloat(raw, 64); err == nil && v > 0 {
-			atypicalThreshold = v
+			p.atypicalThreshold = v
 		}
 	}
-
-	fromHere := false
 	if raw := strings.TrimSpace(r.URL.Query().Get("from_here")); raw == "true" {
-		fromHere = true
+		p.fromHere = true
 	}
+	return p, true
+}
 
-	now := time.Now().Unix()
+// snapshotPropIntelHistory copies the hub.history window from `now - minutes`
+// to `now` into a pooled scratch buffer. The returned release func must be
+// called after Evaluate to return the buffer to the pool. The `now` must be
+// the same value passed to Evaluate so the window and the evaluation agree.
+func snapshotPropIntelHistory(now int64, minutes int) (history []MQTTMessage, release func()) {
 	nowcastCutoff := now - int64(minutes)*60
 	hub.RLock()
 	idx := sort.Search(len(hub.history), func(i int) bool {
@@ -631,21 +664,48 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 	historyCopy := (*bufp)[:n]
 	copy(historyCopy, hub.history[idx:])
 	hub.RUnlock()
+	return historyCopy, func() { propIntelHistoryPool.Put(bufp) }
+}
+
+// applyFromHere stamps the from_here flag on the response and, when set,
+// filters the cells down to those where the operator's QTH is one end.
+func (resp propIntelResponse) applyFromHere(fromHere bool) propIntelResponse {
+	resp.FromHere = fromHere
+	if !fromHere {
+		return resp
+	}
+	filtered := make([]propIntelCell, 0, len(resp.Cells))
+	for _, c := range resp.Cells {
+		if c.FromHere {
+			filtered = append(filtered, c)
+		}
+	}
+	resp.Cells = filtered
+	return resp
+}
+
+// propIntelHandler is the HTTP handler for /api/prop_intel. It follows the
+// dxConditionsHandler pattern: resolve QTH, parse minutes/cw_min_db/
+// surroundings, snapshot hub.history, call the engine, JSON-encode.
+// The `surge_threshold` query parameter overrides the default atypical
+// z-score threshold. The `from_here` query parameter filters to cells where
+// the operator's QTH is one end of any path.
+func propIntelHandler(w http.ResponseWriter, r *http.Request) {
+	propIntelAccounting.requests.Add(1)
+	p, ok := parsePropIntelParams(r)
+	if !ok {
+		propIntelAccounting.errors.Add(1)
+		http.Error(w, "qth required", http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now().Unix()
+	historyCopy, release := snapshotPropIntelHistory(now, p.minutes)
+	defer release()
 
 	engine := propIntel
-	resp := engine.Evaluate(qth, surroundings, minutes, cwMinDb, historyCopy, now, atypicalThreshold)
-	resp.FromHere = fromHere
-
-	// Filter cells to from-here when the param is set.
-	if fromHere {
-		filtered := make([]propIntelCell, 0, len(resp.Cells))
-		for _, c := range resp.Cells {
-			if c.FromHere {
-				filtered = append(filtered, c)
-			}
-		}
-		resp.Cells = filtered
-	}
+	resp := engine.Evaluate(p.qth, p.surroundings, p.minutes, p.cwMinDb, historyCopy, now, p.atypicalThreshold)
+	resp = resp.applyFromHere(p.fromHere)
 
 	// Count atypical detection events per request.
 	hasAtypical := false
@@ -668,11 +728,276 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 					logInfo("push goroutine panic: %v", r)
 				}
 			}()
-			pushStore.NotifySurges(resp.Cells, qth)
+			pushStore.NotifySurges(resp.Cells, p.qth)
 		}()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
-	propIntelHistoryPool.Put(bufp)
+}
+
+// Flag bits for the summary grid cell bitmask. The widget renders badges
+// straight from the bitmask without any engine knowledge.
+const (
+	propIntelFlagSSB      = 1 << 0
+	propIntelFlagCW       = 1 << 1
+	propIntelFlagRising   = 1 << 2
+	propIntelFlagAtypical = 1 << 3
+	propIntelFlagFromHere = 1 << 4
+)
+
+// propIntelSummaryResponse is the compact /api/prop_intel/summary payload:
+// a precomputed widget glance (headline + top bands + intensity grid) so the
+// iOS widget extension never reimplements the engine or the chip ramp.
+type propIntelSummaryResponse struct {
+	Now     int64  `json:"now"`
+	QTH     string `json:"qth"`
+	Minutes int    `json:"minutes"`
+	// FromHere echoes the from_here query param (cells were filtered to it).
+	FromHere bool `json:"from_here"`
+	// Headline is the single most newsworthy cell, rendered as text.
+	Headline string `json:"headline"`
+	// HeadlineKind is "atypical", "rising", or "quiet".
+	HeadlineKind string              `json:"headline_kind"`
+	TopBands     []propIntelTopBand  `json:"top_bands"`
+	Grid         []propIntelGridCell `json:"grid"`
+}
+
+// propIntelTopBand aggregates one band's cells for the widget band list.
+type propIntelTopBand struct {
+	Band string `json:"band"`
+	// Regions are the region codes with live spots, busiest first.
+	Regions []string `json:"regions"`
+	// SSB/CW: any path in this band is open for the mode.
+	SSB bool `json:"ssb"`
+	CW  bool `json:"cw"`
+	// Rising: any cell in this band is rising.
+	Rising bool `json:"rising"`
+	// Spots is the total spot count across the band's regions.
+	Spots int `json:"spots"`
+}
+
+// propIntelGridCell is one live (band × region) cell in compact form.
+type propIntelGridCell struct {
+	Band string `json:"b"`
+	// Region code (see region_names on /api/prop_intel for display names).
+	Region string `json:"r"`
+	// Intensity is spot_count / max cell count in the response, rounded to
+	// 2 decimals — the widget's chip-ramp input.
+	Intensity float64 `json:"i"`
+	// Flags is the OR of the propIntelFlag* bits.
+	Flags int `json:"f"`
+}
+
+// propIntelSummarize reduces a full prop_intel response to the compact
+// widget payload. Deterministic: the engine returns cells sorted by
+// (band, region), and every tiebreak below is stable.
+func propIntelSummarize(resp propIntelResponse) propIntelSummaryResponse {
+	sum := propIntelSummaryResponse{
+		Now:          resp.Now,
+		QTH:          resp.QTH,
+		Minutes:      resp.Minutes,
+		FromHere:     resp.FromHere,
+		HeadlineKind: "quiet",
+		TopBands:     []propIntelTopBand{},
+		Grid:         []propIntelGridCell{},
+	}
+	if len(resp.Cells) == 0 {
+		sum.Headline = "No WSPR paths in the window"
+		return sum
+	}
+
+	maxCount := 0
+	for _, c := range resp.Cells {
+		if c.SpotCount > maxCount {
+			maxCount = c.SpotCount
+		}
+	}
+	for _, c := range resp.Cells {
+		var flags int
+		if c.SSBOpen {
+			flags |= propIntelFlagSSB
+		}
+		if c.CWOpen {
+			flags |= propIntelFlagCW
+		}
+		if c.Rising {
+			flags |= propIntelFlagRising
+		}
+		if c.Atypical != nil {
+			flags |= propIntelFlagAtypical
+		}
+		if c.FromHere {
+			flags |= propIntelFlagFromHere
+		}
+		intensity := 0.0
+		if maxCount > 0 {
+			intensity = round2(float64(c.SpotCount) / float64(maxCount))
+		}
+		sum.Grid = append(sum.Grid, propIntelGridCell{
+			Band:      c.Band,
+			Region:    c.Region,
+			Intensity: intensity,
+			Flags:     flags,
+		})
+	}
+
+	// Per-band aggregation for the top-bands list.
+	type bandAcc struct {
+		spots   int
+		regions map[string]int
+		ssb     bool
+		cw      bool
+		rising  bool
+	}
+	bands := make(map[string]*bandAcc)
+	for _, c := range resp.Cells {
+		acc := bands[c.Band]
+		if acc == nil {
+			acc = &bandAcc{regions: make(map[string]int)}
+			bands[c.Band] = acc
+		}
+		acc.spots += c.SpotCount
+		acc.regions[c.Region] += c.SpotCount
+		acc.ssb = acc.ssb || c.SSBOpen
+		acc.cw = acc.cw || c.CWOpen
+		acc.rising = acc.rising || c.Rising
+	}
+	// Busiest bands first, then canonical order for ties.
+	bandList := make([]string, 0, len(bands))
+	for b := range bands {
+		bandList = append(bandList, b)
+	}
+	sort.Slice(bandList, func(i, j int) bool {
+		if bands[bandList[i]].spots != bands[bandList[j]].spots {
+			return bands[bandList[i]].spots > bands[bandList[j]].spots
+		}
+		return bandList[i] < bandList[j]
+	})
+	for _, b := range bandList {
+		if len(sum.TopBands) == 4 {
+			break
+		}
+		acc := bands[b]
+		regions := make([]string, 0, len(acc.regions))
+		for reg := range acc.regions {
+			regions = append(regions, reg)
+		}
+		sort.Slice(regions, func(i, j int) bool {
+			if acc.regions[regions[i]] != acc.regions[regions[j]] {
+				return acc.regions[regions[i]] > acc.regions[regions[j]]
+			}
+			return regions[i] < regions[j]
+		})
+		sum.TopBands = append(sum.TopBands, propIntelTopBand{
+			Band:    b,
+			Regions: regions,
+			SSB:     acc.ssb,
+			CW:      acc.cw,
+			Rising:  acc.rising,
+			Spots:   acc.spots,
+		})
+	}
+
+	// Headline: atypical beats rising beats quiet (same precedence as the
+	// surge push labels). Highest confidence wins; ties break on z-score.
+	var bestAtypical, bestRising *propIntelCell
+	for i := range resp.Cells {
+		c := &resp.Cells[i]
+		if c.Atypical != nil {
+			if bestAtypical == nil ||
+				c.Atypical.Confidence > bestAtypical.Atypical.Confidence ||
+				(c.Atypical.Confidence == bestAtypical.Atypical.Confidence && c.Atypical.ZScore > bestAtypical.Atypical.ZScore) {
+				bestAtypical = c
+			}
+		}
+		if c.Rising {
+			// Prefer open paths (a rising open cell is actionable), then
+			// the busier cell.
+			if bestRising == nil ||
+				(c.SSBOpen || c.CWOpen) && !(bestRising.SSBOpen || bestRising.CWOpen) ||
+				((c.SSBOpen || c.CWOpen) == (bestRising.SSBOpen || bestRising.CWOpen) && c.SpotCount > bestRising.SpotCount) {
+				bestRising = c
+			}
+		}
+	}
+	switch {
+	case bestAtypical != nil:
+		sum.HeadlineKind = "atypical"
+		sum.Headline = fmt.Sprintf("%s atypical surge to %s (z=%.1f)",
+			bestAtypical.Band, regionDisplayName(bestAtypical.Region), bestAtypical.Atypical.ZScore)
+	case bestRising != nil:
+		sum.HeadlineKind = "rising"
+		sum.Headline = fmt.Sprintf("%s rising toward %s",
+			bestRising.Band, regionDisplayName(bestRising.Region))
+	default:
+		sum.Headline = fmt.Sprintf("%d bands active, none rising", len(resp.Bands))
+	}
+	return sum
+}
+
+// propIntelSummaryCacheTTL bounds how long a summarized response is served
+// from cache. Widget refreshes land every ~15 minutes, so the TTL mostly
+// guards against WidgetKit timeline-reload bursts.
+const propIntelSummaryCacheTTL = 60 * time.Second
+
+// propIntelSummaryCacheEntry is a single-entry response cache keyed on the
+// raw query string — the endpoint serves one operator, one QTH.
+type propIntelSummaryCacheEntry struct {
+	mu   sync.Mutex
+	key  string
+	body []byte
+	at   time.Time
+}
+
+var propIntelSummaryCache propIntelSummaryCacheEntry
+
+// propIntelSummaryHandler serves /api/prop_intel/summary: the same engine
+// and parameters as /api/prop_intel, reduced to the compact widget payload
+// and cached for 60s. The widget extension fetches this directly when the
+// data shared by the app is stale.
+func propIntelSummaryHandler(w http.ResponseWriter, r *http.Request) {
+	propIntelAccounting.requests.Add(1)
+	p, ok := parsePropIntelParams(r)
+	if !ok {
+		propIntelAccounting.errors.Add(1)
+		http.Error(w, "qth required", http.StatusBadRequest)
+		return
+	}
+
+	key := r.URL.RawQuery
+	propIntelSummaryCache.mu.Lock()
+	if key == propIntelSummaryCache.key && time.Since(propIntelSummaryCache.at) < propIntelSummaryCacheTTL {
+		body := propIntelSummaryCache.body
+		propIntelSummaryCache.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "max-age=60")
+		w.Write(body)
+		return
+	}
+	propIntelSummaryCache.mu.Unlock()
+
+	now := time.Now().Unix()
+	historyCopy, release := snapshotPropIntelHistory(now, p.minutes)
+	resp := propIntel.Evaluate(p.qth, p.surroundings, p.minutes, p.cwMinDb, historyCopy, now, p.atypicalThreshold)
+	release()
+	resp = resp.applyFromHere(p.fromHere)
+
+	sum := propIntelSummarize(resp)
+	body, err := json.Marshal(sum)
+	if err != nil {
+		propIntelAccounting.errors.Add(1)
+		http.Error(w, "encode error", http.StatusInternalServerError)
+		return
+	}
+
+	propIntelSummaryCache.mu.Lock()
+	propIntelSummaryCache.key = key
+	propIntelSummaryCache.body = body
+	propIntelSummaryCache.at = time.Now()
+	propIntelSummaryCache.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "max-age=60")
+	w.Write(body)
 }
