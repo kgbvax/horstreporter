@@ -254,7 +254,12 @@ function renderSummary(summaryEl, options = {}) {
         ? `Best now: ${top.slice(0, 3).join(', ')}`
         : 'No clear best band yet';
 
-    const decision = buildGlobalDecision(score, confidence, top.length);
+    // The "worth it" verdict requires at least one band the backend actually
+    // recommends (green/yellow). best_bands is just the top scores and is
+    // populated whenever any band has spots — feeding it here would let the
+    // verdict pass with zero recommended bands. The "Best now" line below
+    // keeps the fallback.
+    const decision = buildGlobalDecision(score, confidence, recBands.length);
     const confidencePct = Math.round(confidence * 100);
 
     summaryEl.innerHTML = `
@@ -288,6 +293,19 @@ function renderBandCards(cardsEl, grouped, qth, minutes) {
     const totalReportsAllBands = allBandCounts.reduce((sum, n) => sum + n, 0);
     const maxReportsSingleBand = Math.max(0, ...allBandCounts);
 
+    // Per-band tier labels depend on the fresh dx metrics, which can arrive
+    // after the cards were first rendered (updateBandLab draws once from the
+    // cached dx response, then again when the fetch resolves). Bake them only
+    // into the DOM rebuild, but recompute + patch the label text on every
+    // pass — otherwise the labels freeze next to a live verdict badge.
+    const recs = new Map(bands.map((band) => [
+        band,
+        buildBandRecommendation(band, grouped.get(band) || [], dxBands.get(band), {
+            totalReportsAllBands,
+            maxReportsSingleBand
+        })
+    ]));
+
     // Only rebuild the card DOM (and its <canvas> elements) when the band set
     // changes; otherwise redraw the charts in place, reusing the canvases.
     const bandKey = bands.join(',');
@@ -297,15 +315,12 @@ function renderBandCards(cardsEl, grouped, qth, minutes) {
             const points = grouped.get(band) || [];
             const safeBand = sanitizeBandId(band);
             const count = points.length;
-            const rec = buildBandRecommendation(band, points, dxBands.get(band), {
-                totalReportsAllBands,
-                maxReportsSingleBand
-            });
+            const rec = recs.get(band);
 
             return `
                 <div class="band-lab-card" style="border-left-color: ${bandColors[band] || '#999'};">
                     <div class="band-lab-card-head">
-                        <span class="band-lab-band">${escapeHtml(`${band} - ${rec}`)}</span>
+                        <span class="band-lab-band" data-band-label="${safeBand}">${escapeHtml(`${band} - ${rec}`)}</span>
                         <span class="band-lab-meta">${formatNumber(count)} reports</span>
                     </div>
                     <div class="band-lab-card-charts">
@@ -327,6 +342,8 @@ function renderBandCards(cardsEl, grouped, qth, minutes) {
     for (const band of bands) {
         const safeBand = sanitizeBandId(band);
         const points = grouped.get(band) || [];
+        const labelEl = cardsEl.querySelector(`[data-band-label="${safeBand}"]`);
+        if (labelEl) labelEl.textContent = `${band} - ${recs.get(band)}`;
         drawActivityChart(document.getElementById(`band-lab-activity-${safeBand}`), points, dxBands.get(band), minutes);
         drawScatterChart(document.getElementById(`band-lab-scatter-${safeBand}`), points, qthCenter, band, globalDistanceCapKm, distanceCache);
     }
