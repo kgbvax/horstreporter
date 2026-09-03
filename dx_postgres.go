@@ -414,7 +414,10 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 		// blocking raw-spot inserts for the build's duration.
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_sender_loc_time ON dx_raw_spots (sender_locator text_pattern_ops, spot_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_receiver_loc_time ON dx_raw_spots (receiver_locator text_pattern_ops, spot_time);`,
-		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_spot_geom ON dx_raw_spots USING GIST (spot_geom);`,
+		// No GIST index on spot_geom: nothing in this codebase queries it
+		// (verified by grep), it costs ~5GB on prod, and the prod disk ran
+		// full. The column stays; the optional maintenance list below drops
+		// any leftover index from earlier deploys.
 		`CREATE TABLE IF NOT EXISTS dx_region_baseline_daily (
 			target_grid4 TEXT NOT NULL,
 			band TEXT NOT NULL,
@@ -455,6 +458,12 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 		{
 			name: "drop legacy idx_dx_raw_spots_geom",
 			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_raw_spots_geom;`,
+		},
+		{
+			// ~5GB on prod, zero query users in this codebase (spot_geom the
+			// column is kept; only the index goes). Created by earlier deploys.
+			name: "drop unused idx_dx_raw_spots_spot_geom",
+			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_raw_spots_spot_geom;`,
 		},
 		{
 			name: "drop redundant idx_dx_baseline_global_band_slot",
