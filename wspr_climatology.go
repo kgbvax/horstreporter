@@ -341,6 +341,8 @@ func (s *dxPostgresStore) ensureWsprRegionBaseline(ctx context.Context) error {
 			spot_count BIGINT NOT NULL,
 			PRIMARY KEY (band, slot_of_day, region, day_index)
 		);
+		CREATE INDEX IF NOT EXISTS idx_wspr_region_baseline_daily_day_index
+			ON wspr_region_baseline_daily (day_index);
 	`)
 	return err
 }

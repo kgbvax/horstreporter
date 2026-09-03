@@ -319,6 +319,24 @@ func (e *DxBaselineEngine) PruneRawSpotsOlderThan(cutoff int64) (int64, error) {
 	return st.pruneRawSpotsOlderThan(cutoff)
 }
 
+// PruneRegionBaselinesOlderThan removes day-indexed climatology rows older than
+// cutoffDayIndex from both dx_region_baseline_daily and wspr_region_baseline_daily.
+// No-op if Postgres isn't configured. The reader (regionCalendarStats /
+// WsprRegionCalendarStats) only ever queries a ~30-day window, so older rows
+// are dead weight that grows the table unbounded without this prune.
+func (e *DxBaselineEngine) PruneRegionBaselinesOlderThan(cutoffDayIndex int64) (int64, error) {
+	if e == nil {
+		return 0, nil
+	}
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return 0, nil
+	}
+	return st.pruneRegionBaselinesOlderThan(cutoffDayIndex)
+}
+
 func (e *DxBaselineEngine) NumBuckets() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()

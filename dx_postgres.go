@@ -427,6 +427,14 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			spot_count BIGINT NOT NULL,
 			PRIMARY KEY (target_grid4, band, slot_of_day, region, day_index)
 		);`,
+		// day_index is the last PK column, so neither the reader
+		// (regionCalendarStats: WHERE day_index BETWEEN ...) nor the prune
+		// (pruneDayIndexedBaselineOlderThan: WHERE day_index < cutoff) can use
+		// the PK — both would seq-scan the whole table. This index makes them
+		// sargable. On a large existing table build it CONCURRENTLY via
+		// scripts/migrate_add_region_day_index.sql BEFORE deploying a binary
+		// that includes this; the IF NOT EXISTS here then no-ops.
+		`CREATE INDEX IF NOT EXISTS idx_dx_region_baseline_daily_day_index ON dx_region_baseline_daily (day_index);`,
 		`CREATE TABLE IF NOT EXISTS dx_meta (
 			k TEXT PRIMARY KEY,
 			v TEXT NOT NULL
@@ -1657,6 +1665,62 @@ func (s *dxPostgresStore) pruneRawSpotsOlderThan(cutoff int64) (int64, error) {
 		}
 	}
 	return total, nil
+}
+
+// pruneDayIndexedBaselineOlderThan deletes rows whose day_index is older than
+// cutoffDayIndex from a day-indexed baseline table (dx_region_baseline_daily /
+// wspr_region_baseline_daily). Both tables are keyed (target_grid4,band,slot,
+// region,day_index) with day_index last, so a plain `WHERE day_index < cutoff`
+// cannot use the PK; the dedicated day_index index (built by initSchema /
+// scripts/migrate_add_region_day_index.sql) makes the ctid-LIMIT subquery
+// sargable. Batched with a fresh short context per batch (same rationale as
+// pruneRawSpotsOlderThan) so a slow/timeout batch still commits what it deleted.
+//
+// table is a hardcoded identifier, not user input, so the fmt.Sprintf is safe.
+const (
+	pruneDayIndexBatchSize    = 50_000
+	pruneDayIndexBatchTimeout = 15 * time.Second
+	pruneDayIndexMaxBatches   = 200
+)
+
+func (s *dxPostgresStore) pruneDayIndexedBaselineOlderThan(table string, cutoffDayIndex int64) (int64, error) {
+	if s == nil {
+		return 0, nil
+	}
+	var total int64
+	for b := 0; b < pruneDayIndexMaxBatches; b++ {
+		ctx, cancel := context.WithTimeout(context.Background(), pruneDayIndexBatchTimeout)
+		tag, err := s.pool.Exec(ctx, fmt.Sprintf(`
+			DELETE FROM %s
+			WHERE ctid IN (SELECT ctid FROM %s
+			               WHERE day_index < $1
+			               LIMIT $2)`, table, table), cutoffDayIndex, pruneDayIndexBatchSize)
+		cancel()
+		if err != nil {
+			return total, err
+		}
+		n := tag.RowsAffected()
+		total += n
+		if n < pruneDayIndexBatchSize {
+			break // caught up to cutoff
+		}
+	}
+	return total, nil
+}
+
+// pruneRegionBaselinesOlderThan prunes both dx_region_baseline_daily and
+// wspr_region_baseline_daily (the FT8 and WSPR day-indexed climatology tables).
+// They share the same store pool; only the day_index cutoff matters.
+func (s *dxPostgresStore) pruneRegionBaselinesOlderThan(cutoffDayIndex int64) (int64, error) {
+	n1, err := s.pruneDayIndexedBaselineOlderThan("dx_region_baseline_daily", cutoffDayIndex)
+	if err != nil {
+		return n1, fmt.Errorf("dx_region_baseline_daily: %w", err)
+	}
+	n2, err := s.pruneDayIndexedBaselineOlderThan("wspr_region_baseline_daily", cutoffDayIndex)
+	if err != nil {
+		return n1 + n2, fmt.Errorf("wspr_region_baseline_daily: %w", err)
+	}
+	return n1 + n2, nil
 }
 
 func (s *dxPostgresStore) loadRecentSpotCache(minutes int, now int64, includeDXCluster bool) ([]MQTTMessage, error) {

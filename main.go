@@ -257,6 +257,9 @@ func main() {
 	dxBaselineMaxEventsFlag := flag.Int("dx-baseline-max-events", defaultDxBaselineMaxEvents, "Maximum number of retained DX baseline events")
 	dxRawSpotRetentionDaysFlag := flag.Int("dx-raw-spot-retention-days", 60, "Delete dx_raw_spots rows older than this many days (0 disables retention).")
 	proplabCellRetentionDaysFlag := flag.Int("proplab-cell-retention-days", 60, "Delete proplab cell bucket / SW series rows older than this many days (0 disables retention).")
+	// 35d covers the 30-day regionCalendarStats / WsprRegionCalendarStats lookback
+	// (propIntelRegionBaselineDaysBack = dxlensRegionStatsLookbackDays = 30) with headroom.
+	dxRegionBaselineRetentionDaysFlag := flag.Int("dx-region-baseline-retention-days", 35, "Delete dx_region_baseline_daily / wspr_region_baseline_daily rows older than this many day_index days (0 disables retention).")
 	proplabSWEnableFlag := flag.Bool("proplab-sw-enable", false, "Enable space-weather index series ingest (NOAA SWPC kp/F10.7/xray/OVATION; consumed by pathscope)")
 	opModeEnableFlag := flag.Bool("opmode-enable", true, "Deprecated: backend opmode integration endpoints are always enabled")
 	opModeControlEnableFlag := flag.Bool("opmode-control-enable", false, "Allow rotate/control commands in operator mode")
@@ -624,6 +627,34 @@ func main() {
 			}
 		}()
 		logInfo("dx_raw_spots retention enabled: %d days", retentionDays)
+	}
+
+	// dx_region_baseline_daily / wspr_region_baseline_daily retention loop:
+	// both tables are keyed by day_index and only read over a ~30-day window
+	// (regionCalendarStats / WsprRegionCalendarStats), so rows older than the
+	// configured window are dead weight that would otherwise grow the tables
+	// unbounded. Prune once an hour; disabled when retention is 0 days. The
+	// prune is sargable on the day_index index (built by initSchema / the
+	// migrate_add_region_day_index.sql migration).
+	if dxBaseline != nil && *dxRegionBaselineRetentionDaysFlag > 0 {
+		regionRetentionDays := *dxRegionBaselineRetentionDaysFlag
+		go func() {
+			firstDelay := 3 * time.Minute
+			t := time.NewTimer(firstDelay)
+			defer t.Stop()
+			for {
+				<-t.C
+				cutoff := utcDayIndex(time.Now().Unix()) - int64(regionRetentionDays)
+				n, err := dxBaseline.PruneRegionBaselinesOlderThan(cutoff)
+				if err != nil {
+					logInfo("region baseline prune failed (cutoff day_index=%d, retention=%dd): %v", cutoff, regionRetentionDays, err)
+				} else if n > 0 {
+					logInfo("region baseline prune deleted %d rows older than %d days", n, regionRetentionDays)
+				}
+				t.Reset(1 * time.Hour)
+			}
+		}()
+		logInfo("region baseline retention enabled: %d days", regionRetentionDays)
 	}
 
 	if *domain != "" {
