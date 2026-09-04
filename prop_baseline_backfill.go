@@ -21,7 +21,7 @@ import (
 //   - bounded to the last propBaselineBackfillDays (45) days — never full-table;
 //   - per (source × day) chunks, pre-aggregated by Postgres on the
 //     (source_type, spot_time) index — never raw-row streaming;
-//   - 5s statement timeout per chunk + inter-chunk sleep;
+//   - 30s statement timeout per chunk + inter-chunk sleep;
 //   - resumable via dx_meta cursor; INSERT ... ON CONFLICT DO NOTHING so a
 //     restart is idempotent and the ensure-time WSPR seed always wins;
 //   - aborts after 2 consecutive chunk failures, leaving the cursor for the
@@ -31,7 +31,7 @@ const (
 	propBaselineBackfillDays          = 45
 	propBaselineMetaCursorKey         = "prop_baseline_backfill_cursor_day"
 	propBaselineMetaDoneKey           = "prop_baseline_backfill_done_at"
-	propBaselineChunkStatementTimeout = 5 * time.Second
+	propBaselineChunkStatementTimeout = 30 * time.Second
 	propBaselineChunkSleep            = 300 * time.Millisecond
 	propBaselineMaxChunkFailures      = 2
 )
