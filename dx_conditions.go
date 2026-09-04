@@ -318,6 +318,27 @@ func (e *DxBaselineEngine) LoadSpotsBetweenFiltered(start, end int64, includeDXC
 	return st.loadSpotsBetweenWithSourceFilter(start, end, includeDXCluster)
 }
 
+// CountSpotsBetweenFiltered returns the number of spots in the window under
+// the same source filter as LoadSpotsBetweenFiltered, so the caller can
+// allocate the destination slice exactly once.
+func (e *DxBaselineEngine) CountSpotsBetweenFiltered(start, end int64, includeDXCluster bool) (int64, error) {
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return 0, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var n int64
+	err := st.pool.QueryRow(ctx, `
+		SELECT count(*) FROM dx_raw_spots
+		WHERE spot_time BETWEEN $1 AND $2
+		  AND ($3::bool OR LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster')
+	`, start, end, includeDXCluster).Scan(&n)
+	return n, err
+}
+
 // PruneRawSpotsOlderThan removes raw spots older than the given Unix
 // timestamp from the persistent store. No-op if Postgres isn't configured.
 func (e *DxBaselineEngine) PruneRawSpotsOlderThan(cutoff int64) (int64, error) {

@@ -415,17 +415,22 @@ func main() {
 		if backfillMinutes <= 0 {
 			backfillMinutes = defaultLiveHistoryRetentionMinutes
 		}
-		// Load the window in 15-minute chunks appended straight into
-		// hub.history: materializing all spots at once transiently doubles
-		// the process footprint and has OOM-killed the service on the
-		// memory-constrained prod box (kills came ~40s into startup, i.e.
-		// mid-backfill). Chunked, peak RSS stays at one chunk.
+		// Load the window in 15-minute chunks, copied into ONE slice
+		// preallocated from a count query. Peak memory is then the live
+		// set + one chunk: materializing the whole window at once, or
+		// appending chunk-by-chunk (repeated multi-GB reallocs), transiently
+		// doubled RSS and OOM-killed the memory-constrained prod box in a
+		// ~90s crash loop during evening FT8 peaks.
 		const backfillChunkMinutes = 15
 		windowEnd := time.Now().Unix()
 		windowStart := windowEnd - int64(backfillMinutes*60)
+		count, err := dxBaseline.CountSpotsBetweenFiltered(windowStart, windowEnd, includeDXCluster)
+		if err != nil {
+			logInfo("Startup spot-cache backfill count failed, continuing uncounted: %v", err)
+		}
+		merged := make([]MQTTMessage, 0, count+count/20+1024)
 		totalLoaded := 0
 		var backfillErr error
-		var chunks [][]MQTTMessage
 		for chunkStart := windowStart; chunkStart < windowEnd; chunkStart += backfillChunkMinutes * 60 {
 			chunkEnd := chunkStart + backfillChunkMinutes*60
 			if chunkEnd > windowEnd {
@@ -436,25 +441,16 @@ func main() {
 				backfillErr = err
 				break
 			}
-			if len(cached) > 0 {
-				chunks = append(chunks, cached)
-				totalLoaded += len(cached)
-			}
+			merged = append(merged, cached...)
+			totalLoaded += len(cached)
 		}
-		// One exact-size allocation: appending chunk by chunk into
-		// hub.history would repeatedly reallocate a multi-GB slice and the
-		// copy garbage alone can OOM the box between GCs.
-		if totalLoaded > 0 && backfillErr == nil {
-			merged := make([]MQTTMessage, 0, totalLoaded)
-			for _, chunk := range chunks {
-				merged = append(merged, chunk...)
-			}
+		if backfillErr != nil {
+			logInfo("Startup spot-cache backfill failed after %d spots (last %d minutes, include_dxcluster=%v): %v", totalLoaded, backfillMinutes, includeDXCluster, backfillErr)
+		} else if totalLoaded > 0 {
 			hub.Lock()
 			hub.history = merged
 			hub.Unlock()
 			logInfo("Startup spot-cache backfill loaded %d spots from dx_raw_spots (last %d minutes, include_dxcluster=%v)", totalLoaded, backfillMinutes, includeDXCluster)
-		} else if backfillErr != nil {
-			logInfo("Startup spot-cache backfill failed after %d spots (last %d minutes, include_dxcluster=%v): %v", totalLoaded, backfillMinutes, includeDXCluster, backfillErr)
 		} else {
 			logInfo("Startup spot-cache backfill found no spots in dx_raw_spots for the last %d minutes (include_dxcluster=%v)", backfillMinutes, includeDXCluster)
 		}
