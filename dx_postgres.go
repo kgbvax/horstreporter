@@ -870,6 +870,7 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 	// still counts the spot.
 	if !isDXCluster {
 		s.pendingRawSpots = append(s.pendingRawSpots, row)
+		s.trimPendingRawSpotsLocked()
 	}
 	shouldFlush := s.pendingCount >= dxBaselineFlushMaxPending
 	s.mu.Unlock()
@@ -884,6 +885,15 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 // the per-statement parameter count (rows×15) stays well under pgx's 65535-param
 // limit and each statement stays manageable. 1000 rows ⇒ 15000 params.
 const rawSpotInsertChunkSize = 1000
+
+// rawSpotMaxPendingRows caps the raw-spot retry buffer. When Postgres stays
+// slow (evening FT8 peak), every flush fails and mergeRawSpotsBack requeues
+// the batch while ~370 new spots/s keep appending: the buffer grows without
+// bound and OOM-killed the memory-constrained prod box (Sep 4, 22:08). At
+// ~370 spots/s the cap holds ~9 minutes of traffic — oldest rows are dropped
+// first so the buffer converges instead of exploding; the live SSE stream
+// and baselines are unaffected (this only bounds raw-history persistence).
+const rawSpotMaxPendingRows = 200000
 
 func (s *dxPostgresStore) flushRawSpots(ctx context.Context) error {
 	s.mu.Lock()
@@ -936,7 +946,17 @@ func (s *dxPostgresStore) mergeRawSpotsBack(rows []rawSpotRow) {
 	combined = append(combined, rows...)
 	combined = append(combined, s.pendingRawSpots...)
 	s.pendingRawSpots = combined
+	s.trimPendingRawSpotsLocked()
 	s.mu.Unlock()
+}
+
+// trimPendingRawSpotsLocked drops the oldest buffered rows when the retry
+// buffer exceeds rawSpotMaxPendingRows. Caller must hold s.mu.
+func (s *dxPostgresStore) trimPendingRawSpotsLocked() {
+	if excess := len(s.pendingRawSpots) - rawSpotMaxPendingRows; excess > 0 {
+		s.pendingRawSpots = s.pendingRawSpots[excess:len(s.pendingRawSpots):len(s.pendingRawSpots)]
+		logInfo("Raw spot retry buffer overflowed; dropped %d oldest rows (Postgres persisting slower than ingest)", excess)
+	}
 }
 
 // buildRawSpotInsertSQL builds one multi-VALUES INSERT for a chunk of precomputed
