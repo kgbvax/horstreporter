@@ -253,9 +253,14 @@ it adopts multi-source rendering. See `prop_intel_v2.go`,
 `prop_intel_sources.go` (per-source profiles), and `prop_baseline.go`
 (unified climatology, `prop_region_baseline_daily`).
 
-Params: v1's (`qth` required, `surroundings`, `minutes`, `cw_min_db` —
-unused by v2's per-source floors, accepted for shape parity,
-`surge_threshold`, `from_here`) plus:
+Params: v1's (`qth` required, `surroundings`, `minutes`, `surge_threshold`,
+`from_here`) plus:
+
+- `ssb_min_db` / `cw_min_db`: global Min SNR overrides (the UI's Min SNR
+  control, sent by the web panel). When present they REPLACE the per-source
+  profile floors for the SNR-floored sources (`pskr`, `rbn` CW) with the
+  given values, clamped ssb −10..30 / cw −40..20. Absent (and for `wspr`'s
+  budget model and `dxcluster`'s presence rule) the profile floors apply.
 
 - `sources`: source selection, CSV or repeated (`?sources=wspr,pskr` or
   `?sources=wspr&sources=rbn`). Public names: `wspr` (WSPR beacons),
@@ -290,6 +295,8 @@ region):
     power is unknown, so these are estimates (`unknown_power: true`).
   - `rbn` — CW skimmer only: CW open ≥ +8 dB; `ssb_open` is ABSENT (nil),
     not false — a CW skimmer can never prove SSB.
+  - `ssb_min_db`/`cw_min_db` override these floors when the global Min SNR
+    control is set (see params).
   - `dxcluster` — no amplitude: `open` = ≥ 2 spots in the window (a single
     spot may be a busted callsign); no mode flags (`presence`).
 - `atypical` per source z-scores the live rate against THAT source's

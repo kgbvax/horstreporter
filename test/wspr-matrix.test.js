@@ -6,13 +6,13 @@ import { readFileSync } from 'node:fs';
 vi.mock('../static/utils.js', () => ({
     WSPR_REGIONS: ['EU', 'NA', 'SA', 'AF', 'AS', 'JA', 'OC', 'VK', 'KH6', 'CAR', 'AN'],
     bandColors: { all: '#555', '20m': '#e67e22', '10m': '#16a095' },
+    getMinSnrMode: () => document.querySelector('input[name="min-snr"]:checked')?.value || 'none',
 }));
 
 import { initWsprMatrix, __test } from '../static/wspr-matrix.js';
 import { state } from '../static/state.js';
 
 const {
-    cellColor,
     cellInk,
     topModeBadges,
     renderCell,
@@ -56,9 +56,8 @@ describe('wspr-matrix heat styles (viridis / inferno)', () => {
     });
 
     it('viridis hits its reference endpoints and ignores the theme', () => {
-        expect(styleFill('viridis', 0, 'light')).toEqual([68, 1, 84]);   // #440154
-        expect(styleFill('viridis', 1, 'dark')).toEqual([253, 231, 37]); // #fde725
-        expect(styleFill('viridis', 0.5, 'light')).toEqual(styleFill('viridis', 0.5, 'dark'));
+        expect(styleFill('viridis', 0)).toEqual([68, 1, 84]);   // #440154
+        expect(styleFill('viridis', 1)).toEqual([253, 231, 37]); // #fde725
     });
 
     it('inferno hits its reference endpoints', () => {
@@ -119,6 +118,7 @@ describe('wspr-matrix heat styles (viridis / inferno)', () => {
 
     it('setStyle persists, resets the render fingerprint, rejects unknown styles', () => {
         runtime.lastRenderKey = 'stale';
+        runtime.style = 'inferno'; // reset() default is viridis; start elsewhere
         setStyle('viridis');
         expect(runtime.style).toBe('viridis');
         expect(store.getItem(__test.STYLE_KEY)).toBe('viridis');
@@ -150,61 +150,6 @@ describe('wspr-matrix topModeBadges', () => {
     });
 });
 
-describe('wspr-matrix cellColor heat ramp', () => {
-    // Panel background approximations: --bg-color composites to near-white in
-    // the light theme and near-black in the dark theme.
-    const PANEL_LUMINANCE = { light: 1.0, dark: 0.022 };
-
-    it('hits the ramp endpoints at 0 and 1 per theme', () => {
-        expect(cellColor(0, 'light')).toBe('rgb(159, 217, 226)');
-        expect(cellColor(1, 'light')).toBe('rgb(8, 55, 67)');
-        expect(cellColor(0, 'dark')).toBe('rgb(13, 71, 83)');
-        expect(cellColor(1, 'dark')).toBe('rgb(127, 220, 234)');
-    });
-
-    it('clamps out-of-range intensities', () => {
-        expect(cellColor(-2, 'light')).toBe(cellColor(0, 'light'));
-        expect(cellColor(5, 'dark')).toBe(cellColor(1, 'dark'));
-    });
-
-    it('defaults to the light theme (backward-compatible call sites)', () => {
-        expect(cellColor(0)).toBe(cellColor(0, 'light'));
-    });
-
-    it('moves chips AWAY from the panel as activity rises, in both themes', () => {
-        for (const theme of ['light', 'dark']) {
-            let prevDist = -1;
-            for (let i = 0; i <= 20; i++) {
-                const l = luminance(parseRgb(cellColor(i / 20, theme)));
-                const dist = Math.abs(l - PANEL_LUMINANCE[theme]);
-                expect(dist, `${theme} intensity ${i}`).toBeGreaterThan(prevDist);
-                prevDist = dist;
-            }
-        }
-    });
-
-    it('spans at least 40 L* so the gradient is actually perceivable', () => {
-        for (const theme of ['light', 'dark']) {
-            const lo = luminance(parseRgb(cellColor(0, theme)));
-            const hi = luminance(parseRgb(cellColor(1, theme)));
-            // L* ≈ 116 * sqrt(luminance) − 16; assert the span, not the exact L*.
-            expect(Math.abs(hi - lo), theme).toBeGreaterThanOrEqual(0.32);
-        }
-    });
-
-    it('keeps numerals at WCAG AA with the selected ink across both ramps', () => {
-        for (const theme of ['light', 'dark']) {
-            for (let i = 0; i <= 40; i++) {
-                const bg = parseRgb(cellColor(i / 40, theme));
-                const ink = parseRgb(cellInk(bg));
-                const bgL = luminance(bg), inkL = luminance(ink);
-                const ratio = (Math.max(bgL, inkL) + 0.05) / (Math.min(bgL, inkL) + 0.05);
-                expect(ratio, `${theme} intensity ${i / 40} on rgb(${bg})`).toBeGreaterThanOrEqual(4.5);
-            }
-        }
-    });
-});
-
 // The .wspr-badge-* flag chips sit ON the teal heat cells, so each bg/fg pair
 // in style.css must hold WCAG AA on its own (0.65rem bold = normal-size text).
 // Guards the dark-ink badge fix (white on green/teal/orange was 2.6-3.1:1).
@@ -228,9 +173,9 @@ describe('wspr-matrix badge contrast (style.css)', () => {
     };
 
     it('covers every badge variant', () => {
-        // Base + ssb/cw/rising/atypical/atypical-multi (flavor variants went
-        // away with the v2 merge — v2 has no flavor field).
-        expect(rules.length).toBeGreaterThanOrEqual(5);
+        // ssb/cw/rising — the !/!! atypical badges and the flavor variants are
+        // gone (v2 merge: anomalies are glyphs/rings, v2 has no flavor field).
+        expect(rules.length).toBeGreaterThanOrEqual(3);
     });
 
     it('keeps badge text at WCAG AA against its own background', () => {
@@ -267,6 +212,13 @@ function installLocalStorageMock() {
 function setupDom() {
     document.body.innerHTML = `
         <input id="qth" value="JO32" />
+        <div id="min-snr-group">
+            <input type="radio" name="min-snr" value="none" checked />
+            <input type="radio" name="min-snr" value="cw" />
+            <input type="radio" name="min-snr" value="ssb" />
+        </div>
+        <input type="range" id="ssb-min-db" min="-10" max="30" value="0" />
+        <input type="range" id="cw-min-db" min="-30" max="0" value="-15" />
         <button id="${TOGGLE_ID}"></button>
         <button id="drill-down-clear" style="display: none;"></button>
         <div id="${PANEL_ID}" class="wspr-matrix-window is-hidden">
@@ -466,39 +418,63 @@ describe('wspr-matrix (Prop) panel', () => {
         expect(runtime.sources).toEqual(['wspr', 'dxcluster']); // canonical order
     });
 
-    it('atypical with multi-source agreement renders !! + the multi badge class', () => {
+    it('anomalies never render the retired !/!! badges or ×n source mark', () => {
         const html = renderCell('10m', 'CAR', makeCell({
             band: '10m', region: 'CAR',
             atypical: { z_score: 3.1, confidence: 0.9 },
             active_sources: ['wspr', 'pskr'], atypical_agreement: 1.0,
         }), 12, 'light');
-        expect(html).toContain('wspr-badge-atypical-multi');
-        expect(html).toContain('>!!</span>');
-        expect(html).toContain('wspr-matrix-surge');
-        expect(html).toContain('×2');
-        // No emoji in the UI — marks are text glyphs.
+        expect(html).not.toContain('wspr-badge-atypical');
+        expect(html).not.toContain('wspr-matrix-src');
+        expect(html).toContain('wspr-chev'); // viridis default: up-chevrons
         expect(html).not.toContain('⚡');
     });
 
-    it('atypical without agreement renders the plain ! badge', () => {
-        const html = renderCell('10m', 'CAR', makeCell({
-            band: '10m', region: 'CAR',
-            atypical: { z_score: 2.4, confidence: 0.5 },
-            active_sources: ['wspr'],
-        }), 12, 'light');
-        expect(html).toContain('wspr-badge-atypical');
-        expect(html).not.toContain('wspr-badge-atypical-multi');
-        expect(html).toContain('>!</span>');
+    it('min-snr=none sends no thresholds; cw/ssb modes send the active one', async () => {
+        const calls = [];
+        global.fetch = vi.fn(async (url) => {
+            calls.push(url);
+            return { ok: true, status: 200, json: async () => ({ cells: [] }) };
+        });
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls[0]).not.toContain('cw_min_db');
+        expect(calls[0]).not.toContain('ssb_min_db');
+
+        document.querySelector('input[name="min-snr"][value="cw"]').click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls.length).toBe(2);
+        expect(calls[1]).toContain('cw_min_db=-15');
+        expect(calls[1]).not.toContain('ssb_min_db');
+
+        document.querySelector('input[name="min-snr"][value="ssb"]').click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls.length).toBe(3);
+        expect(calls[2]).toContain('ssb_min_db=0');
+        expect(calls[2]).not.toContain('cw_min_db');
     });
 
-    it('×n mark fades when sources disagree on open', () => {
-        const agree = renderCell('20m', 'EU', makeCell({ active_sources: ['wspr', 'pskr'], open_agreement: 1.0 }), 12, 'light');
-        expect(agree).toContain('wspr-matrix-src');
-        expect(agree).not.toContain('is-mixed');
-        const mixed = renderCell('20m', 'EU', makeCell({
-            active_sources: ['wspr', 'pskr'], open_agreement: 0.5,
-        }), 12, 'light');
-        expect(mixed).toContain('is-mixed');
+    it('changing a min-snr threshold slider re-fetches with the new value', async () => {
+        const calls = [];
+        global.fetch = vi.fn(async (url) => {
+            calls.push(url);
+            return { ok: true, status: 200, json: async () => ({ cells: [] }) };
+        });
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+
+        document.querySelector('input[name="min-snr"][value="cw"]').click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls[1]).toContain('cw_min_db=-15');
+
+        const cwInput = document.getElementById('cw-min-db');
+        cwInput.value = '-10';
+        cwInput.dispatchEvent(new Event('change'));
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls.length).toBe(3);
+        expect(calls[2]).toContain('cw_min_db=-10');
     });
 
     it('renders an empty cell as a clickable drill-down target', () => {

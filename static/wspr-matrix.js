@@ -1,16 +1,18 @@
 import { state } from './state.js';
-import { WSPR_REGIONS, bandColors } from './utils.js';
+import { WSPR_REGIONS, bandColors, getMinSnrMode } from './utils.js';
 import { makeDraggable } from './panel-drag.js';
 
 // wspr-matrix.js — the unified Prop panel: band × region propagation-
 // intelligence matrix over ALL ingest sources (WSPR, PSKReporter FT8/FT4,
 // RBN, DX cluster). Polls /api/prop_intel/v2 (the multi-source contract;
-// v1 stays frozen for the horstapp widgets). Renders per-cell activity with
-// switchable looks (chip row: Aqua / Viridis / Inferno): the shipped teal
-// ramp + !/!! badges, or a heatmap colormap where the anomaly is a glyph —
-// up-chevrons on viridis, an amber warning ring on inferno (tmp/prop-vis-
-// round3.html, decision 02: one-channel fill + glyph). All looks keep SSB/CW
-// flags, rising slope, and the ×n source-count corner.
+// v1 stays frozen for the horstapp widgets). Renders per-cell activity as a
+// heatmap colormap — switchable between viridis and inferno (chip row) —
+// where the anomaly is a glyph: up-chevrons on viridis, an amber warning
+// ring on inferno (tmp/prop-vis-round3.html, decision 02: one-channel fill
+// + glyph). Both looks keep SSB/CW flags and the rising slope.
+// The SSB/CW open floors follow the global "Min SNR" control: the panel
+// passes ssb_min_db/cw_min_db from #ssb-min-db/#cw-min-db so a stricter
+// min-SNR raises the open thresholds here too (backend v2 overrides).
 // From-here-only by design: cells are paths with the operator's QTH at one
 // end — an unfiltered global window is noise (never re-add one).
 //
@@ -50,21 +52,10 @@ const ALL_SOURCES = SOURCES.map((s) => s.key);
 // The chip stays available for local/dev instances that run the ingest.
 const DEFAULT_SOURCES = ['wspr', 'pskr', 'rbn'];
 
-// Cell heat ramps. Activity maps to *distance from the panel background* in
-// both themes — the perceptual trick that makes the gradient read at a glance:
-//   light theme: pale aqua (sparse) → deep teal (peak), chips darken
-//   dark theme:  deep teal (sparse) → luminous aqua (peak), chips brighten
-// Each ramp spans ~50 L* (the old single-direction teal ramp capped at ~23 L*
-// by white text, so everything above ~5 spots looked identical). sqrt() still
-// spreads the low end so 1-2 spots don't collapse onto the sparse shade.
-const CELL_COLOR_LIGHT = { low: [159, 217, 226], high: [8, 55, 67] }; // #9fd9e2 → #083743
-const CELL_COLOR_DARK = { low: [13, 71, 83], high: [127, 220, 234] }; // #0d4753 → #7fdcea
-
 // Switchable fill "look" (tmp/prop-vis-round3.html, decision 02: one-channel
-// fill + glyph). The heat styles are data-colored — identical in both themes,
-// only the numeral ink flips. 'aqua' keeps the shipped theme-aware ramp.
+// fill + glyph). Both styles are data-colored heatmaps — identical in both
+// themes, only the numeral ink flips.
 const STYLES = [
-    { key: 'aqua', label: 'Aqua' },
     { key: 'viridis', label: 'Viridis' },
     { key: 'inferno', label: 'Inferno' },
 ];
@@ -77,9 +68,10 @@ function hexToRgb(h) {
     return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 }
 
-// Interpolate a stop table at t in 0..1 → [r,g,b].
+// Interpolate a stop table at t in 0..1 → [r,g,b]. sqrt() spreads the low end
+// so 1-2 spots don't collapse onto the dead shade.
 function rampAt(stops, t) {
-    t = Math.max(0, Math.min(1, t));
+    t = Math.sqrt(Math.max(0, Math.min(1, t)));
     const n = stops.length - 1;
     const i = Math.min(n - 1, Math.floor(t * n));
     const a = hexToRgb(stops[i]);
@@ -88,20 +80,16 @@ function rampAt(stops, t) {
     return a.map((v, k) => Math.round(v + (b[k] - v) * f));
 }
 
-// Per-style chip fill. Heat ramps keep the sqrt() low-end spread (1-2 spots
-// must not collapse onto the dead shade); theme only matters for 'aqua'.
-function styleFill(style, intensity, theme) {
-    const t = Math.sqrt(Math.max(0, Math.min(1, intensity)));
-    if (style === 'viridis') return rampAt(VIRIDIS_STOPS, t);
-    if (style === 'inferno') return rampAt(INFERNO_STOPS, t);
-    const { low, high } = theme === 'dark' ? CELL_COLOR_DARK : CELL_COLOR_LIGHT;
-    return low.map((c, i) => Math.round(c + (high[i] - c) * t));
+// Per-style chip fill (unknown/legacy keys — e.g. a stored 'aqua' — fall back
+// to the viridis default).
+function styleFill(style, intensity) {
+    return style === 'inferno' ? rampAt(INFERNO_STOPS, intensity) : rampAt(VIRIDIS_STOPS, intensity);
 }
 
 // Numerals flip ink at the luminance where white/black cross (~0.179); pure
 // black/white inks keep >= 4.58:1 on every shade either side of the switch —
-// a mid-luminance teal would fail AA with both inks, which is why the switch
-// uses #000 rather than the softer #1a1a1a used by the flag badges.
+// a mid-luminance ink would fail AA with both, which is why the switch uses
+// #000 rather than the softer #1a1a1a used by the flag badges.
 const WHITE_INK = 'rgb(255, 255, 255)';
 const BLACK_INK = 'rgb(0, 0, 0)';
 
@@ -111,14 +99,6 @@ function rgbLuminance([r, g, b]) {
         return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
     };
     return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-}
-
-// Map a 0..1 activity intensity to a solid background color for the theme.
-function cellColor(intensity, theme = 'light') {
-    const { low, high } = theme === 'dark' ? CELL_COLOR_DARK : CELL_COLOR_LIGHT;
-    const t = Math.sqrt(Math.max(0, Math.min(1, intensity)));
-    const rgb = low.map((c, i) => Math.round(c + (high[i] - c) * t));
-    return `rgb(${rgb.join(', ')})`;
 }
 
 // Pick the numeral ink for a chip color: whichever of white/black is AA-safe.
@@ -174,7 +154,7 @@ const runtime = {
     lastQth: '',
     lastRenderKey: '',
     sources: [...DEFAULT_SOURCES],
-    style: 'aqua',
+    style: 'viridis',
     onLayoutChange: null,
 };
 
@@ -221,6 +201,19 @@ export function initWsprMatrix({ onLayoutChange } = {}) {
             }
         });
     }
+
+    // Re-poll when the global Min SNR control changes — the panel's SSB/CW
+    // open floors are the same filter as everything else on the page.
+    const onMinSnrChange = () => {
+        if (!runtime.enabled) return;
+        invalidateCache();
+        pollMatrix(true);
+    };
+    document.getElementById('min-snr-group')?.addEventListener('change', (e) => {
+        if (e.target?.name === 'min-snr') onMinSnrChange();
+    });
+    document.getElementById('ssb-min-db')?.addEventListener('change', onMinSnrChange);
+    document.getElementById('cw-min-db')?.addEventListener('change', onMinSnrChange);
 
     makeDraggable(panel, panel.querySelector('.wspr-matrix-window-header'), 'wsprMatrixPos');
 }
@@ -301,8 +294,14 @@ async function pollMatrix(force) {
         return;
     }
 
+    // Global Min SNR state: only the active threshold is meaningful, but
+    // both ride in the key so toggling none/cw/ssb always re-fetches.
+    const minSnrMode = getMinSnrMode();
+    const ssbMinDb = document.getElementById('ssb-min-db')?.value || '0';
+    const cwMinDb = document.getElementById('cw-min-db')?.value || '-15';
+
     const now = Date.now();
-    const key = `${qth}|15|fh|${runtime.sources.join(',')}`;
+    const key = `${qth}|15|fh|${runtime.sources.join(',')}|${minSnrMode}|${ssbMinDb}|${cwMinDb}`;
     if (!force && runtime.cache && runtime.cacheKey === key && (now - runtime.lastFetchedAt) < CACHE_TTL_MS) {
         renderMatrix();
         return;
@@ -321,6 +320,8 @@ async function pollMatrix(force) {
     params.set('surroundings', 'true');
     params.set('from_here', 'true');
     params.set('sources', runtime.sources.join(','));
+    if (minSnrMode === 'ssb') params.set('ssb_min_db', ssbMinDb);
+    if (minSnrMode === 'cw') params.set('cw_min_db', cwMinDb);
 
     try {
         const resp = await fetch(`/api/prop_intel/v2?${params.toString()}`, { signal: controller.signal });
@@ -441,37 +442,20 @@ function renderCell(band, region, cell, maxCount, theme) {
     let badges = topModeBadges(cell);
     if (cell.rising) badges += '<span class="wspr-badge wspr-badge-rising">&uarr;</span>';
     let atypicalMark = '';
-    let surgeClass = '';
     let ring = '';
     if (cell.atypical) {
         const conf = Math.round(Math.max(0, Math.min(1, Number(cell.atypical.confidence ?? 0))) * 100);
         const multi = (cell.atypical_agreement ?? 0) >= 0.5;
         const tip = `atypical z=${cell.atypical.z_score}, confidence ${conf}%${multi ? `, ${Math.round((cell.atypical_agreement ?? 0) * 100)}% of sources agree` : ''}`;
-        if (style === 'viridis' || style === 'inferno') {
-            // Heat styles speak in geometry, not badges (round-3 decision 02).
-            // The v2 backend only flags surges, so glyphs only point up.
-            const strong = surgeStrength(cell) === 2;
-            if (style === 'viridis') {
-                atypicalMark = `<span title="${tip}">${chevronGlyph(strong, '__INK__')}</span>`;
-            } else {
-                ring = ringShadow(strong);
-                atypicalMark = `<span class="wspr-sr-only" title="${tip}">surge</span>`;
-            }
+        // Heat styles speak in geometry, not badges (round-3 decision 02).
+        // The v2 backend only flags surges, so glyphs only point up.
+        const strong = surgeStrength(cell) === 2;
+        if (style === 'inferno') {
+            ring = ringShadow(strong);
+            atypicalMark = `<span class="wspr-sr-only" title="${tip}">surge</span>`;
         } else {
-            // Aqua style keeps the shipped badge language: !! when independent
-            // sources agree on the surge; ! for a single source's call.
-            surgeClass = ' wspr-matrix-surge';
-            const cls = multi ? ' wspr-badge-atypical-multi' : '';
-            atypicalMark = `<span class="wspr-badge wspr-badge-atypical${cls}" title="${tip}">${multi ? '!!' : '!'}</span>`;
+            atypicalMark = `<span title="${tip}">${chevronGlyph(strong, '__INK__')}</span>`;
         }
-    }
-    // Source-count corner: only meaningful with ≥2 active sources (with one,
-    // open agreement is vacuously 1.0). Faded when sources disagree on "open".
-    const activeSources = Array.isArray(cell.active_sources) ? cell.active_sources : [];
-    let srcMark = '';
-    if (activeSources.length >= 2) {
-        const disagree = (cell.open_agreement ?? 1) < 1;
-        srcMark = `<span class="wspr-matrix-src${disagree ? ' is-mixed' : ''}">×${activeSources.length}</span>`;
     }
     const titleParts = [`${band} → ${region}: ${cell.spot_count} spots`];
     if (cell.ssb_open) titleParts.push('SSB open');
@@ -491,28 +475,21 @@ function renderCell(band, region, cell, maxCount, theme) {
             titleParts.push(line);
         }
     }
-    const bgRgb = styleFill(style, intensity, theme);
+    const bgRgb = styleFill(style, intensity);
     const bg = `rgb(${bgRgb.join(', ')})`;
     const ink = cellInk(bgRgb);
-    // Chevron ink follows the numeral ink flip (the heat ramps cross white/
-    // black AA at the same luminance the teal ramp does).
     atypicalMark = atypicalMark.replace('__INK__', ink);
     const styleAttr = `background: ${bg}; color: ${ink}${ring ? `; box-shadow: ${ring}` : ''}`;
-    return `<td class="wspr-matrix-cell${surgeClass}" style="${styleAttr}" title="${titleParts.join('\n')}" data-band="${band}" data-region="${region}" role="button" tabindex="0">${cell.spot_count}${badges}${atypicalMark}${srcMark}</td>`;
+    return `<td class="wspr-matrix-cell" style="${styleAttr}" title="${titleParts.join('\n')}" data-band="${band}" data-region="${region}" role="button" tabindex="0">${cell.spot_count}${badges}${atypicalMark}</td>`;
 }
 
 function legendHtml() {
     const style = runtime.style;
-    let scaleStyle = '';
-    let anomaly = '<span class="wspr-badge wspr-badge-atypical">!</span>=atypical <span class="wspr-badge wspr-badge-atypical wspr-badge-atypical-multi">!!</span>=atypical, multi-source';
-    if (style === 'viridis') {
-        scaleStyle = ` style="background: linear-gradient(90deg, ${VIRIDIS_STOPS.join(', ')})"`;
-        anomaly = `<span class="wspr-chev">${chevSvg('currentColor')}</span>=surge <span class="wspr-chev">${chevSvg('currentColor')}${chevSvg('currentColor')}</span>=strong / multi-source`;
-    } else if (style === 'inferno') {
-        scaleStyle = ` style="background: linear-gradient(90deg, ${INFERNO_STOPS.join(', ')})"`;
-        anomaly = `<span class="wspr-ring-swatch"></span>=surge ring (thicker = strong / multi-source)`;
-    }
-    return `<div class="wspr-matrix-legend small text-muted"><span class="wspr-heat-scale"${scaleStyle} aria-hidden="true"></span>=spots: few &rarr; many <span class="wspr-badge wspr-badge-ssb">S</span>=SSB <span class="wspr-badge wspr-badge-cw">C</span>=CW (top mode) <span class="wspr-badge wspr-badge-rising">&uarr;</span>=rising ${anomaly} <span class="wspr-matrix-src">×n</span>=sources</div>`;
+    const stops = style === 'inferno' ? INFERNO_STOPS : VIRIDIS_STOPS;
+    const anomaly = style === 'inferno'
+        ? '<span class="wspr-ring-swatch"></span>=surge ring (thicker = strong / multi-source)'
+        : `<span class="wspr-chev">${chevSvg('currentColor')}</span>=surge <span class="wspr-chev">${chevSvg('currentColor')}${chevSvg('currentColor')}</span>=strong / multi-source`;
+    return `<div class="wspr-matrix-legend small text-muted"><span class="wspr-heat-scale" style="background: linear-gradient(90deg, ${stops.join(', ')})" aria-hidden="true"></span>=spots: few &rarr; many <span class="wspr-badge wspr-badge-ssb">S</span>=SSB <span class="wspr-badge wspr-badge-cw">C</span>=CW (top mode) <span class="wspr-badge wspr-badge-rising">&uarr;</span>=rising ${anomaly}</div>`;
 }
 
 function attachSourceChipHandlers(body) {
@@ -577,7 +554,6 @@ export function clearDrillDown() {
 
 // Test hooks.
 export const __test = {
-    cellColor,
     cellInk,
     rgbLuminance,
     topModeBadges,
@@ -601,7 +577,7 @@ export const __test = {
         runtime.lastQth = '';
         runtime.lastRenderKey = '';
         runtime.sources = [...DEFAULT_SOURCES];
-        runtime.style = 'aqua';
+        runtime.style = 'viridis';
         runtime.onLayoutChange = null;
     },
     invalidateCache,

@@ -47,7 +47,7 @@ func TestV2WsprBudgetParity(t *testing.T) {
 	}
 
 	v1 := propIntel.Evaluate("JO62", false, 15, defaultDxCwViableMinDb, history, now, propIntelAtypicalZThreshold)
-	v2 := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("wspr"), history, now, propIntelAtypicalZThreshold)
+	v2 := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("wspr"), nil, nil, history, now, propIntelAtypicalZThreshold)
 
 	// Operator at JO62 is the RL end; remote is SL = FN31 (NA).
 	c1 := findCell(t, v1, "20m", "NA")
@@ -79,7 +79,7 @@ func TestV2PskrFloors(t *testing.T) {
 		{0, true, true, true},     // ssb open
 	}
 	for _, tc := range cases {
-		resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("pskr"), []MQTTMessage{spot(tc.snr)}, now, propIntelAtypicalZThreshold)
+		resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("pskr"), nil, nil, []MQTTMessage{spot(tc.snr)}, now, propIntelAtypicalZThreshold)
 		c := findV2Cell(t, resp, "20m", "NA") // operator at JO62 is the reporter end → remote is FN31 (NA)
 		s := findV2SourceCell(t, c, "pskr")
 		if s.Open != tc.open {
@@ -100,13 +100,54 @@ func TestV2PskrFloors(t *testing.T) {
 	}
 }
 
+// TestV2GlobalMinSnOverrides: the ssb_min_db/cw_min_db params (the UI's
+// global Min SNR control) replace per-source floors for SNR-floored sources.
+func TestV2GlobalMinSnOverrides(t *testing.T) {
+	now := time.Now().Unix()
+	spot := func(snr int) MQTTMessage {
+		return MQTTMessage{Source: "mqtt", B: "20m", T: now - 100,
+			SC: "DX", SL: "FN31ab", RC: "OP", RL: "JO62qm", RP: snr, MD: "FT8"}
+	}
+	iptr := func(v int) *int { return &v }
+
+	// snr=? sits between the pskr profile defaults and the overrides below.
+	seen := func(ssbOv, cwOv *int, snr int) (open, cw, ssb bool) {
+		resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("pskr"), ssbOv, cwOv, []MQTTMessage{spot(snr)}, now, propIntelAtypicalZThreshold)
+		c := findV2Cell(t, resp, "20m", "NA")
+		s := findV2SourceCell(t, c, "pskr")
+		return s.Open, s.CWOpen != nil && *s.CWOpen, s.SSBOpen != nil && *s.SSBOpen
+	}
+
+	// Profile defaults (prop_intel_sources.go): ssb floor -5, cw floor -18.
+	// snr=-7 sits between: cw open, ssb not.
+	open, cw, ssb := seen(nil, nil, -7)
+	if !open || !cw || ssb {
+		t.Fatalf("snr=-7 defaults: open=%v cw=%v ssb=%v (want open+cw)", open, cw, ssb)
+	}
+	// cw_min_db=-2 raises the CW floor above the report: cw flag flips off.
+	open, cw, ssb = seen(nil, iptr(-2), -7)
+	if !open || cw || ssb {
+		t.Fatalf("snr=-7 cw_override=-2: open=%v cw=%v ssb=%v (want open, no cw)", open, cw, ssb)
+	}
+	// ssb_min_db=0: -7 is below the phone floor…
+	open, cw, ssb = seen(iptr(0), nil, -7)
+	if !open || !cw || ssb {
+		t.Fatalf("snr=-7 ssb_override=0: open=%v cw=%v ssb=%v", open, cw, ssb)
+	}
+	// …while ssb_min_db=-10 opens it.
+	_, _, ssb = seen(iptr(-10), nil, -7)
+	if !ssb {
+		t.Fatalf("snr=-7 ssb_override=-10: ssb must open")
+	}
+}
+
 // TestV2RbnNeverSSB: RBN is a CW skimmer — ssb_open is nil (not false).
 func TestV2RbnNeverSSB(t *testing.T) {
 	now := time.Now().Unix()
 	// rbn: SC/SL = skimmer (receiver), RC/RL = DX.
 	m := MQTTMessage{Source: "rbn", B: "20m", T: now - 100,
 		SC: "SKIM", SL: "JO62qm", RC: "DX", RL: "FN31ab", RP: 30, MD: "CW"}
-	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("rbn"), []MQTTMessage{m}, now, propIntelAtypicalZThreshold)
+	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("rbn"), nil, nil, []MQTTMessage{m}, now, propIntelAtypicalZThreshold)
 	c := findV2Cell(t, resp, "20m", "NA")
 	s := findV2SourceCell(t, c, "rbn")
 	if s.SSBOpen != nil {
@@ -140,7 +181,7 @@ func TestV2DxclusterPresence(t *testing.T) {
 			SC: "SPOT", SL: "JO62qm", RC: "DX", RL: "FN31ab", MD: ""}
 	}
 
-	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("dxcluster"), []MQTTMessage{spot(100)}, now, propIntelAtypicalZThreshold)
+	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("dxcluster"), nil, nil, []MQTTMessage{spot(100)}, now, propIntelAtypicalZThreshold)
 	c := findV2Cell(t, resp, "20m", "NA")
 	s := findV2SourceCell(t, c, "dxcluster")
 	if s.Open {
@@ -150,7 +191,7 @@ func TestV2DxclusterPresence(t *testing.T) {
 		t.Fatalf("dxcluster must have nil mode flags and presence basis: %+v", s)
 	}
 
-	resp = propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("dxcluster"), []MQTTMessage{spot(100), spot(50)}, now, propIntelAtypicalZThreshold)
+	resp = propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("dxcluster"), nil, nil, []MQTTMessage{spot(100), spot(50)}, now, propIntelAtypicalZThreshold)
 	c = findV2Cell(t, resp, "20m", "NA")
 	s = findV2SourceCell(t, c, "dxcluster")
 	if !s.Open {
@@ -169,7 +210,7 @@ func TestV2Agreement(t *testing.T) {
 		// rbn open, remote FN31.
 		{Source: "rbn", B: "20m", T: now - 100, SC: "SKIM", SL: "JO62qm", RC: "DX", RL: "FN31ab", RP: 20, MD: "CW"},
 	}
-	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("wspr", "pskr", "rbn"), history, now, propIntelAtypicalZThreshold)
+	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("wspr", "pskr", "rbn"), nil, nil, history, now, propIntelAtypicalZThreshold)
 	c := findV2Cell(t, resp, "20m", "NA")
 
 	if got := strings.Join(c.ActiveSources, ","); got != "wspr,pskr,rbn" {
@@ -226,7 +267,7 @@ func TestV2AtypicalPerSource(t *testing.T) {
 			MQTTMessage{Source: "mqtt", B: "20m", T: now - int64(i)*10, SC: "DX" + itoa(i), SL: "FN31ab", RC: "OP", RL: "JO62qm", MD: "FT8"},
 		)
 	}
-	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("wspr", "pskr"), history, now, propIntelAtypicalZThreshold)
+	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("wspr", "pskr"), nil, nil, history, now, propIntelAtypicalZThreshold)
 	c := findV2Cell(t, resp, "20m", "NA")
 	if c.Atypical == nil {
 		t.Fatalf("surge over climatology must flag atypical; cell=%+v", c)
@@ -255,7 +296,7 @@ func TestV2ColdStartNoAtypical(t *testing.T) {
 		history = append(history, MQTTMessage{Source: "rbn", B: "20m", T: now - int64(i)*5,
 			SC: "SKIM", SL: "JO62qm", RC: "DX" + itoa(i), RL: "FN31ab", RP: 30, MD: "CW"})
 	}
-	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("rbn"), history, now, propIntelAtypicalZThreshold)
+	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("rbn"), nil, nil, history, now, propIntelAtypicalZThreshold)
 	c := findV2Cell(t, resp, "20m", "NA")
 	if c.Atypical != nil {
 		t.Fatalf("cold start must suppress atypical: %+v", c.Atypical)
@@ -271,7 +312,7 @@ func TestV2FromHereFilter(t *testing.T) {
 		// global-mesh (neither end is the operator), receiver JO62-ish in NA
 		{Source: "wspr", B: "40m", T: now - 100, SC: "RX", SL: "FN31ab", RC: "TX", RL: "EM10ab", RP: 5, TXPower: 43},
 	}
-	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("wspr"), history, now, propIntelAtypicalZThreshold)
+	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("wspr"), nil, nil, history, now, propIntelAtypicalZThreshold)
 	if len(resp.Cells) != 2 {
 		t.Fatalf("unfiltered response wants 2 cells, got %d", len(resp.Cells))
 	}
@@ -289,7 +330,7 @@ func TestV2SummaryAdditiveFields(t *testing.T) {
 		{Source: "wspr", B: "20m", T: now - 100, SC: "OP", SL: "JO62qm", RC: "TX", RL: "FN31ab", RP: 5, TXPower: 43},
 		{Source: "mqtt", B: "20m", T: now - 90, SC: "DX", SL: "FN31ab", RC: "OP", RL: "JO62qm", RP: 0, MD: "FT8"},
 	}
-	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("wspr", "pskr"), history, now, propIntelAtypicalZThreshold)
+	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("wspr", "pskr"), nil, nil, history, now, propIntelAtypicalZThreshold)
 	sum := propIntelV2Summarize(resp)
 	if len(sum.Grid) == 0 {
 		t.Fatalf("summary grid empty")

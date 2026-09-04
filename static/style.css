@@ -701,18 +701,14 @@ body[data-theme="dark"] .wspr-matrix-cell {
 .wspr-badge-ssb { background: #28a745; color: #1a1a1a; }        /* 5.6:1 */
 .wspr-badge-cw { background: #17a2b8; color: #1a1a1a; }         /* 5.7:1 */
 .wspr-badge-rising { background: #ffc107; color: #333; }        /* 7.8:1 */
-.wspr-badge-atypical { background: #fd7e14; color: #1a1a1a; }   /* 6.8:1 */
-/* !! variant: independent sources agree on the surge — the strong signal. */
-.wspr-badge-atypical-multi { background: #28a745; color: #1a1a1a; }  /* 5.6:1 */
 .wspr-matrix-legend { margin-top: 4px; padding: 2px 4px; }
-/* Sparse → peak heat scale thumbnail, matching the theme's chip ramp. */
+/* Sparse → peak heat scale thumbnail; gradient comes inline per look. */
 .wspr-heat-scale {
     display: inline-block;
     width: 64px;
     height: 8px;
     border-radius: 2px;
     vertical-align: middle;
-    background: linear-gradient(90deg, #9fd9e2, #083743);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 20%, transparent);
 }
 body[data-theme="dark"] .wspr-heat-scale {
@@ -805,29 +801,6 @@ body[data-theme="dark"] .wspr-heat-scale {
     50% {
         box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 14%, transparent), 0 0 0 3px rgba(255, 138, 30, 0);
     }
-}
-
-/* ×n source-count corner mark (only when ≥2 sources see the cell); faded
-   when the sources disagree on whether the path is open. */
-.wspr-matrix-cell {
-    position: relative;
-}
-.wspr-matrix-src {
-    position: absolute;
-    top: -1px;
-    right: 1px;
-    font-size: 0.6rem;
-    font-weight: 700;
-    line-height: 1;
-    opacity: 0.85;
-    pointer-events: none;
-}
-.wspr-matrix-src.is-mixed {
-    opacity: 0.45;
-}
-/* Legend swatch sits inline, not on a cell — neutral position. */
-.wspr-matrix-legend .wspr-matrix-src {
-    position: static;
 }
 
 /* U5: Web Push settings (options panel). The matrix is a compact

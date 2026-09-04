@@ -578,6 +578,11 @@ type propIntelParams struct {
 	cwMinDb           int
 	atypicalThreshold float64
 	fromHere          bool
+	// v2-only floor overrides from the global Min SNR control. nil = use the
+	// per-source profile floors (also the effective v1 behavior: v1 never
+	// reads these fields).
+	cwOverride  *int
+	ssbOverride *int
 }
 
 // parsePropIntelParams resolves and validates the shared query parameters
@@ -604,6 +609,16 @@ func parsePropIntelParams(r *http.Request) (propIntelParams, bool) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("cw_min_db")); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil {
 			p.cwMinDb = v
+			// Shared clamp with v1's Evaluate range: only sane values become
+			// v2 floor overrides.
+			if v >= -40 && v <= 20 {
+				p.cwOverride = &v
+			}
+		}
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("ssb_min_db")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v >= -10 && v <= 30 {
+			p.ssbOverride = &v
 		}
 	}
 	if raw := strings.TrimSpace(r.URL.Query().Get("surge_threshold")); raw != "" {

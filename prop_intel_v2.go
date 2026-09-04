@@ -163,7 +163,7 @@ var propIntelV2 = &propIntelV2Engine{}
 // EvaluateV2 computes the unified per-(band × region) nowcast for the given
 // QTH, history window, and requested sources. Mirrors v1 Evaluate's
 // windowing/rising/atypical math, generalized per source profile.
-func (e *propIntelV2Engine) EvaluateV2(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, history []MQTTMessage, now int64, atypicalThreshold float64) propIntelV2Response {
+func (e *propIntelV2Engine) EvaluateV2(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64) propIntelV2Response {
 	qth = normalizeQTHToken(qth)
 	if len(profiles) == 0 {
 		profiles = propIntelSourceProfiles
@@ -297,12 +297,26 @@ func (e *propIntelV2Engine) EvaluateV2(qth string, surroundings bool, minutes in
 			OpenBasis: openBasisForProfile(prof),
 		}
 
+		// Global Min SNR overrides (ssb_min_db/cw_min_db query params) swap the
+		// per-source profile floor for the operator's own threshold — one
+		// control gates every SNR-floored source. Presence-only sources
+		// (dxcluster) have no SNR to filter.
+		ssbFloor, cwFloor := prof.SSBFloorDb, prof.CWFloorDb
+		if ssbOverride != nil && ssbFloor != nil {
+			v := float64(*ssbOverride)
+			ssbFloor = &v
+		}
+		if cwOverride != nil && cwFloor != nil {
+			v := float64(*cwOverride)
+			cwFloor = &v
+		}
+
 		// Open flags per profile basis (see prop_intel_sources.go).
 		switch {
 		case prof.HasTXPower:
 			// wspr: budget model, identical math to v1.
-			ssb := acc.hasPower && acc.bestBudgetSNR >= *prof.SSBFloorDb
-			cw := acc.hasPower && acc.bestBudgetSNR >= *prof.CWFloorDb
+			ssb := acc.hasPower && acc.bestBudgetSNR >= *ssbFloor
+			cw := acc.hasPower && acc.bestBudgetSNR >= *cwFloor
 			sc.SSBOpen = &ssb
 			sc.CWOpen = &cw
 			sc.Open = ssb || cw
@@ -311,12 +325,12 @@ func (e *propIntelV2Engine) EvaluateV2(qth string, surroundings bool, minutes in
 			sc.Open = acc.spotCount >= prof.PresenceMinSpots
 		default:
 			// pskr/rbn: SNR floors. Unknown power → honesty flag.
-			if prof.SSBFloorDb != nil {
-				ssb := acc.hasReport && float64(acc.bestReportSNR) >= *prof.SSBFloorDb
+			if ssbFloor != nil {
+				ssb := acc.hasReport && float64(acc.bestReportSNR) >= *ssbFloor
 				sc.SSBOpen = &ssb
 			}
-			if prof.CWFloorDb != nil {
-				cw := acc.hasReport && float64(acc.bestReportSNR) >= *prof.CWFloorDb
+			if cwFloor != nil {
+				cw := acc.hasReport && float64(acc.bestReportSNR) >= *cwFloor
 				sc.CWOpen = &cw
 			}
 			digital := prof.DigitalFloorDb != nil && acc.hasReport && float64(acc.bestReportSNR) >= *prof.DigitalFloorDb
@@ -467,7 +481,7 @@ func propIntelV2Handler(w http.ResponseWriter, r *http.Request) {
 	historyCopy, release := snapshotPropIntelHistory(now, p.minutes)
 	defer release()
 
-	resp := propIntelV2.EvaluateV2(p.qth, p.surroundings, p.minutes, profiles, historyCopy, now, p.atypicalThreshold)
+	resp := propIntelV2.EvaluateV2(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold)
 	resp = resp.applyFromHere(p.fromHere)
 
 	// Push fan-out: adapt v2 cells to the v1 push payload (push.go consumes
@@ -731,7 +745,7 @@ func propIntelV2SummaryHandler(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().Unix()
 	historyCopy, release := snapshotPropIntelHistory(now, p.minutes)
-	resp := propIntelV2.EvaluateV2(p.qth, p.surroundings, p.minutes, profiles, historyCopy, now, p.atypicalThreshold)
+	resp := propIntelV2.EvaluateV2(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold)
 	release()
 	resp = resp.applyFromHere(p.fromHere)
 
