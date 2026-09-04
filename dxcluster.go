@@ -75,21 +75,46 @@ func startDXClusterIngest(cfg dxClusterConfig) {
 	}
 
 	attempt := 0
+	delay := reconnectDelay
 	for {
 		attempt++
 		dxClusterAccounting.connectAttempts.Add(1)
 		if cfg.Verbose {
 			logInfo("DX cluster dial attempt #%d to %s", attempt, endpoint)
 		}
-		if err := runDXClusterSession(endpoint, cfg); err != nil {
+		sessionStart := time.Now()
+		err := runDXClusterSession(endpoint, cfg)
+		if err != nil {
 			logInfo("DX cluster session ended (%s): %v", endpoint, err)
 		}
-		if cfg.Verbose {
-			logInfo("DX cluster reconnect scheduled in %s (%s)", reconnectDelay, endpoint)
+		// A session that dies within dxClusterMinHealthySession seconds was
+		// almost certainly rejected (bad login, duplicate-callsign kick,
+		// server-side refusal) rather than a healthy feed that ended. Hammering
+		// the cluster with an immediate retry in that state is abusive — it is
+		// effectively a reconnect flood against the node — so back off
+		// exponentially until we hold a healthy session again.
+		if time.Since(sessionStart) < dxClusterMinHealthySession {
+			delay *= 2
+			if delay > dxClusterMaxReconnectDelay {
+				delay = dxClusterMaxReconnectDelay
+			}
+			logInfo("DX cluster short-lived session (%s); backing off, next attempt in %s", endpoint, delay)
+		} else {
+			delay = reconnectDelay
 		}
-		time.Sleep(reconnectDelay)
+		if cfg.Verbose {
+			logInfo("DX cluster reconnect scheduled in %s (%s)", delay, endpoint)
+		}
+		time.Sleep(delay)
 	}
 }
+
+const (
+	// Sessions shorter than this are treated as login/connection failures
+	// that must back off, not healthy feeds that ended.
+	dxClusterMinHealthySession = 60 * time.Second
+	dxClusterMaxReconnectDelay = 15 * time.Minute
+)
 
 func runDXClusterSession(endpoint string, cfg dxClusterConfig) error {
 	conn, err := net.DialTimeout("tcp", endpoint, 10*time.Second)

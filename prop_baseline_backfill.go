@@ -19,8 +19,10 @@ import (
 //
 // Safety properties (prod dx_raw_spots grows ~1.9G/day):
 //   - bounded to the last propBaselineBackfillDays (45) days — never full-table;
-//   - per (source × day) chunks, pre-aggregated by Postgres on the
-//     (source_type, spot_time) index — never raw-row streaming;
+//   - per (source × hour) sub-chunks, pre-aggregated by Postgres on the
+//     (source_type, spot_time) index — never raw-row streaming; a single
+//     pskr day is ~31M rows and cannot finish inside any sane statement
+//     timeout, so days are walked in hourly windows;
 //   - 30s statement timeout per chunk + inter-chunk sleep;
 //   - resumable via dx_meta cursor; INSERT ... ON CONFLICT DO NOTHING so a
 //     restart is idempotent and the ensure-time WSPR seed always wins;
@@ -33,6 +35,7 @@ const (
 	propBaselineMetaDoneKey           = "prop_baseline_backfill_done_at"
 	propBaselineChunkStatementTimeout = 30 * time.Second
 	propBaselineChunkSleep            = 300 * time.Millisecond
+	propBaselineSubchunkSeconds       = 3600
 	propBaselineMaxChunkFailures      = 2
 )
 
@@ -167,10 +170,10 @@ func (s *dxPostgresStore) backfillPropBaselineChunk(ctx context.Context, prof pr
 		GROUP BY 1, 2, 3
 	`, otherCol, recvCol)
 
-	collect := func(query string) error {
+	collect := func(query string, wStart, wEnd int64) error {
 		qctx, cancel := context.WithTimeout(ctx, propBaselineChunkStatementTimeout)
 		defer cancel()
-		rows, err := s.pool.Query(qctx, query, prof.InternalTag, dayStart, dayEnd)
+		rows, err := s.pool.Query(qctx, query, prof.InternalTag, wStart, wEnd)
 		if err != nil {
 			return err
 		}
@@ -195,11 +198,21 @@ func (s *dxPostgresStore) backfillPropBaselineChunk(ctx context.Context, prof pr
 		return rows.Err()
 	}
 
-	if err := collect(pass1); err != nil {
-		return err
-	}
-	if err := collect(pass2); err != nil {
-		return err
+	// Walk the day in hourly windows: one pskr day is ~31M rows on prod and
+	// cannot finish inside the statement timeout, while a single hour is a
+	// few seconds on the (source_type, spot_time) index.
+	for wStart := dayStart; wStart < dayEnd; wStart += propBaselineSubchunkSeconds {
+		wEnd := wStart + propBaselineSubchunkSeconds
+		if wEnd > dayEnd {
+			wEnd = dayEnd
+		}
+		if err := collect(pass1, wStart, wEnd); err != nil {
+			return err
+		}
+		if err := collect(pass2, wStart, wEnd); err != nil {
+			return err
+		}
+		time.Sleep(propBaselineChunkSleep)
 	}
 
 	if len(acc) == 0 {
