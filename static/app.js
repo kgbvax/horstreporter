@@ -5,6 +5,7 @@ import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzi
 import { initUI, attachUITooltipEvents, initGridSnrLegend } from './ui.js';
 import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
 import { initWsprMatrix, updateWsprMatrix } from './wspr-matrix.js';
+import { initPropMatrix, clearDrillDown, updateDrillDownButton } from './prop-matrix.js';
 import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { initPushUI } from './push.js';
@@ -1351,11 +1352,18 @@ if (captureConfig?.enabled) {
             if (isAzimuthEnabled()) scheduleRender();
         },
     });
-    // Legacy localStorage keys of the removed "Prop" panel (prop-matrix.js,
-    // dropped with the FT8-nowcast contract it was built on). Inert, but keep
-    // returning users' profiles clean.
-    localStorage.removeItem('propMatrixEnabled');
-    localStorage.removeItem('propMatrixPos');
+    initPropMatrix({
+        onLayoutChange: () => {
+            // Same as WSPR: floating overlay, no map resize, just azimuth re-render.
+            if (isAzimuthEnabled()) scheduleRender();
+        },
+    });
+    // U4: wire up the "clear filter" overlay button for grid-square drill-down.
+    const drillDownClearBtn = document.getElementById('drill-down-clear');
+    if (drillDownClearBtn) {
+        drillDownClearBtn.addEventListener('click', clearDrillDown);
+    }
+    updateDrillDownButton();
     hotBandIndicator = initHotBandIndicator({
         getQth: () => document.getElementById('qth')?.value?.trim()?.toUpperCase() || '',
         getSurroundings: () => Boolean(document.getElementById('surroundings')?.checked),

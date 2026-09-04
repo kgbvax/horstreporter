@@ -231,7 +231,7 @@ function renderMatrix(body, data) {
     body.innerHTML = html;
 }
 
-// Test hooks for the vitest suite.
+// Test hooks (mirrors the prop-matrix.js __test convention).
 export const __test = {
     cellColor,
     cellInk,
