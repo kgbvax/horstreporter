@@ -380,7 +380,7 @@ describe('wspr-matrix (Prop) panel', () => {
         expect(calls[0]).toContain('/api/prop_intel/v2?');
         expect(calls[0]).toContain('from_here=true');
         expect(calls[0]).toContain('surroundings=true');
-        expect(calls[0]).toContain('sources=wspr%2Cpskr%2Crbn%2Cdxcluster');
+        expect(calls[0]).toContain('sources=wspr%2Cpskr%2Crbn'); // dxcluster off by default
     });
 
     it('TTL cache: a second update within 15s does not refetch', async () => {
@@ -433,11 +433,25 @@ describe('wspr-matrix (Prop) panel', () => {
 
         toggleSource('rbn');
         await new Promise((r) => setTimeout(r, 0));
-        expect(runtime.sources).toEqual(['wspr', 'pskr', 'dxcluster']);
-        expect(store.getItem(SOURCES_KEY)).toBe('wspr,pskr,dxcluster');
+        expect(runtime.sources).toEqual(['wspr', 'pskr']);
+        expect(store.getItem(SOURCES_KEY)).toBe('wspr,pskr');
         expect(calls.length).toBe(2);
-        expect(calls[1]).toContain('sources=wspr%2Cpskr%2Cdxcluster');
+        expect(calls[1]).toContain('sources=wspr%2Cpskr');
         expect(calls[1]).not.toContain('rbn');
+    });
+
+    it('default source selection excludes dxcluster (prod has no DXC ingest)', async () => {
+        expect(runtime.sources).toEqual(['wspr', 'pskr', 'rbn']);
+        const calls = [];
+        global.fetch = vi.fn(async (url) => {
+            calls.push(url);
+            return { ok: true, status: 200, json: async () => ({ cells: [] }) };
+        });
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls[0]).toContain('sources=wspr%2Cpskr%2Crbn');
+        expect(calls[0]).not.toContain('dxcluster');
     });
 
     it('the last remaining source chip cannot be deselected', () => {

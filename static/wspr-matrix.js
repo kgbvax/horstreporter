@@ -45,6 +45,10 @@ const SOURCES = [
     { key: 'dxcluster', label: 'DXC' },
 ];
 const ALL_SOURCES = SOURCES.map((s) => s.key);
+// Default selection excludes dxcluster: prod has no DX-cluster ingest wired
+// (-dxcluster-enable absent), so DXC would sit there contributing nothing.
+// The chip stays available for local/dev instances that run the ingest.
+const DEFAULT_SOURCES = ['wspr', 'pskr', 'rbn'];
 
 // Cell heat ramps. Activity maps to *distance from the panel background* in
 // both themes — the perceptual trick that makes the gradient read at a glance:
@@ -169,7 +173,7 @@ const runtime = {
     lastFetchedAt: 0,
     lastQth: '',
     lastRenderKey: '',
-    sources: [...ALL_SOURCES],
+    sources: [...DEFAULT_SOURCES],
     style: 'aqua',
     onLayoutChange: null,
 };
@@ -596,7 +600,7 @@ export const __test = {
         runtime.lastFetchedAt = 0;
         runtime.lastQth = '';
         runtime.lastRenderKey = '';
-        runtime.sources = [...ALL_SOURCES];
+        runtime.sources = [...DEFAULT_SOURCES];
         runtime.style = 'aqua';
         runtime.onLayoutChange = null;
     },
