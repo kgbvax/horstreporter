@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -216,6 +217,15 @@ func logFatal(format string, v ...interface{}) {
 }
 
 func main() {
+	// Soft heap limit: on the memory-constrained prod box (3.8GB, Postgres
+	// alongside) the GC's GOGC=100 target let RSS balloon past what the box
+	// can host and the OOM killer fired in a crash loop during evening FT8
+	// peaks (Sep 4). The limit makes GC run before the balloon crosses the
+	// box budget; it is soft, so the process still exceeds it if it must.
+	// An explicit GOMEMLIMIT env var takes precedence.
+	if os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(2400 << 20)
+	}
 	port := flag.String("port", "8080", "HTTP/HTTPS server port")
 	certFile := flag.String("cert", "", "Path to TLS certificate file")
 	keyFile := flag.String("key", "", "Path to TLS key file")
