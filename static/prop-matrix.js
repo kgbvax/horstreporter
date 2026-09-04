@@ -3,9 +3,11 @@ import { state } from './state.js';
 import { makeDraggable } from './panel-drag.js';
 
 // prop-matrix.js — band × region propagation-intelligence matrix panel.
-// Polls the backend `/api/prop_intel` endpoint (built in U1/U2) and renders
-// per-cell P(open) as background intensity, expected count as a numeric
-// badge, surge highlight, and a confidence border.
+// Polls the backend `/api/prop_intel` WSPR nowcast and renders per-cell
+// activity as background intensity (spots relative to the busiest cell),
+// the spot count as a numeric badge, an atypical-surge highlight, and a
+// low-confidence border. From-here-only by design: cells are paths with the
+// operator's QTH at one end (same stance as wspr-matrix.js).
 //
 // Patterns mirrored from:
 //   - wspr-matrix.js: toggle button + localStorage enable + DOM-rebuild
@@ -23,10 +25,10 @@ const POLL_INTERVAL_MS = 30_000;
 const CACHE_TTL_MS = 15_000;
 const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
 
-// Green scale for P(open): 0 = transparent, 1 = solid green. The RGB tuple is
-// the same green used by the success/positive affordances elsewhere in the app.
+// Green scale for cell activity: 0 = transparent, 1 = solid green. The RGB
+// tuple is the same green used by the success/positive affordances elsewhere
+// in the app.
 const OPEN_GREEN_RGB = '40, 167, 69';
-const SURGE_RGB = '255, 138, 30';
 const LOW_CONFIDENCE_THRESHOLD = 0.4;
 
 const runtime = {
@@ -137,7 +139,7 @@ async function pollPropMatrix(force) {
     }
 
     const now = Date.now();
-    const key = `${qth}|15`;
+    const key = `${qth}|15|fh`;
     if (!force && runtime.cache && runtime.cacheKey === key && (now - runtime.lastFetchedAt) < CACHE_TTL_MS) {
         renderPropMatrix();
         return;
@@ -147,9 +149,14 @@ async function pollPropMatrix(force) {
     const controller = new AbortController();
     runtime.abortController = controller;
 
+    // From-here-only by design (never an unfiltered global window), anchored
+    // at the QTH with its surroundings block — same request shape the WSPR
+    // matrix panel and the mobile app use.
     const params = new URLSearchParams();
     params.set('qth', qth);
     params.set('minutes', '15');
+    params.set('surroundings', 'true');
+    params.set('from_here', 'true');
 
     try {
         const resp = await fetch(`/api/prop_intel?${params.toString()}`, { signal: controller.signal });
@@ -183,6 +190,13 @@ function renderPropMatrix() {
         return;
     }
 
+    const cells = Array.isArray(resp.cells) ? resp.cells : [];
+    if (cells.length === 0) {
+        runtime.lastRenderKey = '';
+        body.innerHTML = '<div class="text-muted small">No from-here WSPR paths in the current window.</div>';
+        return;
+    }
+
     const enabledBands = getEnabledBands();
     const bandList = BAND_ORDER.filter((b) => enabledBands.has(b));
     const regions = Array.isArray(resp.regions) && resp.regions.length > 0
@@ -201,6 +215,14 @@ function renderPropMatrix() {
         return;
     }
 
+    // Intensity is relative to the busiest visible cell, like the WSPR
+    // matrix (there spot_count/maxCount drives the teal ramp).
+    let maxCount = 1;
+    for (const c of cells) {
+        const n = Number(c?.spot_count ?? 0);
+        if (n > maxCount) maxCount = n;
+    }
+
     let html = '<table class="prop-matrix-table"><thead><tr><th></th>';
     for (const region of regions) {
         html += `<th title="${escapeHtml(region)}">${escapeHtml(region)}</th>`;
@@ -212,7 +234,7 @@ function renderPropMatrix() {
         html += `<tr><td class="prop-matrix-band" style="border-left: 3px solid ${color}">${escapeHtml(band)}</td>`;
         for (const region of regions) {
             const cell = cellsByBandRegion.get(cellKey(band, region));
-            html += renderCell(band, region, cell);
+            html += renderCell(band, region, cell, maxCount);
         }
         html += '</tr>';
     }
@@ -222,37 +244,44 @@ function renderPropMatrix() {
     attachCellClickHandler(body, bandList, regions, cellsByBandRegion);
 }
 
-function renderCell(band, region, cell) {
+function renderCell(band, region, cell, maxCount = 1) {
     if (!cell) {
         return `<td class="prop-matrix-cell-empty" data-band="${escapeHtml(band)}" data-region="${escapeHtml(region)}" role="button" tabindex="0"></td>`;
     }
-    const pOpen = clamp01(Number(cell.p_open ?? 0));
-    const expectedCount = Number(cell.expected_count ?? 0);
-    const confidence = clamp01(Number(cell.confidence ?? 0));
-    const surge = Boolean(cell.surge);
-
-    const alpha = 0.15 + pOpen * 0.85;
+    const spotCount = Math.max(0, Number(cell.spot_count ?? 0));
+    // sqrt() spreads the low end so 1-2-spot cells don't collapse onto the
+    // sparse shade (same ramp trick as wspr-matrix.js).
+    const intensity = clamp01(spotCount / Math.max(1, maxCount));
+    const alpha = 0.15 + Math.sqrt(intensity) * 0.85;
     const background = `rgba(${OPEN_GREEN_RGB}, ${alpha})`;
-    const roundedCount = Math.round(expectedCount);
+
+    // The WSPR engine's "surge" is the atypical z-score flag; its confidence
+    // is the reliability of that call. No atypical data → no confidence call.
+    const atypical = cell.atypical || null;
+    const confidence = atypical ? clamp01(Number(atypical.confidence ?? 0)) : 1;
 
     const classes = ['prop-matrix-cell'];
-    if (surge) classes.push('prop-matrix-surge');
-    if (confidence < LOW_CONFIDENCE_THRESHOLD) classes.push('prop-matrix-low-confidence');
+    if (atypical) classes.push('prop-matrix-surge');
+    if (atypical && confidence < LOW_CONFIDENCE_THRESHOLD) classes.push('prop-matrix-low-confidence');
 
-    const title = buildCellTitle(band, region, pOpen, expectedCount, confidence, surge);
-    const badge = expectedCount > 0 ? `<span class="prop-matrix-badge">${roundedCount}</span>` : '';
-    const surgeIcon = surge ? '<span class="prop-matrix-surge-icon" title="surge">⚡</span>' : '';
+    const title = buildCellTitle(band, region, cell, atypical);
+    const badge = spotCount > 0 ? `<span class="prop-matrix-badge">${spotCount}</span>` : '';
+    const surgeMark = atypical
+        ? `<span class="prop-matrix-surge-icon" title="atypical z=${escapeHtml(String(atypical.z_score))} (${escapeHtml(atypical.flavor || '')})">!</span>`
+        : '';
 
-    return `<td class="${classes.join(' ')}" style="background: ${background};" title="${escapeHtml(title)}" data-band="${escapeHtml(band)}" data-region="${escapeHtml(region)}" role="button" tabindex="0">${surgeIcon}${badge}</td>`;
+    return `<td class="${classes.join(' ')}" style="background: ${background};" title="${escapeHtml(title)}" data-band="${escapeHtml(band)}" data-region="${escapeHtml(region)}" role="button" tabindex="0">${surgeMark}${badge}</td>`;
 }
 
-function buildCellTitle(band, region, pOpen, expectedCount, confidence, surge) {
-    const lines = [
-        `${band} → ${region}`,
-        `P(open) ${(pOpen * 100).toFixed(0)}%, exp ${Math.round(expectedCount)}/h`,
-        `confidence ${(confidence * 100).toFixed(0)}%`,
-    ];
-    if (surge) lines.push('SURGE');
+function buildCellTitle(band, region, cell, atypical) {
+    const lines = [`${band} → ${region}: ${Number(cell.spot_count ?? 0)} spots`];
+    const modes = [];
+    if (cell.ssb_open) modes.push('SSB open');
+    if (cell.cw_open) modes.push('CW open');
+    if (modes.length) lines.push(modes.join(', '));
+    if (cell.rising) lines.push('rising');
+    if (atypical) lines.push(`atypical z=${atypical.z_score} (${atypical.flavor}), confidence ${Math.round(clamp01(Number(atypical.confidence ?? 0)) * 100)}%`);
+    if (Array.isArray(cell.sources) && cell.sources.length) lines.push(`sources: ${cell.sources.join(', ')}`);
     return lines.join('\n');
 }
 
@@ -273,7 +302,7 @@ function cellKey(band, region) {
 function fingerprintCells(map) {
     const out = [];
     for (const [k, c] of map.entries()) {
-        out.push(`${k}:${Number(c?.p_open ?? 0).toFixed(3)}:${Number(c?.expected_count ?? 0).toFixed(1)}:${c.surge ? 1 : 0}`);
+        out.push(`${k}:${Number(c?.spot_count ?? 0)}:${c?.ssb_open ? 1 : 0}${c?.cw_open ? 1 : 0}${c?.rising ? 1 : 0}:${c?.atypical ? c.atypical.flavor : ''}`);
     }
     return out.sort().join('|');
 }

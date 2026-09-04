@@ -836,7 +836,7 @@ body[data-theme="dark"] .wspr-heat-scale {
     text-align: center;
 }
 
-/* Surge: pulsing orange border + lightning icon. */
+/* Surge (WSPR atypical z-score): pulsing orange border + '!' corner mark. */
 .prop-matrix-surge {
     border: 2px solid rgba(255, 138, 30, 0.95);
     animation: prop-matrix-surge-pulse 1.1s ease-in-out infinite;

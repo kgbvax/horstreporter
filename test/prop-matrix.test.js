@@ -57,19 +57,22 @@ function mockFetchOnce(payload, ok = true) {
     global.fetch = vi.fn(async () => resp);
 }
 
-function makeCell(band, region, { pOpen = 0.8, expectedCount = 12, confidence = 0.8, surge = false } = {}) {
+function makeCell(band, region, { spotCount = 12, ssbOpen = true, cwOpen = true, rising = false, atypical = null } = {}) {
     // NOTE: the returned cell mirrors the BACKEND JSON shape (snake_case),
     // not the camelCase of the options arg. This is deliberate so the test
-    // exercises the real field names the renderer reads (cell.p_open /
-    // cell.expected_count) — a camelCase cell here would mask a
-    // backend/frontend naming mismatch.
+    // exercises the real field names the renderer reads (cell.spot_count /
+    // cell.atypical) — a camelCase cell here would mask a backend/frontend
+    // naming mismatch.
     return {
         band,
         region,
-        p_open: pOpen,
-        expected_count: expectedCount,
-        confidence,
-        surge,
+        spot_count: spotCount,
+        ssb_open: ssbOpen,
+        cw_open: cwOpen,
+        rising,
+        from_here: true,
+        sources: ['wspr'],
+        atypical,
     };
 }
 
@@ -149,13 +152,18 @@ describe('prop-matrix panel', () => {
         expect(inFlightController.signal.aborted).toBe(true);
     });
 
-    it('renders a cell with green background, expected-count badge, and surge border', () => {
-        const html = renderCell('10m', 'CAR', makeCell('10m', 'CAR', { pOpen: 0.8, expectedCount: 12, surge: true }));
-        // Green background at ~83% alpha (0.15 + 0.8 * 0.85)
-        expect(html).toContain('background: rgba(40, 167, 69,');
+    it('renders a cell with green background, spot-count badge, and surge border for atypical cells', () => {
+        const html = renderCell('10m', 'CAR', makeCell('10m', 'CAR', {
+            spotCount: 12,
+            atypical: { z_score: 3.1, confidence: 0.9, flavor: 'atypical-both' },
+        }), 12);
+        // Green background at full alpha (intensity 1: busiest cell)
+        expect(html).toContain('background: rgba(40, 167, 69, 1)');
         expect(html).toContain('class="prop-matrix-cell prop-matrix-surge');
         expect(html).toContain('<span class="prop-matrix-badge">12</span>');
-        expect(html).toContain('⚡');
+        expect(html).toContain('prop-matrix-surge-icon');
+        // No emoji in the UI — the surge mark is a text glyph.
+        expect(html).not.toContain('⚡');
     });
 
     it('renders an empty cell when no data is present', () => {
@@ -163,9 +171,34 @@ describe('prop-matrix panel', () => {
         expect(html).toBe('<td class="prop-matrix-cell-empty" data-band="20m" data-region="AF" role="button" tabindex="0"></td>');
     });
 
-    it('low confidence produces a dashed border class', () => {
-        const html = renderCell('20m', 'AF', makeCell('20m', 'AF', { pOpen: 0.5, expectedCount: 3, confidence: 0.2 }));
+    it('low-confidence atypical cells get a dashed border class', () => {
+        const html = renderCell('20m', 'AF', makeCell('20m', 'AF', {
+            spotCount: 3,
+            atypical: { z_score: 1.9, confidence: 0.2, flavor: 'atypical-wspr-only' },
+        }), 12);
         expect(html).toContain('prop-matrix-low-confidence');
+    });
+
+    it('cells without atypical data carry no surge or confidence classes', () => {
+        const html = renderCell('20m', 'EU', makeCell('20m', 'EU', { spotCount: 6 }), 12);
+        expect(html).toContain('prop-matrix-cell');
+        expect(html).not.toContain('prop-matrix-surge');
+        expect(html).not.toContain('prop-matrix-low-confidence');
+        expect(html).toContain('SSB open');
+    });
+
+    it('fetches from-here with surroundings pinned (never the unfiltered window)', async () => {
+        const calls = [];
+        global.fetch = vi.fn(async (url) => {
+            calls.push(url);
+            return { ok: true, status: 200, json: async () => ({ regions: ['EU'], bands: ['20m'], cells: [] }) };
+        });
+        initPropMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls.length).toBe(1);
+        expect(calls[0]).toContain('from_here=true');
+        expect(calls[0]).toContain('surroundings=true');
     });
 
     it('changing QTH triggers a re-poll with the new QTH', async () => {
