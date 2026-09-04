@@ -593,8 +593,9 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     opacity: 0.82;
 }
 
-/* WSPR Band × Region matrix panel — floating overlay card docked over the
-   map (top-right). Mirrored by .prop-matrix-window (top-left). */
+/* Propagation Intel matrix panel (formerly "WSPR matrix"; ids/keys kept for
+   users' saved position+enablement) — floating overlay card docked over the
+   map (top-right). */
 .wspr-matrix-window {
     position: absolute;
     top: 64px;
@@ -701,9 +702,8 @@ body[data-theme="dark"] .wspr-matrix-cell {
 .wspr-badge-cw { background: #17a2b8; color: #1a1a1a; }         /* 5.7:1 */
 .wspr-badge-rising { background: #ffc107; color: #333; }        /* 7.8:1 */
 .wspr-badge-atypical { background: #fd7e14; color: #1a1a1a; }   /* 6.8:1 */
-.wspr-badge-atypical-atypical-both { background: #28a745; color: #1a1a1a; }
-.wspr-badge-atypical-atypical-wspr-silent-ft8 { background: #dc3545; color: #fff; }  /* 4.5:1 */
-.wspr-badge-atypical-atypical-wspr-only { background: #ffc107; color: #333; }
+/* !! variant: independent sources agree on the surge — the strong signal. */
+.wspr-badge-atypical-multi { background: #28a745; color: #1a1a1a; }  /* 5.6:1 */
 .wspr-matrix-legend { margin-top: 4px; padding: 2px 4px; }
 /* Sparse → peak heat scale thumbnail, matching the theme's chip ramp. */
 .wspr-heat-scale {
@@ -718,152 +718,84 @@ body[data-theme="dark"] .wspr-matrix-cell {
 body[data-theme="dark"] .wspr-heat-scale {
     background: linear-gradient(90deg, #0d4753, #7fdcea);
 }
-/* Propagation Intelligence matrix panel (mirrors .wspr-matrix-* layout,
-   adds surge / confidence / badge affordances). Floating overlay card
-   docked over the map top-left. */
-.prop-matrix-window {
-    position: absolute;
-    top: 64px;
-    left: 12px;
-    width: fit-content;
-    max-width: calc(100% - 24px);
-    max-height: calc(100% - 120px);
-    background: color-mix(in srgb, var(--bg-color) 88%, transparent);
-    backdrop-filter: blur(4px);
-    color: var(--text-color);
-    z-index: 1100;
-    display: flex;
-    flex-direction: column;
-    border: 1px solid var(--control-border);
-    border-radius: var(--btn-radius, 8px);
-    box-shadow: 0 4px 16px var(--shadow-color);
-    overflow: hidden;
-}
-
-.prop-matrix-window.is-hidden {
-    display: none;
-}
-
-.prop-matrix-window-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 12px;
-    font-size: 0.9rem;
-    font-weight: 600;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.prop-matrix-window-header-actions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
 /* Draggable overlay cards: the header is the drag handle (grab), the close
    button stays a pointer, and the whole card suppresses text selection while
    being dragged so the matrix cells don't highlight. */
-.prop-matrix-window-header,
 .wspr-matrix-window-header {
     cursor: grab;
 }
-.prop-matrix-window-header button,
 .wspr-matrix-window-header button {
     cursor: pointer;
 }
-.prop-matrix-window.is-dragging,
 .wspr-matrix-window.is-dragging {
     user-select: none;
 }
-.prop-matrix-window.is-dragging .prop-matrix-window-header,
 .wspr-matrix-window.is-dragging .wspr-matrix-window-header {
     cursor: grabbing;
 }
 
-.prop-matrix-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 8px;
+/* Source chips row (WSPR / PSKR / RBN / DXC multi-select). */
+.wspr-src-chips {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 6px;
 }
-
-.prop-matrix-table {
-    width: auto;
-    border-collapse: collapse;
-    font-size: 0.72rem;
-}
-
-.prop-matrix-table th {
-    padding: 3px 4px;
-    text-align: center;
-    font-weight: 600;
-    color: color-mix(in srgb, var(--text-color) 70%, transparent);
-    border-bottom: 1px solid var(--border-color);
-}
-
-.prop-matrix-table td {
-    padding: 3px 4px;
-    text-align: center;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.prop-matrix-band {
-    font-weight: 600;
-    text-align: left;
-    padding-left: 6px;
-}
-
-.prop-matrix-cell {
-    position: relative;
-    color: #fff;
-    font-weight: 600;
+.wspr-src-chip {
+    font-size: 0.66rem;
+    font-weight: 700;
+    padding: 1px 6px;
     border-radius: 3px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    border: 1px solid var(--control-border);
+    background: transparent;
+    color: color-mix(in srgb, var(--text-color) 55%, transparent);
+    cursor: pointer;
+}
+.wspr-src-chip.is-on {
+    background: #17a2b8;
+    color: #fff;
+    border-color: transparent;
 }
 
-.prop-matrix-cell-empty {
-    color: transparent;
+/* Atypical surge: pulsing ring on the chip (folded in from prop-matrix.js's
+   surge affordance when the two panels merged). */
+.wspr-matrix-surge {
+    animation: wspr-matrix-surge-pulse 1.1s ease-in-out infinite;
 }
 
-/* Low confidence: dashed border signals low sample size / source coverage. */
-.prop-matrix-low-confidence {
-    border: 1px dashed rgba(255, 255, 255, 0.55);
-}
-
-.prop-matrix-badge {
-    display: inline-block;
-    min-width: 1.4em;
-    padding: 0 0.25em;
-    text-align: center;
-}
-
-/* Surge (WSPR atypical z-score): pulsing orange border + '!' corner mark. */
-.prop-matrix-surge {
-    border: 2px solid rgba(255, 138, 30, 0.95);
-    animation: prop-matrix-surge-pulse 1.1s ease-in-out infinite;
-}
-
-.prop-matrix-surge-icon {
-    position: absolute;
-    top: -2px;
-    right: -2px;
-    font-size: 0.62rem;
-    line-height: 1;
-    color: #ff8a1e;
-    text-shadow: 0 0 2px rgba(0, 0, 0, 0.9);
-    pointer-events: none;
-}
-
-@keyframes prop-matrix-surge-pulse {
+@keyframes wspr-matrix-surge-pulse {
     0%, 100% {
-        box-shadow: 0 0 0 0 rgba(255, 138, 30, 0.6);
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 14%, transparent), 0 0 0 0 rgba(255, 138, 30, 0.6);
     }
     50% {
-        box-shadow: 0 0 0 3px rgba(255, 138, 30, 0);
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 14%, transparent), 0 0 0 3px rgba(255, 138, 30, 0);
     }
+}
+
+/* ×n source-count corner mark (only when ≥2 sources see the cell); faded
+   when the sources disagree on whether the path is open. */
+.wspr-matrix-cell {
+    position: relative;
+}
+.wspr-matrix-src {
+    position: absolute;
+    top: -1px;
+    right: 1px;
+    font-size: 0.6rem;
+    font-weight: 700;
+    line-height: 1;
+    opacity: 0.85;
+    pointer-events: none;
+}
+.wspr-matrix-src.is-mixed {
+    opacity: 0.45;
+}
+/* Legend swatch sits inline, not on a cell — neutral position. */
+.wspr-matrix-legend .wspr-matrix-src {
+    position: static;
 }
 
 /* U5: Web Push settings (options panel). The matrix is a compact
-   (band × region) checkbox grid mirroring the prop-matrix layout. */
+   (band × region) checkbox grid mirroring the Prop matrix layout. */
 .push-pref-matrix {
     padding: 4px 0;
 }
@@ -994,11 +926,10 @@ body[data-theme="dark"] .wspr-heat-scale {
         flex-shrink: 0;
     }
 
-    /* Floating matrix overlay cards: stack near-full-width so they don't cover
-       the whole map side-by-side. #controls is z1200 here, so opening the
-       sidebar still covers the cards (z1100 < z1200). !important wins over
-       inline left/top set by the drag helper so the stack is reliable. */
-    .prop-matrix-window,
+    /* Floating matrix overlay card: near-full-width so it doesn't cover the
+       whole map. #controls is z1200 here, so opening the sidebar still covers
+       the card (z1100 < z1200). !important wins over inline left/top set by
+       the drag helper so the placement is reliable. */
     .wspr-matrix-window {
         left: 8px !important;
         right: 8px !important;
@@ -1006,9 +937,6 @@ body[data-theme="dark"] .wspr-heat-scale {
         width: auto !important;
         max-width: none;
         max-height: 38vh;
-    }
-    .wspr-matrix-window {
-        top: calc(64px + 38vh + 8px) !important;
     }
 }
 

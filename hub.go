@@ -33,9 +33,16 @@ var hub = &Hub{
 	history: make([]MQTTMessage, 0),
 }
 
+// propBaseline is the unified per-source band × region climatology engine
+// (prop_baseline.go), observed by the broadcast funnel so every ingest
+// contributes. Separate engine + table from the v1 WsprClimatologyEngine —
+// do NOT merge the Observe paths (WSPR counts would double).
+var propBaseline *propBaselineEngine
+
 func (h *Hub) broadcastMsg(m MQTTMessage) {
 	h.Lock()
 	h.history = append(h.history, m)
+	propBaseline.Observe(m)
 	clients := make([]*Client, 0, len(h.clients))
 	for c := range h.clients {
 		clients = append(clients, c)
@@ -57,6 +64,7 @@ func (h *Hub) broadcastMsg(m MQTTMessage) {
 func (h *Hub) broadcastWSPRToAll(m MQTTMessage) {
 	h.Lock()
 	h.history = append(h.history, m)
+	propBaseline.Observe(m)
 	clients := make([]*Client, 0, len(h.clients))
 	for c := range h.clients {
 		clients = append(clients, c)

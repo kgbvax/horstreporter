@@ -231,6 +231,7 @@ func main() {
 	flag.IntVar(&maxClients, "max-clients", 150, "Maximum number of concurrent SSE clients (0 = unlimited)")
 	dxBaselineFile := flag.String("dx-baseline-file", "dx_baseline.json", "Path to persistent DX baseline bucket storage")
 	wsprClimatologyFile := flag.String("wspr-climatology-file", "wspr_climatology.json", "Path to persistent WSPR climatology bucket storage (JSONL fallback when Postgres is not configured)")
+	propBaselineFile := flag.String("prop-baseline-file", "prop_baseline.json", "Path to persistent unified per-source climatology storage (JSONL fallback when Postgres is not configured); imports -wspr-climatology-file as WSPR seed on first run")
 	dxPostgresDSN := flag.String("dx-postgres-dsn", "", "Postgres DSN for DX baseline and raw spot storage (falls back to env DX_POSTGRES_DSN, then the built-in default; keep secrets out of argv via the env var)")
 	dxPostgresFailFast := flag.Bool("dx-postgres-fail-fast", true, "Exit immediately when Postgres init/migration fails")
 	horstpropURL := flag.String("horstprop-url", "http://127.0.0.1:9970", "Reverse-proxy /horstprop/* to this local horstprop scoring service (empty disables the mount)")
@@ -360,6 +361,12 @@ func main() {
 	if err := wsprClimatology.Load(); err != nil {
 		logInfo("WSPR climatology JSONL load failed (continuing with empty buckets): %v", err)
 	}
+	// Unified per-source climatology (v2). Imports the v1 WSPR JSONL as its
+	// WSPR seed; a distinct engine/table from wsprClimatology (both stay live).
+	propBaseline = newPropBaselineEngine(strings.TrimSpace(*propBaselineFile), strings.TrimSpace(*wsprClimatologyFile))
+	if err := propBaseline.Load(); err != nil {
+		logInfo("prop baseline JSONL load failed (continuing with empty buckets): %v", err)
+	}
 	// Wire the DXCC cty.dat resolver into the baseline engine so the regional
 	// baseline can derive the operator's region for callsign targets (QRZ
 	// locator → region; fallback to DXCC entity centroid → region). The cty
@@ -385,6 +392,22 @@ func main() {
 				stopCh := make(chan struct{})
 				go wsprClimatology.FlushPendingAsync(30*time.Second, stopCh)
 				_ = stopCh
+			}
+			// Unified per-source climatology (v2): same pool, own table.
+			propBaseline.SetStore(dxBaseline.Store())
+			if st := dxBaseline.Store(); st != nil {
+				if err := st.ensurePropRegionBaseline(context.Background()); err != nil {
+					logInfo("prop baseline table creation failed (continuing with in-memory fallback): %v", err)
+					propBaseline.SetStore(nil)
+				} else {
+					logInfo("prop baseline Postgres table ensured (prop_region_baseline_daily)")
+					stopCh := make(chan struct{})
+					go propBaseline.FlushPendingAsync(30*time.Second, stopCh)
+					_ = stopCh
+					// Seed non-WSPR sources from dx_raw_spots (resumable,
+					// day-chunked, idempotent — see prop_baseline_backfill.go).
+					st.startPropBaselineBackfill()
+				}
 			}
 		}
 		includeDXCluster := *dxClusterEnable
@@ -523,6 +546,7 @@ func main() {
 
 	// WSPR climatology JSONL save loop (fallback when Postgres is nil).
 	go wsprClimatology.SaveLoop(5*time.Minute, nil)
+	go propBaseline.SaveLoop(5*time.Minute, nil)
 
 	appMux := http.NewServeMux()
 	var fileServer http.Handler
@@ -544,6 +568,10 @@ func main() {
 	appMux.HandleFunc("/api/hot_bands", hotBandsHandler)
 	appMux.HandleFunc("/api/prop_intel", propIntelHandler)
 	appMux.HandleFunc("/api/prop_intel/summary", propIntelSummaryHandler)
+	// Unified multi-source contract (prop_intel_v2.go). v1 above stays frozen
+	// for horstapp compatibility.
+	appMux.HandleFunc("/api/prop_intel/v2", propIntelV2Handler)
+	appMux.HandleFunc("/api/prop_intel/v2/summary", propIntelV2SummaryHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
 	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)
 	appMux.HandleFunc("/api/opmode/status", opModeStatusHandler)

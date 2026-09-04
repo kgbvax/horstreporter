@@ -1708,9 +1708,10 @@ func (s *dxPostgresStore) pruneDayIndexedBaselineOlderThan(table string, cutoffD
 	return total, nil
 }
 
-// pruneRegionBaselinesOlderThan prunes both dx_region_baseline_daily and
-// wspr_region_baseline_daily (the FT8 and WSPR day-indexed climatology tables).
-// They share the same store pool; only the day_index cutoff matters.
+// pruneRegionBaselinesOlderThan prunes dx_region_baseline_daily,
+// wspr_region_baseline_daily, and prop_region_baseline_daily (the day-indexed
+// climatology tables). They share the same store pool; only the day_index
+// cutoff matters.
 func (s *dxPostgresStore) pruneRegionBaselinesOlderThan(cutoffDayIndex int64) (int64, error) {
 	n1, err := s.pruneDayIndexedBaselineOlderThan("dx_region_baseline_daily", cutoffDayIndex)
 	if err != nil {
@@ -1720,7 +1721,11 @@ func (s *dxPostgresStore) pruneRegionBaselinesOlderThan(cutoffDayIndex int64) (i
 	if err != nil {
 		return n1 + n2, fmt.Errorf("wspr_region_baseline_daily: %w", err)
 	}
-	return n1 + n2, nil
+	n3, err := s.pruneDayIndexedBaselineOlderThan("prop_region_baseline_daily", cutoffDayIndex)
+	if err != nil {
+		return n1 + n2 + n3, fmt.Errorf("prop_region_baseline_daily: %w", err)
+	}
+	return n1 + n2 + n3, nil
 }
 
 func (s *dxPostgresStore) loadRecentSpotCache(minutes int, now int64, includeDXCluster bool) ([]MQTTMessage, error) {

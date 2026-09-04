@@ -1,17 +1,32 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 
 // wspr-matrix.js imports state.js / utils.js / panel-drag.js at module load;
-// utils is mocked to keep the region columns and band palette test-local
-// (same convention as prop-matrix.test.js).
+// utils is mocked to keep the region columns and band palette test-local.
 vi.mock('../static/utils.js', () => ({
     WSPR_REGIONS: ['EU', 'NA', 'SA', 'AF', 'AS', 'JA', 'OC', 'VK', 'KH6', 'CAR', 'AN'],
     bandColors: { all: '#555', '20m': '#e67e22', '10m': '#16a095' },
 }));
 
-import { __test } from '../static/wspr-matrix.js';
+import { initWsprMatrix, __test } from '../static/wspr-matrix.js';
+import { state } from '../static/state.js';
 
-const { cellColor, cellInk, topModeBadges } = __test;
+const {
+    cellColor,
+    cellInk,
+    topModeBadges,
+    renderCell,
+    reset,
+    runtime,
+    toggleSource,
+    clearDrillDown,
+    updateDrillDownButton,
+    PANEL_ID,
+    TOGGLE_ID,
+    BODY_ID,
+    ENABLE_KEY,
+    SOURCES_KEY,
+} = __test;
 
 // WCAG relative luminance + contrast ratio, for asserting that every step of
 // the heat ramp keeps the white spot count readable (AA, >=4.5:1).
@@ -21,10 +36,6 @@ function luminance([r, g, b]) {
         return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
     };
     return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-}
-
-function contrastWithWhite(rgb) {
-    return (1.0 + 0.05) / (luminance(rgb) + 0.05);
 }
 
 function parseRgb(str) {
@@ -127,7 +138,9 @@ describe('wspr-matrix badge contrast (style.css)', () => {
     };
 
     it('covers every badge variant', () => {
-        expect(rules.length).toBeGreaterThanOrEqual(7);
+        // Base + ssb/cw/rising/atypical/atypical-multi (flavor variants went
+        // away with the v2 merge — v2 has no flavor field).
+        expect(rules.length).toBeGreaterThanOrEqual(5);
     });
 
     it('keeps badge text at WCAG AA against its own background', () => {
@@ -140,5 +153,303 @@ describe('wspr-matrix badge contrast (style.css)', () => {
             const ratio = (Math.max(fgL, luminance(bg)) + 0.05) / (Math.min(fgL, luminance(bg)) + 0.05);
             expect(ratio, rule).toBeGreaterThanOrEqual(4.5);
         }
+    });
+});
+
+// ---- Merged-panel behavior (ported from the deleted prop-matrix.test.js,
+// extended for the source chips + multi-source cell contract) --------------
+
+function installLocalStorageMock() {
+    const store = new Map();
+    const mock = {
+        getItem: (key) => (store.has(key) ? store.get(key) : null),
+        setItem: (key, value) => { store.set(String(key), String(value)); },
+        removeItem: (key) => { store.delete(key); },
+        clear: () => { store.clear(); },
+    };
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: mock });
+    if (typeof window !== 'undefined') {
+        Object.defineProperty(window, 'localStorage', { configurable: true, value: mock });
+    }
+    return store;
+}
+
+function setupDom() {
+    document.body.innerHTML = `
+        <input id="qth" value="JO32" />
+        <button id="${TOGGLE_ID}"></button>
+        <button id="drill-down-clear" style="display: none;"></button>
+        <div id="${PANEL_ID}" class="wspr-matrix-window is-hidden">
+            <div class="wspr-matrix-window-header">
+                <span>Propagation Intel</span>
+            </div>
+            <div id="${BODY_ID}"></div>
+        </div>
+    `;
+    document.body.removeAttribute('data-theme');
+}
+
+function mockFetch(payload, ok = true) {
+    const resp = { ok, status: ok ? 200 : 500, json: async () => payload };
+    global.fetch = vi.fn(async () => resp);
+}
+
+function makeCell({ band = '20m', region = 'EU', spot_count = 12, ssb_open = true, cw_open = true,
+    rising = false, atypical = null, active_sources = ['wspr'], open_agreement = 1.0,
+    atypical_agreement, sources } = {}) {
+    // Mirrors the BACKEND v2 JSON shape (snake_case) so a naming mismatch
+    // between backend and renderer surfaces here, not in prod.
+    const cell = { band, region, spot_count, ssb_open, cw_open, rising, from_here: true, active_sources, open_agreement, atypical };
+    if (atypical_agreement !== undefined) cell.atypical_agreement = atypical_agreement;
+    if (sources !== undefined) cell.sources = sources;
+    return cell;
+}
+
+describe('wspr-matrix (Prop) panel', () => {
+    let store;
+    let originalFetch;
+
+    beforeEach(() => {
+        originalFetch = global.fetch;
+        installLocalStorageMock();
+        store = globalThis.localStorage;
+        setupDom();
+        reset();
+        state.drillDownBand = '';
+        state.drillDownRegion = '';
+        window.__horstScheduleRender = vi.fn();
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    });
+
+    afterEach(() => {
+        reset();
+        state.drillDownBand = '';
+        state.drillDownRegion = '';
+        delete window.__horstScheduleRender;
+        global.fetch = originalFetch;
+        vi.restoreAllMocks();
+    });
+
+    it('toggle button shows/hides the panel and persists state to localStorage', async () => {
+        mockFetch({ cells: [] });
+        initWsprMatrix();
+
+        const panel = document.getElementById(PANEL_ID);
+        const toggle = document.getElementById(TOGGLE_ID);
+        expect(panel.classList.contains('is-hidden')).toBe(true);
+        expect(store.getItem(ENABLE_KEY)).toBe(null);
+
+        toggle.click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(panel.classList.contains('is-hidden')).toBe(false);
+        expect(store.getItem(ENABLE_KEY)).toBe('true');
+        expect(toggle.classList.contains('is-active')).toBe(true);
+
+        toggle.click();
+        expect(panel.classList.contains('is-hidden')).toBe(true);
+        expect(store.getItem(ENABLE_KEY)).toBe('false');
+        expect(toggle.classList.contains('is-active')).toBe(false);
+    });
+
+    it('opening starts polling; closing aborts in-flight requests', async () => {
+        let abortSignal;
+        global.fetch = vi.fn(async (_url, opts) => {
+            abortSignal = opts?.signal;
+            // Hold the request open so closing mid-flight triggers abort.
+            return new Promise((_resolve, reject) => {
+                if (abortSignal) {
+                    abortSignal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+                }
+            });
+        });
+
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+        expect(runtime.pollTimer).not.toBeNull();
+        expect(runtime.abortController).not.toBeNull();
+
+        const inFlightController = runtime.abortController;
+        document.getElementById(TOGGLE_ID).click();
+        expect(runtime.pollTimer).toBeNull();
+        expect(runtime.abortController).toBeNull();
+        expect(inFlightController.signal.aborted).toBe(true);
+    });
+
+    it('fetches the v2 endpoint from-here with surroundings + all sources pinned', async () => {
+        const calls = [];
+        global.fetch = vi.fn(async (url) => {
+            calls.push(url);
+            return { ok: true, status: 200, json: async () => ({ cells: [] }) };
+        });
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls.length).toBe(1);
+        expect(calls[0]).toContain('/api/prop_intel/v2?');
+        expect(calls[0]).toContain('from_here=true');
+        expect(calls[0]).toContain('surroundings=true');
+        expect(calls[0]).toContain('sources=wspr%2Cpskr%2Crbn%2Cdxcluster');
+    });
+
+    it('TTL cache: a second update within 15s does not refetch', async () => {
+        const calls = [];
+        global.fetch = vi.fn(async (url) => {
+            calls.push(url);
+            return { ok: true, status: 200, json: async () => ({ cells: [] }) };
+        });
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls.length).toBe(1);
+
+        const { updateWsprMatrix } = await import('../static/wspr-matrix.js');
+        await updateWsprMatrix();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls.length).toBe(1);
+    });
+
+    it('changing QTH triggers a re-poll with the new QTH', async () => {
+        const calls = [];
+        global.fetch = vi.fn(async (url) => {
+            calls.push(url);
+            return { ok: true, status: 200, json: async () => ({ cells: [] }) };
+        });
+
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls.length).toBe(1);
+        expect(calls[0]).toContain('qth=JO32');
+
+        const qthInput = document.getElementById('qth');
+        qthInput.value = 'FN31';
+        qthInput.dispatchEvent(new Event('change'));
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls.length).toBe(2);
+        expect(calls[1]).toContain('qth=FN31');
+    });
+
+    it('source chips: deselect re-fetches with the remaining sources; persisted', async () => {
+        const calls = [];
+        global.fetch = vi.fn(async (url) => {
+            calls.push(url);
+            return { ok: true, status: 200, json: async () => ({ cells: [] }) };
+        });
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+
+        toggleSource('rbn');
+        await new Promise((r) => setTimeout(r, 0));
+        expect(runtime.sources).toEqual(['wspr', 'pskr', 'dxcluster']);
+        expect(store.getItem(SOURCES_KEY)).toBe('wspr,pskr,dxcluster');
+        expect(calls.length).toBe(2);
+        expect(calls[1]).toContain('sources=wspr%2Cpskr%2Cdxcluster');
+        expect(calls[1]).not.toContain('rbn');
+    });
+
+    it('the last remaining source chip cannot be deselected', () => {
+        runtime.sources = ['wspr'];
+        toggleSource('wspr');
+        expect(runtime.sources).toEqual(['wspr']);
+    });
+
+    it('a stored chip selection survives a re-init', () => {
+        store.setItem(SOURCES_KEY, 'dxcluster,wspr');
+        initWsprMatrix();
+        expect(runtime.sources).toEqual(['wspr', 'dxcluster']); // canonical order
+    });
+
+    it('atypical with multi-source agreement renders !! + the multi badge class', () => {
+        const html = renderCell('10m', 'CAR', makeCell({
+            band: '10m', region: 'CAR',
+            atypical: { z_score: 3.1, confidence: 0.9 },
+            active_sources: ['wspr', 'pskr'], atypical_agreement: 1.0,
+        }), 12, 'light');
+        expect(html).toContain('wspr-badge-atypical-multi');
+        expect(html).toContain('>!!</span>');
+        expect(html).toContain('wspr-matrix-surge');
+        expect(html).toContain('×2');
+        // No emoji in the UI — marks are text glyphs.
+        expect(html).not.toContain('⚡');
+    });
+
+    it('atypical without agreement renders the plain ! badge', () => {
+        const html = renderCell('10m', 'CAR', makeCell({
+            band: '10m', region: 'CAR',
+            atypical: { z_score: 2.4, confidence: 0.5 },
+            active_sources: ['wspr'],
+        }), 12, 'light');
+        expect(html).toContain('wspr-badge-atypical');
+        expect(html).not.toContain('wspr-badge-atypical-multi');
+        expect(html).toContain('>!</span>');
+    });
+
+    it('×n mark fades when sources disagree on open', () => {
+        const agree = renderCell('20m', 'EU', makeCell({ active_sources: ['wspr', 'pskr'], open_agreement: 1.0 }), 12, 'light');
+        expect(agree).toContain('wspr-matrix-src');
+        expect(agree).not.toContain('is-mixed');
+        const mixed = renderCell('20m', 'EU', makeCell({
+            active_sources: ['wspr', 'pskr'], open_agreement: 0.5,
+        }), 12, 'light');
+        expect(mixed).toContain('is-mixed');
+    });
+
+    it('renders an empty cell as a clickable drill-down target', () => {
+        const html = renderCell('20m', 'AF', null, 12, 'light');
+        expect(html).toContain('class="wspr-matrix-cell-empty"');
+        expect(html).toContain('data-band="20m"');
+        expect(html).toContain('data-region="AF"');
+    });
+
+    it('per-source breakdown lands in the cell tooltip', () => {
+        const html = renderCell('20m', 'NA', makeCell({
+            band: '20m', region: 'NA',
+            active_sources: ['wspr', 'rbn'],
+            sources: [
+                { source: 'wspr', spot_count: 30, open: true, open_basis: 'budget' },
+                { source: 'rbn', spot_count: 4, open: true, open_basis: 'snr_floor', atypical: { z_score: 3.3 } },
+            ],
+        }), 30, 'light');
+        expect(html).toContain('wspr: 30 spots');
+        expect(html).toContain('rbn: 4 spots');
+        expect(html).toContain('z=3.3');
+    });
+
+    it('clicking a cell sets the drill-down filter and shows the clear button; clicking again clears', async () => {
+        mockFetch({
+            cells: [makeCell({ band: '20m', region: 'EU' })],
+        });
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+
+        const cell = document.querySelector('.wspr-matrix-cell');
+        expect(cell).not.toBeNull();
+        cell.click();
+        expect(state.drillDownBand).toBe('20m');
+        expect(state.drillDownRegion).toBe('EU');
+        const clearBtn = document.getElementById('drill-down-clear');
+        expect(clearBtn.style.display).toBe('');
+        expect(window.__horstScheduleRender).toHaveBeenCalled();
+
+        // Toggle off by clicking the same cell again.
+        cell.click();
+        expect(state.drillDownBand).toBe('');
+        expect(state.drillDownRegion).toBe('');
+        expect(clearBtn.style.display).toBe('none');
+    });
+
+    it('clearDrillDown resets the filter and schedules a render', () => {
+        state.drillDownBand = '10m';
+        state.drillDownRegion = 'JA';
+        updateDrillDownButton();
+        clearDrillDown();
+        expect(state.drillDownBand).toBe('');
+        expect(state.drillDownRegion).toBe('');
+        expect(window.__horstScheduleRender).toHaveBeenCalled();
+        expect(document.getElementById('drill-down-clear').style.display).toBe('none');
     });
 });

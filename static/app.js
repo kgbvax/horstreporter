@@ -4,8 +4,7 @@ import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineL
 import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, getAzimuthCenter, setAzimuthEnabled, setAzimuthDragging, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled, getAzimuthLatLngFromClientPoint, getAzimuthHiddenGridSquaresCount, setAzimuthDxSpotHighlight } from './azimuth-runtime.js';
 import { initUI, attachUITooltipEvents, initGridSnrLegend } from './ui.js';
 import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
-import { initWsprMatrix, updateWsprMatrix } from './wspr-matrix.js';
-import { initPropMatrix, clearDrillDown, updateDrillDownButton } from './prop-matrix.js';
+import { initWsprMatrix, updateWsprMatrix, clearDrillDown, updateDrillDownButton } from './wspr-matrix.js';
 import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { initPushUI } from './push.js';
@@ -1349,12 +1348,6 @@ if (captureConfig?.enabled) {
             // it no longer changes the map container's box, so invalidateSize is
             // not needed (unlike band-lab, which is docked in-flow). The azimuth
             // canvas display-swaps with #map and may need a re-render.
-            if (isAzimuthEnabled()) scheduleRender();
-        },
-    });
-    initPropMatrix({
-        onLayoutChange: () => {
-            // Same as WSPR: floating overlay, no map resize, just azimuth re-render.
             if (isAzimuthEnabled()) scheduleRender();
         },
     });

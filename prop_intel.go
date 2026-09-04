@@ -241,40 +241,13 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		if band == "" || !bandInScope(band) {
 			continue
 		}
-		// Resolve the remote end for WSPR: SC/SL = receiver, RC/RL =
-		// transmitter (opposite of FT8 convention). If the operator's QTH
-		// matches one end, the remote is the other end. If neither end
-		// matches (global mesh view), use the receiver locator (SL) as the
-		// region key — "where the path landed".
-		sl := strings.ToUpper(strings.TrimSpace(m.SL))
-		rl := strings.ToUpper(strings.TrimSpace(m.RL))
-		sc := strings.ToUpper(strings.TrimSpace(m.SC))
-		rc := strings.ToUpper(strings.TrimSpace(m.RC))
-
-		var remoteLocator, remoteCall string
-		matchedEnd := false
-		for _, t := range qthSet {
-			if matchCall(sc, t) || (isLocator(t) && sl != "" && strings.HasPrefix(sl, t)) {
-				// Operator is the receiver → remote is the transmitter.
-				remoteLocator = rl
-				remoteCall = rc
-				matchedEnd = true
-				break
-			}
-			if matchCall(rc, t) || (isLocator(t) && rl != "" && strings.HasPrefix(rl, t)) {
-				// Operator is the transmitter → remote is the receiver.
-				remoteLocator = sl
-				remoteCall = sc
-				matchedEnd = true
-				break
-			}
-		}
-		if !matchedEnd {
-			// Global mesh view: neither end matches QTH. Use the receiver
-			// locator as the region key.
-			remoteLocator = sl
-			remoteCall = sc
-		}
+		// Resolve the remote end: SC/SL = receiver, RC/RL = transmitter for
+		// WSPR (opposite of the FT8 convention). If the operator's QTH matches
+		// one end, the remote is the other end; otherwise (global mesh view)
+		// the receiver locator (SL) is the region key — "where the path
+		// landed". Shared with the v2 engine via resolvePropIntelRemoteEnd
+		// (receiverSide "sc" = this exact behavior).
+		remoteLocator, remoteCall, matchedEnd := resolvePropIntelRemoteEnd(m, qthSet, "sc")
 		if remoteLocator == "" || !isLocator(remoteLocator) {
 			continue
 		}

@@ -285,8 +285,7 @@
         <div id="map" class="w-100 h-100"></div>
         <div id="map-toggles" class="map-toggles">
             <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show Band Stats">Stats</button>
-            <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show WSPR Band × Region Matrix">WSPR</button>
-            <button id="prop-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show Propagation Intelligence Matrix">Prop</button>
+            <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show Propagation Intelligence Matrix">Prop</button>
             <button id="drill-down-clear" type="button" class="panel-toggle is-translucent" title="Clear grid-square filter" style="display: none;"></button>
         </div>
         <canvas id="azimuth-canvas" class="position-absolute top-0 start-0 w-100 h-100"></canvas>
@@ -348,19 +347,13 @@
                 </label>
             </div>
         </div>
-        <!-- Propagation Intel + WSPR stats: floating overlay cards docked over
-             the map. Children of #map-stack so they float above #map / #azimuth-canvas. -->
+        <!-- Propagation Intel: floating overlay card docked over the map.
+             Child of #map-stack so it floats above #map / #azimuth-canvas. -->
         <div id="wspr-matrix-window" class="wspr-matrix-window is-hidden">
             <div class="wspr-matrix-window-header">
-                <span>WSPR Band × Region · from here</span>
-            </div>
-            <div id="wspr-matrix-body" class="wspr-matrix-body"></div>
-        </div>
-        <div id="prop-matrix-window" class="prop-matrix-window is-hidden">
-            <div class="prop-matrix-window-header">
                 <span>Propagation Intel · from here</span>
             </div>
-            <div id="prop-matrix-body" class="prop-matrix-body"></div>
+            <div id="wspr-matrix-body" class="wspr-matrix-body"></div>
         </div>
     </div>
     <div id="tooltip"></div>

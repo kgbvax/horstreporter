@@ -126,7 +126,11 @@ priority ("high"|"normal"), reason, rank_score, spots_per_minute,
 baseline_activity, activity_ratio, sustained_bins, p90_distance_km,
 baseline_p90_distance_km?, distance_ratio?, trend, trend_delta, status}]}`.
 
-### `GET /api/prop_intel` — propagation intelligence nowcast
+### `GET /api/prop_intel` — propagation intelligence nowcast (v1, frozen)
+
+> **Deprecated — frozen for horstapp compatibility; superseded by
+> `GET /api/prop_intel/v2` (below).** v1 stays live until the mobile app
+> migrates; do not extend it.
 
 Per-(band × region) WSPR nowcast of SSB/CW openness, rising slope, and
 atypical-surge detection against the WSPR climatology
@@ -202,7 +206,10 @@ Response:
 - Counters are surfaced in `/api/stats` under `prop_intel.requests`,
   `prop_intel.errors`, `prop_intel.surges_detected`.
 
-### `GET /api/prop_intel/summary` — compact widget payload
+### `GET /api/prop_intel/summary` — compact widget payload (v1, frozen)
+
+> **Deprecated** together with v1 — see `/api/prop_intel/v2` below. Frozen for
+> horstapp's iOS/Android widgets.
 
 Same engine and query parameters as `/api/prop_intel`, reduced to the
 precomputed glance used by the mobile app's iOS/Android home-screen widgets
@@ -236,6 +243,73 @@ Response:
 - `grid`: one entry per live cell; `i` is the spot count relative to the
   busiest cell (0–1, 2 decimals — the chip-ramp input), `f` is a flag
   bitmask: ssb=1, cw=2, rising=4, atypical=8, from_here=16.
+
+### `GET /api/prop_intel/v2` — unified multi-source propagation nowcast
+
+The consolidated successor of v1: a per-(band × region) nowcast across ALL
+four ingest sources, with per-source evidence plus a combined rollup. The web
+panel (wspr-matrix.js) is the primary consumer; horstapp migrates here when
+it adopts multi-source rendering. See `prop_intel_v2.go`,
+`prop_intel_sources.go` (per-source profiles), and `prop_baseline.go`
+(unified climatology, `prop_region_baseline_daily`).
+
+Params: v1's (`qth` required, `surroundings`, `minutes`, `cw_min_db` —
+unused by v2's per-source floors, accepted for shape parity,
+`surge_threshold`, `from_here`) plus:
+
+- `sources`: source selection, CSV or repeated (`?sources=wspr,pskr` or
+  `?sources=wspr&sources=rbn`). Public names: `wspr` (WSPR beacons),
+  `pskr` (PSKReporter FT8/FT4), `rbn` (RBN CW/RTTY skimmers),
+  `dxcluster` (DX cluster spots). Unknown names are dropped; absent/empty
+  selects all four.
+
+Response: v1's envelope plus `sources_requested`; `cells[]` per (band ×
+region):
+```
+{
+  "band": "20m", "region": "NA", "from_here": true, "spot_count": 42,
+  "open": true, "ssb_open": true, "cw_open": true, "rising": false,
+  "atypical": {"z_score": 3.2, "confidence": 0.71},
+  "active_sources": ["wspr", "pskr"],
+  "open_agreement": 1.0,
+  "atypical_agreement": 0.5,        // omitted when no source is atypical
+  "sources": [
+    {"source": "wspr", "spot_count": 30, "open": true,
+     "ssb_open": true, "cw_open": true, "open_basis": "budget",
+     "rising": false, "atypical": {...}, "sample_days": 12},
+    {"source": "pskr", "spot_count": 12, "open": true,
+     "ssb_open": true, "cw_open": true, "open_basis": "snr_floor",
+     "unknown_power": true, "rising": false, "sample_days": 9}
+  ]
+}
+```
+
+- Per-source open semantics are honest about the mechanism (`open_basis`):
+  - `wspr` — unchanged v1 budget model (`budget`).
+  - `pskr` — report-SNR floors: digital ≥ −24 dB, CW ≥ −18, SSB ≥ −5. TX
+    power is unknown, so these are estimates (`unknown_power: true`).
+  - `rbn` — CW skimmer only: CW open ≥ +8 dB; `ssb_open` is ABSENT (nil),
+    not false — a CW skimmer can never prove SSB.
+  - `dxcluster` — no amplitude: `open` = ≥ 2 spots in the window (a single
+    spot may be a busted callsign); no mode flags (`presence`).
+- `atypical` per source z-scores the live rate against THAT source's
+  climatology (≥ 3 sample days, nonzero stddev, same cold-start confidence
+  discount as v1). The rollup cell carries the highest-confidence atypical;
+  `atypical_agreement` is the fraction of active sources that surged
+  (replaces v1's FT8 flavor cross-reference).
+- `open_agreement` is vacuously 1.0 with a single active source — render
+  the `active_sources` count, not the fraction.
+- Atypical cells fan out Web Push like v1 (adapted to the v1 push payload;
+  push labels are unchanged).
+
+### `GET /api/prop_intel/v2/summary` — compact widget payload (v2)
+
+Same engine/parameters as `/api/prop_intel/v2`, reduced to the widget
+payload. Identical shape to v1's summary (headline/top_bands/grid with the
+same `i`/`f` encoding, 60s cache) plus three additive, ignorable grid-cell
+fields for the horstapp migration: `sa` (active sources), `oa` (open
+agreement), `src` (active source count). Atypical headlines prefer cells
+with multi-source agreement (`atypical_agreement ≥ 0.5`).
 
 ### `GET /api/push/vapid-public-key` — Web Push public key
 
