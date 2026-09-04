@@ -304,6 +304,20 @@ func (e *DxBaselineEngine) LoadSpotsBetween(start, end int64) ([]MQTTMessage, er
 	return st.loadSpotsBetween(start, end)
 }
 
+// LoadSpotsBetweenFiltered is LoadSpotsBetween with the source filter exposed
+// (same includeDXCluster semantics as LoadRecentSpotCache). The startup
+// backfill walks the window in chunks through this so peak memory stays at
+// one chunk instead of the whole window.
+func (e *DxBaselineEngine) LoadSpotsBetweenFiltered(start, end int64, includeDXCluster bool) ([]MQTTMessage, error) {
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return nil, nil
+	}
+	return st.loadSpotsBetweenWithSourceFilter(start, end, includeDXCluster)
+}
+
 // PruneRawSpotsOlderThan removes raw spots older than the given Unix
 // timestamp from the persistent store. No-op if Postgres isn't configured.
 func (e *DxBaselineEngine) PruneRawSpotsOlderThan(cutoff int64) (int64, error) {

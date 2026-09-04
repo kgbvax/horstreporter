@@ -415,13 +415,37 @@ func main() {
 		if backfillMinutes <= 0 {
 			backfillMinutes = defaultLiveHistoryRetentionMinutes
 		}
-		if cached, err := dxBaseline.LoadRecentSpotCache(backfillMinutes, time.Now().Unix(), includeDXCluster); err != nil {
-			logInfo("Startup spot-cache backfill failed (last %d minutes, include_dxcluster=%v): %v", backfillMinutes, includeDXCluster, err)
-		} else if len(cached) > 0 {
-			hub.Lock()
-			hub.history = append(make([]MQTTMessage, 0, len(cached)), cached...)
-			hub.Unlock()
-			logInfo("Startup spot-cache backfill loaded %d spots from dx_raw_spots (last %d minutes, include_dxcluster=%v)", len(cached), backfillMinutes, includeDXCluster)
+		// Load the window in 15-minute chunks appended straight into
+		// hub.history: materializing all spots at once transiently doubles
+		// the process footprint and has OOM-killed the service on the
+		// memory-constrained prod box (kills came ~40s into startup, i.e.
+		// mid-backfill). Chunked, peak RSS stays at one chunk.
+		const backfillChunkMinutes = 15
+		windowEnd := time.Now().Unix()
+		windowStart := windowEnd - int64(backfillMinutes*60)
+		totalLoaded := 0
+		var backfillErr error
+		for chunkStart := windowStart; chunkStart < windowEnd; chunkStart += backfillChunkMinutes * 60 {
+			chunkEnd := chunkStart + backfillChunkMinutes*60
+			if chunkEnd > windowEnd {
+				chunkEnd = windowEnd
+			}
+			cached, err := dxBaseline.LoadSpotsBetweenFiltered(chunkStart, chunkEnd, includeDXCluster)
+			if err != nil {
+				backfillErr = err
+				break
+			}
+			if len(cached) > 0 {
+				hub.Lock()
+				hub.history = append(hub.history, cached...)
+				hub.Unlock()
+				totalLoaded += len(cached)
+			}
+		}
+		if backfillErr != nil {
+			logInfo("Startup spot-cache backfill failed after %d spots (last %d minutes, include_dxcluster=%v): %v", totalLoaded, backfillMinutes, includeDXCluster, backfillErr)
+		} else if totalLoaded > 0 {
+			logInfo("Startup spot-cache backfill loaded %d spots from dx_raw_spots (last %d minutes, include_dxcluster=%v)", totalLoaded, backfillMinutes, includeDXCluster)
 		} else {
 			logInfo("Startup spot-cache backfill found no spots in dx_raw_spots for the last %d minutes (include_dxcluster=%v)", backfillMinutes, includeDXCluster)
 		}
