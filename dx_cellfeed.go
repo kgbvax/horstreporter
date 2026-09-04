@@ -50,12 +50,11 @@ func cellfeedSchemaStmts() []string {
 			dist_max_km    INT    NOT NULL DEFAULT 0,
 			PRIMARY KEY (bucket_start, band, cell4, lane)
 		);`,
-		`CREATE INDEX IF NOT EXISTS idx_proplab_cell_band_bucket
-			ON proplab_cell_buckets (band, bucket_start);`,
-		`CREATE INDEX IF NOT EXISTS idx_proplab_cell_region_band_bucket
-			ON proplab_cell_buckets (region, band, bucket_start);`,
-		`CREATE INDEX IF NOT EXISTS idx_proplab_cell_bucket_time
-			ON proplab_cell_buckets (bucket_start);`,
+		// No secondary indexes here: the primary key leads with bucket_start,
+		// which already serves the retention prune and pathscope's
+		// bucket_start-baseline lookups. The former (band, bucket_start),
+		// (region, band, bucket_start) and (bucket_start) indexes were
+		// redundant and dropped (0 lifetime scans on prod).
 
 		`CREATE TABLE IF NOT EXISTS proplab_sw_series (
 			series   TEXT NOT NULL,

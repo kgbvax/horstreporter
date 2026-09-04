@@ -400,7 +400,6 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS comment TEXT NOT NULL DEFAULT '';`,
 		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS spot_geom geometry(Point, 4326);`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_spot_time ON dx_raw_spots (spot_time);`,
-		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_band_spot_time ON dx_raw_spots (band, spot_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_source_type_spot_time ON dx_raw_spots (source_type, spot_time);`,
 		// Locator-prefix indexes for activityByBinForTargets /
 		// recent24hBandSlotCountsForTokens: their ~>=~/~<~ prefix-range arms
@@ -455,6 +454,34 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 	}
 
 	optional := []optionalMaintenanceStmt{
+		{
+			// Dead since the Propagation Lab removal (2026-08-04): empty on
+			// prod, zero readers in this codebase, only legacy schema upkeep.
+			name: "drop empty legacy table proplab_dest_buckets",
+			sql:  `DROP TABLE IF EXISTS proplab_dest_buckets;`,
+		},
+		{
+			// 1.4GB on prod with 2 lifetime scans; nothing queries (band,
+			// spot_time) — the spot_time and (source_type, spot_time) indexes
+			// cover the real access paths.
+			name: "drop unused idx_dx_raw_spots_band_spot_time",
+			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_raw_spots_band_spot_time;`,
+		},
+		{
+			// ~2.6GB on prod, 0 lifetime scans: redundant with the primary
+			// key, which leads with bucket_start and already serves the
+			// retention prune and pathscope's baseline lookups.
+			name: "drop redundant idx_proplab_cell_band_bucket",
+			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_proplab_cell_band_bucket;`,
+		},
+		{
+			name: "drop redundant idx_proplab_cell_region_band_bucket",
+			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_proplab_cell_region_band_bucket;`,
+		},
+		{
+			name: "drop redundant idx_proplab_cell_bucket_time",
+			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_proplab_cell_bucket_time;`,
+		},
 		{
 			name: "drop legacy idx_dx_raw_spots_t",
 			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_raw_spots_t;`,
