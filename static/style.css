@@ -704,7 +704,6 @@ body[data-theme="dark"] .wspr-matrix-cell {
 .wspr-badge-atypical-atypical-both { background: #28a745; color: #1a1a1a; }
 .wspr-badge-atypical-atypical-wspr-silent-ft8 { background: #dc3545; color: #fff; }  /* 4.5:1 */
 .wspr-badge-atypical-atypical-wspr-only { background: #ffc107; color: #333; }
-.wspr-badge-from-here { background: #6f42c1; color: #fff; }     /* 6.5:1 */
 .wspr-matrix-legend { margin-top: 4px; padding: 2px 4px; }
 /* Sparse → peak heat scale thumbnail, matching the theme's chip ramp. */
 .wspr-heat-scale {
@@ -719,21 +718,6 @@ body[data-theme="dark"] .wspr-matrix-cell {
 body[data-theme="dark"] .wspr-heat-scale {
     background: linear-gradient(90deg, #0d4753, #7fdcea);
 }
-.wspr-matrix-from-here-toggle {
-    cursor: pointer;
-    font-size: 0.75rem;
-    padding: 2px 8px;
-    border-radius: 3px;
-    border: 1px solid var(--border-color);
-    background: transparent;
-    color: var(--text-color);
-}
-.wspr-matrix-from-here-toggle.is-active {
-    background: var(--accent-color, #17a2b8);
-    /* Dark ink on the light accent: white drops to 2.2-3.3:1 in both themes. */
-    color: #1a1a1a;
-}
-
 /* Propagation Intelligence matrix panel (mirrors .wspr-matrix-* layout,
    adds surge / confidence / badge affordances). Floating overlay card
    docked over the map top-left. */

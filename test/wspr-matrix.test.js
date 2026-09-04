@@ -127,7 +127,7 @@ describe('wspr-matrix badge contrast (style.css)', () => {
     };
 
     it('covers every badge variant', () => {
-        expect(rules.length).toBeGreaterThanOrEqual(8);
+        expect(rules.length).toBeGreaterThanOrEqual(7);
     });
 
     it('keeps badge text at WCAG AA against its own background', () => {

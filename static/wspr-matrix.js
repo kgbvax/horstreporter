@@ -10,7 +10,9 @@ const PANEL_ID = 'wspr-matrix-window';
 const TOGGLE_ID = 'wspr-matrix-toggle';
 const BODY_ID = 'wspr-matrix-body';
 const ENABLE_KEY = 'wsprMatrixEnabled';
-const FROM_HERE_KEY = 'wsprMatrixFromHere';
+// Legacy localStorage key from the removed from-here/unfiltered toggle —
+// the matrix is from-here-only now; clean up the stale pref once.
+const LEGACY_FROM_HERE_KEY = 'wsprMatrixFromHere';
 const UPDATE_THROTTLE_MS = 300;
 const POLL_INTERVAL_MS = 45000;
 
@@ -68,7 +70,6 @@ function topModeBadges(cell) {
 
 const runtime = {
     enabled: false,
-    fromHere: false,
     lastUpdateAt: 0,
     onLayoutChange: null,
     lastMatrixKey: '',
@@ -87,24 +88,11 @@ export function initWsprMatrix({ onLayoutChange } = {}) {
         setWsprMatrixVisible(true);
     }
 
-    runtime.fromHere = localStorage.getItem(FROM_HERE_KEY) === 'true';
+    localStorage.removeItem(LEGACY_FROM_HERE_KEY);
 
     toggle.addEventListener('click', () => {
         setWsprMatrixVisible(!runtime.enabled);
     });
-
-    // From-here toggle button.
-    const fromHereBtn = panel.querySelector('.wspr-matrix-from-here-toggle');
-    if (fromHereBtn) {
-        fromHereBtn.addEventListener('click', () => {
-            runtime.fromHere = !runtime.fromHere;
-            localStorage.setItem(FROM_HERE_KEY, runtime.fromHere ? 'true' : 'false');
-            fromHereBtn.classList.toggle('is-active', runtime.fromHere);
-            runtime.lastMatrixKey = '';
-            updateWsprMatrix();
-        });
-        fromHereBtn.classList.toggle('is-active', runtime.fromHere);
-    }
 
     makeDraggable(panel, panel.querySelector('.wspr-matrix-window-header'), 'wsprMatrixPos');
 }
@@ -154,8 +142,9 @@ export async function updateWsprMatrix() {
         return;
     }
 
-    const fromHereParam = runtime.fromHere ? '&from_here=true' : '';
-    const url = `/api/prop_intel?qth=${encodeURIComponent(qth)}&minutes=15&surroundings=true${fromHereParam}`;
+    // The matrix is from-here-only by design: an unfiltered global WSPR
+    // window is noise for the operator who anchors every answer at their QTH.
+    const url = `/api/prop_intel?qth=${encodeURIComponent(qth)}&minutes=15&surroundings=true&from_here=true`;
 
     try {
         const resp = await fetch(url);
@@ -226,21 +215,19 @@ function renderMatrix(body, data) {
                         cell.atypical.flavor === 'atypical-wspr-silent-ft8' ? '!w' : '!';
                     atypicalBadge = `<span class="wspr-badge wspr-badge-atypical ${flavorClass}" title="Atypical z=${cell.atypical.z_score} (${cell.atypical.flavor})">${flavorChar}</span>`;
                 }
-                const fromHereMark = cell.from_here ? '<span class="wspr-badge wspr-badge-from-here">*</span>' : '';
                 const titleParts = [`${band} → ${region}: ${cell.spot_count} spots`];
                 if (cell.ssb_open) titleParts.push('SSB open');
                 if (cell.cw_open) titleParts.push('CW open');
                 if (cell.rising) titleParts.push('rising');
                 if (cell.atypical) titleParts.push(`atypical z=${cell.atypical.z_score} (${cell.atypical.flavor})`);
-                if (cell.from_here) titleParts.push('from-here');
                 const bg = cellColor(intensity, theme);
-                html += `<td class="wspr-matrix-cell" style="background: ${bg}; color: ${cellInk(bg)}" title="${titleParts.join(', ')}">${cell.spot_count}${badges}${atypicalBadge}${fromHereMark}</td>`;
+                html += `<td class="wspr-matrix-cell" style="background: ${bg}; color: ${cellInk(bg)}" title="${titleParts.join(', ')}">${cell.spot_count}${badges}${atypicalBadge}</td>`;
             }
         }
         html += '</tr>';
     }
     html += '</tbody></table>';
-    html += '<div class="wspr-matrix-legend small text-muted"><span class="wspr-heat-scale" aria-hidden="true"></span>=spots: few &rarr; many <span class="wspr-badge wspr-badge-ssb">S</span>=SSB <span class="wspr-badge wspr-badge-cw">C</span>=CW (top mode) <span class="wspr-badge wspr-badge-rising">&uarr;</span>=rising <span class="wspr-badge wspr-badge-atypical">!</span>=atypical *=from-here</div>';
+    html += '<div class="wspr-matrix-legend small text-muted"><span class="wspr-heat-scale" aria-hidden="true"></span>=spots: few &rarr; many <span class="wspr-badge wspr-badge-ssb">S</span>=SSB <span class="wspr-badge wspr-badge-cw">C</span>=CW (top mode) <span class="wspr-badge wspr-badge-rising">&uarr;</span>=rising <span class="wspr-badge wspr-badge-atypical">!</span>=atypical</div>';
     body.innerHTML = html;
 }
 
