@@ -44,6 +44,96 @@ function parseRgb(str) {
     return [Number(m[1]), Number(m[2]), Number(m[3])];
 }
 
+describe('wspr-matrix heat styles (viridis / inferno)', () => {
+    const { styleFill, surgeStrength, setStyle } = __test;
+    let store;
+
+    beforeEach(() => {
+        installLocalStorageMock();
+        store = globalThis.localStorage;
+        setupDom();
+        reset();
+    });
+
+    it('viridis hits its reference endpoints and ignores the theme', () => {
+        expect(styleFill('viridis', 0, 'light')).toEqual([68, 1, 84]);   // #440154
+        expect(styleFill('viridis', 1, 'dark')).toEqual([253, 231, 37]); // #fde725
+        expect(styleFill('viridis', 0.5, 'light')).toEqual(styleFill('viridis', 0.5, 'dark'));
+    });
+
+    it('inferno hits its reference endpoints', () => {
+        expect(styleFill('inferno', 0)).toEqual([0, 0, 4]);        // #000004
+        expect(styleFill('inferno', 1)).toEqual([252, 255, 164]);  // #fcffa4
+    });
+
+    it('keeps spot-count numerals at WCAG AA across both heat ramps', () => {
+        for (const style of ['viridis', 'inferno']) {
+            for (let i = 0; i <= 40; i++) {
+                const bg = styleFill(style, i / 40);
+                const ink = parseRgb(cellInk(bg));
+                const bgL = luminance(bg), inkL = luminance(ink);
+                const ratio = (Math.max(bgL, inkL) + 0.05) / (Math.min(bgL, inkL) + 0.05);
+                expect(ratio, `${style} intensity ${i / 40} on rgb(${bg})`).toBeGreaterThanOrEqual(4.5);
+            }
+        }
+    });
+
+    it('clamps out-of-range intensities', () => {
+        expect(styleFill('viridis', -1)).toEqual(styleFill('viridis', 0));
+        expect(styleFill('inferno', 5)).toEqual(styleFill('inferno', 1));
+    });
+
+    it('surgeStrength: z >= 4 or >=50% source agreement is the strong mark', () => {
+        expect(surgeStrength({ atypical: null })).toBe(0);
+        expect(surgeStrength({ atypical: { z_score: 2.4 } })).toBe(1);
+        expect(surgeStrength({ atypical: { z_score: 4.2 } })).toBe(2);
+        expect(surgeStrength({ atypical: { z_score: 3.1 }, atypical_agreement: 0.5 })).toBe(2);
+        expect(surgeStrength({ atypical: { z_score: 3.1 }, atypical_agreement: 0.25 })).toBe(1);
+    });
+
+    it('viridis style: atypical renders up-chevrons, never the ! badge', () => {
+        runtime.style = 'viridis';
+        const html = renderCell('10m', 'CAR', makeCell({
+            band: '10m', region: 'CAR', atypical: { z_score: 4.2, confidence: 0.9 },
+        }), 12, 'light');
+        expect(html).toContain('class="wspr-chev"');
+        expect(html).toContain('<polygon points="0,4.5 4.5,0.5 9,4.5"'); // apex up
+        expect((html.match(/wspr-chev/g) || []).length).toBeGreaterThanOrEqual(1);
+        expect(html).not.toContain('wspr-badge-atypical');
+        expect(html).not.toContain('wspr-matrix-surge');
+    });
+
+    it('inferno style: atypical renders an amber ring, thicker when strong', () => {
+        runtime.style = 'inferno';
+        const mild = renderCell('10m', 'CAR', makeCell({
+            band: '10m', region: 'CAR', atypical: { z_score: 2.4, confidence: 0.5 },
+        }), 12, 'light');
+        expect(mild).toContain('box-shadow: inset 0 0 0 2px #f5b83d');
+        const strong = renderCell('10m', 'CAR', makeCell({
+            band: '10m', region: 'CAR', atypical: { z_score: 3.1, confidence: 0.9 },
+            active_sources: ['wspr', 'pskr'], atypical_agreement: 1.0,
+        }), 12, 'light');
+        expect(strong).toContain('box-shadow: inset 0 0 0 3px #f5b83d');
+        expect(strong).not.toContain('wspr-badge-atypical');
+    });
+
+    it('setStyle persists, resets the render fingerprint, rejects unknown styles', () => {
+        runtime.lastRenderKey = 'stale';
+        setStyle('viridis');
+        expect(runtime.style).toBe('viridis');
+        expect(store.getItem(__test.STYLE_KEY)).toBe('viridis');
+        expect(runtime.lastRenderKey).toBe('');
+        setStyle('plasma');
+        expect(runtime.style).toBe('viridis');
+    });
+
+    it('a stored style survives a re-init', () => {
+        store.setItem(__test.STYLE_KEY, 'inferno');
+        initWsprMatrix();
+        expect(runtime.style).toBe('inferno');
+    });
+});
+
 describe('wspr-matrix topModeBadges', () => {
     it('shows only SSB when both SSB and CW are open', () => {
         expect(topModeBadges({ ssb_open: true, cw_open: true }))

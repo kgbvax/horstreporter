@@ -755,6 +755,42 @@ body[data-theme="dark"] .wspr-heat-scale {
     color: #fff;
     border-color: transparent;
 }
+/* Separator between the source chips and the look chips (Aqua/Viridis/
+   Inferno) on the same row. */
+.wspr-chip-sep {
+    align-self: center;
+    width: 1px;
+    height: 12px;
+    margin: 0 3px;
+    background: var(--control-border);
+}
+/* Heat-style anomaly glyphs: stacked chevrons (viridis) and the legend's
+   ring swatch (inferno). Glyphs ride the numeral ink flip via currentColor. */
+.wspr-chev {
+    display: inline-flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+    vertical-align: middle;
+    margin: 0 2px;
+    line-height: 0;
+}
+.wspr-ring-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    border: 2px solid #f5b83d;
+    vertical-align: middle;
+}
+.wspr-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
 
 /* Atypical surge: pulsing ring on the chip (folded in from prop-matrix.js's
    surge affordance when the two panels merged). */

@@ -5,9 +5,12 @@ import { makeDraggable } from './panel-drag.js';
 // wspr-matrix.js — the unified Prop panel: band × region propagation-
 // intelligence matrix over ALL ingest sources (WSPR, PSKReporter FT8/FT4,
 // RBN, DX cluster). Polls /api/prop_intel/v2 (the multi-source contract;
-// v1 stays frozen for the horstapp widgets). Renders per-cell activity on the
-// canonical teal heat ramp with SSB/CW flags, rising slope, atypical-surge
-// badges (!! when multiple sources agree), and a ×n source-count corner.
+// v1 stays frozen for the horstapp widgets). Renders per-cell activity with
+// switchable looks (chip row: Aqua / Viridis / Inferno): the shipped teal
+// ramp + !/!! badges, or a heatmap colormap where the anomaly is a glyph —
+// up-chevrons on viridis, an amber warning ring on inferno (tmp/prop-vis-
+// round3.html, decision 02: one-channel fill + glyph). All looks keep SSB/CW
+// flags, rising slope, and the ×n source-count corner.
 // From-here-only by design: cells are paths with the operator's QTH at one
 // end — an unfiltered global window is noise (never re-add one).
 //
@@ -21,6 +24,7 @@ const TOGGLE_ID = 'wspr-matrix-toggle';
 const BODY_ID = 'wspr-matrix-body';
 const ENABLE_KEY = 'wsprMatrixEnabled';
 const SOURCES_KEY = 'wsprMatrixSources';
+const STYLE_KEY = 'wsprMatrixStyle';
 // Legacy localStorage key from the removed from-here/unfiltered toggle —
 // the matrix is from-here-only now; clean up the stale pref once.
 const LEGACY_FROM_HERE_KEY = 'wsprMatrixFromHere';
@@ -51,6 +55,44 @@ const ALL_SOURCES = SOURCES.map((s) => s.key);
 // spreads the low end so 1-2 spots don't collapse onto the sparse shade.
 const CELL_COLOR_LIGHT = { low: [159, 217, 226], high: [8, 55, 67] }; // #9fd9e2 → #083743
 const CELL_COLOR_DARK = { low: [13, 71, 83], high: [127, 220, 234] }; // #0d4753 → #7fdcea
+
+// Switchable fill "look" (tmp/prop-vis-round3.html, decision 02: one-channel
+// fill + glyph). The heat styles are data-colored — identical in both themes,
+// only the numeral ink flips. 'aqua' keeps the shipped theme-aware ramp.
+const STYLES = [
+    { key: 'aqua', label: 'Aqua' },
+    { key: 'viridis', label: 'Viridis' },
+    { key: 'inferno', label: 'Inferno' },
+];
+const ALL_STYLES = STYLES.map((s) => s.key);
+// 9-stop perceptually-uniform maps (matplotlib reference samples).
+const VIRIDIS_STOPS = ['#440154', '#482677', '#3f4788', '#31688e', '#26828e', '#1f9e89', '#35b779', '#6ece58', '#fde725'];
+const INFERNO_STOPS = ['#000004', '#1b0c41', '#4a0c6b', '#781c6d', '#a52c60', '#cf4446', '#ed6925', '#fb9b06', '#fcffa4'];
+
+function hexToRgb(h) {
+    return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+}
+
+// Interpolate a stop table at t in 0..1 → [r,g,b].
+function rampAt(stops, t) {
+    t = Math.max(0, Math.min(1, t));
+    const n = stops.length - 1;
+    const i = Math.min(n - 1, Math.floor(t * n));
+    const a = hexToRgb(stops[i]);
+    const b = hexToRgb(stops[i + 1]);
+    const f = t * n - i;
+    return a.map((v, k) => Math.round(v + (b[k] - v) * f));
+}
+
+// Per-style chip fill. Heat ramps keep the sqrt() low-end spread (1-2 spots
+// must not collapse onto the dead shade); theme only matters for 'aqua'.
+function styleFill(style, intensity, theme) {
+    const t = Math.sqrt(Math.max(0, Math.min(1, intensity)));
+    if (style === 'viridis') return rampAt(VIRIDIS_STOPS, t);
+    if (style === 'inferno') return rampAt(INFERNO_STOPS, t);
+    const { low, high } = theme === 'dark' ? CELL_COLOR_DARK : CELL_COLOR_LIGHT;
+    return low.map((c, i) => Math.round(c + (high[i] - c) * t));
+}
 
 // Numerals flip ink at the luminance where white/black cross (~0.179); pure
 // black/white inks keep >= 4.58:1 on every shade either side of the switch —
@@ -83,6 +125,32 @@ function cellInk(rgb) {
     return l <= 0.179 ? WHITE_INK : BLACK_INK;
 }
 
+// Heat-style anomaly glyphs (round-3 decision: shape carries the anomaly).
+// v2 atypical only fires on surges (z >= threshold), so glyphs only ever go
+// up / amber; "strong" doubles the mark for z >= 4 or multi-source agreement.
+function surgeStrength(cell) {
+    if (!cell.atypical) return 0;
+    const multi = (cell.atypical_agreement ?? 0) >= 0.5;
+    const z = Number(cell.atypical.z_score) || 0;
+    return (z >= 4 || multi) ? 2 : 1;
+}
+
+function chevSvg(ink) {
+    return `<svg width="9" height="5" viewBox="0 0 9 5" style="display:block" aria-hidden="true"><polygon points="0,4.5 4.5,0.5 9,4.5" fill="${ink}"/></svg>`;
+}
+
+function chevronGlyph(strong, ink) {
+    const svgs = chevSvg(ink) + (strong ? chevSvg(ink) : '');
+    return `<span class="wspr-chev">${svgs}</span>`;
+}
+
+const RING_COLOR = '#f5b83d';
+
+function ringShadow(strong) {
+    const w = strong ? 3 : 2;
+    return `inset 0 0 0 ${w}px ${RING_COLOR}`;
+}
+
 // Mode badge shows only the top mode: SSB beats CW (if SSB is open, phone
 // wins the band, so the CW badge is dropped for glanceability). Full detail
 // stays in the cell tooltip.
@@ -102,6 +170,7 @@ const runtime = {
     lastQth: '',
     lastRenderKey: '',
     sources: [...ALL_SOURCES],
+    style: 'aqua',
     onLayoutChange: null,
 };
 
@@ -120,6 +189,11 @@ export function initWsprMatrix({ onLayoutChange } = {}) {
         // Canonical order (matches the backend's parse + the chip row).
         parsed.sort((a, b) => ALL_SOURCES.indexOf(a) - ALL_SOURCES.indexOf(b));
         if (parsed.length > 0) runtime.sources = parsed;
+    }
+
+    const storedStyle = localStorage.getItem(STYLE_KEY);
+    if (storedStyle && ALL_STYLES.includes(storedStyle)) {
+        runtime.style = storedStyle;
     }
 
     const stored = localStorage.getItem(ENABLE_KEY);
@@ -266,12 +340,27 @@ async function pollMatrix(force) {
     }
 }
 
+// Switch the fill look. Style is render-only (same payload), so this resets
+// the render fingerprint and repaints from cache — no refetch.
+function setStyle(key) {
+    if (!ALL_STYLES.includes(key) || runtime.style === key) return;
+    runtime.style = key;
+    localStorage.setItem(STYLE_KEY, key);
+    runtime.lastRenderKey = '';
+    renderMatrix();
+}
+
 function renderSourceChips() {
     const chips = SOURCES.map((s) => {
         const on = runtime.sources.includes(s.key);
         return `<button type="button" class="wspr-src-chip${on ? ' is-on' : ''}" data-source="${s.key}" aria-pressed="${on}">${s.label}</button>`;
     }).join('');
-    return `<div class="wspr-src-chips" role="group" aria-label="Sources">${chips}</div>`;
+    const styleChips = STYLES.map((s) => {
+        const on = runtime.style === s.key;
+        return `<button type="button" class="wspr-src-chip${on ? ' is-on' : ''}" data-style="${s.key}" aria-pressed="${on}">${s.label}</button>`;
+    }).join('');
+    return `<div class="wspr-src-chips" role="group" aria-label="Sources">${chips}` +
+        `<span class="wspr-chip-sep" aria-hidden="true"></span>${styleChips}</div>`;
 }
 
 function renderMatrix() {
@@ -302,7 +391,7 @@ function renderMatrix() {
 
     // Fingerprint for skip-rebuild (theme included: a toggle re-shades chips).
     const theme = document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
-    const renderKey = `${theme}|${runtime.sources.join(',')}|${activeBands
+    const renderKey = `${theme}|${runtime.style}|${runtime.sources.join(',')}|${activeBands
         .map((b) => `${b}:${Array.from(matrix.get(b).entries()).sort().map(([r, c]) =>
             `${r}${c.spot_count}${c.ssb_open ? 'S' : ''}${c.cw_open ? 'C' : ''}${c.rising ? 'R' : ''}` +
             `${c.atypical ? `${c.atypical.z_score}~${c.atypical.confidence}` : ''}` +
@@ -343,20 +432,34 @@ function renderCell(band, region, cell, maxCount, theme) {
     if (!cell || cell.spot_count === 0) {
         return `<td class="wspr-matrix-cell-empty" data-band="${band}" data-region="${region}" role="button" tabindex="0"></td>`;
     }
+    const style = runtime.style;
     const intensity = Math.min(1, cell.spot_count / maxCount);
     let badges = topModeBadges(cell);
     if (cell.rising) badges += '<span class="wspr-badge wspr-badge-rising">&uarr;</span>';
-    let atypicalBadge = '';
+    let atypicalMark = '';
     let surgeClass = '';
+    let ring = '';
     if (cell.atypical) {
-        // !! when independent sources agree on the surge; ! for a single
-        // source's atypical call.
-        const multi = (cell.atypical_agreement ?? 0) >= 0.5;
-        surgeClass = ' wspr-matrix-surge';
-        const cls = multi ? ' wspr-badge-atypical-multi' : '';
-        const char = multi ? '!!' : '!';
         const conf = Math.round(Math.max(0, Math.min(1, Number(cell.atypical.confidence ?? 0))) * 100);
-        atypicalBadge = `<span class="wspr-badge wspr-badge-atypical${cls}" title="atypical z=${cell.atypical.z_score}, confidence ${conf}%${multi ? `, ${Math.round((cell.atypical_agreement ?? 0) * 100)}% of sources agree` : ''}">${char}</span>`;
+        const multi = (cell.atypical_agreement ?? 0) >= 0.5;
+        const tip = `atypical z=${cell.atypical.z_score}, confidence ${conf}%${multi ? `, ${Math.round((cell.atypical_agreement ?? 0) * 100)}% of sources agree` : ''}`;
+        if (style === 'viridis' || style === 'inferno') {
+            // Heat styles speak in geometry, not badges (round-3 decision 02).
+            // The v2 backend only flags surges, so glyphs only point up.
+            const strong = surgeStrength(cell) === 2;
+            if (style === 'viridis') {
+                atypicalMark = `<span title="${tip}">${chevronGlyph(strong, '__INK__')}</span>`;
+            } else {
+                ring = ringShadow(strong);
+                atypicalMark = `<span class="wspr-sr-only" title="${tip}">surge</span>`;
+            }
+        } else {
+            // Aqua style keeps the shipped badge language: !! when independent
+            // sources agree on the surge; ! for a single source's call.
+            surgeClass = ' wspr-matrix-surge';
+            const cls = multi ? ' wspr-badge-atypical-multi' : '';
+            atypicalMark = `<span class="wspr-badge wspr-badge-atypical${cls}" title="${tip}">${multi ? '!!' : '!'}</span>`;
+        }
     }
     // Source-count corner: only meaningful with ≥2 active sources (with one,
     // open agreement is vacuously 1.0). Faded when sources disagree on "open".
@@ -384,19 +487,37 @@ function renderCell(band, region, cell, maxCount, theme) {
             titleParts.push(line);
         }
     }
-    const bg = cellColor(intensity, theme);
-    return `<td class="wspr-matrix-cell${surgeClass}" style="background: ${bg}; color: ${cellInk(bg)}" title="${titleParts.join('\n')}" data-band="${band}" data-region="${region}" role="button" tabindex="0">${cell.spot_count}${badges}${atypicalBadge}${srcMark}</td>`;
+    const bgRgb = styleFill(style, intensity, theme);
+    const bg = `rgb(${bgRgb.join(', ')})`;
+    const ink = cellInk(bgRgb);
+    // Chevron ink follows the numeral ink flip (the heat ramps cross white/
+    // black AA at the same luminance the teal ramp does).
+    atypicalMark = atypicalMark.replace('__INK__', ink);
+    const styleAttr = `background: ${bg}; color: ${ink}${ring ? `; box-shadow: ${ring}` : ''}`;
+    return `<td class="wspr-matrix-cell${surgeClass}" style="${styleAttr}" title="${titleParts.join('\n')}" data-band="${band}" data-region="${region}" role="button" tabindex="0">${cell.spot_count}${badges}${atypicalMark}${srcMark}</td>`;
 }
 
 function legendHtml() {
-    return '<div class="wspr-matrix-legend small text-muted"><span class="wspr-heat-scale" aria-hidden="true"></span>=spots: few &rarr; many <span class="wspr-badge wspr-badge-ssb">S</span>=SSB <span class="wspr-badge wspr-badge-cw">C</span>=CW (top mode) <span class="wspr-badge wspr-badge-rising">&uarr;</span>=rising <span class="wspr-badge wspr-badge-atypical">!</span>=atypical <span class="wspr-badge wspr-badge-atypical wspr-badge-atypical-multi">!!</span>=atypical, multi-source <span class="wspr-matrix-src">×n</span>=sources</div>';
+    const style = runtime.style;
+    let scaleStyle = '';
+    let anomaly = '<span class="wspr-badge wspr-badge-atypical">!</span>=atypical <span class="wspr-badge wspr-badge-atypical wspr-badge-atypical-multi">!!</span>=atypical, multi-source';
+    if (style === 'viridis') {
+        scaleStyle = ` style="background: linear-gradient(90deg, ${VIRIDIS_STOPS.join(', ')})"`;
+        anomaly = `<span class="wspr-chev">${chevSvg('currentColor')}</span>=surge <span class="wspr-chev">${chevSvg('currentColor')}${chevSvg('currentColor')}</span>=strong / multi-source`;
+    } else if (style === 'inferno') {
+        scaleStyle = ` style="background: linear-gradient(90deg, ${INFERNO_STOPS.join(', ')})"`;
+        anomaly = `<span class="wspr-ring-swatch"></span>=surge ring (thicker = strong / multi-source)`;
+    }
+    return `<div class="wspr-matrix-legend small text-muted"><span class="wspr-heat-scale"${scaleStyle} aria-hidden="true"></span>=spots: few &rarr; many <span class="wspr-badge wspr-badge-ssb">S</span>=SSB <span class="wspr-badge wspr-badge-cw">C</span>=CW (top mode) <span class="wspr-badge wspr-badge-rising">&uarr;</span>=rising ${anomaly} <span class="wspr-matrix-src">×n</span>=sources</div>`;
 }
 
 function attachSourceChipHandlers(body) {
     body.querySelectorAll('.wspr-src-chip').forEach((chip) => {
         chip.addEventListener('click', () => {
-            const key = chip.getAttribute('data-source');
-            if (key) toggleSource(key);
+            const source = chip.getAttribute('data-source');
+            if (source) toggleSource(source);
+            const styleKey = chip.getAttribute('data-style');
+            if (styleKey) setStyle(styleKey);
         });
     });
 }
@@ -457,6 +578,15 @@ export const __test = {
     rgbLuminance,
     topModeBadges,
     renderCell,
+    styleFill,
+    rampAt,
+    surgeStrength,
+    chevronGlyph,
+    ringShadow,
+    setStyle,
+    VIRIDIS_STOPS,
+    INFERNO_STOPS,
+    STYLES,
     runtime,
     reset() {
         stopPolling();
@@ -467,6 +597,7 @@ export const __test = {
         runtime.lastQth = '';
         runtime.lastRenderKey = '';
         runtime.sources = [...ALL_SOURCES];
+        runtime.style = 'aqua';
         runtime.onLayoutChange = null;
     },
     invalidateCache,
@@ -478,4 +609,5 @@ export const __test = {
     BODY_ID,
     ENABLE_KEY,
     SOURCES_KEY,
+    STYLE_KEY,
 };
