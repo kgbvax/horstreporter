@@ -138,9 +138,14 @@ func (s *dxPostgresStore) upsertProplabSW(ctx context.Context, rows []proplabSWR
 }
 
 const (
-	cellfeedPruneBatchSize    = 20000
-	cellfeedPruneBatchTimeout = 2 * time.Second
-	cellfeedPruneMaxBatches   = 50
+	// Small batches with a realistic timeout: the prod box's Postgres
+	// cannot finish a 20k ctid delete in 2s under memory pressure, so the
+	// hourly prune timed out every time and the 35d retention made no
+	// progress (Sep 4). 10k/10s/100 caps a pass at ~1M rows, worst case
+	// ~15 min, still bounded.
+	cellfeedPruneBatchSize    = 10000
+	cellfeedPruneBatchTimeout = 10 * time.Second
+	cellfeedPruneMaxBatches   = 100
 )
 
 // pruneCellFeedOlderThan removes cell bucket / SW rows older than cutoff.
