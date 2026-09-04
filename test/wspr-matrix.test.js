@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 
 // wspr-matrix.js imports state.js / utils.js / panel-drag.js at module load;
 // utils is mocked to keep the region columns and band palette test-local
-// (same convention as prop-matrix.test.js).
+// (same convention as the other static/ module test hooks).
 vi.mock('../static/utils.js', () => ({
     WSPR_REGIONS: ['EU', 'NA', 'SA', 'AF', 'AS', 'JA', 'OC', 'VK', 'KH6', 'CAR', 'AN'],
     bandColors: { all: '#555', '20m': '#e67e22', '10m': '#16a095' },

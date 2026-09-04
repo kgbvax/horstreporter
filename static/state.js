@@ -15,8 +15,6 @@ export const state = {
     mercatorInteractionActive: false,
     mercatorRenderDeferred: false,
     softPaused: false,
-    drillDownBand: '',
-    drillDownRegion: '',
     // Filter the current SSE connection is actually fetching from the server.
     // Used to avoid tearing down the stream when the user only disables bands
     // (client-side filter is enough) or re-enables bands already in the stream.
