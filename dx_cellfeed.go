@@ -138,14 +138,16 @@ func (s *dxPostgresStore) upsertProplabSW(ctx context.Context, rows []proplabSWR
 }
 
 const (
-	// Small batches with a realistic timeout: the prod box's Postgres
-	// cannot finish a 20k ctid delete in 2s under memory pressure, so the
-	// hourly prune timed out every time and the 35d retention made no
-	// progress (Sep 4). 10k/10s/100 caps a pass at ~1M rows, worst case
-	// ~15 min, still bounded.
+	// Batches sized for the prod box: 20k-row deletes never finished in 2s
+	// under PG memory pressure and the 35d retention made no progress
+	// (Sep 4). The hourly cell prune also collides with the raw-spot prune
+	// window (~:20-:25 past the hour), so the batch timeout must survive a
+	// contested PG (30s) while the wall-clock budget keeps a pass bounded
+	// (~2.5 min worst case) so the tick can't starve bucket persistence.
 	cellfeedPruneBatchSize    = 10000
-	cellfeedPruneBatchTimeout = 10 * time.Second
+	cellfeedPruneBatchTimeout = 30 * time.Second
 	cellfeedPruneMaxBatches   = 100
+	cellfeedPrunePassBudget   = 2 * time.Minute
 )
 
 // pruneCellFeedOlderThan removes cell bucket / SW rows older than cutoff.
@@ -160,7 +162,11 @@ func (s *dxPostgresStore) pruneCellFeedOlderThan(cutoff int64) (int64, error) {
 		if table == "proplab_sw_series" {
 			col = "obs_time"
 		}
+		passStart := time.Now()
 		for b := 0; b < cellfeedPruneMaxBatches; b++ {
+			if time.Since(passStart) > cellfeedPrunePassBudget {
+				break
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), cellfeedPruneBatchTimeout)
 			res, err := s.pool.Exec(ctx, fmt.Sprintf(`
 				DELETE FROM %s
