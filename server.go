@@ -241,6 +241,9 @@ type streamSpot struct {
 	Band            string  `json:"band"`
 	Sender          string  `json:"sender,omitempty"`
 	Receiver        string  `json:"receiver,omitempty"`
+	// SpotTime is the absolute spot timestamp (unix seconds), set only by the
+	// time-travel replay path — live SSE payloads stay byte-identical.
+	SpotTime int64 `json:"spotTime,omitempty"`
 }
 
 type squareDetailReport struct {

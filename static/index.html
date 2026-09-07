@@ -286,6 +286,7 @@
         <div id="map-toggles" class="map-toggles">
             <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show Band Stats">Stats</button>
             <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show Propagation Intelligence Matrix">Prop</button>
+            <button id="timetravel-toggle" type="button" class="panel-toggle is-translucent" title="Replay the last 24-48h of spots">Time Travel</button>
             <button id="drill-down-clear" type="button" class="panel-toggle is-translucent" title="Clear grid-square filter" style="display: none;"></button>
         </div>
         <canvas id="azimuth-canvas" class="position-absolute top-0 start-0 w-100 h-100"></canvas>
@@ -354,6 +355,41 @@
                 <span>Propagation Intel · from here</span>
             </div>
             <div id="wspr-matrix-body" class="wspr-matrix-body"></div>
+        </div>
+        <!-- Time travel: timeline overlay for replaying the last 24-48h of
+             spots in 30-min buckets (static/timetravel.js). While active, the
+             replay bucket array replaces liveSpots and live arrivals/prune
+             are suspended. -->
+        <div id="timetravel-bar" class="timetravel-bar is-hidden" role="region" aria-label="Time travel replay">
+            <div class="timetravel-header">
+                <span class="timetravel-title">Time Travel</span>
+                <span id="timetravel-label" class="timetravel-label"></span>
+                <button id="timetravel-close" type="button" class="timetravel-btn" title="Exit time travel">&times;</button>
+            </div>
+            <div id="timetravel-histogram" class="timetravel-histogram" aria-hidden="true"></div>
+            <input id="timetravel-scrubber" class="timetravel-scrubber" type="range" min="0" max="0" step="1800" aria-label="Replay time">
+            <div class="timetravel-controls">
+                <button id="timetravel-prev" type="button" class="timetravel-btn" title="Previous 30 min">&lsaquo;</button>
+                <button id="timetravel-play" type="button" class="timetravel-btn" title="Play / pause">Play</button>
+                <button id="timetravel-next" type="button" class="timetravel-btn" title="Next 30 min">&rsaquo;</button>
+                <label class="timetravel-speed">
+                    <select id="timetravel-speed" aria-label="Seconds per step">
+                        <option value="1000">1 s</option>
+                        <option value="3000" selected>3 s</option>
+                        <option value="6000">6 s</option>
+                    </select>
+                    <span>/ step</span>
+                </label>
+                <label class="timetravel-range">
+                    <span>From</span>
+                    <input id="timetravel-from" type="datetime-local" step="1800" aria-label="Replay start time">
+                </label>
+                <label class="timetravel-range">
+                    <span>To</span>
+                    <input id="timetravel-to" type="datetime-local" step="1800" aria-label="Replay end time">
+                </label>
+                <button id="timetravel-apply" type="button" class="timetravel-btn" title="Apply the selected range">Apply</button>
+            </div>
         </div>
     </div>
     <div id="tooltip"></div>

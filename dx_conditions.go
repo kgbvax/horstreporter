@@ -110,40 +110,40 @@ type DxBaselineEngine struct {
 }
 
 type dxBandCondition struct {
-	Band                     string         `json:"band"`
-	Score                    float64        `json:"score"`
-	Confidence               float64        `json:"confidence"`
-	Status                   string         `json:"status"`
-	Condition                string         `json:"condition"`
-	Mode                     string         `json:"mode"`
-	Recommendation           string         `json:"recommendation"`
-	CurrentLinks             int            `json:"current_links"`
-	UniqueLinks              int            `json:"unique_links"`
-	RepeatRatio              float64        `json:"repeat_ratio"`
-	SpotsPerMinute           float64        `json:"spots_per_minute"`
-	UniqueTxStations         int            `json:"unique_tx_stations"`
-	UniqueRxStations         int            `json:"unique_rx_stations"`
-	UniqueRemoteGrids        int            `json:"unique_remote_grids"`
-	AvgDistanceKm            float64        `json:"avg_distance_km"`
-	MaxDistanceKm            float64        `json:"max_distance_km"`
-	MedianDistanceKm         float64        `json:"median_distance_km"`
-	P90DistanceKm            float64        `json:"p90_distance_km"`
-	LongHaulRatio            float64        `json:"long_haul_ratio"`
-	DxRatio                  float64        `json:"dx_ratio"`
-	AvgSnr                   float64        `json:"avg_snr"`
-	PeakSnr                  int            `json:"peak_snr"`
-	MedianSnr                float64        `json:"median_snr"`
-	P90Snr                   float64        `json:"p90_snr"`
-	BaselineActivity            float64        `json:"baseline_activity"`
-	ClusterBaselineUsed         bool           `json:"cluster_baseline_used"`
-	BaselineActivityBySlot      []float64      `json:"baseline_activity_by_slot,omitempty"`
-	BaselineSlotUsedByCluster   []bool         `json:"baseline_slot_used_by_cluster,omitempty"`
-	DominantDirection           string         `json:"dominant_direction"`
-	AzimuthSectors              map[string]int `json:"azimuth_sectors,omitempty"`
-	RegionCounts                map[string]int `json:"region_counts,omitempty"`
-	Trend                    string         `json:"trend"`
-	TrendDelta               float64        `json:"trend_delta"`
-	Sparkline                []float64      `json:"sparkline"`
+	Band                      string         `json:"band"`
+	Score                     float64        `json:"score"`
+	Confidence                float64        `json:"confidence"`
+	Status                    string         `json:"status"`
+	Condition                 string         `json:"condition"`
+	Mode                      string         `json:"mode"`
+	Recommendation            string         `json:"recommendation"`
+	CurrentLinks              int            `json:"current_links"`
+	UniqueLinks               int            `json:"unique_links"`
+	RepeatRatio               float64        `json:"repeat_ratio"`
+	SpotsPerMinute            float64        `json:"spots_per_minute"`
+	UniqueTxStations          int            `json:"unique_tx_stations"`
+	UniqueRxStations          int            `json:"unique_rx_stations"`
+	UniqueRemoteGrids         int            `json:"unique_remote_grids"`
+	AvgDistanceKm             float64        `json:"avg_distance_km"`
+	MaxDistanceKm             float64        `json:"max_distance_km"`
+	MedianDistanceKm          float64        `json:"median_distance_km"`
+	P90DistanceKm             float64        `json:"p90_distance_km"`
+	LongHaulRatio             float64        `json:"long_haul_ratio"`
+	DxRatio                   float64        `json:"dx_ratio"`
+	AvgSnr                    float64        `json:"avg_snr"`
+	PeakSnr                   int            `json:"peak_snr"`
+	MedianSnr                 float64        `json:"median_snr"`
+	P90Snr                    float64        `json:"p90_snr"`
+	BaselineActivity          float64        `json:"baseline_activity"`
+	ClusterBaselineUsed       bool           `json:"cluster_baseline_used"`
+	BaselineActivityBySlot    []float64      `json:"baseline_activity_by_slot,omitempty"`
+	BaselineSlotUsedByCluster []bool         `json:"baseline_slot_used_by_cluster,omitempty"`
+	DominantDirection         string         `json:"dominant_direction"`
+	AzimuthSectors            map[string]int `json:"azimuth_sectors,omitempty"`
+	RegionCounts              map[string]int `json:"region_counts,omitempty"`
+	Trend                     string         `json:"trend"`
+	TrendDelta                float64        `json:"trend_delta"`
+	Sparkline                 []float64      `json:"sparkline"`
 	// ActivityByBin is the raw spots/min per time bin over the selected window
 	// (length 12, i=0 oldest), backed by Postgres dx_raw_spots via recentEvents
 	// when a store is configured. The Band Stats "Reports over time" chart uses
@@ -160,7 +160,7 @@ type dxConditionsResponse struct {
 	CwMinDb          int               `json:"cw_min_db"`
 	CurrentSlotOfDay int               `json:"current_slot_of_day"`
 	GeneratedAt      int64             `json:"generated_at"`
-	OperatorCluster string            `json:"qth_cluster,omitempty"`
+	OperatorCluster  string            `json:"qth_cluster,omitempty"`
 	BaselineBuckets  int               `json:"baseline_buckets"`
 	BaselineEventCnt int               `json:"baseline_event_count"`
 	BaselineHistoryM int               `json:"baseline_history_minutes"`
@@ -316,6 +316,20 @@ func (e *DxBaselineEngine) LoadSpotsBetweenFiltered(start, end int64, includeDXC
 		return nil, nil
 	}
 	return st.loadSpotsBetweenWithSourceFilter(start, end, includeDXCluster)
+}
+
+// LoadSpotsBetweenSources loads one bounded replay window straight from the
+// raw-spot table, restricted to the given source types and capped at limit
+// rows (truncated reports when the window held more). Used by the time-travel
+// replay endpoints; unlike LoadSpotsBetweenFiltered it never runs unbounded.
+func (e *DxBaselineEngine) LoadSpotsBetweenSources(start, end int64, sources []string, limit int) ([]MQTTMessage, bool, error) {
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return nil, false, nil
+	}
+	return st.loadSpotsBetweenSources(start, end, sources, limit)
 }
 
 // CountSpotsBetweenFiltered returns the number of spots in the window under
@@ -1022,41 +1036,41 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 		recommendation := classifyRecommendation(status, mode, dxRatio, spotsPerMin, bandConfidence)
 
 		bands = append(bands, dxBandCondition{
-			Band:                     band,
-			Score:                    round1(bandScore),
-			Confidence:               round1(bandConfidence),
-			Status:                   status,
-			Condition:                condition,
-			Mode:                     mode,
-			Recommendation:           recommendation,
-			CurrentLinks:             acc.total,
-			UniqueLinks:              uniqueCount,
-			RepeatRatio:              round2(repeatRatio),
-			SpotsPerMinute:           round2(spotsPerMin),
-			UniqueTxStations:         len(acc.uniqueTx),
-			UniqueRxStations:         len(acc.uniqueRx),
-			UniqueRemoteGrids:        len(acc.uniqueRemote),
-			AvgDistanceKm:            round1(avgDistance),
-			MaxDistanceKm:            round1(maxDistance),
-			MedianDistanceKm:         round1(medianDistance),
-			P90DistanceKm:            round1(p90Distance),
-			LongHaulRatio:            round2(longHaulRatio),
-			DxRatio:                  round2(dxRatio),
-			AvgSnr:                   round1(avgSnr),
-			PeakSnr:                  acc.peakSnr,
-			MedianSnr:                round1(medianSnr),
-			P90Snr:                   round1(p90Snr),
-			BaselineActivity:            round2(baselineActivity),
-			ClusterBaselineUsed:          clusterBaselineUsed,
-			BaselineActivityBySlot:      roundFloats2(baselineActivityBySlot),
-			BaselineSlotUsedByCluster:   baselineSlotUsedByCluster,
-			DominantDirection:           direction,
-			AzimuthSectors:           acc.directionBins,
-			RegionCounts:             acc.regionBins,
-			Trend:                    trend,
-			TrendDelta:               trendDelta,
-			Sparkline:                historicalBandSeries,
-			ActivityByBin:            roundFloats2(activityByBin),
+			Band:                      band,
+			Score:                     round1(bandScore),
+			Confidence:                round1(bandConfidence),
+			Status:                    status,
+			Condition:                 condition,
+			Mode:                      mode,
+			Recommendation:            recommendation,
+			CurrentLinks:              acc.total,
+			UniqueLinks:               uniqueCount,
+			RepeatRatio:               round2(repeatRatio),
+			SpotsPerMinute:            round2(spotsPerMin),
+			UniqueTxStations:          len(acc.uniqueTx),
+			UniqueRxStations:          len(acc.uniqueRx),
+			UniqueRemoteGrids:         len(acc.uniqueRemote),
+			AvgDistanceKm:             round1(avgDistance),
+			MaxDistanceKm:             round1(maxDistance),
+			MedianDistanceKm:          round1(medianDistance),
+			P90DistanceKm:             round1(p90Distance),
+			LongHaulRatio:             round2(longHaulRatio),
+			DxRatio:                   round2(dxRatio),
+			AvgSnr:                    round1(avgSnr),
+			PeakSnr:                   acc.peakSnr,
+			MedianSnr:                 round1(medianSnr),
+			P90Snr:                    round1(p90Snr),
+			BaselineActivity:          round2(baselineActivity),
+			ClusterBaselineUsed:       clusterBaselineUsed,
+			BaselineActivityBySlot:    roundFloats2(baselineActivityBySlot),
+			BaselineSlotUsedByCluster: baselineSlotUsedByCluster,
+			DominantDirection:         direction,
+			AzimuthSectors:            acc.directionBins,
+			RegionCounts:              acc.regionBins,
+			Trend:                     trend,
+			TrendDelta:                trendDelta,
+			Sparkline:                 historicalBandSeries,
+			ActivityByBin:             roundFloats2(activityByBin),
 		})
 
 		weight := float64(acc.total)

@@ -1671,6 +1671,59 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 	return out, rows.Err()
 }
 
+// loadSpotsBetweenSources loads raw spots in the half-open window
+// [start, end) restricted to the given source types ('mqtt'/'dxcluster'/
+// 'rbn'/'wspr' — missing/NULL source_type counts as 'mqtt'). Bounded by
+// limit: fetches limit+1 rows and reports truncated=true when the window
+// holds more, so a replay endpoint can cap its response. 30s context — a
+// single bucket window must return fast on the prod box (the spot_time
+// index serves it), unlike the unbounded backfill loader above.
+func (s *dxPostgresStore) loadSpotsBetweenSources(start, end int64, sources []string, limit int) ([]MQTTMessage, bool, error) {
+	if len(sources) == 0 {
+		return nil, false, nil
+	}
+	if limit <= 0 {
+		limit = 20000
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			spot_time, sender_callsign, sender_locator,
+			receiver_callsign, receiver_locator,
+			band, mode, signal_report_db,
+			COALESCE(frequency_khz, 0), COALESCE(comment, ''),
+			COALESCE(source_type, 'mqtt')
+		FROM dx_raw_spots
+		WHERE spot_time >= $1 AND spot_time < $2
+		  AND LOWER(COALESCE(source_type, 'mqtt')) = ANY($3)
+		ORDER BY spot_time ASC
+		LIMIT $4
+	`, start, end, sources, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+
+	out := make([]MQTTMessage, 0, 1024)
+	for rows.Next() {
+		var m MQTTMessage
+		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP, &m.F, &m.CM, &m.Source); err != nil {
+			return nil, false, err
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	truncated := len(out) > limit
+	if truncated {
+		out = out[:limit]
+	}
+	return out, truncated, nil
+}
+
 // pruneRawSpotsOlderThan deletes dx_raw_spots rows whose spot_time is older
 // than `cutoff` (a Unix-seconds value). Returns the total number of rows
 // deleted across all batches.
