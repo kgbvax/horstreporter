@@ -11,6 +11,25 @@ import { getLoopRange } from './timetravel.js';
 
 const pad = (n) => String(n).padStart(2, '0');
 
+// Done/failed notification: browser Notification (permission is requested at
+// submit time, inside the click gesture) + a document-title badge as the
+// no-permission fallback. The title is restored when the window regains focus.
+let baseTitle = null;
+function flagResult(text, clickedUrl) {
+    if (baseTitle === null) baseTitle = document.title;
+    document.title = `${text} — ${baseTitle}`;
+    if (window.Notification?.permission === 'granted') {
+        const n = new Notification('horstreporter video export', {
+            body: clickedUrl ? 'Render finished — click to open the download.' : text,
+            tag: 'video-export', // re-tag replaces instead of stacking
+        });
+        n.onclick = () => { window.focus(); n.close(); };
+    }
+}
+window.addEventListener('focus', () => {
+    if (baseTitle !== null) { document.title = baseTitle; baseTitle = null; }
+});
+
 let pollTimer = null;
 // One active job per client: prevents N rapid clicks enqueueing N renders.
 // (The sidecar also serializes globally: single worker, 429 past the queue.)
@@ -99,6 +118,11 @@ async function submitJob() {
         return;
     }
 
+    // Ask for notification permission once, inside the click gesture
+    // (browsers reject requests not tied to a user action).
+    if (window.Notification?.permission === 'default') {
+        window.Notification.requestPermission();
+    }
     set('Submitting render job…');
     let resp;
     try {
@@ -152,6 +176,7 @@ async function pollJob(id) {
                 clearInterval(pollTimer);
                 setJobActive(false);
                 if (statusEl) statusEl.textContent = 'Done.';
+                flagResult('Export ready', `/api/video${j.video}`);
                 if (downloadEl) {
                     downloadEl.href = `/api/video${j.video}`;
                     downloadEl.setAttribute('download', `horstreporter-${id}.mp4`);
@@ -162,6 +187,7 @@ async function pollJob(id) {
                 clearInterval(pollTimer);
                 setJobActive(false);
                 if (statusEl) statusEl.textContent = `Failed: ${j.error || 'unknown error'}`;
+                flagResult('Export failed', null);
                 break;
         }
     } catch (err) {
