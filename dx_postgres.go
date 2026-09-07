@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -33,6 +34,16 @@ type dxPostgresStore struct {
 	stopCh    chan struct{}
 	closeOnce *sync.Once
 	wg        sync.WaitGroup
+
+	// Flush health instrumentation. Flush failures were logged one INFO line
+	// at a time for 11 days (Aug 28 – Sep 7 2026) without anyone noticing,
+	// which is how a multi-week persistence outage went unseen until a crash
+	// wiped the (then-unlogged) raw table. Streak counters escalate the log
+	// line and feed /api/stats.
+	rawFlushLastOKUnix      atomic.Int64
+	rawFlushFailStreak      atomic.Int64
+	baselineFlushLastOKUnix atomic.Int64
+	baselineFlushFailStreak atomic.Int64
 
 	// baselineStatsCache memoizes the display-only baseline stats (bucket/event
 	// planner estimates + the baseline_first_observed_at history span). These
@@ -170,11 +181,44 @@ func (s *dxPostgresStore) flushPendingWithTimeout(timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := s.flushPending(ctx); err != nil {
-		logInfo("DX postgres baseline batch flush failed: %v", err)
+		s.reportFlushFailure("baseline", err, &s.baselineFlushFailStreak, &s.baselineFlushLastOKUnix)
+	} else {
+		recordFlushSuccess(&s.baselineFlushFailStreak, &s.baselineFlushLastOKUnix)
 	}
 	if err := s.flushRawSpots(ctx); err != nil {
-		logInfo("DX postgres raw spot batch flush failed: %v", err)
+		s.reportFlushFailure("raw spot", err, &s.rawFlushFailStreak, &s.rawFlushLastOKUnix)
+	} else {
+		recordFlushSuccess(&s.rawFlushFailStreak, &s.rawFlushLastOKUnix)
 	}
+}
+
+func recordFlushSuccess(streak, lastOK *atomic.Int64) {
+	lastOK.Store(time.Now().Unix())
+	streak.Store(0)
+}
+
+// reportFlushFailure keeps the per-tick INFO line and escalates to an error
+// line once failures form a streak. Tick is dxBaselineFlushInterval (2s):
+// 15 ≈ 30s of failures, 450 ≈ 15min, then one escalation per hour.
+func (s *dxPostgresStore) reportFlushFailure(kind string, err error, streak, lastOK *atomic.Int64) {
+	n := streak.Add(1)
+	logInfo("DX postgres %s batch flush failed: %v", kind, err)
+	if n == 15 || n == 450 || (n > 450 && n%1800 == 0) {
+		ago := "never in this process"
+		if last := lastOK.Load(); last > 0 {
+			ago = time.Since(time.Unix(last, 0)).Round(time.Minute).String()
+		}
+		logError("DX postgres %s flush has failed %d times consecutively (last success: %s); %s history persistence is DOWN",
+			kind, n, ago, kind)
+	}
+}
+
+// FlushHealth exposes the persistence counters for /api/stats: unix time of
+// the last successful flush and the current consecutive-failure streak, for
+// the raw-spot and baseline flushes separately.
+func (s *dxPostgresStore) FlushHealth() (rawLastOK, rawStreak, baselineLastOK, baselineStreak int64) {
+	return s.rawFlushLastOKUnix.Load(), s.rawFlushFailStreak.Load(),
+		s.baselineFlushLastOKUnix.Load(), s.baselineFlushFailStreak.Load()
 }
 
 func (s *dxPostgresStore) flushPending(ctx context.Context) error {
@@ -1720,8 +1764,9 @@ func (s *dxPostgresStore) loadSpotsBetweenSources(start, end int64, sources []st
 		  AND LOWER(COALESCE(source_type, 'mqtt')) = ANY($3)
 		  AND (
 		        ($4::text <> '' AND UPPER(sender_callsign) = $4)
-		        OR ($5::text[] IS NOT NULL AND array_length($5, 1) > 0
+		        OR (COALESCE(array_length($5, 1), 0) > 0
 		            AND (sender_locator LIKE ANY($5) OR receiver_locator LIKE ANY($5)))
+		        OR ($4::text = '' AND COALESCE(array_length($5, 1), 0) = 0)
 		      )
 		ORDER BY spot_time ASC
 		LIMIT $6

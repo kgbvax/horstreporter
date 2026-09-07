@@ -38,6 +38,29 @@ func TestReplaySNRFilterExemptsWSPRLikeLive(t *testing.T) {
 	}
 }
 
+func TestReplayRingsUsesUnfilteredLoad(t *testing.T) {
+	// rings (area of interest) intentionally bypasses the SQL prefilter: the
+	// loader must be called with EMPTY filter args, and the SQL's no-prefilter
+	// disjunct then passes everything (Go-side matchAndCreateSpot applies the
+	// area filter). Regression: the old predicate returned 0 rows whenever
+	// both filters were empty, so rings>0 replay buckets were always count=0.
+	saved := replayLoader
+	defer func() { replayLoader = saved }()
+	var gotCallsign string
+	var gotPrefixes []string
+	replayLoader = func(start, end int64, sources []string, callsignFilter string, prefixes []string, limit int) ([]MQTTMessage, bool, error) {
+		gotCallsign, gotPrefixes = callsignFilter, prefixes
+		return nil, false, nil
+	}
+	req := httptest.NewRequest("GET", "/api/replay/spots?qth=JO62QM&bucket_end=1757100000&bucket_seconds=1800&rings=3", nil)
+	if _, err := buildReplayBucket("JO62QM", false, 1757100000, 1800, []string{"mqtt"}, 1000, req); err != nil {
+		t.Fatalf("buildReplayBucket: %v", err)
+	}
+	if gotCallsign != "" || len(gotPrefixes) != 0 {
+		t.Fatalf("rings path must skip the SQL prefilter, got callsign=%q prefixes=%v", gotCallsign, gotPrefixes)
+	}
+}
+
 func TestReplaySourcesFromQuery(t *testing.T) {
 	// No toggles at all: everything included (mqtt is always the main feed).
 	all := replaySourcesFromQuery(map[string][]string{})
