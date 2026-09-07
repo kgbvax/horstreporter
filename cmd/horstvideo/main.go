@@ -25,8 +25,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"image/jpeg"
-	"image/png"
+	// Frames are captured as JPEG directly via CDP (no PNG round-trip).
+	"github.com/chromedp/cdproto/page"
 	"log"
 	"net/http"
 	"net/url"
@@ -373,12 +373,26 @@ func (s *service) renderFrames(j *job, framesDir string) error {
 			return fmt.Errorf("frame %d: %w", i, err)
 		}
 
+		// Capture JPEG straight from CDP: skips the browser's PNG encode plus
+		// the Go-side PNG decode -> JPEG re-encode (a large per-frame cost).
+		// FullScreenshot's beyond-viewport capture is unneeded — the viewport
+		// is pinned by EmulateViewport.
 		var shot []byte
-		if err := chromedp.Run(ctx, chromedp.FullScreenshot(&shot, 100)); err != nil {
+		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			buf, err := page.CaptureScreenshot().
+				WithFormat(page.CaptureScreenshotFormatJpeg).
+				WithQuality(int64(jpgQuality)).
+				Do(ctx)
+			if err != nil {
+				return err
+			}
+			shot = buf
+			return nil
+		})); err != nil {
 			return fmt.Errorf("frame %d screenshot: %w", i, err)
 		}
-		if err := pngToJPEG(shot, filepath.Join(framesDir, fmt.Sprintf("frame-%05d.jpg", i)), jpgQuality); err != nil {
-			return fmt.Errorf("frame %d encode: %w", i, err)
+		if err := os.WriteFile(filepath.Join(framesDir, fmt.Sprintf("frame-%05d.jpg", i)), shot, 0o644); err != nil {
+			return fmt.Errorf("frame %d write: %w", i, err)
 		}
 
 		s.mu.Lock()
@@ -467,20 +481,6 @@ func (s *service) stitch(j *job, framesDir, outFile string) error {
 		return fmt.Errorf("ffmpeg: %v: %s", err, truncate(stderr.String(), 3000))
 	}
 	return os.Rename(tmp, outFile)
-}
-
-// pngToJPEG converts a captured PNG to a JPEG frame (roughly 3-5x smaller on
-// disk — a 48h/2min job is ~1400 frames).
-func pngToJPEG(pngBytes []byte, outPath string, quality int) error {
-	img, err := png.Decode(bytes.NewReader(pngBytes))
-	if err != nil {
-		return err
-	}
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: quality}); err != nil {
-		return err
-	}
-	return os.WriteFile(outPath, buf.Bytes(), 0o644)
 }
 
 func truncate(s string, n int) string {

@@ -114,16 +114,38 @@ const trailParam = parseInt(params.get('trail') ?? '2', 10);
 const trailDepth = Number.isFinite(trailParam) ? Math.max(0, Math.min(trailParam, TRAIL_FADE.length)) : 2;
 const freshHistory = []; // newest-first fresh (unscaled) bucket spot arrays
 
-async function installBucket(bucketEnd) {
+// Per-frame bucket fetch with a one-frame-ahead prefetch cache: the NEXT
+// bucket's request flies while the current frame paints and screenshots,
+// shaving a full server round-trip off every step. Failures are not cached.
+const bucketCache = new Map(); // bucketEnd -> Promise<replay json>
+
+function fetchBucket(bucketEnd) {
     const params2 = new URLSearchParams();
     params2.set('qth', cfg.qth);
     if (cfg.surroundings) params2.set('surroundings', 'true');
     params2.set('bucket_end', String(bucketEnd));
     params2.set('bucket_seconds', String(cfg.step));
     if (cfg.bands.length) params2.set('enabled_bands', cfg.bands.join(','));
-    const res = await fetch(`/api/replay/spots?${params2.toString()}`);
-    if (!res.ok) throw new Error(`replay/spots ${res.status}`);
-    const json = await res.json();
+    return fetch(`/api/replay/spots?${params2.toString()}`).then((res) => {
+        if (!res.ok) throw new Error(`replay/spots ${res.status}`);
+        return res.json();
+    });
+}
+
+function prefetchBucket(bucketEnd) {
+    if (bucketCache.has(bucketEnd)) return;
+    bucketCache.set(bucketEnd, fetchBucket(bucketEnd).catch((err) => {
+        bucketCache.delete(bucketEnd);
+        throw err;
+    }));
+}
+
+// NOTE: does not set currentBucketEnd — stepTo sets it BEFORE kicking this
+// off so the Band Stats re-eval can run in parallel.
+async function installBucket(bucketEnd) {
+    if (!bucketCache.has(bucketEnd)) prefetchBucket(bucketEnd);
+    const json = await bucketCache.get(bucketEnd);
+    bucketCache.delete(bucketEnd);
     const fresh = (json.spots || []).map((spot) => ({
         ...spot,
         __replay: true,
@@ -139,9 +161,10 @@ async function installBucket(bucketEnd) {
                 snr: Number.isFinite(Number(spot.snr)) ? Number(spot.snr) * TRAIL_FADE[i - 1] : spot.snr,
             }))
     );
-    state.timeTravel.currentBucketEnd = bucketEnd;
 }
 
+// Used by boot only — stepTo inlines the same pieces with the two server
+// fetches overlapped (see stepTo for why).
 async function renderFrame() {
     updateMapVisualization(state.liveSpots, 15);
     // Band Stats re-summarizes after an async /api/dx_conditions fetch — the
@@ -174,8 +197,22 @@ const driver = {
     async stepTo(bucketEnd) {
         driver.frameDone = false;
         try {
-            await installBucket(bucketEnd);
-            await renderFrame();
+            // Prefetch the NEXT frame's bucket: it flies while this frame
+            // paints and while the Go side screenshots it.
+            prefetchBucket(bucketEnd + cfg.step);
+            // The two per-frame server round-trips are independent — the
+            // Band Stats re-eval needs only bucket_end, not the spots — so
+            // kick both off in parallel (the bucket fetch usually resolves
+            // from the prefetch cache).
+            state.timeTravel.currentBucketEnd = bucketEnd;
+            const spotsDone = installBucket(bucketEnd);
+            const bandDone = updateBandLab({ force: true });
+            await spotsDone;
+            updateMapVisualization(state.liveSpots, 15);
+            void syncMercatorGraylineLayer();
+            // The frame is only done once the panel promise landed, else
+            // clips capture the "Updating baseline and trend…" placeholder.
+            await bandDone;
             // Two rAFs = both map (Leaflet) and canvas (Band Stats) paints
             // have hit the compositor.
             await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
