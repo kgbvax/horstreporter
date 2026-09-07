@@ -685,6 +685,19 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	propIntelReqs, propIntelErrs, propIntelSurges := propIntelAccounting.snapshot()
 	pushSurges, pushSent, pushErrs := pushAccounting.snapshot()
+	// Persistence health: dx_raw_spots history (replay/time travel) depends on
+	// the raw flush succeeding; surface last success + failure streak so an
+	// outage is visible from the API instead of only in the log.
+	var postgres *postgresStatsBlock
+	if dxBaseline != nil && dxBaseline.Store() != nil {
+		rawOK, rawStreak, baseOK, baseStreak := dxBaseline.Store().FlushHealth()
+		postgres = &postgresStatsBlock{
+			RawFlushLastOKUnix:      rawOK,
+			RawFlushFailStreak:      rawStreak,
+			BaselineFlushLastOKUnix: baseOK,
+			BaselineFlushFailStreak: baseStreak,
+		}
+	}
 
 	stats := struct {
 		ActiveConnections    int                  `json:"active_connections"`
@@ -721,6 +734,7 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		WsprPersisted        int64                `json:"wspr_persisted_spots"`
 		WsprForwarded        int64                `json:"wspr_live_forwarded"`
 		WsprDroppedLoc       int64                `json:"wspr_dropped_no_locator"`
+		Postgres             *postgresStatsBlock  `json:"postgres,omitempty"`
 		PropIntel            *propIntelStatsBlock `json:"prop_intel"`
 		Push                 *pushStatsBlock      `json:"push"`
 	}{
@@ -758,6 +772,7 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		WsprPersisted:        wsprPersisted,
 		WsprForwarded:        wsprForwarded,
 		WsprDroppedLoc:       wsprDroppedNoLoc,
+		Postgres:             postgres,
 		PropIntel: &propIntelStatsBlock{
 			Requests:       propIntelReqs,
 			Errors:         propIntelErrs,
@@ -777,6 +792,17 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 // propIntelStatsBlock is the prop_intel.* sub-object in /api/stats.
 // Mirrors the flat per-ingest counter layout but nested under prop_intel
 // to keep the namespace clean (the plan's accounting requirement, U6).
+// postgresStatsBlock is the postgres.* sub-object in /api/stats: flush
+// health for the two persistence pipelines (raw spots = replay history,
+// baseline = band conditions). A nonzero streak or a stale last-ok timestamp
+// means persistence is down.
+type postgresStatsBlock struct {
+	RawFlushLastOKUnix      int64 `json:"raw_flush_last_ok_unix"`
+	RawFlushFailStreak      int64 `json:"raw_flush_fail_streak"`
+	BaselineFlushLastOKUnix int64 `json:"baseline_flush_last_ok_unix"`
+	BaselineFlushFailStreak int64 `json:"baseline_flush_fail_streak"`
+}
+
 type propIntelStatsBlock struct {
 	Requests       int64 `json:"requests"`
 	Errors         int64 `json:"errors"`
