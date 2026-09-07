@@ -333,6 +333,32 @@ func (e *DxBaselineEngine) LoadSpotsBetweenSources(start, end int64, sources []s
 	return st.loadSpotsBetweenSources(start, end, sources, callsignFilter, locatorPrefixes, limit)
 }
 
+// UpdateReplayBucketCounts folds new raw spots into the replay pre-aggregate
+// (dx_raw_spots_30m_counts) from the persisted watermark; the first run
+// backfills the timeline's 48h reach in bounded chunks. Called by the 5-min
+// background ticker in main, never on the request path.
+func (e *DxBaselineEngine) UpdateReplayBucketCounts(now int64) error {
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return nil
+	}
+	return st.updateReplayBucketCounts(now)
+}
+
+// PruneReplayBucketCountsOlderThan trims the replay pre-aggregate alongside
+// the raw-spot retention prune.
+func (e *DxBaselineEngine) PruneReplayBucketCountsOlderThan(cutoff int64) (int64, error) {
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return 0, nil
+	}
+	return st.pruneReplayBucketCountsOlderThan(cutoff)
+}
+
 // CountSpotsBetweenFiltered returns the number of spots in the window under
 // the same source filter as LoadSpotsBetweenFiltered, so the caller can
 // allocate the destination slice exactly once.

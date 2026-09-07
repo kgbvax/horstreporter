@@ -438,6 +438,18 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			k TEXT PRIMARY KEY,
 			v TEXT NOT NULL
 		);`,
+		// Replay timeline pre-aggregate: per (30-min bucket, band, source_type)
+		// counts maintained incrementally (see updateReplayBucketCounts).
+		// /api/replay/histogram reads this instead of aggregating dx_raw_spots
+		// live — a 24h window is ~29M raw rows and blows the 30s context on the
+		// prod box; from this table the same window is a few thousand rows.
+		`CREATE TABLE IF NOT EXISTS dx_raw_spots_30m_counts (
+			bucket_start BIGINT NOT NULL,
+			band TEXT NOT NULL,
+			source_type TEXT NOT NULL,
+			n BIGINT NOT NULL,
+			PRIMARY KEY (bucket_start, band, source_type)
+		);`,
 	}
 
 	stmts = append(stmts, cellfeedSchemaStmts()...)
@@ -1735,6 +1747,112 @@ func (s *dxPostgresStore) loadSpotsBetweenSources(start, end int64, sources []st
 		out = out[:limit]
 	}
 	return out, truncated, nil
+}
+
+// Replay bucket counts: pre-aggregated per (30-min bucket, band, source_type)
+// so /api/replay/histogram never aggregates dx_raw_spots live (a 24h window
+// is ~29M raw rows and blows the 30s context on the prod box). Maintained
+// incrementally from a watermark in dx_meta by a 5-minute background ticker;
+// on first run the replay's max reach (48h) is backfilled in bounded chunks.
+// Spots landing later than the lag allowance (rare flush retries) are missed —
+// acceptable for a timeline density guide. The mutex serializes the ticker
+// against the bootstrap backfill.
+var replayCountsMu sync.Mutex
+
+const (
+	replayCountsLagSeconds = 300
+	replayCountsMetaKey    = "replay_counts_watermark"
+	replayCountsMaxReach   = int64(48 * 3600)
+	replayBackfillChunks   = 8 // 48h in 6h chunks
+)
+
+func (s *dxPostgresStore) updateReplayBucketCounts(now int64) error {
+	replayCountsMu.Lock()
+	defer replayCountsMu.Unlock()
+
+	safeNow := now - replayCountsLagSeconds
+	if safeNow <= 0 {
+		return nil
+	}
+	watermark, err := s.replayCountsWatermark()
+	if err != nil {
+		return err
+	}
+	if watermark == 0 {
+		// Bootstrap: backfill the timeline's max reach chunk-wise (each chunk
+		// stays within a single-digit-second query), then arm the watermark.
+		chunk := replayCountsMaxReach / replayBackfillChunks
+		for start := safeNow - replayCountsMaxReach; start < safeNow; start += chunk {
+			end := start + chunk
+			if end > safeNow {
+				end = safeNow
+			}
+			if err := s.accumulateReplayBucketCounts(start, end); err != nil {
+				return err
+			}
+		}
+	} else if safeNow > watermark {
+		if err := s.accumulateReplayBucketCounts(watermark, safeNow); err != nil {
+			return err
+		}
+	}
+	return s.setReplayCountsWatermark(safeNow)
+}
+
+func (s *dxPostgresStore) replayCountsWatermark() (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var wm *int64
+	if err := s.pool.QueryRow(ctx,
+		`SELECT v::bigint FROM dx_meta WHERE k = $1`, replayCountsMetaKey,
+	).Scan(&wm); err != nil && err != pgx.ErrNoRows {
+		return 0, err
+	}
+	if wm == nil {
+		return 0, nil
+	}
+	return *wm, nil
+}
+
+func (s *dxPostgresStore) setReplayCountsWatermark(safeNow int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO dx_meta (k, v) VALUES ($1, $2)
+		 ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+		replayCountsMetaKey, fmt.Sprintf("%d", safeNow))
+	return err
+}
+
+// accumulateReplayBucketCounts folds [start, end) raw spots into the counts
+// table. Band is lowercased to match the histogram filter; source_type is
+// normalized to 'mqtt' like the LIKE/ANY queries COALESCE it.
+func (s *dxPostgresStore) accumulateReplayBucketCounts(start, end int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO dx_raw_spots_30m_counts (bucket_start, band, source_type, n)
+		SELECT (spot_time / 1800) * 1800, LOWER(band), COALESCE(source_type, 'mqtt'), count(*)
+		FROM dx_raw_spots
+		WHERE spot_time >= $1 AND spot_time < $2
+		GROUP BY 1, 2, 3
+		ON CONFLICT (bucket_start, band, source_type)
+		DO UPDATE SET n = dx_raw_spots_30m_counts.n + EXCLUDED.n
+	`, start, end)
+	return err
+}
+
+// pruneReplayBucketCountsOlderThan trims the pre-aggregate alongside the
+// raw-spot retention prune so both tables age together.
+func (s *dxPostgresStore) pruneReplayBucketCountsOlderThan(cutoff int64) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM dx_raw_spots_30m_counts WHERE bucket_start < $1`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // pruneRawSpotsOlderThan deletes dx_raw_spots rows whose spot_time is older

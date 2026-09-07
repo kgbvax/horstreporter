@@ -125,7 +125,8 @@ func replayHistogramHandler(w http.ResponseWriter, r *http.Request) {
 	if end > now {
 		end = now
 	}
-	bucketSeconds := replayBucketSeconds(r.URL.Query().Get("bucket_seconds"))
+	// bucket_seconds is accepted for symmetry but the pre-aggregate is keyed
+	// on epoch-aligned 1800s buckets; the response always reports 1800.
 	start := end - maxReplaySpanSeconds
 	if raw := strings.TrimSpace(r.URL.Query().Get("start")); raw != "" {
 		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 && parsed < end {
@@ -142,14 +143,20 @@ func replayHistogramHandler(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// Reads the pre-aggregate (dx_raw_spots_30m_counts, maintained by the
+	// 5-min ticker) — a live GROUP BY over dx_raw_spots times out past ~12h
+	// on the prod box. Buckets are always 30-min aligned here: the counts
+	// table is keyed on the epoch-aligned 1800s bucket, so a requested
+	// bucket_seconds of 900/3600 still returns 1800s rows (the client aligns
+	// its scrubber steps to the response's bucket_seconds).
 	rows, err := dxBaseline.Store().pool.Query(ctx, `
-		SELECT (spot_time / $3) * $3 AS b, count(*)
-		FROM dx_raw_spots
-		WHERE spot_time >= $1 AND spot_time < $2
-		  AND LOWER(COALESCE(source_type, 'mqtt')) = ANY($4)
-		  AND ($5::text = '' OR LOWER(band) = $5)
-		GROUP BY b ORDER BY b ASC
-	`, start, end, bucketSeconds, sources, bandSQLFilter(selectedBand, enabledBands))
+		SELECT bucket_start, sum(n)
+		FROM dx_raw_spots_30m_counts
+		WHERE bucket_start >= $1 AND bucket_start < $2
+		  AND source_type = ANY($3)
+		  AND ($4::text = '' OR band = $4)
+		GROUP BY bucket_start ORDER BY bucket_start ASC
+	`, start, end, sources, bandSQLFilter(selectedBand, enabledBands))
 	if err != nil {
 		http.Error(w, "histogram query failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -175,7 +182,7 @@ func replayHistogramHandler(w http.ResponseWriter, r *http.Request) {
 	resp := replayHistogramResponse{
 		Start:         start,
 		End:           end,
-		BucketSeconds: bucketSeconds,
+		BucketSeconds: 1800,
 		Buckets:       buckets,
 		Total:         total,
 		GeneratedAt:   time.Now().Unix(),
