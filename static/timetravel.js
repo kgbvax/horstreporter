@@ -63,13 +63,14 @@ export function getLoopRange() {
     return { start: rt.rangeStart, end: rt.rangeEnd };
 }
 
-// Set the shared loop range from the video export panel. Same snap/clamp/min
-// -span rules as the time-travel From/To (applyRange), but usable while
-// replay is inactive; granularity is the caller's frame step so short export
-// clips (< 1h) stay possible (export's 2-min step vs the 30-min replay grid).
-export function applyExternalRange(fromUnix, toUnix, granularity = BUCKET_SECONDS) {
+// Set the shared loop range from the video export panel. IDENTICAL rules to
+// the time-travel From/To (applyRange) — same 30-min snap grid, same min
+// span, same 48h extent — so the range never visibly jumps when the operator
+// switches between the export panel and time travel. Usable while inactive;
+// extent then stands in as the rolling 48h window enterTimeTravel shows.
+export function applyExternalRange(fromUnix, toUnix) {
     ensureRange();
-    const gran = rt.active ? rt.bucketSeconds : granularity;
+    const gran = rt.active ? rt.bucketSeconds : BUCKET_SECONDS;
     let extentStart = rt.start;
     let extentEnd = rt.end;
     if (!rt.active) {

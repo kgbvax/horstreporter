@@ -53,7 +53,6 @@ export function initVideoExport() {
         applyExternalRange(
             fromLocalInputValue(document.getElementById('videoexport-from')?.value || ''),
             fromLocalInputValue(document.getElementById('videoexport-to')?.value || ''),
-            parseInt(document.getElementById('videoexport-step')?.value || '120', 10),
         );
     };
     document.getElementById('videoexport-from')?.addEventListener('change', rangeChanged);

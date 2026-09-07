@@ -44,34 +44,36 @@ describe('getLoopRange', () => {
 });
 
 describe('applyExternalRange (replay inactive)', () => {
-    it('snaps to the caller granularity (export step, not the 30-min grid)', () => {
+    // Same 30-min snap grid as the time-travel markers — the range must not
+    // visibly jump when switching between the export panel and time travel.
+    it('snaps to the shared 30-min bucket grid', () => {
         const end = bucketEnd();
-        // Odd minutes: off both grids; must land on the 120s grid.
-        applyExternalRange(end - 3600 + 61, end - 1800 + 37, 120);
+        // Odd minutes: off the grid; must land on 1800s boundaries.
+        applyExternalRange(end - 3600 + 61, end - 1800 + 37);
         const r = getLoopRange();
-        expect(r.start % 120).toBe(0);
-        expect(r.end % 120).toBe(0);
-        expect(Math.abs(r.start - (end - 3600))).toBeLessThanOrEqual(120);
-        expect(Math.abs(r.end - (end - 1800))).toBeLessThanOrEqual(120);
+        expect(r.start % 1800).toBe(0);
+        expect(r.end % 1800).toBe(0);
+        expect(Math.abs(r.start - (end - 3600))).toBeLessThanOrEqual(1800);
+        expect(Math.abs(r.end - (end - 1800))).toBeLessThanOrEqual(1800);
     });
 
-    it('enforces the min span of two steps', () => {
+    it('enforces the shared min span of two buckets (1h)', () => {
         const end = bucketEnd();
-        applyExternalRange(end - 120, end, 120); // only 2 min apart
+        applyExternalRange(end - 1800, end); // only 30 min apart
         const r = getLoopRange();
-        expect(r.end - r.start).toBeGreaterThanOrEqual(2 * 120);
+        expect(r.end - r.start).toBeGreaterThanOrEqual(2 * 1800);
     });
 
     it('clamps to the rolling 48h extent', () => {
         const end = bucketEnd();
-        applyExternalRange(end - 100 * 3600, end, 120);
+        applyExternalRange(end - 100 * 3600, end);
         const r = getLoopRange();
         expect(r.start).toBeGreaterThanOrEqual(end - 2 * DAY);
     });
 
     it('rejects non-finite input by keeping the current side', () => {
         const before = getLoopRange();
-        applyExternalRange(0, NaN, 120);
+        applyExternalRange(0, NaN);
         expect(getLoopRange()).toEqual(before);
     });
 
@@ -82,7 +84,7 @@ describe('applyExternalRange (replay inactive)', () => {
         to.id = 'videoexport-to';
         document.body.append(from, to);
         const end = bucketEnd();
-        applyExternalRange(end - 7200, end - 3600, 120);
+        applyExternalRange(end - 7200, end - 3600);
         expect(from.value).toBeTruthy();
         expect(to.value).toBeTruthy();
         expect(new Date(from.value).getTime() / 1000).toBe(getLoopRange().start);
