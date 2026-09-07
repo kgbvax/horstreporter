@@ -322,6 +322,10 @@ func (s *service) renderFrames(j *job, framesDir string) error {
 	defer cancel2()
 
 	if err := chromedp.Run(ctx,
+		// The --window-size flag does not pin the viewport in this chromium
+		// build (720px window => 577px content) — force exact render dims via
+		// the emulation domain, which is what screenshots capture.
+		chromedp.EmulateViewport(int64(cfg.Width), int64(cfg.Height)),
 		chromedp.Navigate(s.stageURL(cfg)),
 		// The stage sets ready once tiles, layout and the band panel are up.
 		chromedp.Poll(`window.__horstVideo && window.__horstVideo.ready === true`, nil, chromedp.WithPollingTimeout(90*time.Second)),
@@ -371,12 +375,21 @@ func chromedpContext(chromium string, width, height int) (context.Context, conte
 		chromedp.Flag("ignore-certificate-errors", true),
 		chromedp.Flag("hide-scrollbars", true),
 		chromedp.Flag("mute-audio", true),
-		chromedp.Flag("force-device-scale-factor", 1),
+		chromedp.Flag("force-device-scale-factor", "1"),
+		// Debian chromium's crashpad handler aborts startup under systemd
+		// ("--database is required") unless crash reporting is disabled and
+		// it has a writable dumps dir.
+		chromedp.Flag("disable-crash-reporter", true),
+		chromedp.Flag("crash-dumps-dir", "/tmp"),
 		chromedp.WindowSize(width, height),
 		// The stage needs the tile CDN; nothing else external. Headless still
 		// loads it fine, keep the default transport.
 	)
-	return chromedp.NewExecAllocator(context.Background(), opts...)
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
+	// NewExecAllocator alone is not a runnable context — chromedp.Run needs a
+	// browser session created via NewContext, else it fails "invalid context".
+	ctx, cancelCtx := chromedp.NewContext(allocCtx)
+	return ctx, func() { cancelCtx(); cancelAlloc() }
 }
 
 // stageURL assembles the clean stage page URL with the job's parameters.
@@ -411,13 +424,16 @@ func (s *service) stitch(j *job, framesDir, outFile string) error {
 		"-crf", "20",
 		"-pix_fmt", "yuv420p",
 		"-movflags", "+faststart",
+		// The .part suffix defeats ffmpeg's output-format inference.
+		"-f", "mp4",
 		tmp,
 	}
 	cmd := exec.Command(s.ffmpeg, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("ffmpeg: %v: %s", err, truncate(stderr.String(), 400))
+		log.Printf("job %s ffmpeg failed: %s", j.ID, stderr.String())
+		return fmt.Errorf("ffmpeg: %v: %s", err, truncate(stderr.String(), 3000))
 	}
 	return os.Rename(tmp, outFile)
 }
@@ -440,5 +456,8 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	// Keep head AND tail: ffmpeg prefixes everything with a long banner, and
+	// the actual failure lands at the very end of stderr.
+	head, tail := n/3, 2*n/3
+	return s[:head] + "…[" + fmt.Sprint(len(s)-head-tail) + " bytes elided]…" + s[len(s)-tail:]
 }

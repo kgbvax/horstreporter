@@ -173,13 +173,17 @@ export function updateBandLab(options = {}) {
     // When the dx cache is already fresh, the second render is fully redundant
     // (identical data) — skip it.
     if (!hasFreshDx) {
-        void ensureDxConditions(qth, minutes, surroundings, bucketEnd).then(() => {
+        // Return the fetch promise: the video stage (video-stage.js) must
+        // AWAIT this so exported frames carry the resolved decision/score —
+        // interactive callers ignore the return value entirely.
+        return ensureDxConditions(qth, minutes, surroundings, bucketEnd).then(() => {
             // Ignore stale async responses after newer updates were scheduled.
             if (!runtime.enabled || requestSeq !== runtime.updateSeq) return;
             renderSummary(summaryEl);
             renderBandCards(cardsEl, grouped, qth, minutes);
         });
     }
+    return null;
 }
 
 function filterSpots(spots, minutes) {

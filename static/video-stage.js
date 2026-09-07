@@ -12,10 +12,10 @@
 // the Band Stats panel evaluates /api/dx_conditions with bucket_end because
 // state.timeTravel.active is kept true for the whole session.
 import { state } from './state.js';
-import { initMap, setTheme, syncMercatorGraylineLayer, syncMercatorCountryLayer, currentTileLayer } from './map.js';
+import { initMap, setTheme, syncMercatorGraylineLayer, syncMercatorCountryLayer, currentTileLayer, map } from './map.js';
 import { updateMapVisualization } from './renderers.js';
 import { initBandLab, updateBandLab } from './band-lab.js';
-import { bandColors } from './utils.js';
+import { bandColors, locatorToBounds } from './utils.js';
 
 const params = new URLSearchParams(location.search);
 const cfg = {
@@ -65,6 +65,16 @@ for (const band of Object.keys(bandColors)) {
 
 // --- map + panel boot --------------------------------------------------------
 
+// No explicit camera ("current map view" unchecked) => center on the QTH
+// grid square instead of the driver's fallback (0,0 = Gulf of Guinea).
+if (cfg.lat === 0 && cfg.lng === 0 && cfg.qth) {
+    const b = locatorToBounds(cfg.qth);
+    if (b) {
+        cfg.lat = (b[0][0] + b[1][0]) / 2;
+        cfg.lng = (b[0][1] + b[1][1]) / 2;
+    }
+}
+
 initMap([cfg.lat, cfg.lng], cfg.zoom);
 // initMap hardcodes a zoom control; the stage is a render surface.
 map.zoomControl?.remove();
@@ -108,9 +118,12 @@ async function installBucket(bucketEnd) {
     state.timeTravel.currentBucketEnd = bucketEnd;
 }
 
-function renderFrame() {
+async function renderFrame() {
     updateMapVisualization(state.liveSpots, 15);
-    updateBandLab({ force: true });
+    // Band Stats re-summarizes after an async /api/dx_conditions fetch — the
+    // frame is only done once that promise landed, else clips capture the
+    // "Updating baseline and trend…" placeholder.
+    await updateBandLab({ force: true });
     // The grayline layer is key-cached on the 5-min overlay clock; during
     // replay that clock is the current bucket, so this only rebuilds when the
     // terminator actually moved.
@@ -126,7 +139,7 @@ async function boot() {
     await new Promise((resolve) => map.whenReady(resolve));
     await waitTiles();
     await installBucket(state.timeTravel.currentBucketEnd);
-    renderFrame();
+    await renderFrame();
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     window.__horstVideo.ready = true;
 }
@@ -138,7 +151,7 @@ const driver = {
         driver.frameDone = false;
         try {
             await installBucket(bucketEnd);
-            renderFrame();
+            await renderFrame();
             // Two rAFs = both map (Leaflet) and canvas (Band Stats) paints
             // have hit the compositor.
             await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));

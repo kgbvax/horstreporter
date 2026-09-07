@@ -1,10 +1,32 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/chromedp/chromedp"
 )
+
+// The allocator flag map only accepts string and bool values — an int flag
+// (e.g. force-device-scale-factor) makes Allocate fail with the cryptic
+// "invalid exec pool flag". Regression: chromedpContext must build cleanly.
+func TestChromedpContextFlagsValid(t *testing.T) {
+	ctx, cancel := chromedpContext("/nonexistent-chromium", 1280, 720)
+	defer cancel()
+	// Drive Allocate's validation: a flag-type error surfaces before the
+	// (missing) chromium binary is ever launched.
+	if err := chromedp.Run(ctx); err != nil {
+		if strings.Contains(err.Error(), "invalid exec pool flag") {
+			t.Fatalf("chromedpContext has an invalid flag type: %v", err)
+		}
+		if !strings.Contains(err.Error(), "executable") && !errors.Is(err, context.DeadlineExceeded) {
+			t.Logf("expected a binary-not-found error, got: %v", err)
+		}
+	}
+}
 
 func TestValidateDefaults(t *testing.T) {
 	s := &service{maxFrames: 1800}

@@ -20,19 +20,25 @@ Type=simple
 User=hk
 Group=hk
 WorkingDirectory=/opt/horstreporter
-ExecStartPre=/usr/bin/mkdir -p /tmp/horstvideo/out
 # 9961: 9960 is taken by pathscope on the prod box.
-ExecStart=/opt/horstreporter/horstvideo-linux-x64 -listen 127.0.0.1:9961 -backend https://127.0.0.1:443 -chromium /usr/bin/chromium -work /tmp/horstvideo -out /tmp/horstvideo/out
+# Backend must be the public domain, not 127.0.0.1: the core's TLS config
+# rejects handshakes without matching SNI (alert 80) — chromium's
+# --ignore-certificate-errors does not cover a failed handshake.
+ExecStart=/opt/horstreporter/horstvideo-linux-x64 -listen 127.0.0.1:9961 -backend https://horstreporter.kgbvax.net -chromium /usr/bin/chromium -work /tmp/horstvideo -out /tmp/horstvideo/out
 Restart=on-failure
 RestartSec=5
+# Chromium's crashpad handler refuses to start ("--database is required")
+# when its HOME is unwritable (ProtectHome hides /home) — give it the work dir.
+Environment=HOME=/tmp/horstvideo/home
 # Single worker: the prod box has 3.7G RAM — one chromium at a time.
 # Frame + job retention is pruned by the binary itself (24h).
-# hardening
+# hardening — /tmp stays writable under ProtectSystem=strict; the binary
+# MkdirAlls /tmp/horstvideo itself (PrivateTmp namespaces it, so no fixed
+# ReadWritePaths entry: those are resolved before the dir exists -> 226).
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/tmp/horstvideo
 
 [Install]
 WantedBy=multi-user.target
