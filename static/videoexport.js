@@ -118,6 +118,44 @@ async function submitJob() {
         return;
     }
 
+    // Pre-flight: sample the replay archive so an all-empty window (e.g. after
+    // a storage outage) can't silently render a blank clip. The timeline
+    // histogram is global-only and cannot answer this; a probe failure must
+    // never block the export.
+    try {
+        const probe = async (bucketEnd) => {
+            const p = new URLSearchParams({
+                qth: cfg.qth,
+                bucket_end: String(bucketEnd),
+                bucket_seconds: String(cfg.step_seconds),
+            });
+            if (cfg.surroundings) p.set('surroundings', 'true');
+            if (cfg.bands?.length) p.set('enabled_bands', cfg.bands.join(','));
+            const r = await fetch(`/api/replay/spots?${p}`);
+            if (!r.ok) return null;
+            const j = await r.json();
+            return j.count || 0;
+        };
+        // Rendered buckets end at start, start+step, …, end-step (horstvideo
+        // walks t = start + i*step, stage fetches [t-step, t)).
+        const step = cfg.step_seconds;
+        const ends = [
+            cfg.start,
+            Math.floor(((cfg.start + cfg.end - step) / 2) / step) * step,
+            cfg.end - step,
+        ].filter((e) => e > 0);
+        const counts = await Promise.all([...new Set(ends)].map(probe));
+        if (counts.every((c) => c === 0)) {
+            const msg = `No spots for ${cfg.qth} in the selected window — the video would be empty.\n\nRender anyway?`;
+            if (!window.confirm(msg)) {
+                set('Export cancelled — no spots in window.');
+                return;
+            }
+        }
+    } catch {
+        // probe failed (offline, server busy) — do not block the export
+    }
+
     // Ask for notification permission once, inside the click gesture
     // (browsers reject requests not tied to a user action).
     if (window.Notification?.permission === 'default') {
