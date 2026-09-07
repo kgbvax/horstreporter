@@ -41,6 +41,59 @@ export function isReplayActive() {
     return rt.active;
 }
 
+// The loop range is shared state: the time-travel markers, the time-travel
+// From/To inputs and the VIDEO EXPORT panel all view/edit the same
+// rt.rangeStart/rangeEnd (videoexport.js). It survives exitTimeTravel, so a
+// range picked for replay carries into the export dialog and vice versa.
+// ensureRange() makes the range usable while replay is inactive.
+function ensureRange() {
+    if (rt.rangeStart && rt.rangeEnd) return;
+    const now = Math.floor(Date.now() / 1000);
+    const end = floorToBucketEnd(now);
+    const [start] = clampToSpan(end - 2 * DAY_SECONDS, end);
+    rt.start = rt.start || start;
+    rt.end = rt.end || end;
+    // Same default window enterTimeTravel uses: most recent 12h.
+    rt.rangeStart = Math.max(rt.start, rt.end - 12 * 3600);
+    rt.rangeEnd = rt.end;
+}
+
+export function getLoopRange() {
+    ensureRange();
+    return { start: rt.rangeStart, end: rt.rangeEnd };
+}
+
+// Set the shared loop range from the video export panel. Same snap/clamp/min
+// -span rules as the time-travel From/To (applyRange), but usable while
+// replay is inactive; granularity is the caller's frame step so short export
+// clips (< 1h) stay possible (export's 2-min step vs the 30-min replay grid).
+export function applyExternalRange(fromUnix, toUnix, granularity = BUCKET_SECONDS) {
+    ensureRange();
+    const gran = rt.active ? rt.bucketSeconds : granularity;
+    let extentStart = rt.start;
+    let extentEnd = rt.end;
+    if (!rt.active) {
+        // Stand-in extent: the same rolling 48h window enterTimeTravel shows.
+        extentEnd = floorToBucketEnd(Math.floor(Date.now() / 1000));
+        [extentStart] = clampToSpan(extentEnd - 2 * DAY_SECONDS, extentEnd);
+    }
+    let rs = Number.isFinite(fromUnix) && fromUnix ? fromUnix : rt.rangeStart;
+    let re = Number.isFinite(toUnix) && toUnix ? toUnix : rt.rangeEnd;
+    rs = snapRangeMarker('start', rs, rt.rangeStart, rt.rangeEnd, extentStart, extentEnd, gran);
+    rt.rangeStart = rs;
+    re = snapRangeMarker('end', re, rt.rangeStart, rt.rangeEnd, extentStart, extentEnd, gran);
+    rt.rangeEnd = re;
+    rt.rangeStart = Math.min(rs, re - 2 * gran); // keep min span after end moved
+    if (rt.active) {
+        pause();
+        positionMarkers();
+        if (rt.currentBucketEnd < rt.rangeStart || rt.currentBucketEnd > rt.rangeEnd) {
+            loadBucket(Math.min(Math.max(rt.currentBucketEnd, rt.rangeStart), rt.rangeEnd));
+        }
+    }
+    syncRangeInputs();
+}
+
 // Simulated clock for time-aware overlays: during replay the grayline
 // terminator tracks the current bucket (on the same 5-min grid both
 // projections use for their cache keys); otherwise the real clock.
@@ -136,8 +189,11 @@ export async function enterTimeTravel() {
     state.liveSpots = []; // replay array: swapped in, mutated in place per bucket
     rt.start = start;
     rt.end = end;
-    rt.rangeStart = rangeStart;
-    rt.rangeEnd = end;
+    // Keep a loop range the export panel set while replay was off; fall back
+    // to the default window when unset or outside the fresh timeline extent.
+    const rangeKept = rt.rangeStart >= start && rt.rangeEnd <= end && rt.rangeEnd - rt.rangeStart >= 2 * BUCKET_SECONDS;
+    rt.rangeStart = rangeKept ? rt.rangeStart : rangeStart;
+    rt.rangeEnd = rangeKept ? rt.rangeEnd : end;
     rt.bucketSeconds = BUCKET_SECONDS;
     rt.currentBucketEnd = end;
     rt.playing = false;
@@ -348,12 +404,20 @@ function stepBucket(delta) {
 // --- range pickers -----------------------------------------------------------
 
 // From/To mirror the draggable loop range (the markers), not the data extent —
-// the timeline extent stays the fixed 48h window.
+// the timeline extent stays the fixed 48h window. The export panel's From/To
+// are synced too: same shared range, so marker drags update them live.
+// (Programmatic .value writes fire no change event, so no feedback loop.)
 function syncRangeInputs() {
     const from = document.getElementById('timetravel-from');
     const to = document.getElementById('timetravel-to');
     if (from) from.value = toLocalInputValue(rt.rangeStart || rt.start);
     if (to) to.value = toLocalInputValue(rt.rangeEnd || rt.end);
+    const vfrom = document.getElementById('videoexport-from');
+    const vto = document.getElementById('videoexport-to');
+    if (vfrom) vfrom.value = toLocalInputValue(rt.rangeStart || rt.start);
+    if (vto) vto.value = toLocalInputValue(rt.rangeEnd || rt.end);
+    // Lets videoexport.js refresh its frame/clip estimate on range changes.
+    document.dispatchEvent(new Event('timetravel:range'));
 }
 
 function toLocalInputValue(unix) {

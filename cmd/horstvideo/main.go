@@ -101,6 +101,7 @@ func main() {
 			log.Fatalf("cannot create %s: %v", dir, err)
 		}
 	}
+	sweepStaleFrameDirs(*workDir, *outDir)
 
 	s := &service{
 		jobs:      make(map[string]*job),
@@ -123,6 +124,27 @@ func main() {
 }
 
 // --- API -----------------------------------------------------------------
+
+// sweepStaleFrameDirs removes per-job frame dirs orphaned by a previous run
+// (crash/restart) — the deferred RemoveAll in runJob only covers jobs this
+// process executes. Keeps the out dir and the unit's HOME dir.
+func sweepStaleFrameDirs(workDir, outDir string) {
+	entries, err := os.ReadDir(workDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(workDir, e.Name())
+		if p == filepath.Clean(outDir) || e.Name() == "home" {
+			continue
+		}
+		log.Printf("sweeping stale frame dir %s", p)
+		_ = os.RemoveAll(p)
+	}
+}
 
 func (s *service) handleRender(w http.ResponseWriter, r *http.Request) {
 	var cfg videoConfig
@@ -206,7 +228,9 @@ func (s *service) validate(cfg *videoConfig) error {
 		return fmt.Errorf("span yields more than %d frames at %ds steps; widen the step or shorten the span", s.maxFrames, cfg.StepSeconds)
 	}
 	if cfg.Zoom == 0 {
-		cfg.Zoom = 5
+		// No explicit camera => the interactive app's boot default
+		// (static/config.js initialZoom = 2); the stage then centers on QTH.
+		cfg.Zoom = 2
 	}
 	return nil
 }

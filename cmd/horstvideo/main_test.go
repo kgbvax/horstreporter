@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +46,11 @@ func TestValidateDefaults(t *testing.T) {
 	if cfg.Width != 1280 || cfg.Height != 720 {
 		t.Errorf("size defaults not applied: %dx%d", cfg.Width, cfg.Height)
 	}
+	// 2 mirrors the interactive app's boot zoom (static/config.js), so a
+	// camera-less render lands on the same default view the operator knows.
+	if cfg.Zoom != 2 {
+		t.Errorf("zoom default not applied: %v", cfg.Zoom)
+	}
 	if cfg.End < end { // End was filled to ~now
 		t.Errorf("end default not applied: %d", cfg.End)
 	}
@@ -71,6 +78,29 @@ func TestValidateRejects(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: got %v, want error containing %q", tc.name, err, tc.want)
 		}
+	}
+}
+
+// Startup sweep: orphaned per-job frame dirs from a crashed/killed run are
+// removed; the out dir and the unit's HOME dir survive.
+func TestSweepStaleFrameDirs(t *testing.T) {
+	work := t.TempDir()
+	out := filepath.Join(work, "out")
+	stale := filepath.Join(work, "20260101-000000-1")
+	home := filepath.Join(work, "home")
+	for _, d := range []string{out, stale, home} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sweepStaleFrameDirs(work, out)
+	for _, d := range []string{out, home} {
+		if _, err := os.Stat(d); err != nil {
+			t.Errorf("swept dir that must survive: %s", d)
+		}
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale frame dir survived sweep: %v", err)
 	}
 }
 

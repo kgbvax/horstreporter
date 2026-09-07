@@ -23,7 +23,7 @@ const cfg = {
     start: parseInt(params.get('start') || '0', 10),
     end: parseInt(params.get('end') || '0', 10),
     step: parseInt(params.get('step') || '120', 10),
-    zoom: parseFloat(params.get('zoom') || '5'),
+    zoom: parseFloat(params.get('zoom') || '2'), // 2 = the interactive app's boot default (config.js)
     lat: parseFloat(params.get('lat') || '52.5'),
     lng: parseFloat(params.get('lng') || '13.4'),
     bands: (params.get('bands') || '').split(',').map((b) => b.trim()).filter(Boolean),
@@ -37,7 +37,9 @@ state.timeTravel.active = true;
 state.timeTravel.bucketSeconds = cfg.step;
 state.timeTravel.currentBucketEnd = cfg.start || Math.floor(Date.now() / 1000);
 
-const theme = localStorage.getItem('theme') || 'dark';
+// A render surface is always dark — it must NOT inherit the capturing
+// browser profile's per-origin theme (see video-stage.html body tag).
+const theme = 'dark';
 document.body.dataset.theme = theme;
 
 // --- filter inputs the shared modules read from the DOM ---------------------

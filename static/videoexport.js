@@ -7,6 +7,7 @@
 // export never includes this panel.
 import { state } from './state.js';
 import { map } from './map.js';
+import { getLoopRange, applyExternalRange } from './timetravel.js';
 
 const pad = (n) => String(n).padStart(2, '0');
 
@@ -21,6 +22,10 @@ function fromLocalInputValue(value) {
 }
 
 let pollTimer = null;
+// One active job per client: prevents N rapid clicks enqueueing N renders.
+// (The sidecar also serializes globally: single worker, 429 past the queue.)
+let jobActive = false;
+let pollFailures = 0;
 
 export function initVideoExport() {
     const toggle = document.getElementById('videoexport-toggle');
@@ -42,27 +47,31 @@ export function initVideoExport() {
         toggle?.classList.remove('is-active');
     });
 
+    // From/To here edit the SHARED loop range (timetravel.js) — the same
+    // mechanism the time-travel From/To inputs and draggable markers use.
+    const rangeChanged = () => {
+        applyExternalRange(
+            fromLocalInputValue(document.getElementById('videoexport-from')?.value || ''),
+            fromLocalInputValue(document.getElementById('videoexport-to')?.value || ''),
+            parseInt(document.getElementById('videoexport-step')?.value || '120', 10),
+        );
+    };
+    document.getElementById('videoexport-from')?.addEventListener('change', rangeChanged);
+    document.getElementById('videoexport-to')?.addEventListener('change', rangeChanged);
+    // Marker drags / time-travel edits re-sync our inputs; refresh the estimate.
+    document.addEventListener('timetravel:range', updateEstimate);
+
     document.getElementById('videoexport-submit')?.addEventListener('click', submitJob);
 }
 
-// Defaults re-sync every time the panel opens: last 24h.
+// Defaults re-sync every time the panel opens: the shared loop range.
 function syncDefaults() {
-    const now = Math.floor(Date.now() / 1000);
-    const end = Math.floor(now / 1800) * 1800;
+    const { start, end } = getLoopRange();
     const from = document.getElementById('videoexport-from');
     const to = document.getElementById('videoexport-to');
     if (to) to.value = toLocalInputValue(end);
-    if (from) from.value = toLocalInputValue(end - 24 * 3600);
+    if (from) from.value = toLocalInputValue(start);
     updateEstimate();
-}
-
-function readConfig() {
-    const start = fromLocalInputValue(document.getElementById('videoexport-from')?.value || '');
-    const end = fromLocalInputValue(document.getElementById('videoexport-to')?.value || '');
-    const step = parseInt(document.getElementById('videoexport-step')?.value || '120', 10);
-    const fps = parseInt(document.getElementById('videoexport-fps')?.value || '10', 10);
-    const [width, height] = (document.getElementById('videoexport-size')?.value || '1280x720').split('x').map((v) => parseInt(v, 10));
-    return { start, end, step, fps, width, height };
 }
 
 function updateEstimate() {
@@ -84,15 +93,25 @@ document.addEventListener('change', (e) => {
     if (e.target.closest?.('#videoexport-panel')) updateEstimate();
 });
 
+function setJobActive(active) {
+    jobActive = active;
+    const btn = document.getElementById('videoexport-submit');
+    if (btn) btn.disabled = active;
+}
+
 async function submitJob() {
     const statusEl = document.getElementById('videoexport-status');
     const downloadEl = document.getElementById('videoexport-download');
     const set = (text) => { if (statusEl) statusEl.textContent = text; };
+    if (jobActive) {
+        set('A render is already in progress — one export at a time.');
+        return;
+    }
     if (downloadEl) downloadEl.hidden = true;
     clearInterval(pollTimer);
 
-    const from = fromLocalInputValue(document.getElementById('videoexport-from')?.value || '');
-    const to = fromLocalInputValue(document.getElementById('videoexport-to')?.value || '');
+    // Source of truth is the shared loop range (From/To inputs mirror it).
+    const { start: from, end: to } = getLoopRange();
     if (!from || !to || to <= from) {
         set('Pick a start before the end time.');
         return;
@@ -146,6 +165,8 @@ async function submitJob() {
     }
     const { id } = await resp.json();
     set('Queued…');
+    setJobActive(true);
+    pollFailures = 0;
     pollTimer = setInterval(() => pollJob(id), 2000);
 }
 
@@ -154,7 +175,16 @@ async function pollJob(id) {
     const downloadEl = document.getElementById('videoexport-download');
     try {
         const resp = await fetch(`/api/video/job/${encodeURIComponent(id)}`);
+        if (resp.status === 404) {
+            // The sidecar's job state is in-memory: a restart drops it. Stop
+            // polling instead of waiting forever on a job that will never end.
+            clearInterval(pollTimer);
+            setJobActive(false);
+            if (statusEl) statusEl.textContent = 'Job lost (render service restarted) — resubmit.';
+            return;
+        }
         if (!resp.ok) throw new Error(`job ${resp.status}`);
+        pollFailures = 0;
         const j = await resp.json();
         switch (j.status) {
             case 'queued':
@@ -168,6 +198,7 @@ async function pollJob(id) {
                 break;
             case 'done':
                 clearInterval(pollTimer);
+                setJobActive(false);
                 if (statusEl) statusEl.textContent = 'Done.';
                 if (downloadEl) {
                     downloadEl.href = `/api/video${j.video}`;
@@ -177,11 +208,20 @@ async function pollJob(id) {
                 break;
             case 'error':
                 clearInterval(pollTimer);
+                setJobActive(false);
                 if (statusEl) statusEl.textContent = `Failed: ${j.error || 'unknown error'}`;
                 break;
         }
     } catch (err) {
-        // Transient poll failures (deploy restart) are not fatal.
+        // Short transient failures (proxy blip) are tolerated, but don't poll
+        // forever if the service is down.
+        pollFailures++;
+        if (pollFailures > 15) {
+            clearInterval(pollTimer);
+            setJobActive(false);
+            if (statusEl) statusEl.textContent = 'Render service unreachable — gave up waiting.';
+            return;
+        }
         if (statusEl) statusEl.textContent = 'Waiting for render service…';
     }
 }

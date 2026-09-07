@@ -10,13 +10,19 @@
         /* Clean render surface for horstvideo: exactly the map + Band Stats
            panel + watermark, nothing else. The headless driver captures the
            whole viewport frame by frame. */
-        html, body {
+        /* bg tokens live on body (style.css:42); html would resolve
+           var(--bg-color) to nothing, so only body paints the background. */
+        body {
             margin: 0;
             padding: 0;
             width: 100%;
             height: 100%;
             overflow: hidden;
             background: var(--bg-color);
+        }
+        html {
+            margin: 0;
+            padding: 0;
         }
         .video-stage {
             display: flex;
@@ -80,7 +86,9 @@
         }
     </style>
 </head>
-<body>
+<!-- Fixed DARK render surface: a clip must not depend on the capturing
+     profile's localStorage theme — pinned in markup AND in video-stage.js. -->
+<body data-theme="dark">
     <div class="video-stage">
         <div class="video-stage-map">
             <div id="map" class="w-100 h-100"></div>
