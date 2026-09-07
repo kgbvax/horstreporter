@@ -1673,12 +1673,20 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 
 // loadSpotsBetweenSources loads raw spots in the half-open window
 // [start, end) restricted to the given source types ('mqtt'/'dxcluster'/
-// 'rbn'/'wspr' — missing/NULL source_type counts as 'mqtt'). Bounded by
-// limit: fetches limit+1 rows and reports truncated=true when the window
-// holds more, so a replay endpoint can cap its response. 30s context — a
+// 'rbn'/'wspr' — missing/NULL source_type counts as 'mqtt'), with an
+// optional QTH prefilter pushed into SQL: callsignFilter (exact
+// sender/receiver callsign) and/or locatorPrefixes (LIKE patterns such as
+// 'JO62%', served by the text_pattern_ops prefix indexes on
+// sender/receiver_locator + spot_time). Without a prefilter a hot global
+// 30-min bucket holds ~600k rows and a LIMIT cap would only span the first
+// minute of the window — the prefilter shrinks the candidate set to what
+// the replay endpoint can actually display. The Go-side matchAndCreateSpot
+// still runs afterwards for exact semantics (surrounding-squares set,
+// callsign matchCall variants). Bounded by limit: fetches limit+1 rows and
+// reports truncated=true when the window holds more. 30s context — a
 // single bucket window must return fast on the prod box (the spot_time
 // index serves it), unlike the unbounded backfill loader above.
-func (s *dxPostgresStore) loadSpotsBetweenSources(start, end int64, sources []string, limit int) ([]MQTTMessage, bool, error) {
+func (s *dxPostgresStore) loadSpotsBetweenSources(start, end int64, sources []string, callsignFilter string, locatorPrefixes []string, limit int) ([]MQTTMessage, bool, error) {
 	if len(sources) == 0 {
 		return nil, false, nil
 	}
@@ -1698,9 +1706,14 @@ func (s *dxPostgresStore) loadSpotsBetweenSources(start, end int64, sources []st
 		FROM dx_raw_spots
 		WHERE spot_time >= $1 AND spot_time < $2
 		  AND LOWER(COALESCE(source_type, 'mqtt')) = ANY($3)
+		  AND (
+		        ($4::text <> '' AND UPPER(sender_callsign) = $4)
+		        OR ($5::text[] IS NOT NULL AND array_length($5, 1) > 0
+		            AND (sender_locator LIKE ANY($5) OR receiver_locator LIKE ANY($5)))
+		      )
 		ORDER BY spot_time ASC
-		LIMIT $4
-	`, start, end, sources, limit+1)
+		LIMIT $6
+	`, start, end, sources, callsignFilter, locatorPrefixes, limit+1)
 	if err != nil {
 		return nil, false, err
 	}

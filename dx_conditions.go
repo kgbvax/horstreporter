@@ -319,17 +319,18 @@ func (e *DxBaselineEngine) LoadSpotsBetweenFiltered(start, end int64, includeDXC
 }
 
 // LoadSpotsBetweenSources loads one bounded replay window straight from the
-// raw-spot table, restricted to the given source types and capped at limit
+// raw-spot table, restricted to the given source types and the optional SQL
+// QTH prefilter (callsign equality / locator LIKE prefixes), capped at limit
 // rows (truncated reports when the window held more). Used by the time-travel
 // replay endpoints; unlike LoadSpotsBetweenFiltered it never runs unbounded.
-func (e *DxBaselineEngine) LoadSpotsBetweenSources(start, end int64, sources []string, limit int) ([]MQTTMessage, bool, error) {
+func (e *DxBaselineEngine) LoadSpotsBetweenSources(start, end int64, sources []string, callsignFilter string, locatorPrefixes []string, limit int) ([]MQTTMessage, bool, error) {
 	e.mu.RLock()
 	st := e.store
 	e.mu.RUnlock()
 	if st == nil {
 		return nil, false, nil
 	}
-	return st.loadSpotsBetweenSources(start, end, sources, limit)
+	return st.loadSpotsBetweenSources(start, end, sources, callsignFilter, locatorPrefixes, limit)
 }
 
 // CountSpotsBetweenFiltered returns the number of spots in the window under

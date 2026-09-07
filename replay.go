@@ -26,8 +26,8 @@ const (
 
 // replayLoader is a package-level seam so tests can swap the Postgres read
 // (the handlers never touch hub.history).
-var replayLoader = func(start, end int64, sources []string, limit int) ([]MQTTMessage, bool, error) {
-	return dxBaseline.LoadSpotsBetweenSources(start, end, sources, limit)
+var replayLoader = func(start, end int64, sources []string, callsignFilter string, locatorPrefixes []string, limit int) ([]MQTTMessage, bool, error) {
+	return dxBaseline.LoadSpotsBetweenSources(start, end, sources, callsignFilter, locatorPrefixes, limit)
 }
 
 // replaySourcesFromQuery maps the include_* toggles to source_type values for
@@ -357,14 +357,35 @@ func buildReplayBucket(qth string, surroundings bool, bucketEnd, bucketSeconds i
 		qthSet = []string{qth}
 	}
 	client := &Client{qthSet: qthSet}
+	rings := parseIntDefault(r.URL.Query().Get("rings"), 0)
 	// Optional configurable "area of interest", same as streamHandler.
-	if rings := parseIntDefault(r.URL.Query().Get("rings"), 0); rings > 0 && isLocator(qth) {
+	if rings > 0 && isLocator(qth) {
 		if rings > maxAreaRings {
 			rings = maxAreaRings
 		}
 		if cx, cy, ok := locatorSquareXY(qth); ok {
 			client.areaActive = true
 			client.areaX, client.areaY, client.areaRings = cx, cy, rings
+		}
+	}
+
+	// Push the QTH prefilter into SQL so the LIMIT cap spans the whole bucket
+	// instead of the first ~minute of a hot global window (~600k rows/30min on
+	// prod). A rings-based area of interest can't be expressed as LIKE
+	// prefixes, so it falls back to the unfiltered (time-truncated) load.
+	var callsignFilter string
+	var locatorPrefixes []string
+	if rings == 0 {
+		if isLocator(qth) {
+			if surroundings {
+				for _, sq := range getSurroundingSquares(qth) {
+					locatorPrefixes = append(locatorPrefixes, sq+"%")
+				}
+			} else {
+				locatorPrefixes = []string{qth + "%"}
+			}
+		} else {
+			callsignFilter = qth
 		}
 	}
 
@@ -375,7 +396,7 @@ func buildReplayBucket(qth string, surroundings bool, bucketEnd, bucketSeconds i
 	enabledBands := parseEnabledBands(r.URL.Query().Get("enabled_bands"))
 
 	bucketStart := bucketEnd - bucketSeconds
-	msgs, truncated, err := replayLoader(bucketStart, bucketEnd, sources, limit)
+	msgs, truncated, err := replayLoader(bucketStart, bucketEnd, sources, callsignFilter, locatorPrefixes, limit)
 	if err != nil {
 		return nil, err
 	}
