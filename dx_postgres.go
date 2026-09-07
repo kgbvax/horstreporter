@@ -1763,7 +1763,13 @@ const (
 	replayCountsLagSeconds = 300
 	replayCountsMetaKey    = "replay_counts_watermark"
 	replayCountsMaxReach   = int64(48 * 3600)
-	replayBackfillChunks   = 8 // 48h in 6h chunks
+	// Bootstrap backfill granularity: one chunk per 5-min ticker run, so each
+	// aggregate stays bounded even on the loaded prod box (a 6h chunk blew a
+	// 120s context there). 48h backfills over 16 runs (~80 min). Chunks are
+	// committed progressively via the watermark, so a timeout/failure resumes
+	// where it stopped instead of restarting.
+	replayBackfillChunk = int64(3 * 3600)
+	replayCountsCtx     = 600 * time.Second
 )
 
 func (s *dxPostgresStore) updateReplayBucketCounts(now int64) error {
@@ -1774,29 +1780,54 @@ func (s *dxPostgresStore) updateReplayBucketCounts(now int64) error {
 	if safeNow <= 0 {
 		return nil
 	}
-	watermark, err := s.replayCountsWatermark()
+	watermark, err := s.replayCountsMeta(replayCountsMetaKey)
 	if err != nil {
 		return err
 	}
 	if watermark == 0 {
-		// Bootstrap: backfill the timeline's max reach chunk-wise (each chunk
-		// stays within a single-digit-second query), then arm the watermark.
-		chunk := replayCountsMaxReach / replayBackfillChunks
-		for start := safeNow - replayCountsMaxReach; start < safeNow; start += chunk {
-			end := start + chunk
-			if end > safeNow {
-				end = safeNow
-			}
-			if err := s.accumulateReplayBucketCounts(start, end); err != nil {
-				return err
-			}
-		}
-	} else if safeNow > watermark {
-		if err := s.accumulateReplayBucketCounts(watermark, safeNow); err != nil {
-			return err
-		}
+		// First run: record where the backfill starts (now - 48h reach); the
+		// next runs accumulate chunk-wise from there.
+		return s.setReplayCountsMeta(replayCountsMetaKey, safeNow-replayCountsMaxReach)
 	}
-	return s.setReplayCountsWatermark(safeNow)
+	if safeNow <= watermark {
+		return nil
+	}
+	// Steady state this is the ~5-min delta; during bootstrap it is the next
+	// 3h chunk — either way one bounded accumulate per run, committed to the
+	// watermark on success so retries resume.
+	end := safeNow
+	if end-watermark > replayBackfillChunk {
+		end = watermark + replayBackfillChunk
+	}
+	if err := s.accumulateReplayBucketCounts(watermark, end); err != nil {
+		return err
+	}
+	return s.setReplayCountsMeta(replayCountsMetaKey, end)
+}
+
+func (s *dxPostgresStore) replayCountsMeta(key string) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var wm *int64
+	if err := s.pool.QueryRow(ctx,
+		`SELECT v::bigint FROM dx_meta WHERE k = $1`, key,
+	).Scan(&wm); err != nil && err != pgx.ErrNoRows {
+		return 0, err
+	}
+	if wm == nil {
+		return 0, nil
+	}
+	return *wm, nil
+}
+
+func (s *dxPostgresStore) setReplayCountsMeta(key string, value int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO dx_meta (k, v) VALUES ($1, $2)
+		 ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+		key, fmt.Sprintf("%d", value))
+	return err
 }
 
 func (s *dxPostgresStore) replayCountsWatermark() (int64, error) {
@@ -1828,7 +1859,7 @@ func (s *dxPostgresStore) setReplayCountsWatermark(safeNow int64) error {
 // table. Band is lowercased to match the histogram filter; source_type is
 // normalized to 'mqtt' like the LIKE/ANY queries COALESCE it.
 func (s *dxPostgresStore) accumulateReplayBucketCounts(start, end int64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), replayCountsCtx)
 	defer cancel()
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO dx_raw_spots_30m_counts (bucket_start, band, source_type, n)
