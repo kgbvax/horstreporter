@@ -60,6 +60,28 @@ func replaySourcesFromRequest(r *http.Request) []string {
 	return replaySourcesFromQuery(r.URL.Query())
 }
 
+// replayAllSources is the source set for archive reads that mirror what
+// hub.history holds live (the band-conditions historical evaluation).
+var replayAllSources = []string{"mqtt", "dxcluster", "rbn", "wspr"}
+
+// replayQTHPrefilter computes the SQL prefilter args for a qth/surroundings
+// pair (no rings — callers without a rings param). Returns the callsign
+// equality filter and/or the locator LIKE prefixes; both empty means
+// unfiltered (the caller then gets a time-truncated load).
+func replayQTHPrefilter(qth string, surroundings bool) (string, []string) {
+	if isLocator(qth) {
+		if surroundings {
+			var prefixes []string
+			for _, sq := range getSurroundingSquares(qth) {
+				prefixes = append(prefixes, sq+"%")
+			}
+			return "", prefixes
+		}
+		return "", []string{qth + "%"}
+	}
+	return strings.ToUpper(strings.TrimSpace(qth)), nil
+}
+
 // replayBucketSeconds validates the bucket size: default 30min, clamped to
 // [60s, 1h] so a bucket query stays index-friendly.
 func replayBucketSeconds(raw string) int64 {
@@ -383,17 +405,7 @@ func buildReplayBucket(qth string, surroundings bool, bucketEnd, bucketSeconds i
 	var callsignFilter string
 	var locatorPrefixes []string
 	if rings == 0 {
-		if isLocator(qth) {
-			if surroundings {
-				for _, sq := range getSurroundingSquares(qth) {
-					locatorPrefixes = append(locatorPrefixes, sq+"%")
-				}
-			} else {
-				locatorPrefixes = []string{qth + "%"}
-			}
-		} else {
-			callsignFilter = qth
-		}
+		callsignFilter, locatorPrefixes = replayQTHPrefilter(qth, surroundings)
 	}
 
 	minSnrMode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("min_snr_mode")))

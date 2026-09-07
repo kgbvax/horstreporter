@@ -1,6 +1,7 @@
 import { state } from './state.js';
 import { bandColors, formatNumber, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds, haversineKm, hexToRgba } from './utils.js';
 import { dashedLine, fillCircle } from './canvas-draw.js';
+import { isReplayActive } from './timetravel.js';
 
 const ENABLE_KEY = 'bandLabEnabled';
 const UPDATE_THROTTLE_MS = 300;
@@ -138,6 +139,9 @@ export function updateBandLab(options = {}) {
     const qth = String(document.getElementById('qth')?.value || '').trim().toUpperCase();
     const minutes = getBandLabLookbackMinutes();
     const surroundings = document.getElementById('surroundings')?.checked === true;
+    // During time travel the decision/score are evaluated as of the replayed
+    // bucket (server reads the archive); live mode passes 0 = real now.
+    const bucketEnd = isReplayActive() ? (state.timeTravel?.currentBucketEnd || 0) : 0;
 
     if (!qth) {
         summaryEl.innerHTML = '<div class="text-muted">Enter a qth to inspect band conditions.</div>';
@@ -159,7 +163,7 @@ export function updateBandLab(options = {}) {
     const filtered = filterSpots(spots, minutes);
     const grouped = groupSpotsByBand(filtered);
     const requestSeq = ++runtime.updateSeq;
-    const requestKey = `${qth}|${minutes}|${surroundings ? 1 : 0}`;
+    const requestKey = `${qth}|${minutes}|${surroundings ? 1 : 0}|${bucketEnd}`;
     const hasFreshDx = runtime.dxCache && runtime.dxCacheKey === requestKey;
 
     // Render immediately from live spots to avoid a blank panel while dx_conditions loads.
@@ -169,7 +173,7 @@ export function updateBandLab(options = {}) {
     // When the dx cache is already fresh, the second render is fully redundant
     // (identical data) — skip it.
     if (!hasFreshDx) {
-        void ensureDxConditions(qth, minutes, surroundings).then(() => {
+        void ensureDxConditions(qth, minutes, surroundings, bucketEnd).then(() => {
             // Ignore stale async responses after newer updates were scheduled.
             if (!runtime.enabled || requestSeq !== runtime.updateSeq) return;
             renderSummary(summaryEl);
@@ -250,8 +254,13 @@ function renderSummary(summaryEl, options = {}) {
     const recBands = Array.isArray(resp.recommended_bands) ? resp.recommended_bands : [];
 
     const top = recBands.length > 0 ? recBands : bestBands;
+    // During replay the verdict is about the replayed time, not "now".
+    const replayEnd = isReplayActive() ? (state.timeTravel?.currentBucketEnd || 0) : 0;
+    const bestLabel = replayEnd
+        ? `Best at ${new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(new Date(replayEnd * 1000))}`
+        : 'Best now';
     const recommendation = top.length > 0
-        ? `Best now: ${top.slice(0, 3).join(', ')}`
+        ? `${bestLabel}: ${top.slice(0, 3).join(', ')}`
         : 'No clear best band yet';
 
     // The "worth it" verdict requires at least one band the backend actually
@@ -981,8 +990,8 @@ function escapeHtml(value) {
         .replaceAll("'", '&#39;');
 }
 
-async function ensureDxConditions(qth, minutes, surroundings) {
-    const key = `${qth}|${minutes}|${surroundings ? 1 : 0}`;
+async function ensureDxConditions(qth, minutes, surroundings, bucketEnd = 0) {
+    const key = `${qth}|${minutes}|${surroundings ? 1 : 0}|${bucketEnd}`;
     const now = Date.now();
 
     if (runtime.dxCache && runtime.dxCacheKey === key && (now - runtime.lastDxFetchAt) < DX_FETCH_INTERVAL_MS) {
@@ -1005,6 +1014,7 @@ async function ensureDxConditions(qth, minutes, surroundings) {
             params.set('qth', qth);
             params.set('minutes', String(minutes));
             if (surroundings) params.set('surroundings', 'true');
+            if (bucketEnd) params.set('bucket_end', String(bucketEnd));
 
             const response = await fetch(`/api/dx_conditions?${params.toString()}`, { signal: controller.signal });
             if (!response.ok) throw new Error(`dx_conditions HTTP ${response.status}`);

@@ -825,14 +825,46 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 	surroundings := r.URL.Query().Get("surroundings") == "true"
 
 	now := time.Now().Unix()
-	cutoff := now - int64(minutes*60)
-	hub.RLock()
-	idx := sort.Search(len(hub.history), func(i int) bool {
-		return hub.history[i].T >= cutoff
-	})
-	historyCopy := make([]MQTTMessage, len(hub.history)-idx)
-	copy(historyCopy, hub.history[idx:])
-	hub.RUnlock()
+
+	// Optional historical evaluation for time-travel replay: with bucket_end,
+	// the window is read from the Postgres raw-spot archive (QTH-prefiltered,
+	// same as /api/replay/spots) and scored as of that time instead of the
+	// live hub.history — the Band Lab decision/score then track the
+	// simulated clock.
+	bucketEnd := int64(0)
+	if raw := strings.TrimSpace(r.URL.Query().Get("bucket_end")); raw != "" {
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil && v > 0 {
+			bucketEnd = v
+			if bucketEnd > now {
+				bucketEnd = now
+			}
+		}
+	}
+
+	var historyCopy []MQTTMessage
+	if bucketEnd > 0 {
+		if dxBaseline == nil || dxBaseline.Store() == nil {
+			http.Error(w, "bucket_end requires postgres", http.StatusServiceUnavailable)
+			return
+		}
+		callsignFilter, locatorPrefixes := replayQTHPrefilter(qth, surroundings)
+		msgs, _, err := dxBaseline.LoadSpotsBetweenSources(bucketEnd-int64(minutes*60), bucketEnd, replayAllSources, callsignFilter, locatorPrefixes, maxReplaySpots)
+		if err != nil {
+			http.Error(w, "historical conditions query failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		historyCopy = msgs
+		now = bucketEnd
+	} else {
+		cutoff := now - int64(minutes*60)
+		hub.RLock()
+		idx := sort.Search(len(hub.history), func(i int) bool {
+			return hub.history[i].T >= cutoff
+		})
+		historyCopy = make([]MQTTMessage, len(hub.history)-idx)
+		copy(historyCopy, hub.history[idx:])
+		hub.RUnlock()
+	}
 
 	resp := dxConditionsResponse{
 		QTH:              qth,
