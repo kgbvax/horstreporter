@@ -1,0 +1,38 @@
+# systemd unit for horstvideo (cmd/horstvideo) — the video renderer sidecar.
+# Drives a headless chromium over a clean /video-stage.html page and stitches
+# JPEG frames with ffmpeg. The core horstreporter proxies /api/video/* to it.
+#
+# Install:
+#   sudo cp horstvideo-linux-x64 /opt/horstreporter/ && sudo chown hk:hk /opt/horstreporter/horstvideo-linux-x64
+#   sudo cp cmd/horstvideo/horstvideo.service /etc/systemd/system/horstvideo.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now horstvideo
+#
+# Requires /usr/bin/chromium and /usr/bin/ffmpeg on the host (both present on
+# the prod box). No secrets needed — the stage talks to the local HTTPS core
+# with -ignore-certificate-errors.
+[Unit]
+Description=horstvideo time-lapse renderer (chromedp + ffmpeg)
+After=network-online.target horstreporter.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hk
+Group=hk
+WorkingDirectory=/opt/horstreporter
+ExecStartPre=/usr/bin/mkdir -p /tmp/horstvideo/out
+# 9961: 9960 is taken by pathscope on the prod box.
+ExecStart=/opt/horstreporter/horstvideo-linux-x64 -listen 127.0.0.1:9961 -backend https://127.0.0.1:443 -chromium /usr/bin/chromium -work /tmp/horstvideo -out /tmp/horstvideo/out
+Restart=on-failure
+RestartSec=5
+# Single worker: the prod box has 3.7G RAM — one chromium at a time.
+# Frame + job retention is pruned by the binary itself (24h).
+# hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/tmp/horstvideo
+
+[Install]
+WantedBy=multi-user.target

@@ -287,6 +287,7 @@
             <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show Band Stats">Stats</button>
             <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show Propagation Intelligence Matrix">Prop</button>
             <button id="timetravel-toggle" type="button" class="panel-toggle is-translucent" title="Replay the last 24-48h of spots">Time Travel</button>
+            <button id="videoexport-toggle" type="button" class="panel-toggle is-translucent" title="Export the timeline as a video clip">Video</button>
             <button id="drill-down-clear" type="button" class="panel-toggle is-translucent" title="Clear grid-square filter" style="display: none;"></button>
         </div>
         <canvas id="azimuth-canvas" class="position-absolute top-0 start-0 w-100 h-100"></canvas>
@@ -394,6 +395,57 @@
                     <input id="timetravel-to" type="datetime-local" step="1800" aria-label="Replay end time">
                 </label>
                 <button id="timetravel-apply" type="button" class="timetravel-btn" title="Apply the selected range">Apply</button>
+            </div>
+        </div>
+        <!-- Video export: config for the horstvideo sidecar renderer. The
+             video itself is produced from the clean /video-stage surface;
+             this panel never appears in the exported clip. -->
+        <div id="videoexport-panel" class="timetravel-bar videoexport-bar is-hidden" role="region" aria-label="Video export">
+            <div class="timetravel-header">
+                <span class="timetravel-title">Export Video</span>
+                <span id="videoexport-estimate" class="timetravel-label"></span>
+                <button id="videoexport-close" type="button" class="timetravel-btn" title="Close">&times;</button>
+            </div>
+            <div class="timetravel-controls">
+                <label class="timetravel-range">
+                    <span>From</span>
+                    <input id="videoexport-from" type="datetime-local" step="60" aria-label="Video start time">
+                </label>
+                <label class="timetravel-range">
+                    <span>To</span>
+                    <input id="videoexport-to" type="datetime-local" step="60" aria-label="Video end time">
+                </label>
+                <label class="timetravel-speed">
+                    <select id="videoexport-step" aria-label="Time per frame">
+                        <option value="60">1 min</option>
+                        <option value="120" selected>2 min</option>
+                        <option value="300">5 min</option>
+                    </select>
+                    <span>/ frame</span>
+                </label>
+                <label class="timetravel-speed">
+                    <select id="videoexport-fps" aria-label="Frames per second">
+                        <option value="5">5 fps</option>
+                        <option value="10" selected>10 fps</option>
+                        <option value="15">15 fps</option>
+                        <option value="30">30 fps</option>
+                    </select>
+                </label>
+                <label class="timetravel-speed">
+                    <select id="videoexport-size" aria-label="Video resolution">
+                        <option value="1280x720" selected>1280x720</option>
+                        <option value="1920x1080">1920x1080</option>
+                    </select>
+                </label>
+                <label class="timetravel-speed">
+                    <input id="videoexport-use-view" type="checkbox" checked>
+                    <span>current map view</span>
+                </label>
+                <button id="videoexport-submit" type="button" class="timetravel-btn" title="Start the render job">Render</button>
+            </div>
+            <div class="timetravel-header">
+                <span id="videoexport-status" class="timetravel-label small"></span>
+                <a id="videoexport-download" class="timetravel-btn" href="#" hidden download>Download MP4</a>
             </div>
         </div>
     </div>

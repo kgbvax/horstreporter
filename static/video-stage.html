@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>horstreporter video stage</title>
+    <link rel="stylesheet" href="vendor/css/leaflet.css" />
+    <link rel="stylesheet" href="vendor/css/bootstrap.min.css">
+    <link rel="stylesheet" href="style.css" />
+    <style>
+        /* Clean render surface for horstvideo: exactly the map + Band Stats
+           panel + watermark, nothing else. The headless driver captures the
+           whole viewport frame by frame. */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: var(--bg-color);
+        }
+        .video-stage {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+        }
+        .video-stage-map {
+            position: relative;
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+        #map {
+            position: absolute;
+            inset: 0;
+        }
+        /* The stage renders the map itself; suppress interactive chrome. */
+        .leaflet-control-attribution,
+        .leaflet-control-zoom {
+            display: none !important;
+        }
+        .video-stage-band {
+            flex: 0 0 380px;
+            min-width: 320px;
+            display: flex;
+        }
+        /* Offscreen helper inputs the shared modules read via getElementById */
+        .stage-only-inputs {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .video-watermark {
+            position: absolute;
+            left: 14px;
+            bottom: 14px;
+            z-index: 900;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 14px 6px 8px;
+            border-radius: 999px;
+            background: color-mix(in srgb, var(--bg-color) 72%, transparent);
+            backdrop-filter: blur(2px);
+            border: 1px solid var(--border-color);
+            pointer-events: none;
+        }
+        .video-watermark img {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            object-fit: cover;
+        }
+        .video-watermark span {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-color);
+            letter-spacing: 0.02em;
+        }
+    </style>
+</head>
+<body>
+    <div class="video-stage">
+        <div class="video-stage-map">
+            <div id="map" class="w-100 h-100"></div>
+            <div class="video-watermark">
+                <img src="hk.jpg" alt="Horst Kevin" />
+                <span>horstreporter</span>
+            </div>
+        </div>
+        <div class="video-stage-band">
+            <!-- Same DOM shape as the in-app Band Stats window, minus the
+                 toggle/close chrome: initBandLab hard-requires
+                 #band-lab-content and #band-lab-window. -->
+            <div id="band-lab-window" class="band-lab-window">
+                <div id="band-lab-window-header" class="band-lab-window-header">
+                    <span>Band Stats</span>
+                    <div class="band-lab-window-header-actions">
+                        <select id="band-lab-time-range" class="form-select form-select-sm" title="Band Stats time range">
+                            <option value="15">15m</option>
+                            <option value="30">30m</option>
+                            <option value="60">1h</option>
+                            <option value="120">2h</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="band-lab-content" class="band-lab-window-body">
+                    <div id="band-lab-summary" class="band-lab-summary small"></div>
+                    <div id="band-lab-cards" class="band-lab-cards mt-2"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Filter inputs read by renderers/band-lab via getElementById; the
+         driver config populates them before the first render. -->
+    <div class="stage-only-inputs" aria-hidden="true">
+        <input id="qth" value="" />
+        <input id="surroundings" type="checkbox" />
+        <input id="minutes" value="15" />
+        <input id="ssb-min-db" value="0" />
+        <input id="cw-min-db" value="-15" />
+        <div id="band-container"></div>
+    </div>
+    <script src="vendor/js/bootstrap.bundle.min.js"></script>
+    <script src="vendor/js/leaflet.js"></script>
+    <script type="module" src="video-stage.js"></script>
+</body>
+</html>

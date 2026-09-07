@@ -13,6 +13,7 @@ import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, 
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
 import { initTimeTravel, isReplayActive, exitTimeTravel } from './timetravel.js';
+import { initVideoExport } from './videoexport.js';
 
 // --- Azimuth Zoom State ---
 const AZIMUTH_MAX_HORIZON_KM = 20015;
@@ -1385,6 +1386,7 @@ if (captureConfig?.enabled) {
     initPushUI().catch((err) => { console.warn('push UI init failed:', err); });
     // Time travel replay: timeline overlay over the map, swaps the spot list.
     initTimeTravel({ scheduleRender, updateBandDisplay: updateCurrentBandDisplay });
+    initVideoExport();
     if (HORST_KEVIN_ENABLED) {
         horstKevin = initHorstKevin({
             getQth: () => document.getElementById('qth')?.value?.trim()?.toUpperCase() || '',

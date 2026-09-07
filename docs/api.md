@@ -447,6 +447,14 @@ These paths forward to sibling binaries; the main binary only proxies
 - **`/pathscope/*`** → `-pathscope-url` (default `http://127.0.0.1:9960`),
   path NOT stripped (upstream expects it); SSE-friendly flush. Contract:
   the pathscope module.
+- **`/api/video/*`** → `-video-service-url` (default
+  `http://127.0.0.1:9961`), prefix stripped (`/api/video/render` →
+  `127.0.0.1:9961/render`). Contract: `cmd/horstvideo` — time-lapse
+  renderer (headless chromium over `/video-stage.html` + ffmpeg):
+  `POST /render` `{qth, start, end, step_seconds, fps, width, height,
+  zoom?, lat?, lng?, bands?, surroundings?}` → `{id}`; `GET /job/{id}` →
+  `{status, frames_done, total, video, error}`; `GET /file/{name}` → MP4.
+  Single worker (small prod box); 503 when the sidecar is down.
 
 ## DXLens module (`/dxlens/*`)
 

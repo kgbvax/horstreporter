@@ -604,6 +604,8 @@ func main() {
 	appMux.HandleFunc("/api/capture_snapshot", captureSnapshotHandler)
 	appMux.HandleFunc("/api/replay/histogram", replayHistogramHandler)
 	appMux.HandleFunc("/api/replay/spots", replaySpotsHandler)
+	// Video export: proxied to the horstvideo sidecar (cmd/horstvideo).
+	appMux.HandleFunc("/api/video/", videoProxyHandler)
 	appMux.HandleFunc("/api/stats", statsHandler)
 	appMux.HandleFunc("/api/dx_conditions", dxConditionsHandler)
 	appMux.HandleFunc("/api/hot_bands", hotBandsHandler)
