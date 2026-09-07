@@ -1,9 +1,42 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 )
+
+func TestReplaySNRFilterExemptsWSPRLikeLive(t *testing.T) {
+	// The live stream exempts DX-cluster/WSPR from the SNR threshold
+	// (streamClientFilter.spotAllowed: different scales); replay must match —
+	// else the app's default ssb/0dB filter empties every replay bucket.
+	saved := replayLoader
+	defer func() { replayLoader = saved }()
+	bucketEnd := int64(1757100000)
+	replayLoader = func(start, end int64, sources []string, callsignFilter string, prefixes []string, limit int) ([]MQTTMessage, bool, error) {
+		return []MQTTMessage{
+			{T: bucketEnd - 60, SC: "DL9ET", SL: "JO62QM", RC: "HB9ABC", RL: "JN37QM", B: "20m", RP: -20, Source: "mqtt"},
+			{T: bucketEnd - 60, SC: "K1ABC", SL: "FN30AA", RC: "W2XYZ", RL: "JO62QM", B: "20m", RP: -22, Source: "wspr"},
+		}, false, nil
+	}
+
+	req := httptest.NewRequest("GET", "/api/replay/spots?qth=JO62QM&bucket_end=1757100000&bucket_seconds=1800&min_snr_mode=ssb&ssb_min_db=0", nil)
+	data, err := buildReplayBucket("JO62QM", false, bucketEnd, 1800, []string{"mqtt", "wspr"}, 1000, req)
+	if err != nil {
+		t.Fatalf("buildReplayBucket: %v", err)
+	}
+	var resp struct {
+		Spots []streamSpot `json:"spots"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// The mqtt spot (-20 dB) is below the ssb threshold (0 dB) and must be
+	// dropped; the wspr spot (-22 dB) must survive the very same filter.
+	if len(resp.Spots) != 1 || resp.Spots[0].SourceType != "wspr" {
+		t.Fatalf("spots = %+v, want only the exempted wspr spot", resp.Spots)
+	}
+}
 
 func TestReplaySourcesFromQuery(t *testing.T) {
 	// No toggles at all: everything included (mqtt is always the main feed).

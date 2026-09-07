@@ -426,11 +426,17 @@ func buildReplayBucket(qth string, surroundings bool, bucketEnd, bucketSeconds i
 		if !ok {
 			continue
 		}
-		if minSnrMode == "ssb" && spot.SNR < ssbMinDb {
-			continue
-		}
-		if minSnrMode == "cw" && spot.SNR < cwMinDb {
-			continue
+		// Same exemption as the live stream (streamClientFilter.spotAllowed):
+		// the SNR thresholds are calibrated for FT8/MQTT (+RBN); DX-cluster and
+		// WSPR report on different scales and pass through. Without this the
+		// app's default ssb/0dB filter empties every replay bucket.
+		if src := spot.SourceType; src == "" || src == "mqtt" || src == "rbn" {
+			if minSnrMode == "ssb" && spot.SNR < ssbMinDb {
+				continue
+			}
+			if minSnrMode == "cw" && spot.SNR < cwMinDb {
+				continue
+			}
 		}
 		if !bandAllowed(strings.ToLower(strings.TrimSpace(spot.Band)), selectedBand, enabledBands) {
 			continue
