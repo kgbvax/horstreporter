@@ -95,6 +95,10 @@ export function initTimeTravel({ scheduleRender, updateBandDisplay }) {
         if (Number.isFinite(v)) loadBucket(v);
     });
     document.getElementById('timetravel-apply')?.addEventListener('click', () => applyRange());
+    // Typing in From/To moves the markers immediately (the Apply button does
+    // the same thing explicitly).
+    document.getElementById('timetravel-from')?.addEventListener('change', () => applyRange());
+    document.getElementById('timetravel-to')?.addEventListener('change', () => applyRange());
 
     // Filter changes (band pills, source checkboxes, SNR mode, surroundings)
     // must refetch from the server — the bucket cache is filtered at fetch time
@@ -343,11 +347,13 @@ function stepBucket(delta) {
 
 // --- range pickers -----------------------------------------------------------
 
+// From/To mirror the draggable loop range (the markers), not the data extent —
+// the timeline extent stays the fixed 48h window.
 function syncRangeInputs() {
     const from = document.getElementById('timetravel-from');
     const to = document.getElementById('timetravel-to');
-    if (from) from.value = toLocalInputValue(rt.start - rt.bucketSeconds);
-    if (to) to.value = toLocalInputValue(rt.end);
+    if (from) from.value = toLocalInputValue(rt.rangeStart || rt.start);
+    if (to) to.value = toLocalInputValue(rt.rangeEnd || rt.end);
 }
 
 function toLocalInputValue(unix) {
@@ -356,27 +362,27 @@ function toLocalInputValue(unix) {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// Apply sets the loop range from the From/To inputs (the same values the
+// markers drag): snap to the bucket grid, clamp inside the data extent with
+// the minimum span, move the markers and keep the playhead inside the range.
 function applyRange() {
+    if (!rt.active) return;
     const fromVal = document.getElementById('timetravel-from')?.value;
     const toVal = document.getElementById('timetravel-to')?.value;
-    let start = fromVal ? Math.floor(new Date(fromVal).getTime() / 1000) : rt.start - rt.bucketSeconds;
-    let end = toVal ? Math.floor(new Date(toVal).getTime() / 1000) : rt.end;
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return;
-    const now = floorToBucketEnd(Math.floor(Date.now() / 1000));
-    if (end > now) end = now;
-    if (end <= start) return;
-    [start, end] = clampToSpan(start, end);
-    rt.start = start;
-    rt.end = end;
-    // Keep the loop range inside the new data extent.
-    rt.rangeStart = Math.min(Math.max(rt.rangeStart, rt.start), rt.end - 2 * rt.bucketSeconds);
-    rt.rangeEnd = Math.min(Math.max(rt.rangeEnd, rt.rangeStart + 2 * rt.bucketSeconds), rt.end);
-    rt.bucketCache.clear();
+    let rs = fromVal ? Math.floor(new Date(fromVal).getTime() / 1000) : rt.rangeStart;
+    let re = toVal ? Math.floor(new Date(toVal).getTime() / 1000) : rt.rangeEnd;
+    if (!Number.isFinite(rs) || !Number.isFinite(re)) return;
+    rs = snapRangeMarker('start', rs, rt.rangeStart, rt.rangeEnd, rt.start, rt.end, rt.bucketSeconds);
+    rt.rangeStart = rs;
+    re = snapRangeMarker('end', re, rt.rangeStart, rt.rangeEnd, rt.start, rt.end, rt.bucketSeconds);
+    rt.rangeEnd = re;
+    rt.rangeStart = Math.min(rs, re - 2 * rt.bucketSeconds); // keep min span after end moved
     pause();
     syncRangeInputs();
     positionMarkers();
-    loadHistogram();
-    loadBucket(Math.min(rt.currentBucketEnd, end));
+    if (rt.currentBucketEnd < rt.rangeStart || rt.currentBucketEnd > rt.rangeEnd) {
+        loadBucket(Math.min(Math.max(rt.currentBucketEnd, rt.rangeStart), rt.rangeEnd));
+    }
 }
 
 // --- overlay rendering -------------------------------------------------------
@@ -520,6 +526,7 @@ function initRangeMarkers() {
             const snapped = snapRangeMarker(which, t, rt.rangeStart, rt.rangeEnd, rt.start, rt.end, rt.bucketSeconds);
             if (which === 'start') rt.rangeStart = snapped; else rt.rangeEnd = snapped;
             positionMarkers();
+            syncRangeInputs(); // From/To follow the markers while dragging
         });
         const drop = () => {
             if (!dragging) return;

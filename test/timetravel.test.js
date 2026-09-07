@@ -175,4 +175,30 @@ describe('time travel', () => {
         await exitTimeTravel();
         expect(restore).toHaveBeenCalled();
     });
+
+    it('From/To inputs and the loop-range markers stay in sync (two-way)', async () => {
+        initTimeTravel({ scheduleRender: () => {} });
+        await enterTimeTravel();
+        const rt = state.timeTravel;
+        const from = document.getElementById('timetravel-from');
+        const to = document.getElementById('timetravel-to');
+        // Initial sync: inputs mirror the default loop range.
+        expect(from.value).toBe(toLocalInput(rt.rangeStart));
+        // Typing a From time moves the start marker and re-syncs To.
+        from.value = toLocalInput(rt.start + 3 * rt.bucketSeconds);
+        from.dispatchEvent(new Event('change'));
+        expect(rt.rangeStart).toBe(rt.start + 3 * rt.bucketSeconds);
+        expect(to.value).toBe(toLocalInput(rt.rangeEnd));
+        // Typing a To time moves the end marker.
+        to.value = toLocalInput(rt.start + 6 * rt.bucketSeconds);
+        to.dispatchEvent(new Event('change'));
+        expect(rt.rangeEnd).toBe(rt.start + 6 * rt.bucketSeconds);
+        await exitTimeTravel();
+    });
 });
+
+function toLocalInput(unix) {
+    const d = new Date(unix * 1000);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
