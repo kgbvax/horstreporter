@@ -1467,6 +1467,9 @@ export function scheduleRender() {
             } else {
                 const mercatorTimer = startPerfTimer();
                 updateMapVisualization(renderSpots, parseInt(minutes));
+                // Grayline tracks the simulated clock during replay; the call
+                // is key-cached, so it only rebuilds when the bucket changes.
+                if (isReplayActive()) void syncMercatorGraylineLayer();
                 endPerfTimer('render.mercator.frame_ms', mercatorTimer);
             }
 

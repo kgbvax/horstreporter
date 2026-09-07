@@ -41,6 +41,18 @@ export function isReplayActive() {
     return rt.active;
 }
 
+// Simulated clock for time-aware overlays: during replay the grayline
+// terminator tracks the current bucket (on the same 5-min grid both
+// projections use for their cache keys); otherwise the real clock.
+const GRAYLINE_BUCKET_MS = 5 * 60 * 1000;
+
+export function overlayNowMs() {
+    if (rt.active && rt.currentBucketEnd) {
+        return Math.floor((rt.currentBucketEnd * 1000) / GRAYLINE_BUCKET_MS) * GRAYLINE_BUCKET_MS;
+    }
+    return Date.now();
+}
+
 // Snap a draggable loop-range marker to the bucket grid and clamp it so the
 // two markers keep a minimum separation and stay inside the data extent.
 // Pure, for tests.
@@ -371,25 +383,19 @@ function applyRange() {
 
 const dateTimeFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
-const dayFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+const replayClockFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 function fmtBucketEnd(unix) {
     return dateTimeFmt.format(new Date(unix * 1000));
 }
 
 // During replay the top-right display (normally the band pill) shows the
-// current bucket's time span — the most prominent "where am I" indicator.
-// exitTimeTravel hands the element back via the injected restoreBandDisplay.
+// simulated time — one timestamp with the date. exitTimeTravel hands the
+// element back via the injected restoreBandDisplay.
 function setReplayBandDisplay() {
     const display = document.getElementById('current-band-display');
     if (!display) return;
-    const start = rt.currentBucketEnd - rt.bucketSeconds;
-    const startDay = new Date(start * 1000);
-    const endDay = new Date(rt.currentBucketEnd * 1000);
-    const span = startDay.getDate() === endDay.getDate()
-        ? timeFmt.format(startDay)
-        : dayFmt.format(startDay);
-    display.textContent = `Replay ${span}–${timeFmt.format(endDay)}`;
+    display.textContent = `Replay ${replayClockFmt.format(new Date(rt.currentBucketEnd * 1000))}`;
     // pillTextColor needs a concrete hex; resolve the CSS var first.
     const accent = (getComputedStyle(document.documentElement).getPropertyValue('--accent-color') || '').trim();
     const bg = /^#[0-9a-fA-F]{6}$/.test(accent) ? accent : '#5b9bd5';

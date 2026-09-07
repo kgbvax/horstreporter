@@ -6,6 +6,7 @@ export let currentGraylineLayer = null;
 export let currentDxccLabelLayer = null;
 
 import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, hexToRgb, blendOverlayColors } from './utils.js';
+import { overlayNowMs } from './timetravel.js';
 import { selectProminentDxccLabels } from './azimuth-runtime.js';
 import { endPerfTimer, incrementPerfCounter, startPerfTimer } from './perf.js';
 
@@ -372,7 +373,8 @@ export async function syncMercatorGraylineLayer(options = {}) {
         return;
     }
 
-    const bucket = Math.floor(Date.now() / GRAYLINE_BUCKET_MS);
+    const overlayTime = overlayNowMs();
+    const bucket = Math.floor(overlayTime / GRAYLINE_BUCKET_MS);
     const key = `${theme}:${bucket}`;
     if (!force && currentGraylineLayer && currentGraylineLayerKey === key) {
         return;
