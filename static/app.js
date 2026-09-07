@@ -1384,7 +1384,7 @@ if (captureConfig?.enabled) {
     // Returns null when push is unsupported (UI stays hidden).
     initPushUI().catch((err) => { console.warn('push UI init failed:', err); });
     // Time travel replay: timeline overlay over the map, swaps the spot list.
-    initTimeTravel({ scheduleRender });
+    initTimeTravel({ scheduleRender, updateBandDisplay: updateCurrentBandDisplay });
     if (HORST_KEVIN_ENABLED) {
         horstKevin = initHorstKevin({
             getQth: () => document.getElementById('qth')?.value?.trim()?.toUpperCase() || '',

@@ -3,21 +3,28 @@ import { state } from '../static/state.js';
 
 // timetravel.js reads the DOM per call and talks to /api/replay/*; tests stub
 // fetch and mount the minimal overlay markup, following the house jsdom style.
-const { initTimeTravel, enterTimeTravel, exitTimeTravel, isReplayActive, notifyFiltersChanged, loadBucket } =
+const { initTimeTravel, enterTimeTravel, exitTimeTravel, isReplayActive, notifyFiltersChanged, loadBucket, snapRangeMarker, advancePlayback } =
     await import('../static/timetravel.js');
 
 function mountOverlay() {
     document.body.innerHTML = `
         <button id="timetravel-toggle"></button>
         <div id="timetravel-bar" class="is-hidden"></div>
-        <div id="timetravel-histogram"></div>
-        <input id="timetravel-scrubber" />
+        <div id="timetravel-track">
+            <div id="timetravel-shade-start"></div>
+            <div id="timetravel-shade-end"></div>
+            <div id="timetravel-histogram"></div>
+            <input id="timetravel-scrubber" />
+            <div id="timetravel-marker-start"></div>
+            <div id="timetravel-marker-end"></div>
+        </div>
         <span id="timetravel-label"></span>
         <button id="timetravel-play"></button>
         <input id="timetravel-from" />
         <input id="timetravel-to" />
         <input id="timetravel-speed" />
         <div id="wspr-matrix-window"></div>
+        <div id="current-band-display"></div>
         <input id="surroundings" type="checkbox" />
         <input id="qth" value="JO62QM" />
     `;
@@ -127,5 +134,45 @@ describe('time travel', () => {
         await exitTimeTravel();
         expect(isReplayActive()).toBe(false);
         expect(state.liveSpots).toEqual([]);
+    });
+
+    it('snapRangeMarker snaps to the bucket grid and keeps markers apart', () => {
+        const extent = [0, 48 * 3600];
+        const bs = 1800;
+        // Snaps to the nearest bucket boundary.
+        expect(snapRangeMarker('start', 1000, 0, extent[1], ...extent, bs)).toBe(1800);
+        expect(snapRangeMarker('start', 2800, 0, extent[1], ...extent, bs)).toBe(3600);
+        // Start never crosses past the end marker (min span 2 buckets).
+        expect(snapRangeMarker('start', extent[1], 0, 4 * bs, ...extent, bs)).toBe(4 * bs - 2 * bs);
+        // End never crosses before the start marker.
+        expect(snapRangeMarker('end', 0, 0, 6 * bs, ...extent, bs)).toBe(2 * bs);
+        // Both stay inside the data extent.
+        expect(snapRangeMarker('end', extent[1] + 9e6, 0, extent[1], ...extent, bs)).toBe(extent[1]);
+    });
+
+    it('playback wraps from the range end back to the range start', async () => {
+        initTimeTravel({ scheduleRender: () => {} });
+        await enterTimeTravel();
+        const rt = state.timeTravel;
+        // Shrink the loop range away from the data extent.
+        rt.rangeStart = rt.start + 2 * rt.bucketSeconds;
+        rt.rangeEnd = rt.start + 5 * rt.bucketSeconds;
+        await loadBucket(rt.rangeEnd); // playhead sits at the range end
+        const calls = () => fetchMock.mock.calls.filter(([u]) => u.includes('/api/replay/spots')).length;
+        const before = calls();
+        advancePlayback();
+        expect(rt.currentBucketEnd).toBe(rt.rangeStart); // wrapped, not stopped
+        expect(calls()).toBe(before + 1); // a wrap triggers a bucket load
+        await exitTimeTravel();
+    });
+
+    it('the top-right display shows replay time during playback and is restored on exit', async () => {
+        const restore = vi.fn();
+        initTimeTravel({ scheduleRender: () => {}, updateBandDisplay: restore });
+        await enterTimeTravel();
+        const display = document.getElementById('current-band-display');
+        expect(display.textContent).toMatch(/^Replay /);
+        await exitTimeTravel();
+        expect(restore).toHaveBeenCalled();
     });
 });

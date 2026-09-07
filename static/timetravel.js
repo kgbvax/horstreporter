@@ -6,7 +6,7 @@
 // Data comes from /api/replay/histogram (timeline bars) and
 // /api/replay/spots (one bucket per fetch); both read Postgres read-only.
 import { state } from './state.js';
-import { getMinSnrMode, getEnabledBands, getSelectedBand, bandColors } from './utils.js';
+import { getMinSnrMode, getEnabledBands, getSelectedBand, bandColors, pillTextColor } from './utils.js';
 
 const BUCKET_SECONDS = 1800;
 const DAY_SECONDS = 86400;
@@ -14,6 +14,8 @@ const DAY_SECONDS = 86400;
 // scheduleRender lives in app.js (which imports this module), so it is
 // injected at init time instead of imported — keeps the graph one-way.
 let render = () => {};
+// Restores the top-right band display (app.js owns it); injected at init.
+let restoreBandDisplay = () => {};
 
 // Module-level handle. Defaults in state.js may be absent when state.js is
 // mock-partial in tests, so self-initialize on first import.
@@ -22,6 +24,8 @@ const rt = (state.timeTravel = state.timeTravel || {
     liveSpotsBackup: null,
     start: 0,
     end: 0,
+    rangeStart: 0,
+    rangeEnd: 0,
     bucketSeconds: 1800,
     currentBucketEnd: 0,
     playing: false,
@@ -37,8 +41,23 @@ export function isReplayActive() {
     return rt.active;
 }
 
-export function initTimeTravel({ scheduleRender }) {
+// Snap a draggable loop-range marker to the bucket grid and clamp it so the
+// two markers keep a minimum separation and stay inside the data extent.
+// Pure, for tests.
+export function snapRangeMarker(which, t, rangeStart, rangeEnd, extentStart, extentEnd, bucketSeconds) {
+    const minSpan = 2 * bucketSeconds;
+    let snapped = extentStart + Math.round((t - extentStart) / bucketSeconds) * bucketSeconds;
+    if (which === 'start') {
+        snapped = Math.min(Math.max(snapped, extentStart), rangeEnd - minSpan);
+    } else {
+        snapped = Math.min(Math.max(snapped, rangeStart + minSpan), extentEnd);
+    }
+    return snapped;
+}
+
+export function initTimeTravel({ scheduleRender, updateBandDisplay }) {
     render = scheduleRender || (() => {});
+    restoreBandDisplay = updateBandDisplay || (() => {});
 
     document.getElementById('timetravel-toggle')?.addEventListener('click', () => {
         if (rt.active) {
@@ -47,6 +66,8 @@ export function initTimeTravel({ scheduleRender }) {
             enterTimeTravel();
         }
     });
+
+    initRangeMarkers();
 
     document.getElementById('timetravel-close')?.addEventListener('click', () => exitTimeTravel());
     document.getElementById('timetravel-prev')?.addEventListener('click', () => { pause(); stepBucket(-1); });
@@ -97,6 +118,8 @@ export async function enterTimeTravel() {
     state.liveSpots = []; // replay array: swapped in, mutated in place per bucket
     rt.start = start;
     rt.end = end;
+    rt.rangeStart = start;
+    rt.rangeEnd = end;
     rt.bucketSeconds = BUCKET_SECONDS;
     rt.currentBucketEnd = end;
     rt.playing = false;
@@ -107,6 +130,7 @@ export async function enterTimeTravel() {
     document.getElementById('timetravel-toggle')?.classList.add('is-active');
     document.getElementById('wspr-matrix-window')?.classList.add('replay-live');
     syncRangeInputs();
+    positionMarkers();
 
     loadHistogram().then(() => render());
     await loadBucket(end);
@@ -132,6 +156,7 @@ export function exitTimeTravel() {
     document.getElementById('timetravel-bar')?.classList.add('is-hidden');
     document.getElementById('timetravel-toggle')?.classList.remove('is-active');
     document.getElementById('wspr-matrix-window')?.classList.remove('replay-live');
+    restoreBandDisplay();
     render();
 }
 
@@ -246,6 +271,7 @@ function installBucket(bucketEnd, json) {
     }
     rt.currentBucketEnd = bucketEnd;
     updateBucketLabel(json);
+    setReplayBandDisplay();
     syncScrubber();
     render();
     markHistogramPosition();
@@ -268,15 +294,19 @@ function pause() {
     stopTimer();
 }
 
+// One playback tick: advance one bucket, wrapping to the loop-range start
+// when the range end is reached — playback loops until paused or stopped.
+export function advancePlayback() {
+    if (rt.currentBucketEnd >= rt.rangeEnd) {
+        loadBucket(rt.rangeStart);
+        return;
+    }
+    stepBucket(1);
+}
+
 function restartTimer() {
     stopTimer();
-    rt.timer = setInterval(() => {
-        if (rt.currentBucketEnd >= rt.end) {
-            pause();
-            return;
-        }
-        stepBucket(1);
-    }, rt.speedMs);
+    rt.timer = setInterval(advancePlayback, rt.speedMs);
 }
 
 function stopTimer() {
@@ -288,7 +318,7 @@ function stepBucket(delta) {
     loadBucket(rt.currentBucketEnd + delta * rt.bucketSeconds);
     // Prefetch the next bucket one step ahead so playback rarely waits on I/O.
     const prefetchEnd = rt.currentBucketEnd + 2 * delta * rt.bucketSeconds;
-    if (prefetchEnd <= rt.end && !cacheGet(prefetchEnd)) {
+    if (prefetchEnd <= rt.rangeEnd && !cacheGet(prefetchEnd)) {
         const params = collectParams(prefetchEnd);
         fetch(`/api/replay/spots?${params.toString()}`)
             .then((res) => (res.ok ? res.json() : null))
@@ -324,9 +354,13 @@ function applyRange() {
     [start, end] = clampToSpan(start, end);
     rt.start = start;
     rt.end = end;
+    // Keep the loop range inside the new data extent.
+    rt.rangeStart = Math.min(Math.max(rt.rangeStart, rt.start), rt.end - 2 * rt.bucketSeconds);
+    rt.rangeEnd = Math.min(Math.max(rt.rangeEnd, rt.rangeStart + 2 * rt.bucketSeconds), rt.end);
     rt.bucketCache.clear();
     pause();
     syncRangeInputs();
+    positionMarkers();
     loadHistogram();
     loadBucket(Math.min(rt.currentBucketEnd, end));
 }
@@ -334,9 +368,31 @@ function applyRange() {
 // --- overlay rendering -------------------------------------------------------
 
 const dateTimeFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+const dayFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 
 function fmtBucketEnd(unix) {
     return dateTimeFmt.format(new Date(unix * 1000));
+}
+
+// During replay the top-right display (normally the band pill) shows the
+// current bucket's time span — the most prominent "where am I" indicator.
+// exitTimeTravel hands the element back via the injected restoreBandDisplay.
+function setReplayBandDisplay() {
+    const display = document.getElementById('current-band-display');
+    if (!display) return;
+    const start = rt.currentBucketEnd - rt.bucketSeconds;
+    const startDay = new Date(start * 1000);
+    const endDay = new Date(rt.currentBucketEnd * 1000);
+    const span = startDay.getDate() === endDay.getDate()
+        ? timeFmt.format(startDay)
+        : dayFmt.format(startDay);
+    display.textContent = `Replay ${span}–${timeFmt.format(endDay)}`;
+    // pillTextColor needs a concrete hex; resolve the CSS var first.
+    const accent = (getComputedStyle(document.documentElement).getPropertyValue('--accent-color') || '').trim();
+    const bg = /^#[0-9a-fA-F]{6}$/.test(accent) ? accent : '#5b9bd5';
+    display.style.backgroundColor = bg;
+    display.style.color = pillTextColor(bg);
 }
 
 function updateBucketLabel(json) {
@@ -392,4 +448,76 @@ function markHistogramPosition() {
     for (const seg of container.children) {
         seg.classList.toggle('is-current', parseInt(seg.dataset.bucketEnd, 10) === rt.currentBucketEnd);
     }
+}
+
+// --- draggable loop-range markers ---------------------------------------------
+// Two markers on the timeline track set the loop range (rt.rangeStart /
+// rt.rangeEnd): playback wraps from rangeEnd back to rangeStart. They are
+// distinct from rt.start/rt.end, which stay the histogram's data extent.
+
+const pct = (t, span) => `${((t - span[0]) / Math.max(1, span[1] - span[0])) * 100}%`;
+
+function markerExtent() {
+    return [rt.start, rt.end];
+}
+
+function positionMarkers() {
+    const track = document.getElementById('timetravel-track');
+    if (!track || !rt.end || !rt.start) return;
+    const span = markerExtent();
+    const startEl = document.getElementById('timetravel-marker-start');
+    const endEl = document.getElementById('timetravel-marker-end');
+    const shadeL = document.getElementById('timetravel-shade-start');
+    const shadeR = document.getElementById('timetravel-shade-end');
+    if (startEl) startEl.style.left = pct(rt.rangeStart || rt.start, span);
+    if (endEl) endEl.style.left = pct(rt.rangeEnd || rt.end, span);
+    if (shadeL) shadeL.style.width = pct(rt.rangeStart || rt.start, span);
+    if (shadeR) {
+        shadeR.style.left = pct(rt.rangeEnd || rt.end, span);
+        shadeR.style.width = `${100 - ((rt.rangeEnd || rt.end) - span[0]) / Math.max(1, span[1] - span[0]) * 100}%`;
+    }
+}
+
+function initRangeMarkers() {
+    const track = document.getElementById('timetravel-track');
+    if (!track) return;
+
+    const drag = (which, markerId) => {
+        const marker = document.getElementById(markerId);
+        if (!marker) return;
+        let dragging = false;
+        marker.addEventListener('pointerdown', (e) => {
+            if (!rt.active) return;
+            dragging = true;
+            pause();
+            marker.setPointerCapture(e.pointerId);
+            e.preventDefault();
+        });
+        marker.addEventListener('pointermove', (e) => {
+            if (!dragging || !rt.active) return;
+            const rect = track.getBoundingClientRect();
+            if (!rect.width) return;
+            const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+            const t = rt.start + frac * (rt.end - rt.start);
+            const snapped = snapRangeMarker(which, t, rt.rangeStart, rt.rangeEnd, rt.start, rt.end, rt.bucketSeconds);
+            if (which === 'start') rt.rangeStart = snapped; else rt.rangeEnd = snapped;
+            positionMarkers();
+        });
+        const drop = () => {
+            if (!dragging) return;
+            dragging = false;
+            if (rt.active) {
+                rt.bucketCache.clear();
+                syncRangeInputs();
+                // Keep the playhead inside the reshaped loop range.
+                if (rt.currentBucketEnd < rt.rangeStart || rt.currentBucketEnd > rt.rangeEnd) {
+                    loadBucket(Math.min(Math.max(rt.currentBucketEnd, rt.rangeStart), rt.rangeEnd));
+                }
+            }
+        };
+        marker.addEventListener('pointerup', drop);
+        marker.addEventListener('pointercancel', drop);
+    };
+    drag('start', 'timetravel-marker-start');
+    drag('end', 'timetravel-marker-end');
 }

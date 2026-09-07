@@ -1561,6 +1561,35 @@ body[data-theme="dark"] .band-pill .band-nodata-tag {
     width: 100%;
     margin: 0;
 }
+/* Track: histogram + scrubber + draggable loop-range markers on one overlay.
+   position:relative anchors the markers and range shades. */
+.timetravel-track {
+    position: relative;
+}
+.timetravel-shade {
+    position: absolute;
+    top: 0;
+    height: 36px;
+    background: color-mix(in srgb, var(--bg-color) 55%, transparent);
+    pointer-events: none;
+    z-index: 1;
+}
+.timetravel-marker {
+    position: absolute;
+    top: -4px;
+    width: 10px;
+    height: 46px;
+    margin-left: -5px;
+    background: color-mix(in srgb, var(--accent-strong, var(--accent)) 80%, transparent);
+    border: 1px solid var(--accent-strong, var(--accent));
+    border-radius: 3px;
+    cursor: ew-resize;
+    touch-action: none;
+    z-index: 2;
+}
+.timetravel-marker:hover {
+    background: var(--accent-strong, var(--accent));
+}
 .timetravel-controls {
     display: flex;
     align-items: center;

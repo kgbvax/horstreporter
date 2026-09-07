@@ -34,6 +34,11 @@ export const state = {
         liveSpotsBackup: null,
         start: 0,
         end: 0,
+        // Loop range set by the draggable timeline markers; playback wraps
+        // from rangeEnd back to rangeStart. Distinct from start/end (the
+        // histogram's data extent).
+        rangeStart: 0,
+        rangeEnd: 0,
         bucketSeconds: 1800,
         currentBucketEnd: 0,
         playing: false,
