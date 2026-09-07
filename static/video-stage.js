@@ -103,6 +103,17 @@ function waitTiles(timeoutMs = 20000) {
     });
 }
 
+// Temporal blur: buckets are disjoint windows, so without blending every
+// spot pops in/out as the frame advances. Keep the last few buckets on
+// screen as a fading trail — the fade reuses the app's own visual language
+// (the Mercator grid layer derives each square's opacity from its spots'
+// SNR quartiles), so scaling a trail spot's snr dims it with no renderer
+// changes. ?trail=0 disables (testing); default keeps 2 prior buckets.
+const TRAIL_FADE = [0.55, 0.3, 0.15]; // snr scale per bucket distance
+const trailParam = parseInt(params.get('trail') ?? '2', 10);
+const trailDepth = Number.isFinite(trailParam) ? Math.max(0, Math.min(trailParam, TRAIL_FADE.length)) : 2;
+const freshHistory = []; // newest-first fresh (unscaled) bucket spot arrays
+
 async function installBucket(bucketEnd) {
     const params2 = new URLSearchParams();
     params2.set('qth', cfg.qth);
@@ -113,11 +124,21 @@ async function installBucket(bucketEnd) {
     const res = await fetch(`/api/replay/spots?${params2.toString()}`);
     if (!res.ok) throw new Error(`replay/spots ${res.status}`);
     const json = await res.json();
-    state.liveSpots = (json.spots || []).map((spot) => ({
+    const fresh = (json.spots || []).map((spot) => ({
         ...spot,
         __replay: true,
         __bucketEnd: bucketEnd,
     }));
+    freshHistory.unshift(fresh);
+    freshHistory.length = Math.min(freshHistory.length, trailDepth + 1);
+    state.liveSpots = freshHistory.flatMap((bucketSpots, i) =>
+        i === 0
+            ? bucketSpots
+            : bucketSpots.map((spot) => ({
+                ...spot,
+                snr: Number.isFinite(Number(spot.snr)) ? Number(spot.snr) * TRAIL_FADE[i - 1] : spot.snr,
+            }))
+    );
     state.timeTravel.currentBucketEnd = bucketEnd;
 }
 
