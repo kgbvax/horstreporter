@@ -1764,9 +1764,9 @@ func (s *dxPostgresStore) loadSpotsBetweenSources(start, end int64, sources []st
 		  AND LOWER(COALESCE(source_type, 'mqtt')) = ANY($3)
 		  AND (
 		        ($4::text <> '' AND UPPER(sender_callsign) = $4)
-		        OR (COALESCE(array_length($5, 1), 0) > 0
-		            AND (sender_locator LIKE ANY($5) OR receiver_locator LIKE ANY($5)))
-		        OR ($4::text = '' AND COALESCE(array_length($5, 1), 0) = 0)
+		        OR (COALESCE(array_length($5::text[], 1), 0) > 0
+		            AND (sender_locator LIKE ANY($5::text[]) OR receiver_locator LIKE ANY($5::text[])))
+		        OR ($4::text = '' AND COALESCE(array_length($5::text[], 1), 0) = 0)
 		      )
 		ORDER BY spot_time ASC
 		LIMIT $6
