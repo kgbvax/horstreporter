@@ -37,9 +37,10 @@ state.timeTravel.active = true;
 state.timeTravel.bucketSeconds = cfg.step;
 state.timeTravel.currentBucketEnd = cfg.start || Math.floor(Date.now() / 1000);
 
-// A render surface is always dark — it must NOT inherit the capturing
-// browser profile's per-origin theme (see video-stage.html body tag).
-const theme = 'dark';
+// ?theme=light|dark makes the clip follow the operator's current light/dark
+// switch; absent (direct API use / testing) it stays dark, pinned by the body
+// tag in video-stage.html.
+const theme = ['light', 'dark'].includes(params.get('theme')) ? params.get('theme') : 'dark';
 document.body.dataset.theme = theme;
 
 // --- filter inputs the shared modules read from the DOM ---------------------
@@ -67,8 +68,8 @@ for (const band of Object.keys(bandColors)) {
 
 // --- map + panel boot --------------------------------------------------------
 
-// No explicit camera ("current map view" unchecked) => center on the QTH
-// grid square instead of the driver's fallback (0,0 = Gulf of Guinea).
+// No explicit camera (driver sent lat/lng both 0) => center on the QTH
+// grid square instead of the fallback (0,0 = Gulf of Guinea).
 if (cfg.lat === 0 && cfg.lng === 0 && cfg.qth) {
     const b = locatorToBounds(cfg.qth);
     if (b) {

@@ -72,6 +72,7 @@ func TestValidateRejects(t *testing.T) {
 		{"bad fps", videoConfig{QTH: "JO62QM", Start: 1, End: 1000, FPS: 24}, "fps"},
 		{"bad size", videoConfig{QTH: "JO62QM", Start: 1, End: 1000, Width: 99999}, "width/height"},
 		{"too many frames", videoConfig{QTH: "JO62QM", Start: 0, End: 100 * 120, StepSeconds: 120}, "more than 100 frames"},
+		{"bad theme", videoConfig{QTH: "JO62QM", Start: 1, End: 1000, Theme: "sepia"}, "theme"},
 	}
 	for _, tc := range cases {
 		err := s.validate(&tc.cfg)
@@ -110,13 +111,13 @@ func TestStageURL(t *testing.T) {
 		QTH: "JO62QM", Start: 1000, End: 2000, StepSeconds: 120,
 		FPS: 10, Width: 1280, Height: 720, Zoom: 5.5,
 		CenterLat: 52.5, CenterLng: 13.4,
-		Bands: []string{"20m", "40m"}, Surroundings: true,
+		Bands: []string{"20m", "40m"}, Surroundings: true, Theme: "light",
 	})
 	for _, want := range []string{
 		"https://127.0.0.1:443/video-stage.html?",
 		"qth=JO62QM", "start=1000", "end=2000", "step=120",
 		"zoom=5.50", "lat=52.50000", "lng=13.40000",
-		"w=1280", "h=720", "bands=20m%2C40m", "surroundings=true",
+		"w=1280", "h=720", "bands=20m%2C40m", "surroundings=true", "theme=light",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("stageURL missing %q in %s", want, got)

@@ -80,12 +80,15 @@ async function submitJob() {
     const size = (document.getElementById('videoexport-size')?.value || '1280x720').split('x');
     cfg.width = parseInt(size[0], 10);
     cfg.height = parseInt(size[1], 10);
-    if (document.getElementById('videoexport-use-view')?.checked && map) {
+    // WYSIWYG: the clip always renders the operator's current map view —
+    // camera (center + zoom) and the light/dark switch exactly as on screen.
+    if (map) {
         const c = map.getCenter();
         cfg.center_lat = c.lat;
         cfg.center_lng = c.lng;
         cfg.zoom = map.getZoom();
     }
+    cfg.theme = document.body.getAttribute('data-theme') || 'light';
     const bands = Array.from(document.querySelectorAll('.band-enable:checked')).map((cb) => cb.value);
     if (bands.length && bands.length < document.querySelectorAll('.band-enable').length) {
         cfg.bands = bands;

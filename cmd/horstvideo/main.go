@@ -56,6 +56,7 @@ type videoConfig struct {
 	CenterLng    float64  `json:"center_lng"`
 	Bands        []string `json:"bands"` // empty = all enabled
 	Surroundings bool     `json:"surroundings"`
+	Theme        string   `json:"theme"` // light|dark; empty = stage default (dark)
 }
 
 type job struct {
@@ -231,6 +232,9 @@ func (s *service) validate(cfg *videoConfig) error {
 		// No explicit camera => the interactive app's boot default
 		// (static/config.js initialZoom = 2); the stage then centers on QTH.
 		cfg.Zoom = 2
+	}
+	if cfg.Theme != "" && cfg.Theme != "light" && cfg.Theme != "dark" {
+		return errors.New("theme must be light or dark")
 	}
 	return nil
 }
@@ -433,6 +437,9 @@ func (s *service) stageURL(cfg videoConfig) string {
 	}
 	if cfg.Surroundings {
 		q.Set("surroundings", "true")
+	}
+	if cfg.Theme != "" {
+		q.Set("theme", cfg.Theme)
 	}
 	return s.backend + "/video-stage.html?" + q.Encode()
 }

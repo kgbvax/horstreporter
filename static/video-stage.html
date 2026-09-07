@@ -86,8 +86,9 @@
         }
     </style>
 </head>
-<!-- Fixed DARK render surface: a clip must not depend on the capturing
-     profile's localStorage theme — pinned in markup AND in video-stage.js. -->
+<!-- Render surface: dark is the default when ?theme= is absent; the driver
+     passes the operator's current light/dark choice via ?theme=light|dark
+     (enforced in video-stage.js, which overrides this attribute). -->
 <body data-theme="dark">
     <div class="video-stage">
         <div class="video-stage-map">
