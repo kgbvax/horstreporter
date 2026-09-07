@@ -1,25 +1,15 @@
-// videoexport.js — config panel + job client for clip export (horstvideo).
-// The heavy lifting happens server-side: this panel only POSTs a config to
-// /api/video/render (proxied to the horstvideo sidecar), polls job status and
-// hands the user the finished MP4. The captured video is rendered from the
-// dedicated /video-stage.html surface — map zoom/center, band filters and
-// surroundings are snapshotted from the current UI at submit time, and the
-// export never includes this panel.
+// videoexport.js — export the time-travel content as a video clip.
+// The controls live INSIDE the time-travel bar (#timetravel-bar): the clip's
+// start/stop IS the shared loop range (From/To inputs + draggable markers in
+// timetravel.js) — there are no separate time inputs here by design. This
+// module only adds step/fps/size choices, POSTs /api/video/render (proxied
+// to the horstvideo sidecar), polls job status and hands over the MP4.
+// The video itself is rendered from the clean /video-stage.html surface.
 import { state } from './state.js';
 import { map } from './map.js';
-import { getLoopRange, applyExternalRange } from './timetravel.js';
+import { getLoopRange } from './timetravel.js';
 
 const pad = (n) => String(n).padStart(2, '0');
-
-function toLocalInputValue(unix) {
-    const d = new Date(unix * 1000);
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function fromLocalInputValue(value) {
-    const t = Math.floor(new Date(value).getTime() / 1000);
-    return Number.isFinite(t) ? t : 0;
-}
 
 let pollTimer = null;
 // One active job per client: prevents N rapid clicks enqueueing N renders.
@@ -28,54 +18,14 @@ let jobActive = false;
 let pollFailures = 0;
 
 export function initVideoExport() {
-    const toggle = document.getElementById('videoexport-toggle');
-    toggle?.addEventListener('click', () => {
-        const panel = document.getElementById('videoexport-panel');
-        if (!panel) return;
-        if (panel.classList.contains('is-hidden')) {
-            syncDefaults();
-            panel.classList.remove('is-hidden');
-            toggle.classList.add('is-active');
-        } else {
-            panel.classList.add('is-hidden');
-            toggle.classList.remove('is-active');
-        }
-    });
-
-    document.getElementById('videoexport-close')?.addEventListener('click', () => {
-        document.getElementById('videoexport-panel')?.classList.add('is-hidden');
-        toggle?.classList.remove('is-active');
-    });
-
-    // From/To here edit the SHARED loop range (timetravel.js) — the same
-    // mechanism the time-travel From/To inputs and draggable markers use.
-    const rangeChanged = () => {
-        applyExternalRange(
-            fromLocalInputValue(document.getElementById('videoexport-from')?.value || ''),
-            fromLocalInputValue(document.getElementById('videoexport-to')?.value || ''),
-        );
-    };
-    document.getElementById('videoexport-from')?.addEventListener('change', rangeChanged);
-    document.getElementById('videoexport-to')?.addEventListener('change', rangeChanged);
-    // Marker drags / time-travel edits re-sync our inputs; refresh the estimate.
-    document.addEventListener('timetravel:range', updateEstimate);
-
     document.getElementById('videoexport-submit')?.addEventListener('click', submitJob);
-}
-
-// Defaults re-sync every time the panel opens: the shared loop range.
-function syncDefaults() {
-    const { start, end } = getLoopRange();
-    const from = document.getElementById('videoexport-from');
-    const to = document.getElementById('videoexport-to');
-    if (to) to.value = toLocalInputValue(end);
-    if (from) from.value = toLocalInputValue(start);
-    updateEstimate();
+    // The loop range changes via the bar's From/To inputs or marker drags —
+    // refresh the frame/clip estimate whenever that happens.
+    document.addEventListener('timetravel:range', updateEstimate);
 }
 
 function updateEstimate() {
-    const start = fromLocalInputValue(document.getElementById('videoexport-from')?.value || '');
-    const end = fromLocalInputValue(document.getElementById('videoexport-to')?.value || '');
+    const { start, end } = getLoopRange();
     const step = parseInt(document.getElementById('videoexport-step')?.value || '120', 10);
     const fps = parseInt(document.getElementById('videoexport-fps')?.value || '10', 10);
     const el = document.getElementById('videoexport-estimate');
@@ -89,7 +39,7 @@ function updateEstimate() {
 }
 
 document.addEventListener('change', (e) => {
-    if (e.target.closest?.('#videoexport-panel')) updateEstimate();
+    if (e.target.closest?.('#videoexport-controls')) updateEstimate();
 });
 
 function setJobActive(active) {

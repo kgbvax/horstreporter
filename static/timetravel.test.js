@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { state } from './state.js';
-import { getLoopRange, applyExternalRange, snapRangeMarker } from './timetravel.js';
+import { getLoopRange, snapRangeMarker } from './timetravel.js';
 
 // The shared loop range (rt.rangeStart/rangeEnd) backs the time-travel
 // markers + From/To AND the video export panel — test it while replay is
@@ -43,52 +43,35 @@ describe('getLoopRange', () => {
     });
 });
 
-describe('applyExternalRange (replay inactive)', () => {
-    // Same 30-min snap grid as the time-travel markers — the range must not
-    // visibly jump when switching between the export panel and time travel.
-    it('snaps to the shared 30-min bucket grid', () => {
-        const end = bucketEnd();
-        // Odd minutes: off the grid; must land on 1800s boundaries.
-        applyExternalRange(end - 3600 + 61, end - 1800 + 37);
-        const r = getLoopRange();
-        expect(r.start % 1800).toBe(0);
-        expect(r.end % 1800).toBe(0);
-        expect(Math.abs(r.start - (end - 3600))).toBeLessThanOrEqual(1800);
-        expect(Math.abs(r.end - (end - 1800))).toBeLessThanOrEqual(1800);
+// The export controls no longer have own From/To inputs — the clip range IS
+// the loop range — so the invariant that matters: a range picked outside an
+// active replay session survives entering/leaving time travel intact.
+describe('loop range across replay enter/exit', () => {
+    beforeEach(() => {
+        vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ spots: [], buckets: [] }) })));
+        state.liveSpots = [];
     });
 
-    it('enforces the shared min span of two buckets (1h)', () => {
-        const end = bucketEnd();
-        applyExternalRange(end - 1800, end); // only 30 min apart
-        const r = getLoopRange();
-        expect(r.end - r.start).toBeGreaterThanOrEqual(2 * 1800);
+    it('enterTimeTravel keeps a valid existing range (the video export case)', async () => {
+        const tt = state.timeTravel;
+        tt.rangeStart = bucketEnd() - 7200;
+        tt.rangeEnd = bucketEnd() - 3600;
+        const { enterTimeTravel, exitTimeTravel } = await import('./timetravel.js');
+        await enterTimeTravel();
+        expect(tt.rangeStart).toBe(bucketEnd() - 7200);
+        expect(tt.rangeEnd).toBe(bucketEnd() - 3600);
+        exitTimeTravel();
     });
 
-    it('clamps to the rolling 48h extent', () => {
-        const end = bucketEnd();
-        applyExternalRange(end - 100 * 3600, end);
-        const r = getLoopRange();
-        expect(r.start).toBeGreaterThanOrEqual(end - 2 * DAY);
-    });
-
-    it('rejects non-finite input by keeping the current side', () => {
-        const before = getLoopRange();
-        applyExternalRange(0, NaN);
-        expect(getLoopRange()).toEqual(before);
-    });
-
-    it('updates the export From/To inputs via syncRangeInputs', () => {
-        const from = document.createElement('input');
-        from.id = 'videoexport-from';
-        const to = document.createElement('input');
-        to.id = 'videoexport-to';
-        document.body.append(from, to);
-        const end = bucketEnd();
-        applyExternalRange(end - 7200, end - 3600);
-        expect(from.value).toBeTruthy();
-        expect(to.value).toBeTruthy();
-        expect(new Date(from.value).getTime() / 1000).toBe(getLoopRange().start);
-        expect(new Date(to.value).getTime() / 1000).toBe(getLoopRange().end);
+    it('enterTimeTravel falls back to the default window for an out-of-extent range', async () => {
+        const tt = state.timeTravel;
+        tt.rangeStart = bucketEnd() - 100 * 3600; // beyond the 48h extent
+        tt.rangeEnd = bucketEnd() - 99 * 3600;
+        const { enterTimeTravel, exitTimeTravel } = await import('./timetravel.js');
+        await enterTimeTravel();
+        expect(tt.rangeEnd).toBe(bucketEnd());
+        expect(tt.rangeStart).toBe(Math.max(tt.start, bucketEnd() - 12 * 3600));
+        exitTimeTravel();
     });
 });
 

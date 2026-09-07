@@ -1519,12 +1519,14 @@ body[data-theme="dark"] .band-pill .band-nodata-tag {
 .timetravel-bar.is-hidden {
     display: none;
 }
-/* Video export panel: same overlay shell as the timeline, stacked above it
-   so both can be open at once. */
-.videoexport-bar {
-    bottom: 96px;
+/* Video export: folded INTO the time-travel bar as a second row — the clip's
+   start/stop is the loop range above, so it needs no own time inputs. */
+.videoexport-controls {
+    border-top: 1px solid var(--border-color);
+    margin-top: 8px;
+    padding-top: 8px;
 }
-.videoexport-bar a.timetravel-btn {
+.videoexport-controls a.timetravel-btn {
     text-decoration: none;
 }
 .timetravel-header {

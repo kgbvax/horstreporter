@@ -287,7 +287,6 @@
             <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show Band Stats">Stats</button>
             <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show Propagation Intelligence Matrix">Prop</button>
             <button id="timetravel-toggle" type="button" class="panel-toggle is-translucent" title="Replay the last 24-48h of spots">Time Travel</button>
-            <button id="videoexport-toggle" type="button" class="panel-toggle is-translucent" title="Export the timeline as a video clip">Video</button>
             <button id="drill-down-clear" type="button" class="panel-toggle is-translucent" title="Clear grid-square filter" style="display: none;"></button>
         </div>
         <canvas id="azimuth-canvas" class="position-absolute top-0 start-0 w-100 h-100"></canvas>
@@ -396,25 +395,11 @@
                 </label>
                 <button id="timetravel-apply" type="button" class="timetravel-btn" title="Apply the selected range">Apply</button>
             </div>
-        </div>
-        <!-- Video export: config for the horstvideo sidecar renderer. The
-             video itself is produced from the clean /video-stage surface;
-             this panel never appears in the exported clip. -->
-        <div id="videoexport-panel" class="timetravel-bar videoexport-bar is-hidden" role="region" aria-label="Video export">
-            <div class="timetravel-header">
-                <span class="timetravel-title">Export Video</span>
-                <span id="videoexport-estimate" class="timetravel-label"></span>
-                <button id="videoexport-close" type="button" class="timetravel-btn" title="Close">&times;</button>
-            </div>
-            <div class="timetravel-controls">
-                <label class="timetravel-range">
-                    <span>From</span>
-                    <input id="videoexport-from" type="datetime-local" step="1800" aria-label="Video start time">
-                </label>
-                <label class="timetravel-range">
-                    <span>To</span>
-                    <input id="videoexport-to" type="datetime-local" step="1800" aria-label="Video end time">
-                </label>
+            <!-- Export the time-travel content as a video clip: the loop
+                 range above IS the clip's start/stop — there are no separate
+                 time inputs here by design (static/videoexport.js). -->
+            <div id="videoexport-controls" class="timetravel-controls videoexport-controls">
+                <span class="timetravel-title">Video</span>
                 <label class="timetravel-speed">
                     <select id="videoexport-step" aria-label="Time per frame">
                         <option value="60">1 min</option>
@@ -441,9 +426,8 @@
                     <input id="videoexport-use-view" type="checkbox" checked>
                     <span>current map view</span>
                 </label>
-                <button id="videoexport-submit" type="button" class="timetravel-btn" title="Start the render job">Render</button>
-            </div>
-            <div class="timetravel-header">
+                <span id="videoexport-estimate" class="timetravel-label"></span>
+                <button id="videoexport-submit" type="button" class="timetravel-btn" title="Start the render job">Export</button>
                 <span id="videoexport-status" class="timetravel-label small"></span>
                 <a id="videoexport-download" class="timetravel-btn" href="#" hidden download>Download MP4</a>
             </div>

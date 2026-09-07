@@ -41,10 +41,11 @@ export function isReplayActive() {
     return rt.active;
 }
 
-// The loop range is shared state: the time-travel markers, the time-travel
-// From/To inputs and the VIDEO EXPORT panel all view/edit the same
-// rt.rangeStart/rangeEnd (videoexport.js). It survives exitTimeTravel, so a
-// range picked for replay carries into the export dialog and vice versa.
+// The loop range is the shared clip/replay range: edited via this bar's
+// From/To inputs and draggable markers, and READ by the video export controls
+// that live in the same bar (videoexport.js getLoopRange) — the clip's
+// start/stop is exactly what the markers show. It survives exitTimeTravel,
+// so a picked range carries into the next replay/export session.
 // ensureRange() makes the range usable while replay is inactive.
 function ensureRange() {
     if (rt.rangeStart && rt.rangeEnd) return;
@@ -61,38 +62,6 @@ function ensureRange() {
 export function getLoopRange() {
     ensureRange();
     return { start: rt.rangeStart, end: rt.rangeEnd };
-}
-
-// Set the shared loop range from the video export panel. IDENTICAL rules to
-// the time-travel From/To (applyRange) — same 30-min snap grid, same min
-// span, same 48h extent — so the range never visibly jumps when the operator
-// switches between the export panel and time travel. Usable while inactive;
-// extent then stands in as the rolling 48h window enterTimeTravel shows.
-export function applyExternalRange(fromUnix, toUnix) {
-    ensureRange();
-    const gran = rt.active ? rt.bucketSeconds : BUCKET_SECONDS;
-    let extentStart = rt.start;
-    let extentEnd = rt.end;
-    if (!rt.active) {
-        // Stand-in extent: the same rolling 48h window enterTimeTravel shows.
-        extentEnd = floorToBucketEnd(Math.floor(Date.now() / 1000));
-        [extentStart] = clampToSpan(extentEnd - 2 * DAY_SECONDS, extentEnd);
-    }
-    let rs = Number.isFinite(fromUnix) && fromUnix ? fromUnix : rt.rangeStart;
-    let re = Number.isFinite(toUnix) && toUnix ? toUnix : rt.rangeEnd;
-    rs = snapRangeMarker('start', rs, rt.rangeStart, rt.rangeEnd, extentStart, extentEnd, gran);
-    rt.rangeStart = rs;
-    re = snapRangeMarker('end', re, rt.rangeStart, rt.rangeEnd, extentStart, extentEnd, gran);
-    rt.rangeEnd = re;
-    rt.rangeStart = Math.min(rs, re - 2 * gran); // keep min span after end moved
-    if (rt.active) {
-        pause();
-        positionMarkers();
-        if (rt.currentBucketEnd < rt.rangeStart || rt.currentBucketEnd > rt.rangeEnd) {
-            loadBucket(Math.min(Math.max(rt.currentBucketEnd, rt.rangeStart), rt.rangeEnd));
-        }
-    }
-    syncRangeInputs();
 }
 
 // Simulated clock for time-aware overlays: during replay the grayline
@@ -405,19 +374,13 @@ function stepBucket(delta) {
 // --- range pickers -----------------------------------------------------------
 
 // From/To mirror the draggable loop range (the markers), not the data extent —
-// the timeline extent stays the fixed 48h window. The export panel's From/To
-// are synced too: same shared range, so marker drags update them live.
-// (Programmatic .value writes fire no change event, so no feedback loop.)
+// the timeline extent stays the fixed 48h window. The event notifies the
+// video export controls (same bar) so their clip estimate follows the range.
 function syncRangeInputs() {
     const from = document.getElementById('timetravel-from');
     const to = document.getElementById('timetravel-to');
     if (from) from.value = toLocalInputValue(rt.rangeStart || rt.start);
     if (to) to.value = toLocalInputValue(rt.rangeEnd || rt.end);
-    const vfrom = document.getElementById('videoexport-from');
-    const vto = document.getElementById('videoexport-to');
-    if (vfrom) vfrom.value = toLocalInputValue(rt.rangeStart || rt.start);
-    if (vto) vto.value = toLocalInputValue(rt.rangeEnd || rt.end);
-    // Lets videoexport.js refresh its frame/clip estimate on range changes.
     document.dispatchEvent(new Event('timetravel:range'));
 }
 
