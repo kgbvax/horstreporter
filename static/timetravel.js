@@ -111,14 +111,16 @@ export async function enterTimeTravel() {
     if (rt.active) return;
     const now = Math.floor(Date.now() / 1000);
     const end = floorToBucketEnd(now);
-    const [start] = clampToSpan(end - DAY_SECONDS, end);
+    // Full 48h timeline; the loop range defaults to the most recent 12h.
+    const [start] = clampToSpan(end - 2 * DAY_SECONDS, end);
+    const rangeStart = Math.max(start, end - 12 * 3600);
 
     rt.active = true;
     rt.liveSpotsBackup = state.liveSpots;
     state.liveSpots = []; // replay array: swapped in, mutated in place per bucket
     rt.start = start;
     rt.end = end;
-    rt.rangeStart = start;
+    rt.rangeStart = rangeStart;
     rt.rangeEnd = end;
     rt.bucketSeconds = BUCKET_SECONDS;
     rt.currentBucketEnd = end;
@@ -467,14 +469,24 @@ function positionMarkers() {
     const span = markerExtent();
     const startEl = document.getElementById('timetravel-marker-start');
     const endEl = document.getElementById('timetravel-marker-end');
-    const shadeL = document.getElementById('timetravel-shade-start');
-    const shadeR = document.getElementById('timetravel-shade-end');
-    if (startEl) startEl.style.left = pct(rt.rangeStart || rt.start, span);
-    if (endEl) endEl.style.left = pct(rt.rangeEnd || rt.end, span);
-    if (shadeL) shadeL.style.width = pct(rt.rangeStart || rt.start, span);
-    if (shadeR) {
-        shadeR.style.left = pct(rt.rangeEnd || rt.end, span);
-        shadeR.style.width = `${100 - ((rt.rangeEnd || rt.end) - span[0]) / Math.max(1, span[1] - span[0]) * 100}%`;
+    const startLbl = document.getElementById('timetravel-marker-start-time');
+    const endLbl = document.getElementById('timetravel-marker-end-time');
+    const highlight = document.getElementById('timetravel-range-highlight');
+    const rs = rt.rangeStart || rt.start;
+    const re = rt.rangeEnd || rt.end;
+    if (startEl) startEl.style.left = pct(rs, span);
+    if (endEl) endEl.style.left = pct(re, span);
+    if (startLbl) startLbl.textContent = timeFmt.format(new Date(rs * 1000));
+    if (endLbl) {
+        endLbl.textContent = timeFmt.format(new Date(re * 1000));
+        // Flip the label left of the marker when it would overflow the track.
+        const flip = ((re - span[0]) / Math.max(1, span[1] - span[0])) > 0.92;
+        endLbl.style.left = flip ? 'auto' : 'calc(100% + 5px)';
+        endLbl.style.right = flip ? 'calc(100% + 5px)' : 'auto';
+    }
+    if (highlight) {
+        highlight.style.left = pct(rs, span);
+        highlight.style.width = `${((re - rs) / Math.max(1, span[1] - span[0])) * 100}%`;
     }
 }
 

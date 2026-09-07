@@ -1566,29 +1566,44 @@ body[data-theme="dark"] .band-pill .band-nodata-tag {
 .timetravel-track {
     position: relative;
 }
-.timetravel-shade {
+.timetravel-range-highlight {
     position: absolute;
     top: 0;
     height: 36px;
-    background: color-mix(in srgb, var(--bg-color) 55%, transparent);
+    background: color-mix(in srgb, var(--accent-strong, var(--accent)) 14%, transparent);
+    border-left: 1px solid color-mix(in srgb, var(--accent-strong, var(--accent)) 55%, transparent);
+    border-right: 1px solid color-mix(in srgb, var(--accent-strong, var(--accent)) 55%, transparent);
     pointer-events: none;
     z-index: 1;
 }
 .timetravel-marker {
     position: absolute;
-    top: -4px;
-    width: 10px;
-    height: 46px;
-    margin-left: -5px;
-    background: color-mix(in srgb, var(--accent-strong, var(--accent)) 80%, transparent);
+    top: 0;
+    width: 5px;
+    height: 36px;
+    margin-left: -2px;
+    background: color-mix(in srgb, var(--accent-strong, var(--accent)) 85%, transparent);
     border: 1px solid var(--accent-strong, var(--accent));
-    border-radius: 3px;
+    border-radius: 2px;
     cursor: ew-resize;
     touch-action: none;
     z-index: 2;
 }
 .timetravel-marker:hover {
     background: var(--accent-strong, var(--accent));
+}
+.timetravel-marker-time {
+    position: absolute;
+    left: calc(100% + 5px);
+    top: -3px;
+    font-size: 0.7rem;
+    white-space: nowrap;
+    color: var(--text-color);
+    opacity: 0.85;
+    pointer-events: none;
+}
+#timetravel-marker-end .timetravel-marker-time {
+    color: var(--accent-strong, var(--accent));
 }
 .timetravel-controls {
     display: flex;

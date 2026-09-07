@@ -367,12 +367,11 @@
                 <button id="timetravel-close" type="button" class="timetravel-btn" title="Exit time travel">&times;</button>
             </div>
             <div id="timetravel-track" class="timetravel-track">
-                <div id="timetravel-shade-start" class="timetravel-shade" aria-hidden="true"></div>
-                <div id="timetravel-shade-end" class="timetravel-shade" aria-hidden="true"></div>
+                <div id="timetravel-range-highlight" class="timetravel-range-highlight" aria-hidden="true"></div>
                 <div id="timetravel-histogram" class="timetravel-histogram" aria-hidden="true"></div>
                 <input id="timetravel-scrubber" class="timetravel-scrubber" type="range" min="0" max="0" step="1800" aria-label="Replay time">
-                <div id="timetravel-marker-start" class="timetravel-marker" title="Loop start — drag to set where playback wraps to"></div>
-                <div id="timetravel-marker-end" class="timetravel-marker" title="Loop end — drag to set where playback wraps around"></div>
+                <div id="timetravel-marker-start" class="timetravel-marker" title="Loop start — drag to set where playback wraps to"><span id="timetravel-marker-start-time" class="timetravel-marker-time"></span></div>
+                <div id="timetravel-marker-end" class="timetravel-marker" title="Loop end — drag to set where playback wraps around"><span id="timetravel-marker-end-time" class="timetravel-marker-time"></span></div>
             </div>
             <div class="timetravel-controls">
                 <button id="timetravel-prev" type="button" class="timetravel-btn" title="Previous 30 min">&lsaquo;</button>
