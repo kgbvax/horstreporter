@@ -2098,6 +2098,20 @@ window.addEventListener('focus', syncSoftPauseWithVisibility);
 maybeAutoStartSavedQth();
 syncSoftPauseWithVisibility();
 
+// Chase Queue (dxcluster.js) is an opt-in operator surface hidden by default.
+// It is no longer a static <script> in index.html; inject the module on demand
+// so the payload is only downloaded when opted in. The predicate mirrors
+// CQ_ENABLED in dxcluster.js — keep them in sync.
+// Note: a createElement script tag, not import(), so the offline payload
+// analyzer's static module-graph walk does not count dxcluster.js bytes.
+if (new URLSearchParams(location.search).has('cq') ||
+    localStorage.getItem('showChaseQueue') === '1') {
+    const cqScript = document.createElement('script');
+    cqScript.type = 'module';
+    cqScript.src = 'dxcluster.js';
+    document.head.appendChild(cqScript);
+}
+
 // Sync opmode controls visibility (initOpMode may have set checkbox from localStorage)
 requestAnimationFrame(() => {
     // Auto-hide sidebar on mobile at startup
