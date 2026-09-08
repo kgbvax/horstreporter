@@ -1,9 +1,8 @@
 export let map;
-export let currentTileLayer = null;
-export let currentGeoJsonLayer = null;
-export let currentCountryLayer = null;
-export let currentGraylineLayer = null;
-export let currentDxccLabelLayer = null;
+let currentTileLayer = null;
+let currentCountryLayer = null;
+let currentGraylineLayer = null;
+let currentDxccLabelLayer = null;
 
 import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, hexToRgb, blendOverlayColors, icon } from './utils.js';
 import { selectProminentDxccLabels } from './azimuth-runtime.js';
@@ -581,11 +580,6 @@ export function setTheme(theme) {
     if (currentTileLayer && map) {
         map.removeLayer(currentTileLayer);
         currentTileLayer = null;
-    }
-
-    if (currentGeoJsonLayer && map) {
-        map.removeLayer(currentGeoJsonLayer);
-        currentGeoJsonLayer = null;
     }
 
     if (currentCountryLayer && map) {

@@ -91,7 +91,7 @@ function latLngToVector(lat, lng) {
     ];
 }
 
-export function getCountryFeatureKey(feature) {
+function getCountryFeatureKey(feature) {
     const p = feature?.properties || {};
     return p.ADM0_A3 || p.ISO_A2 || p.SOV_A3 || p.BRK_A3 || p.NAME || p.ADMIN || 'UNKNOWN';
 }
@@ -510,7 +510,7 @@ export function getMercatorDxccLabelsEnabled() {
 
 // locatorToLatLngJS converts a Maidenhead locator to (lat, lng).
 // Mirrors Go's spot.go:locatorToLatLng. Returns null for invalid locators.
-export function locatorToLatLngJS(locator) {
+function locatorToLatLngJS(locator) {
     if (!locator || typeof locator !== 'string') return null;
     locator = locator.toUpperCase().trim();
     if (locator.length < 2) return null;

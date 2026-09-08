@@ -624,55 +624,6 @@ async function updateDk3jfMode(enabled) {
     scheduleRender();
 }
 
-async function fetchSnapshotFrame(config, snapshotAt) {
-    if (!config?.enabled) return { spots: [] };
-
-    const params = new URLSearchParams();
-    params.set('qth', config.qth);
-    params.set('minutes', String(config.minutes));
-    params.set('surroundings', config.surroundings ? 'true' : 'false');
-    params.set('min_snr_mode', config.minSnrMode);
-    params.set('ssb_min_db', String(config.ssbMinDb));
-    params.set('cw_min_db', String(config.cwMinDb));
-    params.set('selected_band', config.selectedBand);
-    if (config.enabledBandsCsv) params.set('enabled_bands', config.enabledBandsCsv);
-    params.set('include_dxcluster', config.includeDxcluster ? 'true' : 'false');
-    if (Number.isFinite(snapshotAt)) {
-        params.set('snapshot_at', String(snapshotAt));
-    }
-
-    const response = await fetch(`/api/capture_snapshot?${params.toString()}`);
-    if (!response.ok) {
-        const msg = await response.text();
-        throw new Error(`snapshot request failed (${response.status}): ${msg}`);
-    }
-
-    return response.json();
-}
-
-async function loadSnapshotFrame(config, snapshotAt, readyKey = 'capture') {
-    const payload = await fetchSnapshotFrame(config, snapshotAt);
-    state.liveSpots = Array.isArray(payload?.spots) ? payload.spots : [];
-
-    scheduleRender();
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-
-    const stamp = payload?.snapshot_at ?? snapshotAt ?? null;
-    const statusEl = document.getElementById('stream-status');
-    const spotCountLabel = formatNumber(state.liveSpots.length);
-    if (statusEl) {
-        statusEl.innerHTML = `Status: Capture Snapshot ready (Spots: ${spotCountLabel})`;
-    }
-    window.__horstCaptureReady = {
-        ready: true,
-        count: state.liveSpots.length,
-        snapshotAt: stamp,
-        generatedAt: payload?.generated_at ?? null
-    };
-
-    return payload;
-}
-
 // --- Init Configuration & Map ---
 const { initialCenter, initialZoom } = loadConfig();
 const savedTheme = localStorage.getItem('theme') || 'light';
@@ -1779,8 +1730,6 @@ function startLiveStream(preserveData = false) {
     localStorage.setItem('qth', qth);
     localStorage.setItem('minutes', minutes);
 
-    console.log(`Starting live stream for qth: '${qth}'${preserveData ? ' (preserving data)' : ''}`);
-
     if (state.eventSource) state.eventSource.close();
     if (state.renderInterval) clearInterval(state.renderInterval);
 
@@ -1912,7 +1861,6 @@ function startLiveStream(preserveData = false) {
     let historyLoading = true;
 
     state.eventSource.onopen = () => {
-        console.log(`Connected to live MQTT stream${preserveData ? ' (preserving data)' : ''}`);
         // On auto-reconnect EventSource re-sends a history dump before live
         // frames. Reset the loading flag so that dump is also suppressed from
         // rendering (and the 5s prune is gated) until history_end fires —

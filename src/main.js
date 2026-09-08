@@ -105,5 +105,3 @@ const projHost = document.getElementById('projection-group');
 if (projHost) new Projection({ target: projHost });
 
 window.__horstUiStore = uiStore;
-
-export { app, uiStore };

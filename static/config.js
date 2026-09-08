@@ -16,14 +16,6 @@ function inputById(id) {
     return asInput(document.getElementById(id));
 }
 
-/**
- * @param {string} selector
- * @returns {HTMLInputElement | null}
- */
-function inputByQuery(selector) {
-    return asInput(document.querySelector(selector));
-}
-
 export function loadConfig() {
     /** @type {[number, number]} */
     let initialCenter = [20, 0];
