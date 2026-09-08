@@ -505,6 +505,16 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			sql:  `DROP TABLE IF EXISTS proplab_dest_buckets;`,
 		},
 		{
+			// Dormant since the Propagation Lab removal: documented dormant in
+			// docs/api.md, zero writers/readers in this codebase.
+			name: "drop dormant legacy table proplab_drap_snapshots",
+			sql:  `DROP TABLE IF EXISTS proplab_drap_snapshots;`,
+		},
+		{
+			name: "drop dormant legacy table proplab_events",
+			sql:  `DROP TABLE IF EXISTS proplab_events;`,
+		},
+		{
 			// 1.4GB on prod with 2 lifetime scans; nothing queries (band,
 			// spot_time) — the spot_time and (source_type, spot_time) indexes
 			// cover the real access paths.
@@ -669,13 +679,6 @@ func (s *dxPostgresStore) ensureDxPulseRegionBaseline(ctx context.Context) error
 		return err
 	}
 
-	if _, err := s.pool.Exec(ctx, `
-		INSERT INTO dx_meta (k,v) VALUES ('dxpulse_region_baseline_built_at',$1)
-		ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v
-	`, fmt.Sprintf("%d", time.Now().Unix())); err != nil {
-		return err
-	}
-
 	logInfo("DXPulse region baseline backfill finished (%d raw spots processed)", processed)
 	return nil
 }
@@ -686,9 +689,7 @@ func (s *dxPostgresStore) ensureDxPulseRegionBaseline(ctx context.Context) error
 // otherwise it scans dx_raw_spots in ascending spot_time order, recomputes
 // the (cluster_anchor, band, slot_of_day, distance_tier, snr_tier) bucket key
 // for each spot (deriving the cluster anchor, slot, dist tier, snr tier from
-// the locators and signal_report_db), and batches upserts. Guards against
-// re-running via a
-// dx_meta key so a restart after a partial backfill doesn't redo the scan.
+// the locators and signal_report_db), and batches upserts.
 func (s *dxPostgresStore) ensureDxBaselineCluster(ctx context.Context) error {
 	var baselineExists bool
 	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM dx_baseline_cluster LIMIT 1)`).Scan(&baselineExists); err != nil {
@@ -790,13 +791,6 @@ func (s *dxPostgresStore) ensureDxBaselineCluster(ctx context.Context) error {
 		return err
 	}
 	if err := flush(); err != nil {
-		return err
-	}
-
-	if _, err := s.pool.Exec(ctx, `
-		INSERT INTO dx_meta (k,v) VALUES ('dx_baseline_cluster_built_at',$1)
-		ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v
-	`, fmt.Sprintf("%d", time.Now().Unix())); err != nil {
 		return err
 	}
 

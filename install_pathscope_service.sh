@@ -22,7 +22,6 @@ APP_USER="hk"
 APP_GROUP="hk"
 INSTALL_DIR="/opt/horstreporter"
 BINARY_NAME="pathscope-linux-x64"
-SCHEMA_FILE="schema/pathscope.sql"
 
 # 1. Service user (idempotent: skip if present)
 if ! id "$APP_USER" &>/dev/null; then
@@ -84,50 +83,7 @@ EOF
     echo "*** Edit $SECRETS_FILE and set DX_POSTGRES_DSN before starting. ***"
 fi
 
-# 5. SQL schema (idempotent CREATE TABLE IF NOT EXISTS). We resolve the
-#    schema path against the script's own directory so the installer works
-#    no matter what the caller's CWD is (the typical case: the deploy
-#    script scp's files into /tmp/ on the host and runs the installer from
-#    there, where a relative `schema/pathscope.sql` silently doesn't
-#    resolve). We also try a few likely locations before giving up.
-SCHEMA_SOURCE=""
-for candidate in \
-    "$SCHEMA_FILE" \
-    "$(dirname "$(readlink -f "$0")")/schema/pathscope.sql" \
-    "$INSTALL_DIR/schema/pathscope.sql"; do
-    if [ -f "$candidate" ]; then
-        SCHEMA_SOURCE="$candidate"
-        break
-    fi
-done
-SCHEMA_TARGET="$INSTALL_DIR/schema/pathscope.sql"
-if [ -n "$SCHEMA_SOURCE" ]; then
-    mkdir -p "$INSTALL_DIR/schema"
-    cp "$SCHEMA_SOURCE" "$SCHEMA_TARGET"
-    chmod 0644 "$SCHEMA_TARGET"
-    chown "$APP_USER:$APP_GROUP" "$SCHEMA_TARGET"
-    if grep -q '^DX_POSTGRES_DSN=' "$SECRETS_FILE" 2>/dev/null; then
-        DSN_VAL=$(grep '^DX_POSTGRES_DSN=' "$SECRETS_FILE" | head -1 | cut -d= -f2-)
-        if [ "$DSN_VAL" != "postgres://dxuser:CHANGE_ME@localhost:5432/dxdata?sslmode=disable" ]; then
-            echo "Applying $SCHEMA_FILE to the database..."
-            if command -v psql >/dev/null 2>&1; then
-                sudo -u "$APP_USER" -E psql "$DSN_VAL" -f "$SCHEMA_TARGET" || \
-                    echo "Warning: schema apply failed; run manually: psql \"\$DX_POSTGRES_DSN\" -f $SCHEMA_TARGET"
-            else
-                echo "psql not found on this host. Apply $SCHEMA_TARGET manually:"
-                echo "    psql \"\$DX_POSTGRES_DSN\" -f $SCHEMA_TARGET"
-            fi
-        else
-            echo "DX_POSTGRES_DSN is the install default; skipping schema apply."
-        fi
-    fi
-else
-    echo "Note: schema/pathscope.sql not found in $(pwd),"
-    echo "      next to the installer, or under $INSTALL_DIR/schema/; skipping schema staging."
-    echo "      Apply schema/pathscope.sql manually once the binary is running."
-fi
-
-# 6. systemd unit. Renders on every run so the deployed copy tracks the
+# 5. systemd unit. Renders on every run so the deployed copy tracks the
 #    one shipped at cmd/pathscope/pathscope.service.
 SERVICE_FILE="/etc/systemd/system/$APP_NAME.service"
 SERVICE_SOURCE="cmd/pathscope/$APP_NAME.service"

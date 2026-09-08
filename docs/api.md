@@ -415,8 +415,9 @@ plumbing their sibling consumer needs:
   feed's tables.
 - `proplab_sw_series` is still written by `-proplab-sw-enable` — also
   read by pathscope (kp / F10.7 / x-ray / OVATION series).
-- The now-dormant tables (`proplab_dest_buckets`, `proplab_drap_snapshots`,
-  `proplab_events`) are no longer written nor pruned by the service.
+- The dormant tables (`proplab_dest_buckets`, `proplab_drap_snapshots`,
+  `proplab_events`) are dropped by the startup migration; deployments that
+  predate the drop can remove them manually.
 
 ## Reverse proxies
 

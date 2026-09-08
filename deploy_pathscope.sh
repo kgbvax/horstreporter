@@ -23,8 +23,8 @@ fi
 echo "Building $BINARY_NAME..."
 ./build_pathscope_linux_x64.sh
 
-echo "Uploading $BINARY_NAME, service file, schema, and installer to ${USER}@${HOST}..."
-scp "$BINARY_NAME"     "cmd/pathscope/pathscope.service"     "install_pathscope_service.sh"     "schema/pathscope.sql"     "${USER}@${HOST}:/tmp/"
+echo "Uploading $BINARY_NAME, service file, and installer to ${USER}@${HOST}..."
+scp "$BINARY_NAME"     "cmd/pathscope/pathscope.service"     "install_pathscope_service.sh"     "${USER}@${HOST}:/tmp/"
 
 echo "Running installer on ${HOST}..."
 ssh "${USER}@${HOST}" 'cd /tmp && sudo ./install_pathscope_service.sh && sudo systemctl status pathscope --no-pager'

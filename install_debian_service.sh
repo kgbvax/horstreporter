@@ -101,7 +101,7 @@ cat <<'EOF' > "$CRON_FILE"
 # Nightly catch-up vacuum/analyze for HorstReporter hot tables.
 # Runs as postgres; low-traffic time (03:43 UTC).  Uses plain VACUUM ANALYZE
 # (not VACUUM FULL) so it does not block concurrent ingest/queries.
-43 3 * * * postgres /usr/bin/psql -d dxdata -c "VACUUM (ANALYZE) dx_baseline_target, dx_raw_spots, dx_region_baseline_daily, proplab_cell_buckets, dx_baseline_global, proplab_sw_series;"
+43 3 * * * postgres /usr/bin/psql -d dxdata -c "VACUUM (ANALYZE) dx_raw_spots, dx_region_baseline_daily, proplab_cell_buckets, dx_baseline_global, proplab_sw_series;"
 EOF
 chmod 0644 "$CRON_FILE"
 
