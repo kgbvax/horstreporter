@@ -84,25 +84,36 @@ func ingestPSKRMessage(topic string, payload []byte) {
 	if m.B == "" || m.MD == "" || m.SC == "" || m.RC == "" || m.SL == "" || m.RL == "" {
 		// Extract missing fields from the topic string (PSKReporter omits them in JSON to save bandwidth)
 		// Topic format: pskr/filter/v2/{band}/{mode}/{senderCall}/{receiverCall}/{senderLocator}/{receiverLocator}
-		topicParts := strings.Split(topic, "/")
-		if len(topicParts) >= 9 {
-			if m.B == "" && topicParts[3] != "unknown" {
-				m.B = topicParts[3]
+		// Walked by '/' without a split slice: only parts[3..8] are ever read
+		// and each part is a substring of the topic either way.
+		var parts [9]string
+		np := 0
+		start := 0
+		for i := 0; i <= len(topic) && np < 9; i++ {
+			if i == len(topic) || topic[i] == '/' {
+				parts[np] = topic[start:i]
+				np++
+				start = i + 1
 			}
-			if m.MD == "" && topicParts[4] != "unknown" {
-				m.MD = topicParts[4]
+		}
+		if np >= 9 {
+			if m.B == "" && parts[3] != "unknown" {
+				m.B = parts[3]
 			}
-			if m.SC == "" && topicParts[5] != "unknown" {
-				m.SC = strings.ReplaceAll(topicParts[5], ".", "/") // Slashes in callsigns are replaced by dots in the topic
+			if m.MD == "" && parts[4] != "unknown" {
+				m.MD = parts[4]
 			}
-			if m.RC == "" && topicParts[6] != "unknown" {
-				m.RC = strings.ReplaceAll(topicParts[6], ".", "/")
+			if m.SC == "" && parts[5] != "unknown" {
+				m.SC = strings.ReplaceAll(parts[5], ".", "/") // Slashes in callsigns are replaced by dots in the topic
 			}
-			if m.SL == "" && topicParts[7] != "unknown" {
-				m.SL = topicParts[7]
+			if m.RC == "" && parts[6] != "unknown" {
+				m.RC = strings.ReplaceAll(parts[6], ".", "/")
 			}
-			if m.RL == "" && topicParts[8] != "unknown" {
-				m.RL = topicParts[8]
+			if m.SL == "" && parts[7] != "unknown" {
+				m.SL = parts[7]
+			}
+			if m.RL == "" && parts[8] != "unknown" {
+				m.RL = parts[8]
 			}
 		}
 	}
