@@ -65,3 +65,6 @@ playwright-report/
 # Vite/vitest transient build cache (node_modules is vendored, but this dir is generated)
 node_modules/.vite/
 dx_baseline.json
+
+# ce-optimize scratch
+.context/
