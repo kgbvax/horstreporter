@@ -134,7 +134,7 @@ describe('mercator perf harness', () => {
         expect(snapshot.counters['mercator.grid.rectangles_added']).toBeGreaterThan(0);
     });
 
-    it('profiles style switching burst and tracks mutation counters', () => {
+    it('profiles style switching burst and tracks mutation counters', async () => {
         const spots = createSpots(4500);
 
         setupDom('grid-snr');
@@ -144,6 +144,11 @@ describe('mercator perf harness', () => {
                 radio.checked = radio.value === style;
             });
             updateMapVisualization(spots, 15);
+            // The active-area draw runs in an ensureTurf().then() continuation
+            // (turf is lazy-loaded); drain the macrotask so its metrics and
+            // counters land before the snapshot below. The turf global is
+            // pre-seeded above, so this is one microtask drain.
+            await new Promise((resolve) => setTimeout(resolve, 0));
         }
 
         const snapshot = getPerfSnapshot();
@@ -165,5 +170,11 @@ describe('mercator perf harness', () => {
         expect(snapshot.counters['mercator.layers.removed']).toBeGreaterThanOrEqual(1);
         expect(snapshot.counters['mercator.render.style.grid_snr']).toBeGreaterThanOrEqual(1);
         expect(snapshot.counters['mercator.render.style.active_area']).toBeGreaterThanOrEqual(1);
+        // The async continuation is part of the measured window: the drain
+        // above must have let the hull draw actually run (the stubbed turf
+        // returns no hulls, so the points land as markers instead).
+        expect(snapshot.metrics['mercator.active_area.total_ms']).toBeDefined();
+        expect(snapshot.metrics['mercator.active_area.cluster_draw_ms']).toBeDefined();
+        expect(snapshot.counters['mercator.active_area.markers_added']).toBeGreaterThan(0);
     });
 });

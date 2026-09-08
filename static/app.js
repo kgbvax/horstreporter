@@ -1,5 +1,6 @@
 import { state } from './state.js';
 import { loadConfig } from './config.js';
+import { isChaseQueueEnabled } from './cq-flag.js';
 import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineLayer, syncMercatorDxccLabelLayer, setMercatorDxHighlight, clearMercatorDxHighlight } from './map.js';
 import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, getAzimuthCenter, setAzimuthEnabled, setAzimuthDragging, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled, getAzimuthLatLngFromClientPoint, getAzimuthHiddenGridSquaresCount, setAzimuthDxSpotHighlight } from './azimuth-runtime.js';
 import { initUI, attachUITooltipEvents, initGridSnrLegend } from './ui.js';
@@ -8,7 +9,7 @@ import { initWsprMatrix, updateWsprMatrix, clearDrillDown, updateDrillDownButton
 import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { initPushUI } from './push.js';
-import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint } from './renderers.js';
+import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint, whenActiveAreaRendered } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming, icon } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
@@ -1049,6 +1050,11 @@ async function runCaptureBootstrap(config) {
     scheduleRender();
 
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    // The active-area hull draw completes asynchronously (turf is lazy-loaded);
+    // hold the capture-ready handshake until it settles so frames captured off
+    // __horstCaptureReady always contain the hulls. Resolves immediately when
+    // no active-area rebuild is pending (grid-snr or cached turf).
+    await whenActiveAreaRendered();
     if (statusEl) {
         statusEl.innerHTML = `Status: Capture snapshot ready (Spots: ${formatNumber(state.liveSpots.length)})`;
     }
@@ -2048,12 +2054,12 @@ syncSoftPauseWithVisibility();
 
 // Chase Queue (dxcluster.js) is an opt-in operator surface hidden by default.
 // It is no longer a static <script> in index.html; inject the module on demand
-// so the payload is only downloaded when opted in. The predicate mirrors
-// CQ_ENABLED in dxcluster.js — keep them in sync.
-// Note: a createElement script tag, not import(), so the offline payload
-// analyzer's static module-graph walk does not count dxcluster.js bytes.
-if (new URLSearchParams(location.search).has('cq') ||
-    localStorage.getItem('showChaseQueue') === '1') {
+// so the payload is only downloaded when opted in. The predicate lives in
+// cq-flag.js, shared with dxcluster.js's CQ_ENABLED.
+// Note: a createElement script tag, not import(). The offline payload
+// analyzer's static module-graph walk does not count these bytes in
+// wire_gzip_kb; the harness reports them separately in lazy_gzip_kb.
+if (isChaseQueueEnabled()) {
     const cqScript = document.createElement('script');
     cqScript.type = 'module';
     cqScript.src = 'dxcluster.js';

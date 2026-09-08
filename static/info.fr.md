@@ -3,7 +3,7 @@ C'est en pratique une interface alternative pour <a href="https://www.pskreporte
 
 
 ## Pour commencer
-1. Saisissez votre **Locator** (p. ex. JO32, FN31AB) dans le champ en haut. Vous pouvez aussi cliquer sur l'icône de marqueur <i class="fas fa-map-marker-alt"></i> pour détecter automatiquement votre position.
+1. Saisissez votre **Locator** (p. ex. JO32, FN31AB) dans le champ en haut. Vous pouvez aussi cliquer sur l'icône de marqueur pour détecter automatiquement votre position.
 2. Cliquez sur **Go**. HorstReporter se connecte au flux en direct et récupère les rapports FT8/FT4 récents où vous-même ou des stations de votre grille apparaissez comme émetteur ou récepteur.
 3. Regardez la carte se remplir ! Les données se mettent à jour en temps réel tant que le flux est actif.
 
@@ -14,7 +14,7 @@ C'est en pratique une interface alternative pour <a href="https://www.pskreporte
     * *Grid :* Regroupe les spots en carrés Maidenhead. La couleur indique la bande dominante, l'opacité la force du signal.
     * *Active Area :* Trace des polygones dynamiques englobant les spots regroupés pour montrer l'empreinte globale de propagation.
 
-* **Cycleur de bandes :** Cliquez sur l'icône de lecture <i class="fas fa-play"></i> sous la liste des bandes pour parcourir automatiquement les bandes actuellement ouvertes.
+* **Cycleur de bandes :** Cliquez sur l'icône de lecture sous la liste des bandes pour parcourir automatiquement les bandes actuellement ouvertes.
 * **Options :** Dépliez le panneau Options pour modifier l'âge maximal des spots, la distance de regroupement, le comportement du zoom automatique, et plus encore.
 * Si vous ne voyez pas assez de données pour votre carré, activez **Adj. Squares** qui récupère aussi les données des 8 carrés voisins.
 

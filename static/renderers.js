@@ -14,30 +14,46 @@ let lastGridFingerprint = '';
 // the active-area (hull/cluster) render path actually runs. An already-loaded
 // global (e.g. the perf-gate stub) is reused as-is instead of re-injecting.
 let turfLoadPromise = null;
-function ensureTurf() {
+// Backoff state for failed injections: without it the 2s rebuild debounce
+// would re-append the ~605KB script (and a dead <script> tag) forever while
+// the vendor file is unreachable.
+let turfFailures = 0;
+let lastTurfFailureAt = 0;
+export function ensureTurf() {
     const existing = (typeof window !== 'undefined' ? window : globalThis).turf;
     if (existing) return Promise.resolve(existing);
+    // Hoisted so ensureTurf always returns a Promise (the rejection flows into
+    // the caller's .catch instead of crashing on a null .then).
+    if (typeof document === 'undefined' || !document.createElement) {
+        return Promise.reject(new Error('turf: no DOM available to load vendor/js/turf.min.js'));
+    }
+    if (turfFailures && Date.now() - lastTurfFailureAt < Math.min(2000 * 2 ** turfFailures, 60000)) {
+        // Back off exponentially (2s -> 60s cap) after failures; reset on success.
+        return Promise.reject(new Error('turf: backing off after a failed load'));
+    }
     if (!turfLoadPromise) {
         turfLoadPromise = new Promise((resolve, reject) => {
-            if (typeof document === 'undefined' || !document.createElement) {
-                turfLoadPromise = null;
-                reject(new Error('turf: no DOM available to load vendor/js/turf.min.js'));
-                return;
-            }
             const script = document.createElement('script');
             script.src = 'vendor/js/turf.min.js';
             script.async = true;
             script.onload = () => {
                 const loaded = (typeof window !== 'undefined' ? window : globalThis).turf;
                 if (loaded) {
+                    turfFailures = 0;
                     resolve(loaded);
                 } else {
+                    turfFailures += 1;
+                    lastTurfFailureAt = Date.now();
+                    script.remove();
                     turfLoadPromise = null;
                     reject(new Error('turf: vendor/js/turf.min.js loaded but the turf global is missing'));
                 }
             };
             script.onerror = () => {
-                // Allow a later frame to retry the injection.
+                // Remove the dead tag and allow a later frame to retry.
+                turfFailures += 1;
+                lastTurfFailureAt = Date.now();
+                script.remove();
                 turfLoadPromise = null;
                 reject(new Error('turf: failed to load vendor/js/turf.min.js'));
             };
@@ -639,13 +655,22 @@ function renderGridSquares(squareData, filterCtx) {
     incrementPerfCounter('mercator.grid.rectangles_added', gridFeatures.length);
 }
 
+// Promise for the most recent async active-area draw; runCaptureBootstrap
+// awaits it so the capture-ready handshake covers the hull render (which now
+// completes only after the turf fetch).
+let activeAreaRebuildPromise = Promise.resolve();
+export function whenActiveAreaRendered() {
+    return activeAreaRebuildPromise;
+}
+
 // Async wrapper around renderActiveArea: load turf on demand (the vendor
 // script is no longer part of the initial index.html payload), then draw the
 // hulls into the already-created layer and update the band labels. On a turf
 // load failure the layer is left empty for this frame instead of crashing the
-// render; the rebuild debounce lets a later frame retry.
+// render; band pills still recompute from the spot set (they are data, not
+// decoration), and the rebuild debounce + backoff let a later frame retry.
 function rebuildActiveArea(layer, regularSpots, maxMinutes, filterCtx, spots) {
-    ensureTurf()
+    activeAreaRebuildPromise = ensureTurf()
         .then(() => {
             const activeBands = renderActiveArea(regularSpots, maxMinutes, filterCtx, layer);
             const bandLabelTimer = startPerfTimer();
@@ -654,7 +679,9 @@ function rebuildActiveArea(layer, regularSpots, maxMinutes, filterCtx, spots) {
         })
         .catch((err) => {
             console.error('Active-area render skipped: turf is unavailable.', err);
+            updateBandLabels(spots, filterCtx, null);
         });
+    return activeAreaRebuildPromise;
 }
 
 function renderActiveArea(regularSpots, maxMinutes, filterCtx, layer) {

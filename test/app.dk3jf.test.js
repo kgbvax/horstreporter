@@ -267,4 +267,28 @@ describe('app.js DK3JF mode behavior', () => {
         expect(document.getElementById('stream-status').innerHTML).toContain('Connecting to QTH: W1AW');
     });
 
+    // Chase Queue opt-in: dxcluster.js is no longer a static module script in
+    // index.html; app.js injects it at boot only when the predicate is true.
+    const cqScriptTag = () => document.querySelector('head script[type="module"][src="dxcluster.js"]');
+
+    it('does not inject the Chase Queue module by default', async () => {
+        await importAppFresh();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(cqScriptTag()).toBeNull();
+    });
+
+    it('injects the Chase Queue module when ?cq=1', async () => {
+        window.history.replaceState({}, '', '/?cq=1');
+        await importAppFresh();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(cqScriptTag()).not.toBeNull();
+    });
+
+    it('injects the Chase Queue module when localStorage showChaseQueue=1', async () => {
+        localStorage.setItem('showChaseQueue', '1');
+        await importAppFresh();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(cqScriptTag()).not.toBeNull();
+    });
+
 });

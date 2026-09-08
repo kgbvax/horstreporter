@@ -6,6 +6,7 @@
 // to app.js required. See docs/dxcluster-*.md and docs/horstprop.md.
 
 import { canControlRig, rigTune, operate, canLookup, enrichSpots } from './opmode.js';
+import { isChaseQueueEnabled } from './cq-flag.js';
 import { setChaseQueueHighlight, clearChaseQueueHighlight } from './app.js';
 import { getEnabledBands } from './utils.js';
 
@@ -19,9 +20,9 @@ const REFRESH_MS = 30000;
 const TOP_N = 40; // cap how many spots we score per cycle
 
 // Hidden by default: the Chase Queue is an optional operator surface (prod has
-// no DX-cluster ingest). Opt in with ?cq=1 or localStorage 'showChaseQueue'='1'.
-const CQ_ENABLED = new URLSearchParams(location.search).has('cq') ||
-  localStorage.getItem('showChaseQueue') === '1';
+// no DX-cluster ingest). Opt in with ?cq=1 or localStorage 'showChaseQueue'='1'
+// — predicate shared with app.js via cq-flag.js.
+const CQ_ENABLED = isChaseQueueEnabled();
 
 // Canonical band palette (mirrors static/utils.js bandColors).
 const BAND_COLORS = {
