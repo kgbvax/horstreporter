@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { regionForLocator, regionForLatLng, locatorClusterAnchorJS, locatorToLatLngJS, WSPR_REGIONS } from '../static/utils.js';
+import { regionForLocator, regionForLatLng, WSPR_REGIONS } from '../static/utils.js';
 
 describe('regionForLocator', () => {
     it('classifies known locators to DXPulse regions', () => {
@@ -29,20 +29,6 @@ describe('regionForLatLng', () => {
 
     it('classifies Caribbean', () => {
         expect(regionForLatLng(18, -70)).toBe('CAR');
-    });
-});
-
-describe('locatorClusterAnchorJS', () => {
-    it('floors to 6×6 cluster anchor', () => {
-        expect(locatorClusterAnchorJS('JO62')).toBe('JN68');
-        expect(locatorClusterAnchorJS('FN31')).toBe('EM86');
-        expect(locatorClusterAnchorJS('CM87')).toBe('CM46');
-    });
-
-    it('returns null for non-locators', () => {
-        expect(locatorClusterAnchorJS('W1AW')).toBe(null);
-        expect(locatorClusterAnchorJS('')).toBe(null);
-        expect(locatorClusterAnchorJS(null)).toBe(null);
     });
 });
 

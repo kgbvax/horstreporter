@@ -464,30 +464,3 @@ function initInfoOverlay() {
         }
     }
 }
-
-function initServerStats() {
-    function updateServerStats() {
-        if (document.hidden) return;
-
-        const statsEl = document.getElementById('server-stats');
-        if (!statsEl) return;
-
-        fetch('/api/stats')
-            .then(response => response.json())
-            .then(stats => {
-                statsEl.innerHTML = `Connections: ${formatNumber(stats.active_connections)} History: ${formatNumber(stats.history_size)} spots (${formatNumber(stats.history_minutes)} mins)`;
-            })
-            .catch(error => {
-                console.error('Error fetching server stats:', error);
-                statsEl.innerHTML = 'Server stats unavailable.';
-            });
-    }
-
-    updateServerStats();
-    setInterval(updateServerStats, 10000);
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) {
-            updateServerStats();
-        }
-    });
-}

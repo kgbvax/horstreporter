@@ -761,10 +761,6 @@ export function canControlRig() {
     return allowed;
 }
 
-export function getRigCapabilities() {
-    return opModeState.rigCapabilities;
-}
-
 // canLookup reports whether the agent has a configured Wavelog backend. Lookup
 // is a read (no hardware), so it is gated only on the agent + capability, not
 // on the control-permission checkbox.

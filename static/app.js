@@ -1749,28 +1749,6 @@ document.getElementById('btn-geo')?.addEventListener('click', () => {
     );
 });
 
-document.getElementById('btn-center')?.addEventListener('click', () => {
-    if (!map) return;
-
-    const qth = document.getElementById('qth')?.value.trim().toUpperCase() || '';
-    const isLocator = /^[A-Z]{2}[0-9]{2}([A-Z]{2})?$/.test(qth);
-    if (isLocator) {
-        const bounds = locatorToBounds(qth);
-        if (bounds) {
-            const lat = (bounds[0][0] + bounds[1][0]) / 2;
-            const lng = (bounds[0][1] + bounds[1][1]) / 2;
-            if (currentProjection() === 'azimuthal') {
-                setAzimuthCenter([lat, lng]);
-                scheduleRender();
-            } else {
-                map.setView([lat, lng], map.getZoom());
-            }
-        }
-    } else if (qth) {
-        alert('Cannot center: Please provide a valid Maidenhead locator.');
-    }
-});
-
 document.getElementById('btn-cycle')?.addEventListener('click', () => {
     if (state.cycleInterval) stopBandCycle();
     else startBandCycle();

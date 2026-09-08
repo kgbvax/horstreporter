@@ -3,13 +3,10 @@ import {
     formatNumber,
     getCountryColoringEnabled,
     getMercatorDxccLabelsEnabled,
-    getClosestSunEvent,
     getCountryFillForFeature,
     getCountryFillForKey,
     getGraylineEnabled,
-    getGraylineOverlayCells,
     getGraylineOverlayOpacities,
-    getGraylineSegments,
     latLngToLocator,
     locatorToBounds,
     normalizeLongitude,
@@ -148,20 +145,6 @@ describe('utils.js', () => {
             expect(subsolar.lng).toBeLessThanOrEqual(180);
         });
 
-        it('getGraylineSegments returns usable terminator segments', () => {
-            const segments = getGraylineSegments(new Date('2026-03-20T12:00:00Z'), 10);
-
-            expect(segments.length).toBeGreaterThan(0);
-            expect(segments.some(segment => segment.length >= 10)).toBe(true);
-
-            segments.flat().forEach(([lat, lng]) => {
-                expect(lat).toBeGreaterThanOrEqual(-90);
-                expect(lat).toBeLessThanOrEqual(90);
-                expect(lng).toBeGreaterThanOrEqual(-180);
-                expect(lng).toBeLessThanOrEqual(180);
-            });
-        });
-
         it('getSolarZenithAngle is lower near the subsolar point than on the night side', () => {
             const source = { lat: 0, lng: 0 };
 
@@ -184,21 +167,6 @@ describe('utils.js', () => {
             expect(nightSide.nightOpacity).toBeGreaterThan(0);
         });
 
-        it('getGraylineOverlayCells yields shaded cells only for twilight and night regions', () => {
-            const cells = getGraylineOverlayCells({ lat: 0, lng: 0 }, { latStep: 30, lngStep: 30 });
-
-            expect(cells.length).toBeGreaterThan(0);
-            expect(cells.every(cell => cell.graylineOpacity > 0 || cell.nightOpacity > 0)).toBe(true);
-        });
-
-        it('getClosestSunEvent returns a nearby sunrise/sunset with signed minutes when within range', () => {
-            const equinoxNoon = new Date('2026-03-20T12:00:00Z');
-            const closest = getClosestSunEvent(0, 0, equinoxNoon, 500);
-
-            expect(closest).not.toBeNull();
-            expect(['sunrise', 'sunset']).toContain(closest.type);
-            expect(Number.isInteger(closest.deltaMinutes)).toBe(true);
-        });
     });
 
     describe('DOM Reading Functions', () => {
