@@ -91,14 +91,13 @@ type bandSlotKey struct {
 }
 
 // rawSpotRow is one spot enqueued for the next flushRawSpots batch. The
-// derived columns (source4, lat/lon, upper-trimmed callsigns/locators/mode) are
+// derived columns (source4, upper-trimmed callsigns/locators/mode) are
 // precomputed in observe BEFORE the store lock so flushRawSpots can build the
 // multi-VALUES INSERT without recomputing per row.
 type rawSpotRow struct {
 	m                  MQTTMessage
 	band               string
 	source4            string
-	lat, lon           float64
 	sc, rc, sl, rl, md string
 }
 
@@ -368,7 +367,6 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			mode TEXT NOT NULL,
 			signal_report_db INTEGER NOT NULL,
 			source_grid4 TEXT NOT NULL,
-			spot_geom geometry(Point, 4326),
 			source_type TEXT NOT NULL DEFAULT 'mqtt',
 			spotter_callsign TEXT NOT NULL DEFAULT '',
 			frequency_khz DOUBLE PRECISION,
@@ -434,7 +432,7 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 				SELECT 1 FROM information_schema.columns
 				WHERE table_name = 'dx_raw_spots' AND column_name = 'geom'
 			) THEN
-				ALTER TABLE dx_raw_spots RENAME COLUMN geom TO spot_geom;
+				ALTER TABLE dx_raw_spots DROP COLUMN geom;
 			END IF;
 		END
 		$$;`,
@@ -442,7 +440,10 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS spotter_callsign TEXT NOT NULL DEFAULT '';`,
 		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS frequency_khz DOUBLE PRECISION;`,
 		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS comment TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE dx_raw_spots ADD COLUMN IF NOT EXISTS spot_geom geometry(Point, 4326);`,
+		// spot_geom was write-only (zero readers; its GIST index was dropped
+		// earlier as ~5GB unused) — dropped from the schema. Catalog-only
+		// (instant); existing heap bytes are reclaimed on rewrite/VACUUM FULL.
+		`ALTER TABLE dx_raw_spots DROP COLUMN IF EXISTS spot_geom;`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_spot_time ON dx_raw_spots (spot_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_source_type_spot_time ON dx_raw_spots (source_type, spot_time);`,
 		// Locator-prefix indexes for activityByBinForTargets /
@@ -459,8 +460,9 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_dx_raw_spots_receiver_loc_time ON dx_raw_spots (receiver_locator text_pattern_ops, spot_time);`,
 		// No GIST index on spot_geom: nothing in this codebase queries it
 		// (verified by grep), it costs ~5GB on prod, and the prod disk ran
-		// full. The column stays; the optional maintenance list below drops
-		// any leftover index from earlier deploys.
+		// full. The column itself is dropped above (also write-only); the
+		// optional maintenance list below drops any leftover index from
+		// earlier deploys.
 		`CREATE TABLE IF NOT EXISTS dx_region_baseline_daily (
 			target_grid4 TEXT NOT NULL,
 			band TEXT NOT NULL,
@@ -549,8 +551,8 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_raw_spots_geom;`,
 		},
 		{
-			// ~5GB on prod, zero query users in this codebase (spot_geom the
-			// column is kept; only the index goes). Created by earlier deploys.
+			// ~5GB on prod, zero query users in this codebase (the spot_geom
+			// column is dropped above too). Created by earlier deploys.
 			name: "drop unused idx_dx_raw_spots_spot_geom",
 			sql:  `DROP INDEX CONCURRENTLY IF EXISTS idx_dx_raw_spots_spot_geom;`,
 		},
@@ -847,13 +849,10 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 	var row rawSpotRow
 	if !isDXCluster {
 		source4 := normalizeSource4(m.SL)
-		lat, lon := locatorToLatLng(source4)
 		row = rawSpotRow{
 			m:       m,
 			band:    band,
 			source4: source4,
-			lat:     lat,
-			lon:     lon,
 			sc:      strings.ToUpper(strings.TrimSpace(m.SC)),
 			rc:      strings.ToUpper(strings.TrimSpace(m.RC)),
 			sl:      strings.ToUpper(strings.TrimSpace(m.SL)),
@@ -998,17 +997,16 @@ func (s *dxPostgresStore) trimPendingRawSpotsLocked() {
 }
 
 // buildRawSpotInsertSQL builds one multi-VALUES INSERT for a chunk of precomputed
-// rawSpotRows. Each row contributes 15 parameters; the spot_geom column is built
-// in SQL via ST_SetSRID(ST_MakePoint(lon, lat), 4326) (NULL when lat=lon=0),
-// identical to the old per-row INSERT. Extracted so it can be unit-tested without
-// a database.
+// rawSpotRows. Each row contributes 13 parameters (spot_geom was dropped from
+// the schema — write-only, zero readers). Extracted so it can be unit-tested
+// without a database.
 func buildRawSpotInsertSQL(chunk []rawSpotRow) (string, []any) {
-	const cols = 15
+	const cols = 13
 	var b strings.Builder
 	b.WriteString(`INSERT INTO dx_raw_spots (
 		spot_time, band, sender_callsign, receiver_callsign,
 		sender_locator, receiver_locator, mode, signal_report_db,
-		source_grid4, spot_geom,
+		source_grid4,
 		source_type, spotter_callsign, frequency_khz, comment)
 	VALUES `)
 	args := make([]any, 0, len(chunk)*cols)
@@ -1016,16 +1014,11 @@ func buildRawSpotInsertSQL(chunk []rawSpotRow) (string, []any) {
 		if ri > 0 {
 			b.WriteByte(',')
 		}
-		base := ri*cols + 1           // 1-indexed placeholder base
-		latp, lonp := base+9, base+10 // $lat, $lon
-		// spot_time..source_grid4 (9 direct), spot_geom (CASE expr), source_type..comment (4)
-		fmt.Fprintf(&b, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,"+
-			"CASE WHEN $%d::float8 = 0 AND $%d::float8 = 0 THEN NULL "+
-			"ELSE ST_SetSRID(ST_MakePoint($%d, $%d), 4326) END,"+
-			"$%d,$%d,$%d,$%d)",
+		base := ri*cols + 1 // 1-indexed placeholder base
+		// spot_time..source_grid4 (9 direct), source_type..comment (4)
+		fmt.Fprintf(&b, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 			base, base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8,
-			latp, lonp, lonp, latp,
-			base+11, base+12, base+13, base+14)
+			base+9, base+10, base+11, base+12)
 		args = append(args,
 			row.m.T,
 			row.band,
@@ -1036,8 +1029,6 @@ func buildRawSpotInsertSQL(chunk []rawSpotRow) (string, []any) {
 			row.md,
 			row.m.RP,
 			row.source4,
-			row.lat,
-			row.lon,
 			"mqtt",
 			"",
 			(*float64)(nil),
@@ -1056,7 +1047,6 @@ func (s *dxPostgresStore) insertRawSpot(ctx context.Context, m MQTTMessage, band
 	}
 
 	source4 := normalizeSource4(m.SL)
-	lat, lon := locatorToLatLng(source4)
 
 	if strings.TrimSpace(sourceType) == "" {
 		sourceType = "mqtt"
@@ -1066,13 +1056,10 @@ func (s *dxPostgresStore) insertRawSpot(ctx context.Context, m MQTTMessage, band
 		INSERT INTO dx_raw_spots (
 			spot_time, band, sender_callsign, receiver_callsign,
 			sender_locator, receiver_locator, mode, signal_report_db,
-			source_grid4, spot_geom,
+			source_grid4,
 			source_type, spotter_callsign, frequency_khz, comment
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
-			CASE WHEN $10::float8 = 0 AND $11::float8 = 0 THEN NULL
-			ELSE ST_SetSRID(ST_MakePoint($11, $10), 4326) END,
-			$12,$13,$14,$15)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 	`,
 		m.T,
 		band,
@@ -1083,8 +1070,6 @@ func (s *dxPostgresStore) insertRawSpot(ctx context.Context, m MQTTMessage, band
 		strings.ToUpper(strings.TrimSpace(m.MD)),
 		m.RP,
 		source4,
-		lat,
-		lon,
 		strings.ToLower(strings.TrimSpace(sourceType)),
 		strings.ToUpper(strings.TrimSpace(spotter)),
 		frequencyKHz,

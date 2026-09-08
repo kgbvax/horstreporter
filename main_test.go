@@ -389,43 +389,35 @@ func TestPruneLiveHistoryResliceInPlace(t *testing.T) {
 
 func TestBuildRawSpotInsertSQL(t *testing.T) {
 	chunk := []rawSpotRow{
-		{m: MQTTMessage{T: 100, RP: -8}, band: "20m", source4: "FN31", lat: 41.7, lon: -72.7, sc: "W1AW", rc: "DL1A", sl: "FN31", rl: "JO32", md: "FT8"},
-		{m: MQTTMessage{T: 200, RP: -12}, band: "40m", source4: "JO32", lat: 50.1, lon: 8.0, sc: "DL2B", rc: "W1AW", sl: "JO32", rl: "FN31", md: "CW"},
+		{m: MQTTMessage{T: 100, RP: -8}, band: "20m", source4: "FN31", sc: "W1AW", rc: "DL1A", sl: "FN31", rl: "JO32", md: "FT8"},
+		{m: MQTTMessage{T: 200, RP: -12}, band: "40m", source4: "JO32", sc: "DL2B", rc: "W1AW", sl: "JO32", rl: "FN31", md: "CW"},
 	}
 	q, args := buildRawSpotInsertSQL(chunk)
 
-	const cols = 15
+	const cols = 13
 	if len(args) != len(chunk)*cols {
 		t.Fatalf("args len = %d, want %d", len(args), len(chunk)*cols)
 	}
-	// Row 0 layout: T, band, sc, rc, sl, rl, md, RP, source4, lat, lon, "mqtt", "", nil, "".
+	// Row 0 layout: T, band, sc, rc, sl, rl, md, RP, source4, "mqtt", "", nil, "".
 	if args[0] != int64(100) || args[1] != "20m" || args[2] != "W1AW" || args[8] != "FN31" {
 		t.Fatalf("row0 args mismatch: %v", args[:9])
 	}
-	if args[9] != 41.7 || args[10] != -72.7 {
-		t.Fatalf("row0 lat/lon args mismatch: %v %v", args[9], args[10])
+	if args[9] != "mqtt" || args[10] != "" || args[11] != (*float64)(nil) || args[12] != "" {
+		t.Fatalf("row0 trailing args mismatch: %v", args[9:13])
 	}
-	if args[11] != "mqtt" || args[12] != "" || args[13] != (*float64)(nil) || args[14] != "" {
-		t.Fatalf("row0 trailing args mismatch: %v", args[11:15])
-	}
-	// Row 1 starts at offset 15.
-	if args[15] != int64(200) || args[16] != "40m" {
-		t.Fatalf("row1 start args mismatch: %v %v", args[15], args[16])
+	// Row 1 starts at offset 13.
+	if args[13] != int64(200) || args[14] != "40m" {
+		t.Fatalf("row1 start args mismatch: %v %v", args[13], args[14])
 	}
 
-	// Placeholder indices: row0 uses $1..$15 (geom CASE at col 10 refs $10=lat,$11=lon);
-	// row1 uses $16..$30. Spot-check the geom expression and the row1 start.
-	if !strings.Contains(q, "ST_SetSRID(ST_MakePoint($11, $10), 4326)") {
-		t.Fatalf("row0 geom expression missing/wrong: %s", q)
-	}
-	if !strings.Contains(q, "WHEN $10::float8 = 0 AND $11::float8 = 0") {
-		t.Fatalf("row0 geom NULL-guard missing/wrong: %s", q)
-	}
-	if !strings.Contains(q, "($16,$17") {
+	// Placeholder indices: row0 uses $1..$13; row1 uses $14..$26.
+	// Spot-check the row1 start.
+	if !strings.Contains(q, "($14,$15") {
 		t.Fatalf("row1 VALUES tuple missing: %s", q)
 	}
-	if !strings.Contains(q, "ST_SetSRID(ST_MakePoint($26, $25), 4326)") {
-		t.Fatalf("row1 geom expression missing/wrong (expected $26/$25): %s", q)
+	// spot_geom was dropped — no ST_MakePoint/CASE left in the INSERT.
+	if strings.Contains(q, "ST_MakePoint") || strings.Contains(q, "spot_geom") {
+		t.Fatalf("stale spot_geom machinery in INSERT: %s", q)
 	}
 	// Two VALUE tuples ⇒ exactly one comma between tuples (no trailing comma).
 	if strings.Count(q, "),(") != 1 {

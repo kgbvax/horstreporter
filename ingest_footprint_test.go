@@ -128,12 +128,13 @@ func TestIngestFootprintHarness(t *testing.T) {
 	parseNs := time.Since(start)
 
 	// Row-width accounting for the dx_raw_spots pipeline (diagnostic): the
-	// flusher inserts 15 columns per spot (buildRawSpotInsertSQL: spot_time,
+	// flusher inserts 13 columns per spot (buildRawSpotInsertSQL: spot_time,
 	// band, sender/receiver callsign+locator, mode, signal_report_db,
-	// source_grid4, spot_geom, source_type, spotter, frequency_khz, comment).
-	// Width = summed wire width of the argument values plus a PG tuple
-	// overhead estimate (23B header + 2B null bitmap per column; alignment
-	// padding ignored) — an estimate grounded in the real INSERT shape.
+	// source_grid4, source_type, spotter, frequency_khz, comment — spot_geom
+	// was dropped in run #3 H5 as write-only). Width = summed wire width of
+	// the argument values plus a PG tuple overhead estimate (23B header + 2B
+	// null bitmap per column; alignment padding ignored) — an estimate
+	// grounded in the real INSERT shape.
 	argWidth := 0
 	for _, a := range []interface{}{
 		int64(8),       // spot_time
@@ -145,7 +146,6 @@ func TestIngestFootprintHarness(t *testing.T) {
 		len("FT8"),     // mode
 		8,              // signal_report_db (float)
 		len("JO62"),    // source_grid4
-		8 + 8,          // spot_geom: ST_MakePoint lon+lat inputs
 		len("mqtt"),    // source_type
 		len(""),        // spotter_callsign (empty on mqtt)
 		8,              // frequency_khz (NULL, arg placeholder)
@@ -157,7 +157,7 @@ func TestIngestFootprintHarness(t *testing.T) {
 			argWidth += 8
 		}
 	}
-	tupleOverhead := 23 + 15*2
+	tupleOverhead := 23 + 13*2
 	rowWidth := argWidth + tupleOverhead
 
 	out := map[string]interface{}{
