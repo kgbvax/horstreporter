@@ -272,10 +272,7 @@ func main() {
 	// (propIntelRegionBaselineDaysBack = dxlensRegionStatsLookbackDays = 30) with headroom.
 	dxRegionBaselineRetentionDaysFlag := flag.Int("dx-region-baseline-retention-days", 35, "Delete dx_region_baseline_daily / wspr_region_baseline_daily rows older than this many day_index days (0 disables retention).")
 	proplabSWEnableFlag := flag.Bool("proplab-sw-enable", false, "Enable space-weather index series ingest (NOAA SWPC kp/F10.7/xray/OVATION; consumed by pathscope)")
-	opModeEnableFlag := flag.Bool("opmode-enable", true, "Deprecated: backend opmode integration endpoints are always enabled")
-	opModeControlEnableFlag := flag.Bool("opmode-control-enable", false, "Allow rotate/control commands in operator mode")
 	opModeAgentURLFlag := flag.String("opmode-agent-url", "", "Deprecated and ignored: backend never proxies to local operator agent")
-	opModeAgentTimeoutMsFlag := flag.Int("opmode-agent-timeout-ms", 1500, "Deprecated and ignored: backend never proxies to local operator agent")
 	pushEnableFlag := flag.Bool("push-enable", false, "Enable Web Push notification channel for surge alerts (requires VAPID keys via -push-vapid-private-key/-push-vapid-public-key or PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
 	pushVAPIDPrivateKeyFlag := flag.String("push-vapid-private-key", "", "VAPID private key (base64url) for signing Web Push messages. Falls back to env PUSH_VAPID_PRIVATE_KEY. Generate with `go run github.com/SherClockHolmes/webpush-go` or the scripts/generate-vapid-keys.sh helper.")
 	pushVAPIDPublicKeyFlag := flag.String("push-vapid-public-key", "", "VAPID public key (base64url) served at /api/push/vapid-public-key for the browser subscription flow. Falls back to env PUSH_VAPID_PUBLIC_KEY.")
@@ -307,16 +304,11 @@ func main() {
 		dxBaselineMaxEvents = *dxBaselineMaxEventsFlag
 	}
 
-	if !*opModeEnableFlag {
-		logInfo("-opmode-enable=false is deprecated and ignored; backend opmode endpoints remain active")
-	}
+	// Prod's systemd unit still passes -opmode-agent-url; keep the flag
+	// registered (warn-only) until the unit is cleaned up.
 	if strings.TrimSpace(*opModeAgentURLFlag) != "" {
 		logInfo("-opmode-agent-url is deprecated and ignored; browser must call local operator agent directly")
 	}
-	if *opModeAgentTimeoutMsFlag != 1500 {
-		logInfo("-opmode-agent-timeout-ms is deprecated and ignored; backend no longer calls operator agent")
-	}
-	configureOpMode(*opModeControlEnableFlag)
 
 	// Web Push (U5): resolve VAPID keys from flag then env (mirrors the
 	// DX_POSTGRES_DSN pattern — keep the private key out of argv via the
@@ -610,10 +602,8 @@ func main() {
 	// Unified multi-source contract (prop_intel_v2.go). v1 above stays frozen
 	// for horstapp compatibility.
 	appMux.HandleFunc("/api/prop_intel/v2", propIntelV2Handler)
-	appMux.HandleFunc("/api/prop_intel/v2/summary", propIntelV2SummaryHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
 	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)
-	appMux.HandleFunc("/api/opmode/status", opModeStatusHandler)
 	// Web Push (U5): VAPID public key for the browser subscription flow,
 	// subscribe/unsubscribe, and a subscription-status endpoint used by
 	// the frontend's re-subscription-after-restart check. The handlers

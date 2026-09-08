@@ -8,8 +8,7 @@ or this doc is stale — check `git log docs/api.md` last.
 Related contracts documented elsewhere:
 
 - `docs/dxcluster-agent-api.md` — local operator agent at `http://127.0.0.1:9955/v1/*`
-  (browser-direct; the main binary NEVER proxies it, except the read-only
-  `/api/opmode/status`).
+  (browser-direct; the main binary NEVER proxies it).
 - `docs/horstprop.md` — the horstprop scoring service (`/horstprop/*` here is
   only a reverse proxy to it).
 - `docs/horstawards.md` — award progress; entirely agent-side, no server API.
@@ -309,15 +308,6 @@ region):
 - Atypical cells fan out Web Push like v1 (adapted to the v1 push payload;
   push labels are unchanged).
 
-### `GET /api/prop_intel/v2/summary` — compact widget payload (v2)
-
-Same engine/parameters as `/api/prop_intel/v2`, reduced to the widget
-payload. Identical shape to v1's summary (headline/top_bands/grid with the
-same `i`/`f` encoding, 60s cache) plus three additive, ignorable grid-cell
-fields for the horstapp migration: `sa` (active sources), `oa` (open
-agreement), `src` (active source count). Atypical headlines prefer cells
-with multi-source agreement (`atypical_agreement ≥ 0.5`).
-
 ### `GET /api/push/vapid-public-key` — Web Push public key
 
 Returns the server's VAPID public key (base64url) for the browser
@@ -412,14 +402,6 @@ counters, plus a `prop_intel` block (`requests`, `errors`, `surges_detected`)
 and a `push` block (`surges_detected`, `push_sent`, `push_errors`). The
 de-facto health endpoint.
 
-### `GET /api/opmode/status` — operator-mode wiring info
-
-No params. `{enabled: true, configured: false, control_enabled, mode:
-"direct", proxy_active: false, direct_capable: true, agent_reachable:
-false, error: "backend proxy disabled by design; browser must connect to
-local agent directly"}`. There is deliberately no opmode proxy — the
-browser calls the local agent itself.
-
 ## Removed features
 
 **Propagation Lab** (`/api/proplab/v1/params|ladder|fusion|reachability`,
@@ -472,8 +454,8 @@ the first snapshot builds.
 
 ## Explicitly NOT here
 
-- **No opmode proxy/control** (`/api/opmode/*` beyond `/status`) — direct
-  by design; browser → local agent.
+- **No opmode proxy/control** — direct by design; browser → local agent.
+  (`/api/opmode/status` existed briefly but nothing consumed it; removed.)
 - **No awards API** — operator award progress is computed inside the local
   agent (`internal/awards`); never pulled server-side ("wanted" reaches the
   Chase Queue through the agent's enrich response).

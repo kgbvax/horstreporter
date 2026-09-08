@@ -78,7 +78,7 @@ integration).
 ARE called from `dx_conditions.go:425-445` and `main.go:386-389`; do
 not list them.
 
-### 1.3 Deprecated opmode command-line flags
+### 1.3 Deprecated opmode command-line flags (RESOLVED 2026-09-08: `-opmode-enable` and `-opmode-agent-timeout-ms` removed; `-opmode-agent-url` kept registered so the prod systemd unit keeps starting)
 
 Each flag below is accepted on the command line and consumed only by
 a single `logInfo(...)` line that announces the flag as deprecated and
@@ -220,10 +220,9 @@ in the named surface is dead.
   `/api/stream` (via `EventSource` at `app.js:1902`). Every
   registered route in `main.go:511-528` is consumed by the
   in-tree frontend, with the following intentional exception:
-  `/api/opmode/status` is consumed only by the operator agent's
-  browser-direct script (`cmd/horstoperator-agent`); the static
-  frontend never fetches it. This is documented behavior, not a
-  dead route. No findings.
+  `/api/opmode/status` was incorrectly justified here as consumed
+  by the operator agent — it had zero consumers and was removed
+  2026-09-08 (opmode.go deleted).
 
 ---
 

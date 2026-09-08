@@ -107,9 +107,7 @@ go run ./cmd/horstoperator-agent \
 Then run HorstReporter (backend proxy is intentionally disabled by design):
 
 ```bash
-go run . -dev -port 8080 \
-  -opmode-enable \
-  -opmode-control-enable
+go run . -dev -port 8080
 ```
 
 Important: the backend never contacts the local agent. Browser opmode calls `http://127.0.0.1:9955/v1/*` (or `http://localhost:9955/v1/*`) directly.

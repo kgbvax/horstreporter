@@ -40,9 +40,8 @@ go run ./cmd/horstprop -listen 127.0.0.1:9970
 # (required for DCLNext), and optionally POTA_HUNTED_CSV (hunted-parks export).
 #   WAVELOG_STATION_ID=3427 POTA_HUNTED_CSV=hunted.csv ./run_operator_agent.sh
 # Spec: docs/horstawards.md
-# Then point the agent at it so the Chase Queue "wanted" badges gain WAS/POTA:
-#   go run ./cmd/horstoperator-agent ... -horstawards-url http://127.0.0.1:9956
-# Spec: docs/horstawards.md
+# The award index runs in-process in that agent (no separate binary / no
+# -horstawards-url flag): the Chase Queue "wanted" badges gain WAS/POTA from it.
 
 # Backend tests
 go test ./...

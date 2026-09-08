@@ -321,34 +321,3 @@ func TestV2FromHereFilter(t *testing.T) {
 		t.Fatalf("from-here filter broken: %+v", filtered.Cells)
 	}
 }
-
-// TestV2SummaryAdditiveFields: the v2 summary keeps the v1 shape and adds
-// sa/oa/src on grid cells.
-func TestV2SummaryAdditiveFields(t *testing.T) {
-	now := time.Now().Unix()
-	history := []MQTTMessage{
-		{Source: "wspr", B: "20m", T: now - 100, SC: "OP", SL: "JO62qm", RC: "TX", RL: "FN31ab", RP: 5, TXPower: 43},
-		{Source: "mqtt", B: "20m", T: now - 90, SC: "DX", SL: "FN31ab", RC: "OP", RL: "JO62qm", RP: 0, MD: "FT8"},
-	}
-	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("wspr", "pskr"), nil, nil, history, now, propIntelAtypicalZThreshold)
-	sum := propIntelV2Summarize(resp)
-	if len(sum.Grid) == 0 {
-		t.Fatalf("summary grid empty")
-	}
-	g := sum.Grid[0]
-	if g.SourceCount != 2 || len(g.ActiveSources) != 2 {
-		t.Fatalf("additive fields: src=%d sa=%v", g.SourceCount, g.ActiveSources)
-	}
-	if g.OpenAgreement != 1.0 {
-		t.Fatalf("both sources open → oa=1.0, got %v", g.OpenAgreement)
-	}
-	if g.Flags&propIntelFlagSSB == 0 || g.Flags&propIntelFlagFromHere == 0 {
-		t.Fatalf("bitmask flags lost: %b", g.Flags)
-	}
-	if g.Intensity != 1.0 {
-		t.Fatalf("single cell is the max → intensity 1.0, got %v", g.Intensity)
-	}
-	if sum.Headline == "" || sum.HeadlineKind == "" {
-		t.Fatalf("headline must be set: %+v", sum)
-	}
-}
