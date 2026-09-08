@@ -8,9 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"unsafe"
 
 	"horstreporter/internal/cty"
 	"horstreporter/internal/region"
@@ -468,8 +471,11 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 		}
 	}
 
-	baseKey := baselineKey(band, hour, distTier, snrTier)
-	e.observeBucket(e.buckets, baseKey, band, hour, distTier, snrTier)
+	// Keys are built in a stack buffer for the map lookups; observeBucket
+	// clones on insert, so the map never retains the stack-backed strings.
+	var kb [96]byte
+	buf := appendBaselineKey(kb[:0], band, hour, distTier, snrTier)
+	e.observeBucket(e.buckets, stackString(buf), band, hour, distTier, snrTier)
 
 	// Grid-cluster baseline: write a bucket keyed by the observer's grid
 	// cluster anchor for both ends of the path. This is the middle tier
@@ -479,10 +485,14 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 	// between cluster JN68 and cluster EM46 increments both) so either
 	// operator's Evaluate benefits.
 	if anchor, ok := locatorClusterAnchor(sl); ok {
-		e.observeBucket(e.clusterBuckets, baselineClusterKey(anchor, band, hour, distTier, snrTier), band, hour, distTier, snrTier)
+		buf = append(append(kb[:0], anchor...), '|')
+		buf = appendBaselineKey(buf, band, hour, distTier, snrTier)
+		e.observeBucket(e.clusterBuckets, stackString(buf), band, hour, distTier, snrTier)
 	}
 	if anchor, ok := locatorClusterAnchor(rl); ok {
-		e.observeBucket(e.clusterBuckets, baselineClusterKey(anchor, band, hour, distTier, snrTier), band, hour, distTier, snrTier)
+		buf = append(append(kb[:0], anchor...), '|')
+		buf = appendBaselineKey(buf, band, hour, distTier, snrTier)
+		e.observeBucket(e.clusterBuckets, stackString(buf), band, hour, distTier, snrTier)
 	}
 
 	maxEvents := dxBaselineMaxEvents
@@ -547,11 +557,14 @@ func (e *DxBaselineEngine) PersistRawSpot(m MQTTMessage, sourceType, spotter str
 	}
 }
 
+// observeBucket looks up a bucket by key and increments it. key may be a
+// stack-backed lookup string (stackString); on insert it is cloned to a heap
+// string so the map never retains the caller's buffer.
 func (e *DxBaselineEngine) observeBucket(store map[string]*baselineBucket, key, band string, hour, distTier, snrTier int) {
 	b := store[key]
 	if b == nil {
 		b = &baselineBucket{Band: band, SlotOfDay: hour, DistanceTier: distTier, SnrTier: snrTier}
-		store[key] = b
+		store[strings.Clone(key)] = b
 	}
 	b.Count++
 }
@@ -1935,6 +1948,26 @@ func bandInScope(band string) bool {
 
 func baselineKey(band string, slotOfDay, distanceTier, snrTier int) string {
 	return band + "|" + itoa(slotOfDay) + "|" + itoa(distanceTier) + "|" + itoa(snrTier)
+}
+
+// appendBaselineKey appends the same "band|slot|dist|snr" key to buf without
+// allocating. The result is for map lookups only — clone before retaining
+// (see observeBucket).
+func appendBaselineKey(buf []byte, band string, slotOfDay, distanceTier, snrTier int) []byte {
+	buf = append(buf, band...)
+	buf = append(buf, '|')
+	buf = strconv.AppendInt(buf, int64(slotOfDay), 10)
+	buf = append(buf, '|')
+	buf = strconv.AppendInt(buf, int64(distanceTier), 10)
+	buf = append(buf, '|')
+	return strconv.AppendInt(buf, int64(snrTier), 10)
+}
+
+// stackString reinterprets buf as a string without allocating. The result is
+// valid only until buf is reused; callers must clone before retaining it
+// (e.g. as a map key). buf must be non-empty.
+func stackString(buf []byte) string {
+	return unsafe.String(&buf[0], len(buf))
 }
 
 // baselineClusterKey keys a grid-cluster baseline bucket: the 6×6 cluster

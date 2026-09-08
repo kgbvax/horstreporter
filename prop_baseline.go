@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -123,6 +124,19 @@ func propBaselineBucketKey(band, source string, slot int, reg string) string {
 	return band + "|" + source + "|" + itoa(slot) + "|" + reg
 }
 
+// appendPropBaselineKey appends the same "band|source|slot|region" key to buf
+// without allocating. The result is for map lookups only — clone before
+// retaining (the Observe insert below does).
+func appendPropBaselineKey(buf []byte, band, source string, slot int, reg string) []byte {
+	buf = append(buf, band...)
+	buf = append(buf, '|')
+	buf = append(buf, source...)
+	buf = append(buf, '|')
+	buf = strconv.AppendInt(buf, int64(slot), 10)
+	buf = append(buf, '|')
+	return append(buf, reg...)
+}
+
 // Observe records one spot of any known source into the climatology. Called
 // from the hub broadcast funnel so every ingest contributes. The region axis
 // is the receiver/reporter end's region (per the source profile), with the
@@ -161,7 +175,10 @@ func (e *propBaselineEngine) Observe(m MQTTMessage) {
 		}
 	}
 
-	key := propBaselineBucketKey(band, prof.PublicName, slot, string(reg))
+	// Lookup key built in a stack buffer; cloned on insert below.
+	var kb [96]byte
+	buf := appendPropBaselineKey(kb[:0], band, prof.PublicName, slot, string(reg))
+	key := stackString(buf)
 
 	e.mu.Lock()
 	if e.firstEventAt == 0 || ts < e.firstEventAt {
@@ -177,7 +194,7 @@ func (e *propBaselineEngine) Observe(m MQTTMessage) {
 			Band: band, Source: prof.PublicName, SlotOfDay: slot,
 			Region: string(reg), DayCounts: make(map[int64]int64),
 		}
-		e.buckets[key] = b
+		e.buckets[strings.Clone(key)] = b
 	}
 	b.Count++
 	dayIndex := utcDayIndex(ts)
