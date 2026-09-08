@@ -5,7 +5,7 @@ export let currentCountryLayer = null;
 export let currentGraylineLayer = null;
 export let currentDxccLabelLayer = null;
 
-import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, hexToRgb, blendOverlayColors } from './utils.js';
+import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, hexToRgb, blendOverlayColors, icon } from './utils.js';
 import { selectProminentDxccLabels } from './azimuth-runtime.js';
 import { endPerfTimer, incrementPerfCounter, startPerfTimer } from './perf.js';
 
@@ -612,7 +612,7 @@ export function setTheme(theme) {
 
     const toggleBtn = document.getElementById('theme-toggle');
     if (toggleBtn) {
-        toggleBtn.innerHTML = theme === 'dark' ? '<i class="fas fa-sun"></i>' : '<i class="fas fa-moon"></i>';
+        toggleBtn.innerHTML = theme === 'dark' ? icon('sun') : icon('moon');
         toggleBtn.title = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
     }
 }

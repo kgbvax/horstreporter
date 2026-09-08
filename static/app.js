@@ -9,7 +9,7 @@ import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { initPushUI } from './push.js';
 import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint } from './renderers.js';
-import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming } from './utils.js';
+import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming, icon } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
 
@@ -110,7 +110,7 @@ function stopBandCycle() {
     }
     const btn = document.getElementById('btn-cycle');
     if (btn) {
-        btn.innerHTML = '<i class="fas fa-play"></i> Cycle';
+        btn.innerHTML = `${icon('play')} Cycle`;
         btn.title = 'Cycle enabled bands';
         btn.classList.remove('active');
     }
@@ -119,7 +119,7 @@ function stopBandCycle() {
 function startBandCycle() {
     const btn = document.getElementById('btn-cycle');
     if (btn) {
-        btn.innerHTML = '<i class="fas fa-pause"></i> Cycle';
+        btn.innerHTML = `${icon('pause')} Cycle`;
         btn.title = 'Stop cycling';
         btn.classList.add('active');
     }
@@ -1722,7 +1722,7 @@ document.getElementById('btn-geo')?.addEventListener('click', () => {
     const btn = document.getElementById('btn-geo');
     if (!btn) return;
     const originalText = btn.innerHTML;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    btn.innerHTML = icon('spinner', true);
     btn.disabled = true;
 
     navigator.geolocation.getCurrentPosition(

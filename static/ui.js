@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, latLngToLocator, locatorToBounds, initialBearingDeg, getMinSnrMode, getSelectedBand, getEnabledBands, formatNumber } from './utils.js';
+import { getGridResolution, latLngToLocator, locatorToBounds, initialBearingDeg, getMinSnrMode, getSelectedBand, getEnabledBands, formatNumber, icon } from './utils.js';
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -430,7 +430,7 @@ function initInfoOverlay() {
         
         const infoBtn = document.createElement('button');
         infoBtn.id = 'info-toggle';
-        infoBtn.innerHTML = '<i class="fas fa-question-circle"></i>';
+        infoBtn.innerHTML = icon('question-circle');
         infoBtn.title = 'Help';
         infoBtn.style.background = 'none';
         infoBtn.style.border = '1px solid var(--border-color)';

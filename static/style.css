@@ -26,6 +26,21 @@
     }
 }
 
+/* Inline SVG icons (replace Font Awesome). 1em box on the text baseline,
+   matching FA's svg-inline--fa; color inherits via fill="currentColor". */
+.icon {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    vertical-align: -0.125em;
+    fill: currentColor;
+}
+
+/* Rotating variant (was fa-spin): same timing as FA — 2s linear infinite. */
+.icon-spin {
+    animation: spin 2s linear infinite;
+}
+
 /* Global variables and theme setup */
 body {
     --bg-color: #ffffff;
