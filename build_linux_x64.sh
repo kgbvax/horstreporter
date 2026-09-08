@@ -17,10 +17,6 @@ case "$MODE" in
 		echo "Building statically linked binary for Linux x64 (CGO disabled)..."
 		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags '-extldflags "-static"' -o "$STATIC_BIN" .
 		echo "Build complete: $STATIC_BIN"
-		# Video renderer sidecar (cmd/horstvideo) — ships alongside the core so
-		# ./deploy.sh can install both in one pass.
-		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags '-extldflags "-static"' -o horstvideo-linux-x64 ./cmd/horstvideo
-		echo "Build complete: horstvideo-linux-x64"
 		;;
 	*)
 		echo "Usage: $0 [static]"

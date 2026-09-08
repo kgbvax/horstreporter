@@ -318,47 +318,6 @@ func (e *DxBaselineEngine) LoadSpotsBetweenFiltered(start, end int64, includeDXC
 	return st.loadSpotsBetweenWithSourceFilter(start, end, includeDXCluster)
 }
 
-// LoadSpotsBetweenSources loads one bounded replay window straight from the
-// raw-spot table, restricted to the given source types and the optional SQL
-// QTH prefilter (callsign equality / locator LIKE prefixes), capped at limit
-// rows (truncated reports when the window held more). Used by the time-travel
-// replay endpoints; unlike LoadSpotsBetweenFiltered it never runs unbounded.
-func (e *DxBaselineEngine) LoadSpotsBetweenSources(start, end int64, sources []string, callsignFilter string, locatorPrefixes []string, limit int) ([]MQTTMessage, bool, error) {
-	e.mu.RLock()
-	st := e.store
-	e.mu.RUnlock()
-	if st == nil {
-		return nil, false, nil
-	}
-	return st.loadSpotsBetweenSources(start, end, sources, callsignFilter, locatorPrefixes, limit)
-}
-
-// UpdateReplayBucketCounts folds new raw spots into the replay pre-aggregate
-// (dx_raw_spots_30m_counts) from the persisted watermark; the first run
-// backfills the timeline's 48h reach in bounded chunks. Called by the 5-min
-// background ticker in main, never on the request path.
-func (e *DxBaselineEngine) UpdateReplayBucketCounts(now int64) error {
-	e.mu.RLock()
-	st := e.store
-	e.mu.RUnlock()
-	if st == nil {
-		return nil
-	}
-	return st.updateReplayBucketCounts(now)
-}
-
-// PruneReplayBucketCountsOlderThan trims the replay pre-aggregate alongside
-// the raw-spot retention prune.
-func (e *DxBaselineEngine) PruneReplayBucketCountsOlderThan(cutoff int64) (int64, error) {
-	e.mu.RLock()
-	st := e.store
-	e.mu.RUnlock()
-	if st == nil {
-		return 0, nil
-	}
-	return st.pruneReplayBucketCountsOlderThan(cutoff)
-}
-
 // CountSpotsBetweenFiltered returns the number of spots in the window under
 // the same source filter as LoadSpotsBetweenFiltered, so the caller can
 // allocate the destination slice exactly once.

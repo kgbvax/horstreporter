@@ -241,9 +241,6 @@ type streamSpot struct {
 	Band            string  `json:"band"`
 	Sender          string  `json:"sender,omitempty"`
 	Receiver        string  `json:"receiver,omitempty"`
-	// SpotTime is the absolute spot timestamp (unix seconds), set only by the
-	// time-travel replay path — live SSE payloads stay byte-identical.
-	SpotTime int64 `json:"spotTime,omitempty"`
 }
 
 type squareDetailReport struct {
@@ -685,9 +682,9 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	propIntelReqs, propIntelErrs, propIntelSurges := propIntelAccounting.snapshot()
 	pushSurges, pushSent, pushErrs := pushAccounting.snapshot()
-	// Persistence health: dx_raw_spots history (replay/time travel) depends on
-	// the raw flush succeeding; surface last success + failure streak so an
-	// outage is visible from the API instead of only in the log.
+	// Persistence health: dx_raw_spots history depends on the raw flush
+	// succeeding; surface last success + failure streak so an outage is
+	// visible from the API instead of only in the log.
 	var postgres *postgresStatsBlock
 	if dxBaseline != nil && dxBaseline.Store() != nil {
 		rawOK, rawStreak, baseOK, baseStreak := dxBaseline.Store().FlushHealth()
@@ -793,7 +790,7 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 // Mirrors the flat per-ingest counter layout but nested under prop_intel
 // to keep the namespace clean (the plan's accounting requirement, U6).
 // postgresStatsBlock is the postgres.* sub-object in /api/stats: flush
-// health for the two persistence pipelines (raw spots = replay history,
+// health for the two persistence pipelines (raw spots = history archive,
 // baseline = band conditions). A nonzero streak or a stale last-ok timestamp
 // means persistence is down.
 type postgresStatsBlock struct {
@@ -852,36 +849,8 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().Unix()
 
-	// Optional historical evaluation for time-travel replay: with bucket_end,
-	// the window is read from the Postgres raw-spot archive (QTH-prefiltered,
-	// same as /api/replay/spots) and scored as of that time instead of the
-	// live hub.history — the Band Lab decision/score then track the
-	// simulated clock.
-	bucketEnd := int64(0)
-	if raw := strings.TrimSpace(r.URL.Query().Get("bucket_end")); raw != "" {
-		if v, err := strconv.ParseInt(raw, 10, 64); err == nil && v > 0 {
-			bucketEnd = v
-			if bucketEnd > now {
-				bucketEnd = now
-			}
-		}
-	}
-
 	var historyCopy []MQTTMessage
-	if bucketEnd > 0 {
-		if dxBaseline == nil || dxBaseline.Store() == nil {
-			http.Error(w, "bucket_end requires postgres", http.StatusServiceUnavailable)
-			return
-		}
-		callsignFilter, locatorPrefixes := replayQTHPrefilter(qth, surroundings)
-		msgs, _, err := dxBaseline.LoadSpotsBetweenSources(bucketEnd-int64(minutes*60), bucketEnd, replayAllSources, callsignFilter, locatorPrefixes, maxReplaySpots)
-		if err != nil {
-			http.Error(w, "historical conditions query failed: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		historyCopy = msgs
-		now = bucketEnd
-	} else {
+	{
 		cutoff := now - int64(minutes*60)
 		hub.RLock()
 		idx := sort.Search(len(hub.history), func(i int) bool {

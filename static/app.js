@@ -12,8 +12,6 @@ import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, clearW
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
-import { initTimeTravel, isReplayActive, exitTimeTravel } from './timetravel.js';
-import { initVideoExport } from './videoexport.js';
 
 // --- Azimuth Zoom State ---
 const AZIMUTH_MAX_HORIZON_KM = 20015;
@@ -709,21 +707,6 @@ function getRenderableMapSpots(spots) {
     const maxAge = getCurrentMaxSpotAgeSeconds();
     const now = Date.now();
 
-    // Replay mode: bucket ages are relative to the replayed bucket end, so the
-    // live maxAge gate (an hour at most from the #minutes slider) would kill
-    // every historical spot. Only the source checkboxes and band filters apply;
-    // the server already applied SNR/band/source filters at fetch time.
-    if (isReplayActive()) {
-        return spots.filter((spot) => {
-            if (!srcFilter) return true;
-            const src = String(spot?.sourceType || '').toLowerCase();
-            if (!showDXClusterSpots && src === 'dxcluster') return false;
-            if (!showRbnSpots && src === 'rbn') return false;
-            if (!showWsprSpots && src === 'wspr') return false;
-            return true;
-        });
-    }
-
     return spots.filter((spot) => {
         const recvMs = spot.__recvMs;
         if (recvMs) {
@@ -1384,9 +1367,6 @@ if (captureConfig?.enabled) {
     // registration, and re-subscription-after-restart reconciliation.
     // Returns null when push is unsupported (UI stays hidden).
     initPushUI().catch((err) => { console.warn('push UI init failed:', err); });
-    // Time travel replay: timeline overlay over the map, swaps the spot list.
-    initTimeTravel({ scheduleRender, updateBandDisplay: updateCurrentBandDisplay });
-    initVideoExport();
     if (HORST_KEVIN_ENABLED) {
         horstKevin = initHorstKevin({
             getQth: () => document.getElementById('qth')?.value?.trim()?.toUpperCase() || '',
@@ -1469,9 +1449,6 @@ export function scheduleRender() {
             } else {
                 const mercatorTimer = startPerfTimer();
                 updateMapVisualization(renderSpots, parseInt(minutes));
-                // Grayline tracks the simulated clock during replay; the call
-                // is key-cached, so it only rebuilds when the bucket changes.
-                if (isReplayActive()) void syncMercatorGraylineLayer();
                 endPerfTimer('render.mercator.frame_ms', mercatorTimer);
             }
 
@@ -1820,10 +1797,6 @@ function startLiveStream(preserveData = false) {
         return;
     }
 
-    // Restarting the stream ends any active replay first, so the replay array
-    // can't be mistaken for the live list (exit restores liveSpotsBackup).
-    exitTimeTravel();
-
     state.qth = qth;
     localStorage.setItem('qth', qth);
     localStorage.setItem('minutes', minutes);
@@ -1994,9 +1967,6 @@ function startLiveStream(preserveData = false) {
     });
 
     state.eventSource.onmessage = (e) => {
-        // Time travel owns liveSpots while replaying; the connection stays open
-        // (status/reconnect logic untouched) but arrivals are not applied.
-        if (isReplayActive()) return;
         totalReceived++;
         // SSE text frames: count bytes for a user-facing data-consumption hint.
         // EventSource reassembles line-terminated data; e.data.length is close
@@ -2082,9 +2052,6 @@ function startLiveStream(preserveData = false) {
 
     state.renderInterval = setInterval(() => {
         if (state.softPaused) return;
-        // Replay owns liveSpots: the prune would mutate bucket-relative ages
-        // (+5s per tick) and destructively reap the historical window.
-        if (isReplayActive()) return;
         // Prune/age continuously when preserving data so existing spots don't
         // freeze on screen while the new band's history loads. For fresh starts,
         // keep suppressing during the history dump to avoid a half-loaded grid.
@@ -2111,9 +2078,6 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
     const btnSubmit = document.getElementById('btn-submit');
 
     if (btnSubmit && isStreaming(btnSubmit)) {
-        // Hand liveSpots back from an active replay before tearing down, so the
-        // fresh array below is the real live list (not the replay bucket).
-        exitTimeTravel();
         if (state.eventSource) {
             state.eventSource.close();
             state.eventSource = null;

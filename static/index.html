@@ -286,7 +286,6 @@
         <div id="map-toggles" class="map-toggles">
             <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show Band Stats">Stats</button>
             <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show Propagation Intelligence Matrix">Prop</button>
-            <button id="timetravel-toggle" type="button" class="panel-toggle is-translucent" title="Replay the last 24-48h of spots">Time Travel</button>
             <button id="drill-down-clear" type="button" class="panel-toggle is-translucent" title="Clear grid-square filter" style="display: none;"></button>
         </div>
         <canvas id="azimuth-canvas" class="position-absolute top-0 start-0 w-100 h-100"></canvas>
@@ -355,78 +354,6 @@
                 <span>Propagation Intel · from here</span>
             </div>
             <div id="wspr-matrix-body" class="wspr-matrix-body"></div>
-        </div>
-        <!-- Time travel: timeline overlay for replaying the last 24-48h of
-             spots in 30-min buckets (static/timetravel.js). While active, the
-             replay bucket array replaces liveSpots and live arrivals/prune
-             are suspended. -->
-        <div id="timetravel-bar" class="timetravel-bar is-hidden" role="region" aria-label="Time travel replay">
-            <div class="timetravel-header">
-                <span class="timetravel-title">Time Travel</span>
-                <span id="timetravel-label" class="timetravel-label"></span>
-                <button id="timetravel-close" type="button" class="timetravel-btn" title="Exit time travel">&times;</button>
-            </div>
-            <div id="timetravel-track" class="timetravel-track">
-                <div id="timetravel-range-highlight" class="timetravel-range-highlight" aria-hidden="true"></div>
-                <div id="timetravel-histogram" class="timetravel-histogram" aria-hidden="true"></div>
-                <input id="timetravel-scrubber" class="timetravel-scrubber" type="range" min="0" max="0" step="1800" aria-label="Replay time">
-                <div id="timetravel-marker-start" class="timetravel-marker" title="Loop start — drag to set where playback wraps to"><span id="timetravel-marker-start-time" class="timetravel-marker-time"></span></div>
-                <div id="timetravel-marker-end" class="timetravel-marker" title="Loop end — drag to set where playback wraps around"><span id="timetravel-marker-end-time" class="timetravel-marker-time"></span></div>
-            </div>
-            <div class="timetravel-controls">
-                <button id="timetravel-prev" type="button" class="timetravel-btn" title="Previous 30 min">&lsaquo;</button>
-                <button id="timetravel-play" type="button" class="timetravel-btn" title="Play / pause">Play</button>
-                <button id="timetravel-next" type="button" class="timetravel-btn" title="Next 30 min">&rsaquo;</button>
-                <label class="timetravel-speed">
-                    <select id="timetravel-speed" aria-label="Seconds per step">
-                        <option value="1000">1 s</option>
-                        <option value="3000" selected>3 s</option>
-                        <option value="6000">6 s</option>
-                    </select>
-                    <span>/ step</span>
-                </label>
-                <label class="timetravel-range">
-                    <span>From</span>
-                    <input id="timetravel-from" type="datetime-local" step="1800" aria-label="Replay start time">
-                </label>
-                <label class="timetravel-range">
-                    <span>To</span>
-                    <input id="timetravel-to" type="datetime-local" step="1800" aria-label="Replay end time">
-                </label>
-                <button id="timetravel-apply" type="button" class="timetravel-btn" title="Apply the selected range">Apply</button>
-            </div>
-            <!-- Export the time-travel content as a video clip: the loop
-                 range above IS the clip's start/stop — there are no separate
-                 time inputs here by design (static/videoexport.js). -->
-            <div id="videoexport-controls" class="timetravel-controls videoexport-controls">
-                <span class="timetravel-title">Video</span>
-                <label class="timetravel-speed">
-                    <select id="videoexport-step" aria-label="Time per frame">
-                        <option value="60">1 min</option>
-                        <option value="120" selected>2 min</option>
-                        <option value="300">5 min</option>
-                    </select>
-                    <span>/ frame</span>
-                </label>
-                <label class="timetravel-speed">
-                    <select id="videoexport-fps" aria-label="Frames per second">
-                        <option value="5">5 fps</option>
-                        <option value="10" selected>10 fps</option>
-                        <option value="15">15 fps</option>
-                        <option value="30">30 fps</option>
-                    </select>
-                </label>
-                <label class="timetravel-speed">
-                    <select id="videoexport-size" aria-label="Video resolution">
-                        <option value="1280x720" selected>1280x720</option>
-                        <option value="1920x1080">1920x1080</option>
-                    </select>
-                </label>
-                <span id="videoexport-estimate" class="timetravel-label"></span>
-                <button id="videoexport-submit" type="button" class="timetravel-btn" title="Start the render job">Export</button>
-                <span id="videoexport-status" class="timetravel-label small"></span>
-                <a id="videoexport-download" class="timetravel-btn" href="#" hidden download>Download MP4</a>
-            </div>
         </div>
     </div>
     <div id="tooltip"></div>

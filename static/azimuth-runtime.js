@@ -1,6 +1,4 @@
 import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, gridSnrOpacity, topQuartileMean, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
-import { overlayNowMs } from './timetravel.js';
-
 import { radialLine, strokeCircle } from './canvas-draw.js';
 
 const EARTH_RADIUS_KM = 6371;
@@ -956,10 +954,7 @@ export function getAzimuthLatLngFromClientPoint(clientX, clientY) {
 
 
 function drawGrayline(ctx, width, height) {
-    // overlayNowMs follows replay time while time travel is active, so the
-    // terminator tracks the simulated clock; the throttle timestamp below
-    // stays on the real clock.
-    const bucket = Math.floor(overlayNowMs() / (5 * 60 * 1000));
+    const bucket = Math.floor(Date.now() / (5 * 60 * 1000));
     const nowMs = Date.now();
     const key = `${width}x${height}:${state.theme}:${state.zoom.toFixed(2)}:${state.horizonKm}:${state.center[0].toFixed(3)}:${state.center[1].toFixed(3)}:${bucket}`;
 

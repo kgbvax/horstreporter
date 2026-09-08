@@ -175,9 +175,6 @@ A great-circle line and distance ring from your station to a clicked point on th
 **Cluster spot detail**
 When DX cluster spots are shown, display the spotter's note and frequency alongside the grid square marker, so you can see the exact frequency of a rare DX station without leaving the map.
 
-**Historical playback**
-Replay the past 24 hours of propagation as a time-lapse. Useful for post-contest analysis ("when did the path to Japan open?") and for understanding diurnal propagation patterns on a given band.
-
 **Solar and geomagnetic indices overlay**
 Display current solar flux (SFI), sunspot number (SSN), and K-index directly in the interface. When the K-index spikes, it's immediately visible alongside the degraded propagation on the map.
 

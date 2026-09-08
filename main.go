@@ -602,10 +602,6 @@ func main() {
 	}
 	appMux.HandleFunc("/api/stream", streamHandler)
 	appMux.HandleFunc("/api/capture_snapshot", captureSnapshotHandler)
-	appMux.HandleFunc("/api/replay/histogram", replayHistogramHandler)
-	appMux.HandleFunc("/api/replay/spots", replaySpotsHandler)
-	// Video export: proxied to the horstvideo sidecar (cmd/horstvideo).
-	appMux.HandleFunc("/api/video/", videoProxyHandler)
 	appMux.HandleFunc("/api/stats", statsHandler)
 	appMux.HandleFunc("/api/dx_conditions", dxConditionsHandler)
 	appMux.HandleFunc("/api/hot_bands", hotBandsHandler)
@@ -694,36 +690,10 @@ func main() {
 				} else if n > 0 {
 					logInfo("dx_raw_spots prune deleted %d rows older than %d days", n, retentionDays)
 				}
-				// The replay pre-aggregate ages with the raw spots it sums.
-				if pn, err := dxBaseline.PruneReplayBucketCountsOlderThan(cutoff); err != nil {
-					logInfo("replay bucket counts prune failed: %v", err)
-				} else if pn > 0 {
-					logInfo("replay bucket counts prune deleted %d rows", pn)
-				}
 				t.Reset(1 * time.Hour)
 			}
 		}()
 		logInfo("dx_raw_spots retention enabled: %d days", retentionDays)
-	}
-
-	// Replay timeline pre-aggregate: fold new raw spots into
-	// dx_raw_spots_30m_counts every 5 minutes (watermark-incremental; the
-	// first run backfills the 48h reach in bounded chunks, in the background).
-	// /api/replay/histogram reads this table because a live GROUP BY over
-	// dx_raw_spots times out past ~12h on the prod box.
-	if dxBaseline != nil && dxBaseline.Store() != nil {
-		go func() {
-			// Give the startup backfill/loader a quiet minute first.
-			t := time.NewTimer(1 * time.Minute)
-			defer t.Stop()
-			for range t.C {
-				if err := dxBaseline.UpdateReplayBucketCounts(time.Now().Unix()); err != nil {
-					logInfo("replay bucket counts update failed: %v", err)
-				}
-				t.Reset(5 * time.Minute)
-			}
-		}()
-		logInfo("replay bucket counts maintenance enabled (5m ticker)")
 	}
 
 	// dx_region_baseline_daily / wspr_region_baseline_daily retention loop:

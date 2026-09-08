@@ -23,30 +23,4 @@ export const state = {
     // When the SNR threshold or band set changes, we still restart but preserve
     // existing data so the map doesn't flash empty. null = no active stream.
     streamedFilter: null,
-    // Time-travel replay runtime (static/timetravel.js). While `active`, the
-    // replay bucket array REPLACES liveSpots (the real live list is parked in
-    // liveSpotsBackup) — scheduleRender, band-lab and both projections read
-    // state.liveSpots dynamically each call, so they follow the swap with no
-    // changes. SSE arrivals and the 5s prune are suspended until exit, so the
-    // backup stays valid.
-    timeTravel: {
-        active: false,
-        liveSpotsBackup: null,
-        start: 0,
-        end: 0,
-        // Loop range set by the draggable timeline markers; playback wraps
-        // from rangeEnd back to rangeStart. Distinct from start/end (the
-        // histogram's data extent).
-        rangeStart: 0,
-        rangeEnd: 0,
-        bucketSeconds: 1800,
-        currentBucketEnd: 0,
-        playing: false,
-        speedMs: 3000,
-        histogram: null,
-        bucketCache: new Map(),
-        bucketCacheLimit: 24,
-        timer: null,
-        abort: null
-    }
 };
