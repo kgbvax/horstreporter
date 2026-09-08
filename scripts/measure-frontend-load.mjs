@@ -1,10 +1,14 @@
 // ce-optimize measurement harness for the "frontend-load" run.
 // Outputs a single JSON object to stdout; progress/warnings go to stderr.
 //
-// wire_gzip_kb (primary): total gzip-9 bytes of everything initial page load
-// transfers — index.html, linked stylesheets, blocking vendor <script>s, the
-// vite dist bundle, and the full ES-module import graph reachable (static +
-// dynamic imports) from the module script entries.
+// wire_gzip_kb (primary): eager initial payload — index.html, linked
+// stylesheets, blocking vendor <script>s, the vite dist bundle, and the full
+// ES-module import graph reachable (static + dynamic imports) from the module
+// script entries. Images (e.g. the hk.jpg preload) are excluded by design.
+// Script tags injected at runtime via createElement (the lazy-loaded turf
+// bundle and the opt-in Chase Queue module) are NOT in this total; they are
+// reported separately in lazy_gzip_kb so the eager and deferred halves of the
+// first load stay visible.
 //
 // Gates: tests_passed (npm run check), perf_gate_passed (mercator perf gate).
 // Set MEASURE_SKIP_GATES=1 to skip gates (fast local iteration only).
@@ -18,6 +22,7 @@ const root = process.cwd();
 const staticDir = path.join(root, 'static');
 const out = {
   wire_gzip_kb: 0,
+  lazy_gzip_kb: 0,
   tests_passed: 0,
   perf_gate_passed: 0,
   js_raw_bytes: 0,
@@ -27,6 +32,7 @@ const out = {
   dist_bytes: 0,
   vendor_referenced_bytes: 0,
   wire_raw_kb: 0,
+  lazy_raw_kb: 0,
 };
 
 const log = (msg) => process.stderr.write(`[measure] ${msg}\n`);
@@ -57,6 +63,28 @@ function addFile(absPath, relPath, kind) {
 
 // --- JS module graph walk ------------------------------------------------
 const importRe = /\bimport\s+(?:[\w${}\s,*]+\s+from\s+)?['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)|\bexport\s+[\w${}\s,*]*\sfrom\s+['"]([^'"]+)['"]/g;
+// Runtime-injected script tags: `.src = 'something.js'` in first-party code
+// (e.g. renderers.js's ensureTurf, app.js's Chase Queue injection). These are
+// deferred fetches the eager payload walk cannot see; they are tallied
+// separately as lazy_gzip_kb.
+const lazySrcRe = /\.src\s*=\s*['"]([^'"]+)['"]/g;
+const lazySeen = new Set();
+let lazyRaw = 0;
+let lazyGz = 0;
+
+function addLazyFile(absPath, relPath) {
+  if (lazySeen.has(relPath) || seen.has(relPath)) return;
+  lazySeen.add(relPath);
+  let buf;
+  try {
+    buf = fs.readFileSync(absPath);
+  } catch {
+    log(`WARN missing lazy script: ${relPath}`);
+    return;
+  }
+  lazyRaw += buf.length;
+  lazyGz += gz(buf);
+}
 
 function walkModule(absPath, relPath) {
   addFile(absPath, relPath, 'js');
@@ -68,6 +96,15 @@ function walkModule(absPath, relPath) {
     return;
   }
   const dir = path.dirname(relPath);
+  for (const m of src.matchAll(lazySrcRe)) {
+    const spec = m[1];
+    // Injected script srcs are root-relative ('dxcluster.js',
+    // 'vendor/js/turf.min.js'); skip absolute URLs.
+    if (spec.startsWith('http') || spec.startsWith('//') || !spec.endsWith('.js')) continue;
+    const lazyRel = path.posix.normalize(path.posix.join(dir, spec));
+    if (lazyRel.startsWith('..')) continue;
+    addLazyFile(path.join(staticDir, lazyRel), lazyRel);
+  }
   for (const m of src.matchAll(importRe)) {
     const spec = m[1] || m[2] || m[3];
     if (!spec || !spec.startsWith('.')) continue; // bare/absolute imports: none expected in first-party code
@@ -114,7 +151,9 @@ for (const m of html.matchAll(/<script\s+type="module"\s+src="([^"]+)"/g)) {
 
 out.wire_raw_kb = Math.round((rawTotal / 1024) * 10) / 10;
 out.wire_gzip_kb = Math.round((gzTotal / 1024) * 10) / 10;
-log(`payload: raw=${out.wire_raw_kb}KB gzip=${out.wire_gzip_kb}KB modules=${out.module_request_count}`);
+out.lazy_raw_kb = Math.round((lazyRaw / 1024) * 10) / 10;
+out.lazy_gzip_kb = Math.round((lazyGz / 1024) * 10) / 10;
+log(`payload: raw=${out.wire_raw_kb}KB gzip=${out.wire_gzip_kb}KB modules=${out.module_request_count} lazy=${out.lazy_gzip_kb}KB`);
 
 // --- gates -----------------------------------------------------------------
 if (process.env.MEASURE_SKIP_GATES === '1') {
@@ -137,4 +176,4 @@ if (process.env.MEASURE_SKIP_GATES === '1') {
 }
 
 process.stdout.write(JSON.stringify(out, null, 2) + '\n');
-process.exit(out.tests_passed === 1 ? 0 : 1);
+process.exit(out.tests_passed === 1 && out.perf_gate_passed === 1 ? 0 : 1);
