@@ -849,17 +849,8 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().Unix()
 
-	var historyCopy []MQTTMessage
-	{
-		cutoff := now - int64(minutes*60)
-		hub.RLock()
-		idx := sort.Search(len(hub.history), func(i int) bool {
-			return hub.history[i].T >= cutoff
-		})
-		historyCopy = make([]MQTTMessage, len(hub.history)-idx)
-		copy(historyCopy, hub.history[idx:])
-		hub.RUnlock()
-	}
+	historyCopy, releaseHistory := snapshotHubHistoryWindow(now, minutes)
+	defer releaseHistory()
 
 	resp := dxConditionsResponse{
 		QTH:              qth,
@@ -913,14 +904,9 @@ func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
 	currentBand := normalizeBand(strings.TrimSpace(r.URL.Query().Get("current_band")))
 
 	now := time.Now().Unix()
-	cutoff := now - int64(minutes*60)
-	hub.RLock()
-	idx := sort.Search(len(hub.history), func(i int) bool {
-		return hub.history[i].T >= cutoff
-	})
-	historyCopy := make([]MQTTMessage, len(hub.history)-idx)
-	copy(historyCopy, hub.history[idx:])
-	hub.RUnlock()
+
+	historyCopy, releaseHistory := snapshotHubHistoryWindow(now, minutes)
+	defer releaseHistory()
 
 	resp := hotBandsResponse{
 		QTH:              qth,

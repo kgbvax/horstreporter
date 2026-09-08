@@ -48,8 +48,6 @@ const (
 	propIntelRegionBaselineNegCacheTTL int64 = 30
 	// propIntelRegionBaselineQueryTimeout is the per-query deadline.
 	propIntelRegionBaselineQueryTimeout = 1500 * time.Millisecond
-	// propIntelHistoryPoolCap is the initial capacity of pooled scratch slices.
-	propIntelHistoryPoolCap = 1 << 14
 	// SSB/CW budget model constants (KTD8).
 	// propIntelSSBFloorDb: SSB requires roughly +10 dB SNR/2500 Hz at 100W
 	// reference power to be comfortably copied.
@@ -147,16 +145,11 @@ type propIntelEngine struct {
 // checks (the handler still guards for safety).
 var propIntel = &propIntelEngine{}
 
-// propIntelHistoryPool reuses scratch slices for the per-request hub.history
-// copy (#4): a 1.8M-entry window is ~360MB, and allocating (and GC-ing) that
-// on every request amplifies the cost of the evaluation passes. Buffers grow
-// to fit and are returned after Evaluate, which does not retain the slice.
-var propIntelHistoryPool = sync.Pool{
-	New: func() interface{} {
-		b := make([]MQTTMessage, 0, propIntelHistoryPoolCap)
-		return &b
-	},
-}
+// propIntelHistoryPoolCap sizes the shared historyScratchPool (dx_conditions.go):
+// a 1.8M-entry window is ~360MB, and allocating (and GC-ing) that on every
+// request amplifies the cost of the evaluation passes. Buffers grow to fit and
+// are returned after Evaluate, which does not retain the slice.
+const propIntelHistoryPoolCap = 1 << 14
 
 // propIntelCellKey indexes a (band × region) accumulator.
 type propIntelCellKey struct {
@@ -251,7 +244,7 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		if remoteLocator == "" || !isLocator(remoteLocator) {
 			continue
 		}
-		reg := region.FromLocator(remoteLocator)
+		reg := regionFromLocatorCached(remoteLocator)
 		if reg == region.Unknown {
 			continue
 		}
@@ -471,6 +464,37 @@ func round3(v float64) float64 {
 	return math.Round(v*1000) / 1000
 }
 
+// regionFromLocatorCache memoizes internal/region.FromLocator per locator
+// string (ce-optimize prop-latency): the per-message window scan calls it for
+// every in-scope message, and the locator→region math (centroid + point-in-
+// region) is pure, so each distinct locator only needs to be solved once per
+// process. Keys are full locators (not prefixes) so boundary behavior is
+// byte-identical to the uncached call; the cap bounds memory (active station
+// locators are ~10k in practice; entries are a string header + a byte).
+var regionFromLocatorCacheMu sync.RWMutex
+var regionFromLocatorCache = make(map[string]region.Region)
+
+const regionFromLocatorCacheCap = 1 << 16
+
+func regionFromLocatorCached(loc string) region.Region {
+	regionFromLocatorCacheMu.RLock()
+	r, ok := regionFromLocatorCache[loc]
+	regionFromLocatorCacheMu.RUnlock()
+	if ok {
+		return r
+	}
+	r = region.FromLocator(loc)
+	regionFromLocatorCacheMu.Lock()
+	if len(regionFromLocatorCache) >= regionFromLocatorCacheCap {
+		// Reset instead of LRU: a pathological locator churn just pays the
+		// solve cost again; correctness is unaffected.
+		regionFromLocatorCache = make(map[string]region.Region, regionFromLocatorCacheCap/2)
+	}
+	regionFromLocatorCache[loc] = r
+	regionFromLocatorCacheMu.Unlock()
+	return r
+}
+
 // regionBaselineKey indexes regionCalendarStats rows by (band, region, slot).
 type regionBaselineKey struct {
 	band   string
@@ -636,23 +660,8 @@ func parsePropIntelParams(r *http.Request) (propIntelParams, bool) {
 // to `now` into a pooled scratch buffer. The returned release func must be
 // called after Evaluate to return the buffer to the pool. The `now` must be
 // the same value passed to Evaluate so the window and the evaluation agree.
-func snapshotPropIntelHistory(now int64, minutes int) (history []MQTTMessage, release func()) {
-	nowcastCutoff := now - int64(minutes)*60
-	hub.RLock()
-	idx := sort.Search(len(hub.history), func(i int) bool {
-		return hub.history[i].T >= nowcastCutoff
-	})
-	n := len(hub.history) - idx
-	bufp := propIntelHistoryPool.Get().(*[]MQTTMessage)
-	if cap(*bufp) < n {
-		*bufp = make([]MQTTMessage, n)
-	} else {
-		*bufp = (*bufp)[:n]
-	}
-	historyCopy := (*bufp)[:n]
-	copy(historyCopy, hub.history[idx:])
-	hub.RUnlock()
-	return historyCopy, func() { propIntelHistoryPool.Put(bufp) }
+func snapshotPropIntelHistory(now int64, minutes int) ([]MQTTMessage, func()) {
+	return snapshotHubHistoryWindow(now, minutes)
 }
 
 // applyFromHere stamps the from_here flag on the response and, when set,

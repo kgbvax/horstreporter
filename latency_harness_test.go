@@ -136,13 +136,22 @@ func TestPropLatencyHarness(t *testing.T) {
 	}()
 
 	history := buildLatencyHistory(count)
-	// Feed the engines the same stream the ingest would: the climatology and
-	// baseline buckets then carry realistic occupancy for Evaluate/HotBands.
-	for _, m := range history {
+	// Feed the engines a bounded sample of the ingest stream, not the full
+	// window: on prod the dx baseline engine is store-backed (Postgres), so
+	// Evaluate never takes the dev-only cloneBuckets/snapshotEventsLocked
+	// paths — letting the harness build a 1M-event in-memory ring would bake
+	// a dev-only cost into the metric. The window scan itself (extractMatched
+	// BandEvent over hub.history) is unaffected by this cap.
+	const engineFeedCap = 20000
+	feed := history
+	if len(feed) > engineFeedCap {
+		feed = feed[:engineFeedCap]
+	}
+	for _, m := range feed {
 		dxEng.Observe(m)
 	}
 	clim := newWsprClimatologyEngine("")
-	for _, m := range history {
+	for _, m := range feed {
 		if m.Source == "wspr" {
 			clim.Observe(m)
 		}

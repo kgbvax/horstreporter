@@ -37,19 +37,33 @@ func reporterLocatorForMessage(m MQTTMessage) string {
 	return strings.ToUpper(strings.TrimSpace(m.RL))
 }
 
-// matchCall checks for an exact callsign match, or a match with common prefix/suffix modifiers (e.g., W1AW/P, DL/W1AW)
+// matchCall checks for an exact callsign match, or a match with common prefix/suffix modifiers (e.g., W1AW/P, DL/W1AW).
+// The three modifier checks are spelled out against qth instead of building
+// "/"+qth needles: at ~250k window messages per /api/dx_conditions request
+// the old concat version spent ~29% of total endpoint CPU in allocation
+// (ce-optimize prop-latency, run #2 profile).
 func matchCall(spotCall, qth string) bool {
 	if spotCall == qth {
 		return true
 	}
-	if strings.HasPrefix(spotCall, qth+"/") {
+	// HasPrefix(spotCall, qth+"/")
+	if n := len(qth); len(spotCall) > n && spotCall[:n] == qth && spotCall[n] == '/' {
 		return true
 	}
-	if strings.HasSuffix(spotCall, "/"+qth) {
+	// HasSuffix(spotCall, "/"+qth)
+	if n := len(qth); len(spotCall) > n && spotCall[len(spotCall)-n:] == qth && spotCall[len(spotCall)-n-1] == '/' {
 		return true
 	}
-	if strings.Contains(spotCall, "/"+qth+"/") {
-		return true
+	// Contains(spotCall, "/"+qth+"/") — scan slash positions, no needle.
+	if needleLen := len(qth) + 2; len(spotCall) >= needleLen {
+		for i := 0; i+needleLen <= len(spotCall); i++ {
+			if spotCall[i] != '/' {
+				continue
+			}
+			if spotCall[i+1:i+1+len(qth)] == qth && spotCall[i+1+len(qth)] == '/' {
+				return true
+			}
+		}
 	}
 	return false
 }

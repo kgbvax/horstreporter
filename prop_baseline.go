@@ -153,9 +153,9 @@ func (e *propBaselineEngine) Observe(m MQTTMessage) {
 	}
 	slot := utcSlotOfDay(ts)
 
-	reg := region.FromLocator(recvLoc)
+	reg := regionFromLocatorCached(recvLoc)
 	if reg == region.Unknown {
-		reg = region.FromLocator(otherLoc)
+		reg = regionFromLocatorCached(otherLoc)
 		if reg == region.Unknown {
 			return
 		}

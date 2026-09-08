@@ -29,6 +29,42 @@ const (
 
 var dxBaselineMaxEvents = defaultDxBaselineMaxEvents
 
+// historyScratchPool backs snapshotHubHistoryWindow: pooled scratch buffers
+// for the per-request hub.history window copy. dx_conditions, hot_bands, and
+// prop_intel share the element type, so they share the pool (ce-optimize
+// prop-latency: the old per-request make() churned a ~40MB window slice and
+// its GC pressure on every /api/dx_conditions and /api/hot_bands hit).
+var historyScratchPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]MQTTMessage, 0, propIntelHistoryPoolCap)
+		return &b
+	},
+}
+
+// snapshotHubHistoryWindow copies the hub.history slice covering
+// [now-minutes*60, now] into a pooled scratch buffer and returns it together
+// with a release func. Callers must release() as soon as Evaluate/HotBands
+// has returned — the engine reads the slice but never retains it (same
+// contract as the prop_intel pool this extends to the DX endpoints).
+func snapshotHubHistoryWindow(now int64, minutes int) ([]MQTTMessage, func()) {
+	cutoff := now - int64(minutes)*60
+	hub.RLock()
+	idx := sort.Search(len(hub.history), func(i int) bool {
+		return hub.history[i].T >= cutoff
+	})
+	n := len(hub.history) - idx
+	bufp := historyScratchPool.Get().(*[]MQTTMessage)
+	if cap(*bufp) < n {
+		*bufp = make([]MQTTMessage, n)
+	} else {
+		*bufp = (*bufp)[:n]
+	}
+	hist := (*bufp)[:n]
+	copy(hist, hub.history[idx:])
+	hub.RUnlock()
+	return hist, func() { historyScratchPool.Put(bufp) }
+}
+
 // SlotsOfDay is the number of 30-minute slots in one UTC day: 48.
 // Buckets are aggregated across the week into this 24h × 30min grid;
 // day-of-week is intentionally collapsed because propagation patterns

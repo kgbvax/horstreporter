@@ -226,7 +226,7 @@ func (e *propIntelV2Engine) EvaluateV2(qth string, surroundings bool, minutes in
 		if remoteLocator == "" || !isLocator(remoteLocator) {
 			continue
 		}
-		reg := region.FromLocator(remoteLocator)
+		reg := regionFromLocatorCached(remoteLocator)
 		if reg == region.Unknown {
 			continue
 		}
