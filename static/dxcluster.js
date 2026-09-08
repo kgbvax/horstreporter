@@ -18,6 +18,11 @@ const HORSTPROP_URL = new URLSearchParams(location.search).get('hp') || '/horstp
 const REFRESH_MS = 30000;
 const TOP_N = 40; // cap how many spots we score per cycle
 
+// Hidden by default: the Chase Queue is an optional operator surface (prod has
+// no DX-cluster ingest). Opt in with ?cq=1 or localStorage 'showChaseQueue'='1'.
+const CQ_ENABLED = new URLSearchParams(location.search).has('cq') ||
+  localStorage.getItem('showChaseQueue') === '1';
+
 // Canonical band palette (mirrors static/utils.js bandColors).
 const BAND_COLORS = {
   '160m': '#8B0000', '80m': '#800080', '60m': '#4B0082', '40m': '#0000FF',
@@ -715,6 +720,7 @@ async function refresh() {
 }
 
 function init() {
+  if (!CQ_ENABLED) return;
   mount();
   refresh();
   setInterval(() => { if (!panelEl.classList.contains('is-hidden')) refresh(); }, REFRESH_MS);
