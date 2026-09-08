@@ -9,6 +9,44 @@ import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTi
 // and their appearance, so a new spot that doesn't change any square's
 // dominant band or quantized opacity doesn't tear down and rebuild the layer.
 let lastGridFingerprint = '';
+// Lazy loader for vendor/js/turf.min.js (~605KB raw). The script is not part
+// of the initial index.html payload; it is injected on demand the first time
+// the active-area (hull/cluster) render path actually runs. An already-loaded
+// global (e.g. the perf-gate stub) is reused as-is instead of re-injecting.
+let turfLoadPromise = null;
+function ensureTurf() {
+    const existing = (typeof window !== 'undefined' ? window : globalThis).turf;
+    if (existing) return Promise.resolve(existing);
+    if (!turfLoadPromise) {
+        turfLoadPromise = new Promise((resolve, reject) => {
+            if (typeof document === 'undefined' || !document.createElement) {
+                turfLoadPromise = null;
+                reject(new Error('turf: no DOM available to load vendor/js/turf.min.js'));
+                return;
+            }
+            const script = document.createElement('script');
+            script.src = 'vendor/js/turf.min.js';
+            script.async = true;
+            script.onload = () => {
+                const loaded = (typeof window !== 'undefined' ? window : globalThis).turf;
+                if (loaded) {
+                    resolve(loaded);
+                } else {
+                    turfLoadPromise = null;
+                    reject(new Error('turf: vendor/js/turf.min.js loaded but the turf global is missing'));
+                }
+            };
+            script.onerror = () => {
+                // Allow a later frame to retry the injection.
+                turfLoadPromise = null;
+                reject(new Error('turf: failed to load vendor/js/turf.min.js'));
+            };
+            document.head.appendChild(script);
+        });
+    }
+    return turfLoadPromise;
+}
+
 // Debounce for the active-area rebuild: turf.clustersDbscan is O(n²), so the
 // layer is rebuilt at most this often even when spots are streaming in.
 const ACTIVE_AREA_REBUILD_INTERVAL_MS = 2000;
@@ -38,13 +76,13 @@ function getGridCanvasRenderer() {
     return gridCanvasRenderer;
 }
 
-// Add a single isolated-spot circle marker to the heat layer (shared by the
+// Add a single isolated-spot circle marker to the given layer (shared by the
 // clustered and non-clustered render paths so the style lives in one place).
-function addSpotMarker(p, color) {
+function addSpotMarker(p, color, layer) {
     L.circleMarker([p.geometry.coordinates[1], p.geometry.coordinates[0]], {
         color, fillColor: color, radius: 4.5, weight: 2,
         opacity: 0.65, fillOpacity: 0.5, interactive: false
-    }).addTo(state.heatLayer);
+    }).addTo(layer);
 }
 
 function buildFilterCtx() {
@@ -294,10 +332,14 @@ export function updateMapVisualization(spots, maxMinutes) {
                 incrementPerfCounter('mercator.layers.removed', 1);
             }
             incrementPerfCounter('mercator.render.style.active_area', 1);
-            const activeBands = renderActiveArea(regularSpots, maxMinutes, filterCtx);
-            const bandLabelTimer = startPerfTimer();
-            updateBandLabels(spots, filterCtx, activeBands);
-            endPerfTimer('mercator.band_labels.total_ms', bandLabelTimer);
+            // Create the layer synchronously so it is on the map even while
+            // turf is still loading; the hull/draw pass fills it in via the
+            // async continuation (its `layer` argument pins the draw target so
+            // a later style switch can't capture this draw).
+            const layer = L.layerGroup().addTo(map);
+            state.heatLayer = layer;
+            incrementPerfCounter('mercator.layers.added', 1);
+            rebuildActiveArea(layer, regularSpots, maxMinutes, filterCtx, spots);
         }
     } else {
         // grid-snr: the aggregate is O(n) but cheap; the L.geoJSON layer
@@ -597,10 +639,26 @@ function renderGridSquares(squareData, filterCtx) {
     incrementPerfCounter('mercator.grid.rectangles_added', gridFeatures.length);
 }
 
-function renderActiveArea(regularSpots, maxMinutes, filterCtx) {
+// Async wrapper around renderActiveArea: load turf on demand (the vendor
+// script is no longer part of the initial index.html payload), then draw the
+// hulls into the already-created layer and update the band labels. On a turf
+// load failure the layer is left empty for this frame instead of crashing the
+// render; the rebuild debounce lets a later frame retry.
+function rebuildActiveArea(layer, regularSpots, maxMinutes, filterCtx, spots) {
+    ensureTurf()
+        .then(() => {
+            const activeBands = renderActiveArea(regularSpots, maxMinutes, filterCtx, layer);
+            const bandLabelTimer = startPerfTimer();
+            updateBandLabels(spots, filterCtx, activeBands);
+            endPerfTimer('mercator.band_labels.total_ms', bandLabelTimer);
+        })
+        .catch((err) => {
+            console.error('Active-area render skipped: turf is unavailable.', err);
+        });
+}
+
+function renderActiveArea(regularSpots, maxMinutes, filterCtx, layer) {
     const timer = startPerfTimer();
-    state.heatLayer = L.layerGroup().addTo(map);
-    incrementPerfCounter('mercator.layers.added', 1);
 
     // Item 3: use passed filterCtx instead of re-reading DOM
     const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands } = filterCtx;
@@ -694,7 +752,7 @@ function renderActiveArea(regularSpots, maxMinutes, filterCtx) {
                             renderer: getGridCanvasRenderer(),
                             style: { color: color, weight: 1, opacity: 0.9, fillColor: color, fillOpacity: 0.18 },
                             interactive: false
-                        }).addTo(state.heatLayer);
+                        }).addTo(layer);
                         polygonsAdded += 1;
                     }
                 } else {
@@ -703,12 +761,12 @@ function renderActiveArea(regularSpots, maxMinutes, filterCtx) {
             }
 
             isolatedPts.forEach(p => {
-                addSpotMarker(p, color);
+                addSpotMarker(p, color, layer);
                 markersAdded += 1;
             });
         } else {
             pts.forEach(p => {
-                addSpotMarker(p, color);
+                addSpotMarker(p, color, layer);
                 markersAdded += 1;
             });
         }
@@ -716,7 +774,7 @@ function renderActiveArea(regularSpots, maxMinutes, filterCtx) {
         // Capped-out points (weaker SNR) are drawn as dots so the view still
         // shows them, just not as cluster regions.
         cappedOut.forEach(p => {
-            addSpotMarker(p, color);
+            addSpotMarker(p, color, layer);
             markersAdded += 1;
         });
     }
