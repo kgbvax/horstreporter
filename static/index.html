@@ -35,7 +35,7 @@
                 <label class="form-label mb-0" title="Sets the minimum Signal-to-Noise (SNR) level used to display spots.">Min SNR:</label>
                 <div class="btn-group w-100" role="group" id="min-snr-group" title="Sets the minimum Signal-to-Noise (SNR) level used to display spots."></div>
             </div>
-            <div id="projection-switch-row" class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
+            <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
                 <div class="btn-group w-100" role="group" id="projection-group"></div>
             </div>
             <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
@@ -202,7 +202,7 @@
                     <div class="small text-muted" id="opmode-station-row">station: <strong id="opmode-station">n/a</strong></div>
                     <div class="small text-muted" id="opmode-heading-row">antenna: <strong id="opmode-heading">n/a</strong></div>
                     <!-- Azimuth -->
-                    <div id="azimuth-options-group" class="d-flex flex-column gap-2">
+                    <div class="d-flex flex-column gap-2">
                         <label class="d-flex align-items-center justify-content-between">Azimuthal horizon (km, auto):
                             <input type="number" id="azimuth-horizon-km" class="form-control form-control-sm w-auto" value="16000" min="1000" max="20015" step="100" style="max-width: 100px;" readonly title="Derived automatically from azimuth zoom" />
                         </label>
@@ -257,7 +257,7 @@
         </form>
     </div>
     <div id="band-lab-window" class="band-lab-window is-hidden">
-        <div id="band-lab-window-header" class="band-lab-window-header">
+        <div class="band-lab-window-header">
             <span>Band Stats</span>
             <div class="band-lab-window-header-actions">
                 <label for="band-lab-time-range" class="visually-hidden">Band Stats time range</label>
@@ -301,7 +301,7 @@
         </div>
         <!-- Collapsible beam-direction controls (UltraBeam over MQTT) -->
         <div id="opmode-controls-group" style="display: none;">
-            <div id="opmode-beam-group" class="opmode-beam-group d-flex gap-1" role="group" aria-label="UltraBeam beam direction">
+            <div class="opmode-beam-group d-flex gap-1" role="group" aria-label="UltraBeam beam direction">
                 <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn" id="opmode-beam-forward" data-mode="forward" aria-pressed="false">forward</button>
                 <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn" id="opmode-beam-180" data-mode="reverse" aria-pressed="false">180&deg;</button>
                 <button type="button" class="btn btn-outline-secondary btn-sm opmode-beam-btn" id="opmode-beam-bidir" data-mode="bidirectional" aria-pressed="false">bi-dir</button>
