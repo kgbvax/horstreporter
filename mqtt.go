@@ -76,7 +76,14 @@ func startMQTT() {
 // the FT8/FT4 fan-out to the baseline engine and hub — without a broker.
 func ingestPSKRMessage(topic string, payload []byte) {
 	var m MQTTMessage
-	if err := json.Unmarshal(payload, &m); err != nil {
+	// Fast path: the dominant real feed payload is the minimal {"t":N,"rp":N}
+	// (PSKReporter omits the rest to save bandwidth — the topic backfill below
+	// covers those fields). The fast parse is strict: any deviation from that
+	// shape falls back to the full unmarshal, so behavior stays identical.
+	if t, rp, ok := fastParseMinimalPSKR(payload); ok {
+		m.T = t
+		m.RP = rp
+	} else if err := json.Unmarshal(payload, &m); err != nil {
 		logDebug("Failed to unmarshal payload: %s", string(payload))
 		return
 	}
@@ -136,4 +143,115 @@ func ingestPSKRMessage(topic string, payload []byte) {
 		}
 		hub.broadcastMsg(m)
 	}
+}
+
+// fastParseMinimalPSKR parses exactly the shape {"t":<int>,"rp":<int>} — keys
+// in either order, optional whitespace, negative integers — without the full
+// json.Unmarshal machinery. It refuses anything else (extra keys, floats,
+// strings, nested objects, malformed JSON such as leading zeros or trailing
+// garbage) so the caller falls back to json.Unmarshal and ingest behavior
+// stays byte-identical, including for payloads json would reject.
+func fastParseMinimalPSKR(payload []byte) (t int64, rp int, ok bool) {
+	n := len(payload)
+	i := 0
+	ws := func() {
+		for i < n {
+			switch payload[i] {
+			case ' ', '\t', '\n', '\r':
+				i++
+			default:
+				return
+			}
+		}
+	}
+	scanInt := func() (int64, bool) {
+		neg := false
+		if i < n && payload[i] == '-' {
+			neg = true
+			i++
+		}
+		if i >= n || payload[i] < '0' || payload[i] > '9' {
+			return 0, false
+		}
+		if payload[i] == '0' && i+1 < n && payload[i+1] >= '0' && payload[i+1] <= '9' {
+			return 0, false // leading zero: invalid JSON, let Unmarshal reject
+		}
+		var v int64
+		for i < n && payload[i] >= '0' && payload[i] <= '9' {
+			v = v*10 + int64(payload[i]-'0')
+			if v < 0 {
+				return 0, false // overflow
+			}
+			i++
+		}
+		if i < n && (payload[i] == '.' || payload[i] == 'e' || payload[i] == 'E') {
+			return 0, false // not an integer
+		}
+		if neg {
+			v = -v
+		}
+		return v, true
+	}
+
+	ws()
+	if i >= n || payload[i] != '{' {
+		return 0, 0, false
+	}
+	i++
+	ws()
+	seen := 0 // bit 0: t, bit 1: rp
+	for {
+		ws()
+		if i >= n || payload[i] != '"' {
+			return 0, 0, false
+		}
+		switch {
+		case i+2 < n && payload[i+1] == 't' && payload[i+2] == '"':
+			i += 3
+			ws()
+			if i >= n || payload[i] != ':' {
+				return 0, 0, false
+			}
+			i++
+			ws()
+			v, good := scanInt()
+			if !good {
+				return 0, 0, false
+			}
+			t = v
+			seen |= 1
+		case i+3 < n && payload[i+1] == 'r' && payload[i+2] == 'p' && payload[i+3] == '"':
+			i += 4
+			ws()
+			if i >= n || payload[i] != ':' {
+				return 0, 0, false
+			}
+			i++
+			ws()
+			v, good := scanInt()
+			if !good {
+				return 0, 0, false
+			}
+			rp = int(v)
+			seen |= 2
+		default:
+			return 0, 0, false // any other key → full unmarshal
+		}
+		ws()
+		if i < n && payload[i] == ',' {
+			i++
+			continue
+		}
+		break
+	}
+	ws()
+	if i >= n || payload[i] != '}' || seen != 3 {
+		return 0, 0, false
+	}
+	i++
+	ws()
+	if i != n {
+		return 0, 0, false // trailing non-whitespace bytes → fall back
+	}
+	return t, rp, true
 }
