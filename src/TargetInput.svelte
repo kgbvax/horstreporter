@@ -12,5 +12,5 @@
 </script>
 
 <input type="text" id="qth" class="form-control" bind:value={$uiStore.qth} on:input={onInput}
-       placeholder="Callsign or Locator (e.g. W1AW, FN31, JO32WE)"
+       placeholder="Locator or Callsign"
        title="You can use squares, subsquares or callsigns" />

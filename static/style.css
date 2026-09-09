@@ -1472,7 +1472,3 @@ body[data-theme="dark"] .band-pill .band-nodata-tag {
     justify-content: space-between;
     margin-top: 2px;
 }
-.grid-legend-caption {
-    margin-top: 3px;
-    opacity: 0.85;
-}
