@@ -1720,15 +1720,50 @@ document.getElementById('qth')?.addEventListener('keydown', (e) => {
     }
 });
 
+// Surface an invalid-target error in the stream status line (same place the
+// stream's connection status renders, so the feedback lands where users look).
+// Message text is assigned via textContent — the message embeds raw user input.
+function showStreamError(message) {
+    const statusEl = document.getElementById('stream-status');
+    if (statusEl) {
+        statusEl.textContent = 'Status: ';
+        const span = document.createElement('span');
+        span.style.color = 'red';
+        span.textContent = message;
+        statusEl.appendChild(span);
+    } else {
+        alert(message);
+    }
+}
+
 // Start (or restart) the live SSE stream. When preserveData is true, existing
 // spots and overlays are kept on screen while the new connection's history dump
 // is merged in, so band changes never create an empty-map flash.
 function startLiveStream(preserveData = false) {
-    const qth = document.getElementById('qth')?.value.trim().toUpperCase() || '';
     const minutes = document.getElementById('minutes')?.value || 15;
 
-    if (!qth) {
+    const rawQth = document.getElementById('qth')?.value.trim().toUpperCase() || '';
+    if (!rawQth) {
         alert('Please provide a Callsign or Locator.');
+        return;
+    }
+
+    // Normalize/validate the target: accept Maidenhead squares/subsquares and
+    // callsigns (the backend matches sender/receiver callsigns incl. modifiers).
+    // A subsquare (JO32WE) is shortened to its square (JO32) — spot locators are
+    // typically 4-char, so an exact 6-char prefix match would find nothing.
+    const locatorRe = /^[A-R]{2}[0-9]{2}(?:[A-R]{2})?$/;
+    const callsignRe = /^[A-Z0-9]{3,}(?:\/[A-Z0-9]+)*$/;
+    let qth = rawQth;
+    if (locatorRe.test(qth)) {
+        if (qth.length > 4) {
+            qth = qth.slice(0, 4);
+            const qthInput = document.getElementById('qth');
+            if (qthInput) qthInput.value = qth;
+            window.__horstSetQTH?.(qth);
+        }
+    } else if (!callsignRe.test(qth) || !/[0-9]/.test(qth) || !/[A-Z]/.test(qth)) {
+        showStreamError(`"${rawQth}" is not a valid locator (e.g. JO32) or callsign.`);
         return;
     }
 
