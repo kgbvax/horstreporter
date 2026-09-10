@@ -2,9 +2,7 @@
 
 HorstReporter is a single Go binary that ingests PSK Reporter MQTT data, computes live HF propagation conditions, and serves a browser UI.
 
-This repository now includes a requirements-aligned DX conditions engine and Home Assistant integration via MQTT discovery.
 
-> Note: Home Assistant MQTT publishing has been removed in this branch because the target HA deployment is firewalled from MQTT ingress.
 
 ## What is implemented
 
