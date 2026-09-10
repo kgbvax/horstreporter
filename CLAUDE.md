@@ -52,6 +52,15 @@ npm test
 # Frontend typecheck + tests
 npm run check
 
+# Mercator perf gate (catch draw/zoom regressions)
+npm run perf:gate:mercator
+# Runs the Mercator perf tests with report output, writes scenario reports to
+# tmp/perf-reports/, compares against .perf-baseline.json, and fails if any
+# threshold is exceeded. Sub-steps: npm run test:perf:mercator:report (write
+# reports, HORST_PERF_WRITE_REPORT=1, HORST_PERF_REPORT_DIR=tmp/perf-reports)
+# and npm run test:perf:mercator:assert (node scripts/perf-assert.mjs
+# .perf-baseline.json tmp/perf-reports).
+
 # Cell bucket feed (path-scope data plumbing; Propagation Lab was removed 2026-08-04)
 #   -proplab-cell-retention-days  # retention for proplab_cell_buckets / proplab_sw_series (default 60; 0 disables)
 #   -proplab-sw-enable            # NOAA SWPC index series ingest (kp/F10.7/xray/OVATION; consumed by pathscope)

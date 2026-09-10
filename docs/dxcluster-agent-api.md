@@ -41,7 +41,8 @@ UI hides what isn't present.
 }
 ```
 
-`rig` appears only when a rig backend is configured (`-rig-transport`); with the **WaveLogGate**
+`rig` appears only when a rig backend is configured (`-rig-transport none|waveloggate|log4om`,
+see `cmd/horstoperator-agent -h`); with the **WaveLogGate**
 backend (shipped first), `preview`/`split` are `false` (see §3). `lookup` appears only when
 `WAVELOG_API_KEY` is set; `was` is `false` (no Wavelog WAS endpoint — see §1).
 

@@ -12,8 +12,6 @@
     "test:perf:mercator:report": "HORST_PERF_WRITE_REPORT=1 HORST_PERF_REPORT_DIR=tmp/perf-reports vitest run test/mercator*.perf.test.js",
     "test:perf:mercator:assert": "node scripts/perf-assert.mjs .perf-baseline.json tmp/perf-reports",
     "perf:gate:mercator": "node scripts/perf-run-mercator-gate.mjs",
-    "capture:dk3jf:frames": "node scripts/capture-dk3jf-frames.mjs",
-    "capture:dk3jf:movie": "bash scripts/assemble-dk3jf-movie.sh",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run test"
   },
