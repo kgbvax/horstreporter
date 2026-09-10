@@ -1,98 +1,117 @@
 # HorstReporter
 
-HorstReporter is a single Go binary that ingests PSK Reporter MQTT data, computes live HF propagation conditions, and serves a browser UI.
+HorstReporter is a single Go binary with a plain-ES-modules frontend (no React/Vue
+build pipeline). It ingests PSK Reporter MQTT data (`pskr/filter/v2/#`), computes
+live HF propagation conditions from an FT8-SNR baseline, and serves a browser UI
+plus SSE streams. Optional ingests add DX cluster, RBN, and WSPR data.
 
+The architecture is intentionally single-service/single-binary. Separate
+operator-side binaries (`cmd/horstoperator-agent`, `cmd/horstprop`,
+`cmd/pathscope`) consume the backend or the operator's log read-only — that is
+the sanctioned extension pattern, not a core split.
 
+![HorstReporter live map: FT8 spots per band around JO32](docs/screenshot.png)
 
-## What is implemented
+## Core DX analytics
 
-### Core DX analytics
-
-- Real-time scoring per band
-- Baseline-aware confidence and status
+- Real-time scoring per band, baseline-aware confidence and status
 - Status classes: `green | yellow | red | grey`
-- Recommendations:
-  - `best_bands`
-  - `recommended_bands`
-  - `worst_bands`
-  - `avoid_bands`
+- Recommendations: `best_bands`, `recommended_bands`, `worst_bands`, `avoid_bands`
 - Trend direction + sparkline
 - Mode feasibility: `ssb | cw | digital | none`
 - Direction output: dominant azimuth sector (`N`, `NE`, ...)
+- Propagation intelligence: `GET /api/prop_intel` (WSPR nowcast per band × region,
+  always from your QTH) plus a 60s-cached `/api/prop_intel/summary` that feeds the
+  horstapp mobile widgets
 
-### Home Assistant integration status
-
-- Direct Home Assistant MQTT publishing is currently **disabled/removed**.
-- DX analytics remain available through `GET /api/dx_conditions` and can be consumed by external adapters or polling integrations.
-
-### Cell bucket feed (for pathscope)
-
-The former Propagation Lab and DXPulse features were removed (2026-08-04).
-What remains is the ingest/persistence they also produced, because the
-[pathscope](#) module consumes it:
-
-- `proplab_cell_buckets` — midpoint cell × band × lane 15-minute buckets written in-process from the live spot stream. Retention: `-proplab-cell-retention-days` (default `60`, `0` disables).
-- `proplab_sw_series` — NOAA SWPC index series (kp, F10.7, x-ray, OVATION), gated by `-proplab-sw-enable`.
-
-Backend endpoints are documented in [docs/api.md](docs/api.md).
+Canonical endpoint reference: [docs/api.md](docs/api.md) (response shapes, caches,
+exclusions). Scoring method: [docs/scoring-method.md](docs/scoring-method.md).
 
 ## Run locally
 
-### Development mode
-
-Use dev mode when iterating on static UI assets:
-
 ```bash
+# Backend
 go run . -dev -port 8080
-```
 
-### Test suites
-
-```bash
+# Tests
 go test ./...
-npm test
+npm test          # frontend
+npm run check     # frontend typecheck + tests
+
+# Mercator perf gate (catches draw/zoom regressions)
+npm run perf:gate:mercator
 ```
 
-### Optional DX cluster ingest
+In production mode static assets are embedded (`//go:embed static`); `-dev`
+serves them from disk with no-cache.
 
-DX cluster ingest is disabled by default. Enable it explicitly and point it to a cluster endpoint:
+## Optional ingests
+
+All optional ingests are disabled by default and enabled explicitly via flags.
+Secrets go through env vars or a systemd EnvironmentFile, never argv — see
+[docs/deployment-secrets.md](docs/deployment-secrets.md).
+
+### DX cluster (TCP)
+
+Most clusters (e.g. DB0ERF, a DXSpider node) require a registered callsign and an
+individually-assigned password. Login is prompt-aware.
 
 ```bash
-go run . -dev -port 8080 -dxcluster-enable -dxcluster-endpoint db0erf.de:7300
+DXCLUSTER_USERNAME=<yourcall> DXCLUSTER_PASSWORD=<password> \
+  go run . -dev -port 8080 -dxcluster-enable -dxcluster-endpoint db0erf.de:7300
 ```
 
-Available flags:
+Flags: `-dxcluster-enable`, `-dxcluster-endpoint` (default `db0erf.de:7300`),
+`-dxcluster-reconnect-seconds`, `-dxcluster-verbose`. Credentials via
+`DXCLUSTER_USERNAME` / `DXCLUSTER_PASSWORD` (or the `-dxcluster-username` /
+`-dxcluster-password` flags).
 
-- `-dxcluster-enable` enable optional DX cluster ingest (default: `false`)
-- `-dxcluster-endpoint` cluster endpoint in `host:port` (default: `db0erf.de:7300`)
-- `-dxcluster-reconnect-seconds` reconnect delay after disconnect (default: `15`)
-- `-dxcluster-verbose` emit detailed DX cluster connection lifecycle logs (default: `false`)
-- `-dxcluster-username` callsign sent when connecting to DX cluster
-- `-dxcluster-password` optional password sent when connecting to DX cluster
-- `-qrz-username` QRZ username for callsign→locator enrichment
-- `-qrz-password` QRZ password for callsign→locator enrichment
+All parsed cluster spots are persisted to Postgres `dx_raw_spots` with
+`source_type=dxcluster`; only spots with usable locators enter the live SSE/map
+flow. Cluster spots stay out of the FT8-SNR baseline.
 
-QRZ credentials can also be provided via environment variables (preferred):
+### QRZ enrichment (shared)
 
-- `QRZ_USERNAME`
-- `QRZ_PASSWORD`
+`QRZ_USERNAME` / `QRZ_PASSWORD` enable callsign→locator enrichment (`dx_locator`),
+shared by the DX-cluster and RBN ingests.
 
-DX cluster credentials can also be provided via environment variables:
+### RBN (Reverse Beacon Network)
 
-- `DXCLUSTER_USERNAME`
-- `DXCLUSTER_PASSWORD`
+Public CW/RTTY telnet relay; it prompts for a callsign before streaming. Fills the
+activity chart/live stream during CW/SSB contests when FT8 thins out. Minimal
+scope: activity + live only, kept out of the FT8-SNR baseline like the DX cluster.
 
-When DX cluster ingest is enabled:
+```bash
+go run . -dev -port 8080 -rbn-enable -rbn-callsign <yourcall>
+```
 
-- all parsed cluster spots are persisted to Postgres `dx_raw_spots` with `source_type=dxcluster`
-- only spots with usable locators are forwarded into live SSE/map flow
+### WSPR (wspr.live)
 
-### Local PSTrotator operator agent (opmode)
+ClickHouse HTTP poller, reference-only (also kept out of the FT8-SNR baseline).
 
-This repo now includes a local operator agent at `cmd/horstoperator-agent`.
-It exposes `/v1/*` endpoints consumed directly by the browser opmode runtime and bridges to PSTrotator via UDP.
+```bash
+go run . -dev -port 8080 -wspr-enable
+```
 
-Run the local agent (example):
+## Cell bucket feed (for pathscope)
+
+The former Propagation Lab and DXPulse features were removed (2026-08-04). What
+remains is the ingest/persistence they also produced, because the
+[pathscope](cmd/pathscope) module consumes it:
+
+- `proplab_cell_buckets` — midpoint cell × band × lane 15-minute buckets written
+  in-process from the live spot stream. Retention: `-proplab-cell-retention-days`
+  (default `60`, `0` disables).
+- `proplab_sw_series` — NOAA SWPC index series (kp, F10.7, x-ray, OVATION), gated
+  by `-proplab-sw-enable`.
+
+## Local operator agent (opmode)
+
+`cmd/horstoperator-agent` is a standalone local agent exposing `/v1/*` endpoints
+consumed directly by the browser opmode runtime. It bridges to PSTrotator via UDP
+(built-in command profile, no user templates) and, with `-rig-transport`, can also
+tune the rig via WaveLogGate or Log4OM. The backend never proxies to it: browser
+opmode calls `http://127.0.0.1:9955/v1/*` directly.
 
 ```bash
 go run ./cmd/horstoperator-agent \
@@ -104,104 +123,75 @@ go run ./cmd/horstoperator-agent \
   -pst-port 12000
 ```
 
-Then run HorstReporter (backend proxy is intentionally disabled by design):
-
-```bash
-go run . -dev -port 8080
-```
-
-Important: the backend never contacts the local agent. Browser opmode calls `http://127.0.0.1:9955/v1/*` (or `http://localhost:9955/v1/*`) directly.
-
-When `-backend-url` is set, the local agent also reverse-proxies non-`/v1/*` requests to HorstReporter backend. This allows using the local agent as a single browser origin (open `http://127.0.0.1:9955/`) while keeping opmode local/direct.
+When `-backend-url` is set, the agent also reverse-proxies non-`/v1/*` requests to
+the HorstReporter backend, so it can serve as a single browser origin.
 
 Agent flags (core):
 
-- `-listen` HTTP listen address for local agent (default: `127.0.0.1:9955`)
-- `-backend-url` optional HorstReporter backend base URL used for reverse proxy of non-`/v1/*` routes
+- `-listen` HTTP listen address (default `127.0.0.1:9955`)
+- `-backend-url` optional backend base URL for reverse proxying non-`/v1/*` routes
 - `-station-name` station display name
-- `-station-locator` Maidenhead locator (**required**; station position is derived from it)
+- `-station-locator` Maidenhead locator (**required**)
 - `-control-permitted` enable/disable rotate+mode commands
-- `-beamwidth-3db-deg` reported antenna beamwidth for UI overlays
 
-PSTrotator UDP flags:
+PSTrotator UDP flags: `-pst-host`, `-pst-port`, `-pst-timeout-ms`, plus
+diagnostics (`-pst-log-traffic`, `-pst-log-traffic-hex`, `-pst-log-max-bytes`).
 
-- `-pst-host` PSTrotator host (supports localhost or LAN host)
-- `-pst-port` PSTrotator UDP port
-- `-pst-timeout-ms` UDP timeout
+Rig control: `-rig-transport none|waveloggate|log4om`
+(`-rig-waveloggate-url`, `-rig-log4om-addr`).
 
-The agent now uses a built-in PSTrotator command profile (no user regex/command templates required):
+### Chase Queue enrichment + award progress
 
-- azimuth query: `<PST>AZ?</PST>`
-- mode query: `<PST>MODE?</PST>`
-- rotate command: `<PST><TRACK>0</TRACK><AZIMUTH><deg></AZIMUTH></PST>`
-- mode command mapping:
-  - `forward`/`backward` → `<PST><TRACK>0</TRACK></PST>`
-  - `bidirectional` → `<PST><TRACK>1</TRACK></PST>`
-- command terminator: `CR` (`\r`)
-- response receive behavior: listens for replies on `pst-port + 1` (per manual)
+The agent resolves Wavelog attributes for the Chase Queue and computes award
+progress ("wanted": DXCC/WAS/POTA) in-process via `internal/awards`, so the
+operator's log stays local — it is never pulled to the shared server. Configure
+with `WAVELOG_API_KEY`, `WAVELOG_STATION_ID` (required for DCLNext), and
+optionally `POTA_HUNTED_CSV` (hunted-parks export). Spec:
+[docs/horstawards.md](docs/horstawards.md).
 
-Optional UDP diagnostics flags:
+## HF link-quality scoring (horstprop)
 
-- `-pst-log-traffic` enable UDP TX/RX logging
-- `-pst-log-traffic-hex` include a truncated hex dump in UDP logs
-- `-pst-log-max-bytes` max bytes shown in UDP payload previews (default: `256`)
+`cmd/horstprop` is a separate binary that consumes HorstReporter read-only over
+HTTP and scores individual paths/links (consumed by the Chase Queue via
+`/horstprop/v1/score`). The scoring boundary is deliberate: horstreporter owns
+the shared, multi-station band/region conditions analytics; per-spot/path link
+scoring lives only in horstprop. Spec: [docs/horstprop.md](docs/horstprop.md).
 
-### Mercator performance gate (local, provider-agnostic)
+```bash
+go run ./cmd/horstprop -listen 127.0.0.1:9970
+```
 
-Use the local perf gate to catch draw/zoom/pan regressions before merging:
+## Mercator performance gate
 
 ```bash
 npm run perf:gate:mercator
 ```
 
-What it does:
+Runs Mercator perf tests with report output enabled, writes scenario reports to
+`tmp/perf-reports/`, compares against `.perf-baseline.json`, and fails if any
+threshold is exceeded. Sub-commands: `npm run test:perf:mercator:report`,
+`npm run test:perf:mercator:assert`.
 
-- runs Mercator perf tests with report output enabled
-- writes scenario reports to `tmp/perf-reports/`
-- compares measured metrics against `.perf-baseline.json`
-- fails if any threshold is exceeded
+## Server-driven frame capture (snapshot-based)
 
-Useful sub-commands:
+- `GET /api/capture_snapshot` returns a deterministic filtered spot snapshot for a
+  target and timestamp.
+- The frontend can boot in capture mode via `?capture=1` and signals readiness
+  via `window.__horstCaptureReady`.
+- Scripts (require Playwright via `npm i`, a running server, and `ffmpeg` for
+  movie assembly):
 
 ```bash
-npm run test:perf:mercator:report
-npm run test:perf:mercator:assert
+npm run capture:dk3jf:frames -- --base-url http://127.0.0.1:8080 --target JO32 --duration-minutes 360 --step-seconds 60 --projection mercator --style active-area --min-snr-mode ssb
+npm run capture:dk3jf:movie -- tmp/dk3jf-capture/<run-id> tmp/dk3jf-capture/<run-id>/dk3jf.mp4 24
 ```
 
-### Server-side DK3JF capture experiment (snapshot-based)
+This path does not alter regular live SSE behavior.
 
-This branch now includes a first implementation slice for server-driven movie capture:
+## Related repositories
 
-- `GET /api/capture_snapshot` returns a deterministic filtered spot snapshot for a target and timestamp.
-- Frontend can be booted in capture mode via URL query params (`capture=1`) and exposes readiness via `window.__horstCaptureReady`.
-- Scripts:
-  - `npm run capture:dk3jf:frames -- --base-url http://127.0.0.1:8080 --target JO32 --duration-minutes 360 --step-seconds 60 --projection mercator --style active-area --min-snr-mode ssb`
-  - `npm run capture:dk3jf:movie -- tmp/dk3jf-capture/<run-id> tmp/dk3jf-capture/<run-id>/dk3jf.mp4 24`
-
-Notes:
-
-- Frame capture requires Playwright (`npm i`) and a running HorstReporter server.
-- Movie assembly requires `ffmpeg` on the host.
-- This is an experiment path and does not alter regular live SSE behavior.
-
-## Home Assistant usage (firewalled setup)
-
-Because MQTT publish is removed, use the HTTP endpoint as integration source:
-
-- `GET /api/dx_conditions?target=<CALL_OR_GRID>&minutes=<N>&surroundings=true|false`
-
-This response includes status, score, confidence, mode, direction, and recommendation fields per band.
-
-## Verification checklist (Phase 4)
-
-1. Start app and query `GET /api/dx_conditions` for your target.
-2. Confirm low-data cases emit:
-   - `status = grey`
-   - `mode = none`
-3. Confirm frontend still renders DX panel values and trend/sparkline.
-
-## Notes
-
-- In production mode static assets are embedded (`//go:embed static`).
-- In `-dev` mode static files are served from disk.
-- Current architecture is intentionally single-service and single-binary.
+- `../dxlens` — sibling module mounted at `/dxlens/` (via `go.mod replace`); DX
+  conditions lens reading the in-memory baseline.
+- `../horstapp` — sibling Flutter mobile app (iOS primary + Android) consuming
+  this backend read-only over HTTPS: propagation-intelligence overview plus
+  native home-screen widgets fed by `/api/prop_intel/summary`.
