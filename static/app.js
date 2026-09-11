@@ -15,6 +15,7 @@ import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, start
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
 import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL } from './timeline.js';
 import { updateAfterglow, notifyMapMoved, hideAfterglow } from './afterglow.js';
+import { sessionRing } from './session-ring.js';
 
 // --- Azimuth Zoom State ---
 const AZIMUTH_MAX_HORIZON_KM = 20015;
@@ -1740,6 +1741,11 @@ function showStreamError(message) {
     }
 }
 
+// The qth whose cohort the session ring currently holds. Tracked separately
+// from state.qth (which the qth input listener updates on every keystroke) so
+// the ring's invalidation compares the value the stream actually last fed.
+let lastRingQth = null;
+
 // Start (or restart) the live SSE stream. When preserveData is true, existing
 // spots and overlays are kept on screen while the new connection's history dump
 // is merged in, so band changes never create an empty-map flash.
@@ -1774,6 +1780,17 @@ function startLiveStream(preserveData = false) {
     state.qth = qth;
     localStorage.setItem('qth', qth);
     localStorage.setItem('minutes', minutes);
+
+    // The session ring only holds frames the server filtered for the current
+    // qth, so a qth change invalidates the whole ring (the incoming cohort is
+    // foreign). Compared against the qth the ring actually fed, not state.qth:
+    // the qth input listener updates state.qth on every keystroke, so it can
+    // already hold the new value when startLiveStream runs. A resubmit with
+    // an unchanged qth keeps the ring (and the preserveData band change too).
+    if (lastRingQth !== qth) {
+        sessionRing.clear();
+        lastRingQth = qth;
+    }
 
     if (state.eventSource) state.eventSource.close();
     if (state.renderInterval) clearInterval(state.renderInterval);
@@ -1972,6 +1989,12 @@ function startLiveStream(preserveData = false) {
         // filter computes a continuous true age.
         spot.__recvMs = Date.now();
         spot.__recvAge = spot.ageSeconds;
+        // Session ring (plan 2026-09-11-002, U2): every received frame feeds
+        // the ring — connect-time and reconnect history dumps included, since
+        // they flow through this same handler. Unconditional: the feed must
+        // not depend on any render gate (the timeline relies on the ring's
+        // coverage even while live rendering is suppressed).
+        sessionRing.push(spot);
         state.liveSpots.push(spot);
         setFaviconColor('#28a745'); // Green for active receiving
 
