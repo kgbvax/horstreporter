@@ -1,15 +1,10 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, latLngToLocator, locatorToBounds, initialBearingDeg, getMinSnrMode, getSelectedBand, getEnabledBands, formatNumber, icon } from './utils.js';
-
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
-}
+import { getGridResolution, latLngToLocator, locatorToBounds, getMinSnrMode, getSelectedBand, getEnabledBands, formatNumber, icon } from './utils.js';
+// Pure helpers (escapeHtml, hover-square style/azimuth, hover-cache key) live
+// in ui-helpers.js so they are unit-testable without this module's map.js /
+// init-closure surface.
+import { escapeHtml, getHoverSquareStyle, hoverSquareAzimuth, buildHoverRequestKey } from './ui-helpers.js';
 
 export function initUI() {
     initInfoOverlay();
@@ -158,29 +153,6 @@ export function attachUITooltipEvents() {
     let hoverSquareLocator = '';
     let hoverSquareTheme = '';
 
-    function getHoverSquareStyle() {
-        const theme = document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
-        if (theme === 'dark') {
-            return {
-                color: '#ffe39a',
-                weight: 2,
-                opacity: 1,
-                fillColor: '#ffe39a',
-                fillOpacity: 0.20,
-                interactive: false
-            };
-        }
-
-        return {
-            color: '#cc9a1f',
-            weight: 2,
-            opacity: 0.95,
-            fillColor: '#ffd166',
-            fillOpacity: 0.14,
-            interactive: false
-        };
-    }
-
     function clearHoverSquareHighlight() {
         if (!hoverSquareLayer || !map) return;
         map.removeLayer(hoverSquareLayer);
@@ -196,7 +168,7 @@ export function attachUITooltipEvents() {
         }
 
         const theme = document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
-        const style = getHoverSquareStyle();
+        const style = getHoverSquareStyle(theme);
 
         if (hoverSquareLocator === locator && hoverSquareLayer) {
             if (hoverSquareTheme !== theme) {
@@ -238,21 +210,11 @@ export function attachUITooltipEvents() {
     }
 
     // Great-circle bearing from the target square (station) to the hovered
-    // square center, e.g. " 302°". Empty when the qth isn't a valid
-    // locator (the field also accepts callsigns) or hovers the qth itself.
+    // square center; the pure math lives in ui-helpers.js, this wrapper only
+    // reads the qth from the DOM.
     function hoverSquareAzimuthText(hoverLocator) {
         const qth = document.getElementById('qth')?.value?.trim()?.toUpperCase() || '';
-        const locatorRe = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/;
-        if (!locatorRe.test(qth) || !locatorRe.test(hoverLocator)) return '';
-        if (qth === hoverLocator) return '';
-        const qthBounds = locatorToBounds(qth);
-        const hoverBounds = locatorToBounds(hoverLocator);
-        if (!qthBounds || !hoverBounds) return '';
-        const center = (b) => [(b[0][0] + b[1][0]) / 2, (b[0][1] + b[1][1]) / 2];
-        const [tLat, tLng] = center(qthBounds);
-        const [hLat, hLng] = center(hoverBounds);
-        const bearing = Math.round(initialBearingDeg(tLat, tLng, hLat, hLng)) % 360;
-        return ` ${bearing}°`;
+        return hoverSquareAzimuth(qth, hoverLocator);
     }
 
     function renderDetails(locator, data) {
@@ -289,26 +251,6 @@ export function attachUITooltipEvents() {
             `Spots: ${formatNumber(count)}` +
             reportsHtml;
         tooltip.style.display = 'block';
-    }
-
-    function buildHoverRequestKey(params) {
-        // Bucket the key by wall-clock time so the cache naturally expires:
-        // spot counts change as spots arrive and age out, and without a time
-        // component the cached payload would be served forever for unchanged
-        // filter params. 30s is plenty fresh for a hover preview.
-        const timeBucket = Math.floor(Date.now() / 30000);
-        return [
-            timeBucket,
-            params.qth,
-            params.locator,
-            params.minutes,
-            params.surroundings ? '1' : '0',
-            params.minSnrMode,
-            params.ssbMinDb,
-            params.cwMinDb,
-            params.selectedBand,
-            params.enabledBands
-        ].join('|');
     }
 
     function getHoverParams(locator) {

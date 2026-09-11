@@ -9,7 +9,11 @@ const GLYPH = {
     rising: '↑',
 };
 
-function hexToRgba(hex, alpha) {
+// Exported for tests (this module has no auto-init side effect, so it is safe
+// to import under vitest). Note: this is the hot-band variant — it requires a
+// 7-char `#rrggbb` string and falls back to rgba(85,85,85,α); the shared
+// utils.js hexToRgba has a laxer parse and a different fallback color.
+export function hexToRgba(hex, alpha) {
     if (typeof hex !== 'string' || hex.length !== 7 || hex[0] !== '#') {
         return `rgba(85,85,85,${alpha})`;
     }

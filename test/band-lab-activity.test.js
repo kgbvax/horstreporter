@@ -149,4 +149,85 @@ describe('computeActivityChartData', () => {
         );
         expect(data.binRates[11]).toBeCloseTo(1.6, 6);
     });
+
+    it('zeros non-finite/non-positive values inside a valid-length activity_by_bin', () => {
+        // NaN, negatives, and Infinity must all map to 0; strings that parse
+        // as numbers pass through. Only a full-length series is trusted.
+        const data = computeActivityChartData(
+            [],
+            { activity_by_bin: [NaN, -5, Infinity, 'x', 2, 3, 4, 5, 6, 7, 8, 9] },
+            15,
+            nowMidnightMs,
+        );
+        expect(data.binRates).toEqual([0, 0, 0, 0, 2, 3, 4, 5, 6, 7, 8, 9]);
+    });
+
+    it('treats minutes below 1 as a 1-minute window', () => {
+        // Math.max(1, minutes) with the 0||1 falsy fallback: 0 → 1, -5 → 1.
+        expect(computeActivityChartData([{ ageSeconds: 1 }], {}, 0, nowMidnightMs).binMinutes)
+            .toBeCloseTo(1 / 12, 6);
+        expect(computeActivityChartData([], {}, -5, nowMidnightMs).binRates.every((r) => r === 0))
+            .toBe(true);
+    });
+
+    it('tolerates null points, null entries, and non-finite ages', () => {
+        expect(computeActivityChartData(null, {}, 15, nowMidnightMs).binRates.every((r) => r === 0))
+            .toBe(true);
+        // A null entry is skipped; the live point still lands in the newest bin (1/1.25 = 0.8).
+        expect(computeActivityChartData([null, { ageSeconds: 1 }], {}, 15, nowMidnightMs).binRates[11])
+            .toBeCloseTo(0.8, 6);
+        // NaN age falls through "NaN || 0" to age 0 → counted in the newest bin.
+        expect(computeActivityChartData([{ ageSeconds: NaN }], {}, 15, nowMidnightMs).binRates[11])
+            .toBeCloseTo(0.8, 6);
+        // Negative age is explicitly skipped.
+        expect(computeActivityChartData([{ ageSeconds: -1 }], {}, 15, nowMidnightMs).binRates.every((r) => r === 0))
+            .toBe(true);
+    });
+
+    it('counts a point exactly at the window edge in the oldest bin', () => {
+        // age == totalWindowSec (900s for 15m) is NOT older than the window —
+        // the drop predicate is a strict `>`, so it lands in bin 0.
+        const at = computeActivityChartData([{ ageSeconds: 900 }], {}, 15, nowMidnightMs);
+        expect(at.binRates[0]).toBeCloseTo(0.8, 6);
+        expect(at.binRates.slice(1).every((r) => r === 0)).toBe(true);
+        const justUnder = computeActivityChartData([{ ageSeconds: 899.9 }], {}, 15, nowMidnightMs);
+        expect(justUnder.binRates[0]).toBeCloseTo(0.8, 6);
+    });
+
+    it('ignores a negative single-slot baseline fallback', () => {
+        const data = computeActivityChartData(
+            [],
+            { baseline_activity: -2, cluster_baseline_used: true },
+            15,
+            nowMidnightMs,
+        );
+        expect(data.baselineRatesPerBin.every((r) => r === 0)).toBe(true);
+    });
+
+    it('drives yMax from the baseline when all live bins are empty, and reports no slot changes', () => {
+        const data = computeActivityChartData([], { baseline_activity: 1.5 }, 15, nowMidnightMs);
+        expect(data.yMax).toBeCloseTo(1.65, 6);
+        expect(data.slotChanges).toEqual([]);
+        expect(computeActivityChartData([], {}, 15, nowMidnightMs).yMax).toBe(0.5);
+    });
+});
+
+describe('utcSlotOfDayFromMs (extra variants)', () => {
+    it('handles the slot boundary at exactly :30 and :29:59.999', () => {
+        expect(utcSlotOfDayFromMs(30 * 60 * 1000 - 1)).toBe(0);
+        expect(utcSlotOfDayFromMs(30 * 60 * 1000)).toBe(1);
+    });
+
+    it('maps a pre-epoch timestamp into the last slot of the previous UTC day', () => {
+        // 1969-12-31 23:59:59.999 UTC → slot 47.
+        expect(utcSlotOfDayFromMs(-1)).toBe(47);
+    });
+
+    it('works for arbitrary UTC timestamps, not just the epoch day', () => {
+        // 2026-09-11 12:15 UTC → slot 24; 23:59 → slot 47; midnight → slot 0.
+        const D = (h, m) => Date.UTC(2026, 8, 11, h, m);
+        expect(utcSlotOfDayFromMs(D(12, 15))).toBe(24);
+        expect(utcSlotOfDayFromMs(D(23, 59))).toBe(47);
+        expect(utcSlotOfDayFromMs(D(0, 0))).toBe(0);
+    });
 });
