@@ -14,6 +14,7 @@ import {
     filterAllowed,
     __internals,
 } from './session-ring.js';
+import { sliceMoment, toLiveSpot } from './timeline.js';
 
 // makeSpot builds a live-wire-shaped spot stamped the way app.js onmessage
 // stamps it (__recvMs / __recvAge) before the ring push.
@@ -360,5 +361,218 @@ describe('__internals', () => {
         const b = makeSpot({ recvMs: a.__recvMs + 9000, recvAge: 16, snr: -12 });
         expect(__internals.deriveT(b.__recvMs, b.__recvAge)).toBe(__internals.deriveT(a.__recvMs, a.__recvAge));
         expect(__internals.spotIdentity(b)).toBe(__internals.spotIdentity(a));
+    });
+});
+
+// --- Unit U7 (plan 2026-09-11-002): full-bundle render parity (R9) ---------
+//
+// U3's fixture in timeline.test.js already proves the controller path
+// (ring-synthesized vs archive-fetched moments) with a fixture whose live and
+// archive shapes are identical. This block closes the remaining gap: the
+// recorded /api/history bundle carries the FULL historySpot field shape
+// (history.go:68-79, 242-253) — sender/receiver included for EVERY source
+// type — while the live wire strips sender/receiver for non-dxcluster spots
+// (server.go:467-485), so the ring only ever saw them for dxcluster. The
+// comparison is therefore render-equivalent, not byte-identical (KTD-5):
+// sender/receiver for mqtt/wspr are excluded from the comparison (the
+// renderers consume them only in the dxcluster popup), and t is compared with
+// a ±2s tolerance because live frames derive t from the receive stamps
+// (t = floor(recvMs/1000) − recvAge) and inherit client/server clock skew.
+//
+// Deliberate choices (both stated in the unit packet):
+//   - The recorded bundle is HAND-CONSTRUCTED in exactly the shape fetchBundle
+//     produces ({key, t0, t1, spots t-sorted}), not via a fetch mock: the
+//     fetch-mock leg is already proven by U3, and the hand-built object lets
+//     this fixture pin the exact historySpot field list without DOM wiring.
+//   - The ring-synthesized bundle is built the same way tryRingBundle builds
+//     it (sessionRing.sliceFiltered over a filter the streamed cohort
+//     satisfies), just without the DOM-dependent cohort gate — the gate and
+//     the fall-through are U3/AE2 territory, already covered.
+describe('render parity: ring-synthesized vs recorded /api/history bundle (U7)', () => {
+    // 1-hour window, one spot every 60s, cycling mqtt/wspr/dxcluster. Ages are
+    // stamped relative to a notional stream "now" = T0 + 3600, so the pushes
+    // model exactly the connect/reconnect dump: a short receive burst whose
+    // content spans the last hour in derived t.
+    const T0 = 1_730_000_000; // unix seconds (not hour-aligned)
+    const HOUR = 60 * 60;
+    const NOW = T0 + HOUR;
+    // Client/server clock skew in ms, varying per frame — the realistic shape
+    // of the skew the ±2s t tolerance exists for. All skews stay well inside
+    // the tolerance: derived t drifts by at most 1s from the server t.
+    const skewFor = (i) => (i % 5) * 300;
+
+    const makeWireSpot = (t, sourceType, age, i) => {
+        // Live-wire shape (server.go toStreamSpot): sender/receiver ONLY on
+        // dxcluster spots; app.js stamps __recvMs/__recvAge on every frame.
+        const spot = {
+            ageSeconds: age,
+            lat: 52.5, lng: 13.4, snr: -6,
+            locator: 'JO62qm', reporterLocator: 'JO31ab',
+            sourceType, band: '20m',
+            __recvMs: (t + age) * 1000 + skewFor(i),
+            __recvAge: age,
+        };
+        if (sourceType === 'dxcluster') {
+            spot.sender = 'DL1ABC';
+            spot.receiver = 'DL9ET';
+        }
+        return spot;
+    };
+
+    // historySpot (history.go:68-79): absolute t, sender/receiver always
+    // present (historySpotsFromMessages includes them unconditionally).
+    const makeRecordedSpot = (t, sourceType) => ({
+        t,
+        lat: 52.5, lng: 13.4, snr: -6,
+        locator: 'JO62qm', reporterLocator: 'JO31ab',
+        sourceType, band: '20m',
+        sender: 'DL1ABC', receiver: 'DL9ET',
+    });
+
+    const seed = () => {
+        sessionRing.clear();
+        const recorded = [];
+        for (let i = 0; i <= 60; i++) {
+            const t = T0 + i * 60;
+            const sourceType = ['mqtt', 'wspr', 'dxcluster'][i % 3];
+            const age = NOW - t;
+            sessionRing.push(makeWireSpot(t, sourceType, age, i));
+            recorded.push(makeRecordedSpot(t, sourceType));
+        }
+        return recorded;
+    };
+
+    // renderedKey: the fields the renderers actually consume. sender/receiver
+    // participate ONLY for dxcluster (the popup); for mqtt/wspr they are
+    // excluded per KTD-5.
+    const renderedKey = (s) => {
+        const parts = [
+            s.sourceType, s.band, s.locator, s.reporterLocator,
+            String(s.lat), String(s.lng), String(s.snr),
+        ];
+        if (s.sourceType === 'dxcluster') parts.push(s.sender, s.receiver);
+        return parts.join('|');
+    };
+
+    const assertParity = (ringLive, archLive, ph) => {
+        const tOf = (s) => ph - s.ageSeconds;
+        // Ordering preserved: both moment arrays are t-sorted ascending, and
+        // positionally the t's pair within the ±2s tolerance.
+        const ringTs = ringLive.map(tOf);
+        const archTs = archLive.map(tOf);
+        expect(ringTs).toEqual([...ringTs].sort((a, b) => a - b));
+        expect(archTs).toEqual([...archTs].sort((a, b) => a - b));
+        expect(ringTs).toHaveLength(archTs.length);
+        for (let i = 0; i < ringTs.length; i++) {
+            expect(Math.abs(ringTs[i] - archTs[i])).toBeLessThanOrEqual(2);
+        }
+        // Set-identity of rendered inputs: same identity multiset, per-identity
+        // t lists within ±2s.
+        const collect = (list) => {
+            const m = new Map();
+            for (const s of list) {
+                const k = renderedKey(s);
+                if (!m.has(k)) m.set(k, []);
+                m.get(k).push(tOf(s));
+            }
+            return m;
+        };
+        const mr = collect(ringLive);
+        const ma = collect(archLive);
+        expect([...mr.keys()].sort()).toEqual([...ma.keys()].sort());
+        for (const [k, tr] of mr) {
+            const ta = ma.get(k).sort((a, b) => a - b);
+            tr.sort((a, b) => a - b);
+            expect(tr).toHaveLength(ta.length);
+            for (let i = 0; i < tr.length; i++) {
+                expect(Math.abs(tr[i] - ta[i])).toBeLessThanOrEqual(2);
+            }
+        }
+    };
+
+    it('moments sliced from the ring bundle and the recorded bundle are render-equivalent (R9)', () => {
+        const recorded = seed();
+
+        // Ring-synthesized bundle — built exactly like tryRingBundle does it:
+        // {key, t0, t1, spots: sliceFiltered(...)}. The filter below is the
+        // widest one (all bands, SNR off) — a cohort the streamed filter
+        // trivially satisfies.
+        expect(sessionRing.covers(T0, NOW)).toBe(true);
+        const ringBundle = {
+            key: 'ring-synthesized',
+            t0: T0,
+            t1: NOW,
+            spots: sessionRing.sliceFiltered(T0, NOW, {
+                enabledBands: new Set(),
+                minSnrMode: 'off',
+                ssbMinDb: 0,
+                cwMinDb: -15,
+            }),
+        };
+
+        // Recorded bundle — the exact shape fetchBundle constructs from an
+        // /api/history payload (spots sorted by t ascending).
+        const recordedBundle = {
+            key: 'recorded',
+            t0: T0,
+            t1: NOW,
+            spots: recorded.slice().sort((a, b) => a.t - b.t),
+        };
+
+        expect(ringBundle.spots).toHaveLength(recordedBundle.spots.length);
+
+        // Compare moments at several playheads (window end + mid-window): the
+        // 15-min trailing slice each time, through the same toLiveSpot the
+        // render path consumes.
+        for (const playhead of [NOW, T0 + 1800, T0 + 60]) {
+            const ringLive = sliceMoment(ringBundle.spots, playhead).map((s) => toLiveSpot(s, playhead));
+            const archLive = sliceMoment(recordedBundle.spots, playhead).map((s) => toLiveSpot(s, playhead));
+            assertParity(ringLive, archLive, playhead);
+        }
+    });
+
+    it('the archive leg carries sender/receiver for mqtt/wspr while the ring (live-wire) leg does not — the KTD-5 exclusion is load-bearing', () => {
+        const recorded = seed();
+        // Sanity: the recorded historySpots are the FULL server shape (the
+        // server includes sender/receiver for every source type), so a naive
+        // byte-compare of the two legs would fail.
+        const recMqtt = recorded.find((s) => s.sourceType === 'mqtt');
+        const recWspr = recorded.find((s) => s.sourceType === 'wspr');
+        expect(recMqtt.sender).toBe('DL1ABC');
+        expect(recWspr.receiver).toBe('DL9ET');
+
+        const ringRaws = sessionRing.slice(0, Infinity);
+        const ringMqtt = ringRaws.find((s) => s.sourceType === 'mqtt');
+        const ringWspr = ringRaws.find((s) => s.sourceType === 'wspr');
+        // The live wire strips sender/receiver for non-dxcluster spots, so the
+        // ring (fed from the SSE) never saw them. Matching live rendering.
+        expect(ringMqtt.sender).toBeUndefined();
+        expect(ringMqtt.receiver).toBeUndefined();
+        expect(ringWspr.sender).toBeUndefined();
+        expect(ringWspr.receiver).toBeUndefined();
+
+        // Rendered through toLiveSpot at the same playhead: the mqtt/wspr
+        // dxcluster-popup inputs differ between the legs and MUST be excluded
+        // from the comparison, while the rendered map/tooltip inputs match.
+        const playhead = NOW;
+        const ringLive = sliceMoment(sessionRing.slice(0, Infinity), playhead).map((s) => toLiveSpot(s, playhead));
+        const archLive = sliceMoment(recorded.slice().sort((a, b) => a.t - b.t), playhead).map((s) => toLiveSpot(s, playhead));
+        const ringMqttLive = ringLive.find((s) => s.sourceType === 'mqtt');
+        const archMqttLive = archLive.find((s) => s.sourceType === 'mqtt');
+        expect(archMqttLive.sender).toBe('DL1ABC'); // present in the archive leg…
+        expect(ringMqttLive.sender).toBeUndefined(); // …absent in the live leg
+        // Yet the rendered inputs the map consumes are identical.
+        expect(renderedKey(ringMqttLive)).toBe(renderedKey({ ...archMqttLive, sender: undefined, receiver: undefined }));
+    });
+
+    it('dxcluster sender/receiver survive BOTH legs (the popup input is preserved)', () => {
+        seed();
+        const ringRaw = sessionRing.slice(0, Infinity).find((s) => s.sourceType === 'dxcluster');
+        expect(ringRaw.sender).toBe('DL1ABC');
+        expect(ringRaw.receiver).toBe('DL9ET');
+        const playhead = NOW;
+        const live = toLiveSpot(ringRaw, playhead);
+        expect(live.sender).toBe('DL1ABC');
+        expect(live.receiver).toBe('DL9ET');
     });
 });

@@ -104,7 +104,7 @@ A recommender that surfaces a few bands worth attention right now for the QTH, e
 ## Time navigation
 
 ### Session Ring
-A client-side, in-memory ring buffer of raw Spot copies received over the live SSE stream during the current page session (6-hour depth with a count cap; session-only, never persisted). It lets timeline playback re-slice already-received windows with zero archive fetches and lets filter narrowing re-slice instead of refetch. Coverage is tracked as receive-time intervals, so stream outages create real gaps that fall through to `/api/history`.
+A client-side, in-memory ring buffer of raw Spot copies received over the live SSE stream during the current page session (6-hour depth with a count cap; session-only, never persisted). It lets timeline playback re-slice already-received windows with zero archive fetches and lets filter narrowing re-slice instead of refetch. Coverage is tracked in derived spot-time (t = receive wall clock − ageSeconds at receipt), so the connect-time history dump back-fills its hour and only content gaps longer than the dump depth create real misses that fall through to `/api/history`.
 
 ### Playhead
 The virtual "now" of timeline replay — the data-time the renderers are showing. Timeline moments emit the spots inside a trailing window ending at the playhead, with spot ages derived from it rather than wall clock. In timeline mode the Playhead (not wall clock) is also the time basis for the grayline terminator.
