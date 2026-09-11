@@ -256,6 +256,10 @@ async function fetchBundle(t0, t1) {
     }
 
     const ac = new AbortController();
+    // Registered before the await so exitTimeline/invalidateBundles abort the
+    // fetch that is actually running (the finally assignment alone only lands
+    // after completion).
+    controller.inflight = ac;
     const promise = (async () => {
         let resp;
         for (let attempt = 0; ; attempt++) {
@@ -305,6 +309,16 @@ async function fetchBundle(t0, t1) {
 // silent hole, so it falls through to /api/history (AE2, KTD-12). The qth
 // guard matches the cohort too: app.js clears the ring on a qth change, so a
 // qth the timeline was not entered with is foreign.
+// clearBundles drops the current bundle, the whole LRU and the in-flight dedup
+// set in one go — enter (stale prior session), exit (re-fetchable) and
+// invalidateBundles (filter change) all wipe the same four fields.
+function clearBundles() {
+    controller.bundle = null;
+    controller.bundles.clear();
+    controller.bundleOrder = [];
+    controller.inflightKeys.clear();
+}
+
 function ringCohortSatisfies(f) {
     const sf = state.streamedFilter;
     if (!sf) return false;
@@ -336,16 +350,13 @@ function tryRingBundle(chunkT0, chunkT1, key) {
     const f = currentFilterState();
     if (!ringCohortSatisfies(f)) return null;
     if (!sessionRing.covers(chunkT0, chunkT1)) return null;
+    // f goes straight to sliceFiltered: the spotAllowed replica reads only
+    // the band/SNR fields, so the filter object needs no projection.
     const bundle = {
         key,
         t0: chunkT0,
         t1: chunkT1,
-        spots: sessionRing.sliceFiltered(chunkT0, chunkT1, {
-            enabledBands: f.enabledBands,
-            minSnrMode: f.minSnrMode,
-            ssbMinDb: f.ssbMinDb,
-            cwMinDb: f.cwMinDb,
-        }),
+        spots: sessionRing.sliceFiltered(chunkT0, chunkT1, f),
     };
     putBundle(key, bundle);
     return bundle;
@@ -486,10 +497,7 @@ export async function enterTimeline(rangeSeconds = 60 * 60) {
     // not leak into this one: the LRU keys on filters+window, but a same-key
     // chunk with different filter values can't exist (key includes filters) —
     // clearing is still the safe, cheap choice on every fresh entry.
-    controller.bundle = null;
-    controller.bundles.clear();
-    controller.bundleOrder = [];
-    controller.inflightKeys.clear();
+    clearBundles();
 
     document.body.classList.add('timeline-active');
     emitStatus();
@@ -517,10 +525,7 @@ export function exitTimeline() {
     controller.rafId = 0;
     controller.inflight?.abort();
     controller.active = false;
-    controller.bundle = null;
-    controller.bundles.clear();
-    controller.bundleOrder = [];
-    controller.inflightKeys.clear();
+    clearBundles();
     document.body.classList.remove('timeline-active');
     emitStatus();
 }
@@ -540,13 +545,13 @@ export async function seek(t) {
 // refetch (widening) instead of re-serving a stale LRU entry. Bundle keys
 // already include the filter values, so no same-key collision can occur — the
 // clear mirrors the enter/exit wipes as the safe, cheap choice. In-flight
-// fetches are also un-deduped: an old-filter response landing after the clear
-// must not be mistaken for the new filter's bundle.
+// fetches are aborted like exitTimeline does: their continuation would
+// otherwise unconditionally reassign controller.bundle and re-cache the
+// old-filter chunk into the fresh LRU (review #3).
 export function invalidateBundles() {
-    controller.bundle = null;
-    controller.bundles.clear();
-    controller.bundleOrder = [];
-    controller.inflightKeys.clear();
+    controller.inflight?.abort();
+    controller.inflight = null;
+    clearBundles();
 }
 
 // refreshMoment re-resolves the current playhead's bundle (ring re-slice or
@@ -763,5 +768,4 @@ export const __internals = {
     renderBar,
     ensureBar,
     tryRingBundle,
-    ringCohortSatisfies,
 };

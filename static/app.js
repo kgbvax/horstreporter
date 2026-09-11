@@ -15,7 +15,7 @@ import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, start
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
 import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL, invalidateBundles as invalidateTimelineBundles, refreshMoment as refreshTimelineMoment } from './timeline.js';
 import { updateAfterglow, notifyMapMoved, hideAfterglow } from './afterglow.js';
-import { dataNow, setDataNowMs, clearDataNowOverride } from './data-now.js';
+import { GRAYLINE_BUCKET_MS, setDataNowMs, clearDataNowOverride } from './data-now.js';
 import { sessionRing } from './session-ring.js';
 
 // --- Azimuth Zoom State ---
@@ -120,7 +120,13 @@ function restartStreamIfSubscribed() {
     }
 
     // Filter changed in a way the server needs to know about. Restart while
-    // keeping current data visible.
+    // keeping current data visible. The ring must not survive the restart:
+    // its windows were delivered under the old narrower filter, so keeping it
+    // would let the cohort guard vouch those windows with the new wider
+    // filter and ring-served chunks would silently miss the newly enabled
+    // band's spots. The new connection's dump re-seeds the recent window;
+    // older windows fall through to /api/history.
+    sessionRing.clear();
     startLiveStream(true);
 }
 
@@ -1440,10 +1446,7 @@ export function scheduleRender() {
             const renderSpots = getRenderableMapSpots(state.liveSpots);
             if (isAzimuthEnabled()) {
                 updateBandLabels(renderSpots);
-                // The clock's current value keeps the grayline cache key
-                // consistent within a bucket across re-renders (U6, KTD-9):
-                // wall clock in live mode, the pinned playhead in timeline.
-                renderAzimuthScene({ spots: renderSpots, dataNowMs: dataNow() });
+                renderAzimuthScene({ spots: renderSpots }); // grayline clock defaults to dataNow() (U6, KTD-9)
                 syncAzimuthZoomOutHint();
                 endPerfTimer('render.azimuth.frame_ms', rafStart);
             } else {
@@ -1965,6 +1968,16 @@ function startLiveStream(preserveData = false) {
 
     let historyLoading = true;
 
+    // Shared tail for the two mid-timeline fatal-drop paths (server_error and
+    // a CLOSED onerror after the restart attempt): the stream is gone but the
+    // timeline stays active — the ring still serves every covered moment
+    // (KTD-7), only uncovered windows fall through to /api/history.
+    function surfaceTimelineCoverageEnded() {
+        statusEl.innerHTML = `Status: <span style="color: red;">Live data ended — timeline shows session coverage only</span>`;
+        setFaviconColor('#dc3545'); // Red for error
+        if (btnSubmit) setSubmitMode(btnSubmit, 'go');
+    }
+
     state.eventSource.onopen = () => {
         // On auto-reconnect EventSource re-sends a history dump before live
         // frames. Reset the loading flag so that dump is also suppressed from
@@ -1990,9 +2003,7 @@ function startLiveStream(preserveData = false) {
         // through to /api/history. The exit path starts a fresh stream.
         if (isTimelineActive()) {
             streamRestartedDuringTimeline = false;
-            statusEl.innerHTML = `Status: <span style="color: red;">Live data ended — timeline shows session coverage only</span>`;
-            setFaviconColor('#dc3545'); // Red for error
-            if (btnSubmit) setSubmitMode(btnSubmit, 'go');
+            surfaceTimelineCoverageEnded();
             return;
         }
         state.streamedFilter = null;
@@ -2099,9 +2110,7 @@ function startLiveStream(preserveData = false) {
                     clearInterval(state.renderInterval);
                     state.renderInterval = null;
                 }
-                statusEl.innerHTML = `Status: <span style="color: red;">Live data ended — timeline shows session coverage only</span>`;
-                setFaviconColor('#dc3545'); // Red for error
-                if (btnSubmit) setSubmitMode(btnSubmit, 'go');
+                surfaceTimelineCoverageEnded();
                 return;
             }
             console.error("Stream closed (fatal):", e);
@@ -2147,6 +2156,23 @@ function startLiveStream(preserveData = false) {
     }, 5000);
 }
 
+// teardownTimelineFrame is the shared timeline-exit prologue: the flags both
+// exit paths reset, the timeline teardown, and the retained-moment/clock
+// reset. Callers add their own restore (ring rebuild + stream restart, or the
+// plain programmatic-exit handoff to a fresh stream).
+function teardownTimelineFrame() {
+    streamRestartedDuringTimeline = false;
+    exitTimeline();
+    hideAfterglow();
+    syncTimelineURL();
+    resetRenderFingerprint();
+    // Drop the retained moment so no stale frame survives the gate, and
+    // restore the grayline clock to the wall (live mode).
+    lastMomentSpots = null;
+    lastMomentPlayhead = 0;
+    clearDataNowOverride();
+}
+
 // exitTimelineForRestart is the plain programmatic exit used when the timeline
 // must end because the stream cohort is about to change (qth / surroundings /
 // submit): no ring rebuild — the caller's full re-stream (or teardown) follows.
@@ -2154,14 +2180,7 @@ function startLiveStream(preserveData = false) {
 // Stream's qth hook, the surroundings handler).
 function exitTimelineForRestart() {
     if (!isTimelineActive()) return;
-    streamRestartedDuringTimeline = false;
-    exitTimeline();
-    hideAfterglow();
-    syncTimelineURL();
-    resetRenderFingerprint();
-    lastMomentSpots = null;
-    lastMomentPlayhead = 0;
-    clearDataNowOverride();
+    teardownTimelineFrame();
 }
 
 document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
@@ -2345,16 +2364,7 @@ async function startTimelineMode(rangeSeconds) {
 }
 
 function stopTimelineMode() {
-    streamRestartedDuringTimeline = false;
-    exitTimeline();
-    hideAfterglow();
-    syncTimelineURL();
-    resetRenderFingerprint();
-    // Drop the retained moment so no stale frame survives the gate, and
-    // restore the grayline clock to the wall (live mode).
-    lastMomentSpots = null;
-    lastMomentPlayhead = 0;
-    clearDataNowOverride();
+    teardownTimelineFrame();
 
     if (state.eventSource) {
         // KTD-11: rebuild the live list from the ring's tail — the SSE has been
@@ -2382,11 +2392,10 @@ onTimelineExit(stopTimelineMode);
 // bucket (the same bucket size map.js keys on); when the layer is disabled or
 // the azimuth projection is active (U6 owns that leg) the sync is skipped.
 const GRAYLINE_LIVE_REFRESH_MS = 60 * 1000;
-const GRAYLINE_LIVE_BUCKET_MS = 5 * 60 * 1000;
-let lastGraylineLiveBucket = Math.floor(Date.now() / GRAYLINE_LIVE_BUCKET_MS);
+let lastGraylineLiveBucket = Math.floor(Date.now() / GRAYLINE_BUCKET_MS);
 setInterval(() => {
     if (isTimelineActive() || isAzimuthEnabled()) return;
-    const bucket = Math.floor(Date.now() / GRAYLINE_LIVE_BUCKET_MS);
+    const bucket = Math.floor(Date.now() / GRAYLINE_BUCKET_MS);
     if (bucket === lastGraylineLiveBucket) return;
     lastGraylineLiveBucket = bucket;
     void syncMercatorGraylineLayer();
