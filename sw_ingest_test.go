@@ -124,6 +124,9 @@ func captureLogForSWTest(t *testing.T) *bytes.Buffer {
 
 // mockSWServer serves a SWPC feed fixture per path: /kp, /f107, /xray,
 // /ovation. The behavior map selects fixture vs HTTP error vs malformed body.
+// Fixtures are modeled on the live NOAA SWPC feed schemas (2026-09-11),
+// trimmed to the few records each assertion needs; refresh if the upstream
+// schema drifts.
 func newSWMockServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

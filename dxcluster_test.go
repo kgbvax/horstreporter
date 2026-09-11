@@ -573,7 +573,7 @@ func TestRunDXClusterSessionHandshakeAndSpots(t *testing.T) {
 		t.Fatal("server script did not finish")
 	}
 
-	_, _, linesSeen, parsed, _, _, dropped := dxClusterAccounting.snapshot()
+	_, _, linesSeen, parsed, _, forwardedAfter, dropped := dxClusterAccounting.snapshot()
 	if got := linesSeen - linesBefore; got != 4 {
 		t.Errorf("linesSeen delta = %d, want 4 (spots, chatter, empty, broken)", got)
 	}
@@ -584,8 +584,11 @@ func TestRunDXClusterSessionHandshakeAndSpots(t *testing.T) {
 	if got := dropped - droppedBefore; got != 1 {
 		t.Errorf("droppedNoLoc delta = %d, want 1", got)
 	}
-	if got := forwarded - forwarded; got != 0 {
+	if got := forwardedAfter - forwarded; got != 0 {
 		t.Errorf("forwardedSpots delta = %d, want 0", got)
+	}
+	if got := len(hub.history); got != 0 {
+		t.Errorf("hub.history = %d spots, want 0 (no locator, nothing forwarded)", got)
 	}
 }
 

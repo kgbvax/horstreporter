@@ -46,12 +46,11 @@ go run ./cmd/horstprop -listen 127.0.0.1:9970
 # Backend tests
 go test ./...
 
-# Backend coverage gate (unit U8): re-measures per-package coverage with
-# `go test ./... -cover` and fails when an in-scope package (horstreporter,
-# cmd/horstoperator-agent) drops below .coverage-baseline.json by more than
-# 0.5pp. internal/awards*/awardcontract are out of scope by design. Run after
-# `go test ./...` — this is the Go side of the local coverage floor.
-npm run test:go:coverage   # (= go test ./... -cover && node scripts/coverage-check.mjs)
+# Backend coverage gate (unit U8): runs `go test ./... -cover` itself and fails
+# when an in-scope package (horstreporter, cmd/horstoperator-agent) drops below
+# .coverage-baseline.json by more than 0.5pp. internal/awards*/awardcontract are
+# out of scope by design. This is the Go side of the local coverage floor.
+npm run test:go:coverage   # (= node scripts/coverage-check.mjs)
 
 # Frontend tests
 npm test

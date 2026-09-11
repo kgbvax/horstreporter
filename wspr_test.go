@@ -177,6 +177,9 @@ func wsprSnap() [7]int64 {
 	return [7]int64{a, b, c, d, e, f, g}
 }
 
+// wsprFixtureEnvelope is a synthetic response in the wspr.live API schema
+// (callsigns anonymized, rows trimmed). Refresh if the upstream query/schema
+// drifts.
 const wsprFixtureEnvelope = `{
   "data": [
     {
