@@ -301,12 +301,12 @@ describe('utils.js', () => {
             expect(isStreaming(btn)).toBe(false);
         });
 
-        it('setSubmitMode toggles the stream-stalled highlight with the mode', () => {
+        it('setSubmitMode flags the not-streaming red highlight when idle', () => {
             const btn = document.getElementById('btn-submit');
             setSubmitMode(btn, 'stop');
-            expect(btn.classList.contains('stream-stalled')).toBe(true);
+            expect(btn.classList.contains('not-streaming')).toBe(false);
             setSubmitMode(btn, 'go');
-            expect(btn.classList.contains('stream-stalled')).toBe(false);
+            expect(btn.classList.contains('not-streaming')).toBe(true);
         });
 
         it('helpers are null-safe when the button is missing', () => {

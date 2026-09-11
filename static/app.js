@@ -22,9 +22,6 @@ const AZIMUTH_MAX_ZOOM = 5.0;
 // band can push thousands of spots/sec; without this the array grows
 // unbounded until the prune runs. Drop oldest-arrived in a batch when over.
 const MAX_LIVE_SPOTS = 20000;
-// "Stop" button goes red when the stream is subscribed but no frames have
-// arrived for this long (checked on the 5s render tick).
-const STALLED_STREAM_MS = 30000;
 let suppressAzimuthClickUntil = 0;
 let hotBandIndicator = null;
 let horstKevin = null;
@@ -1862,7 +1859,6 @@ function startLiveStream(preserveData = false) {
     let totalReceived = 0;
     let totalBytes = 0;
     let lastStatusUpdate = 0;
-    let lastFrameMs = 0;
     statusEl.innerHTML = `Status: Connecting to ${currentSub}...`;
 
     const btnSubmit = document.getElementById('btn-submit');
@@ -1938,7 +1934,6 @@ function startLiveStream(preserveData = false) {
     });
 
     state.eventSource.onmessage = (e) => {
-        lastFrameMs = Date.now();
         totalReceived++;
         // SSE text frames: count bytes for a user-facing data-consumption hint.
         // EventSource reassembles line-terminated data; e.data.length is close
@@ -2023,16 +2018,6 @@ function startLiveStream(preserveData = false) {
     };
 
     state.renderInterval = setInterval(() => {
-        // Stalled-stream indicator: while subscribed ("stop" shown) but nothing
-        // is actually playing — connection not OPEN, or open but no frames for
-        // a while (dead server, quiet/dead stream) — flag the button red.
-        if (btnSubmit && isStreaming(btnSubmit)) {
-            const es = state.eventSource;
-            const stalled = !es || es.readyState !== EventSource.OPEN
-                || (Date.now() - lastFrameMs > STALLED_STREAM_MS);
-            btnSubmit.classList.toggle('stream-stalled', stalled);
-        }
-
         if (state.softPaused) return;
         // Prune/age continuously when preserving data so existing spots don't
         // freeze on screen while the new band's history loads. For fresh starts,

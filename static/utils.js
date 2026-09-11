@@ -46,9 +46,9 @@ export function setSubmitMode(btn, mode) {
     const label = stop ? 'Stop' : 'Go';
     btn.title = label;
     btn.setAttribute('aria-label', label);
-    // Stalled-stream red highlight belongs to the "stop" (subscribed) state
-    // only; app.js flips it live while streaming, leaving the state clears it.
-    btn.classList.toggle('stream-stalled', stop);
+    // Red highlight = not playing: while streaming the button is the normal
+    // primary; once stopped (or before the first start) it goes red.
+    btn.classList.toggle('not-streaming', !stop);
 }
 
 export function isStreaming(btn) {

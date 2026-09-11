@@ -1239,13 +1239,13 @@ body[data-theme="dark"] .band-pill .band-nodata-tag {
 /* Solid primary still pops on the white map without the Bootstrap-blue weight. */
 #btn-submit { font-weight: 600; }
 
-/* Subscribed but stalled (stream-stalled, set by app.js when no frames are
-   arriving): red so a dead stream doesn't read as playing. */
-#btn-submit.stream-stalled {
+/* Not playing (idle "go" state — before the first start or after pressing
+   stop, incl. error teardown): red so an idle button doesn't read as active. */
+#btn-submit.not-streaming {
     background-color: #dc3545;
     border-color: #dc3545;
 }
-#btn-submit.stream-stalled:hover {
+#btn-submit.not-streaming:hover {
     background-color: #c82333;
     border-color: #bd2130;
 }
