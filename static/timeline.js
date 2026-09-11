@@ -534,6 +534,32 @@ export async function seek(t) {
     emitCurrentMoment();
 }
 
+// invalidateBundles drops every cached bundle so the next moment re-synthesizes
+// against the current filter (plan 2026-09-11-002 U4, KTD-12): a mid-timeline
+// band/SNR change must re-slice from the ring (narrowing) or fall through to a
+// refetch (widening) instead of re-serving a stale LRU entry. Bundle keys
+// already include the filter values, so no same-key collision can occur — the
+// clear mirrors the enter/exit wipes as the safe, cheap choice. In-flight
+// fetches are also un-deduped: an old-filter response landing after the clear
+// must not be mistaken for the new filter's bundle.
+export function invalidateBundles() {
+    controller.bundle = null;
+    controller.bundles.clear();
+    controller.bundleOrder = [];
+    controller.inflightKeys.clear();
+}
+
+// refreshMoment re-resolves the current playhead's bundle (ring re-slice or
+// /api/history fetch, exactly the ensurePlayheadBundle pipeline) and re-emits
+// the moment. Unlike seek() it does NOT snap: during playback the playhead
+// sits between 5-minute scrub snaps and must not jump back. app.js calls it
+// after invalidateBundles() when a band/SNR control changes mid-timeline.
+export async function refreshMoment() {
+    if (!controller.active) return;
+    await ensurePlayheadBundle();
+    emitCurrentMoment();
+}
+
 // play starts (or resumes) animation; pause stops it in place.
 export function play(speed) {
     if (!controller.active) return;

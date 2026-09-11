@@ -102,7 +102,10 @@ vi.mock('../static/timeline.js', () => ({
     onMoment: (cb) => { timelineMock.onMomentCb = cb; },
     onExit: (cb) => { timelineMock.onExitCb = cb; },
     syncTimelineURL: vi.fn(),
-    readTimelineURL: vi.fn(() => null)
+    readTimelineURL: vi.fn(() => null),
+    // U4 exports: mid-timeline filter changes invalidate + re-emit.
+    invalidateBundles: vi.fn(),
+    refreshMoment: vi.fn(async () => {})
 }));
 
 const NOW_MS = 1_730_000_000_000;

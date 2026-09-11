@@ -21,6 +21,8 @@ import {
     enterTimeline,
     exitTimeline,
     seek,
+    invalidateBundles,
+    refreshMoment,
     __internals,
 } from './timeline.js';
 import { sessionRing } from './session-ring.js';
@@ -552,5 +554,115 @@ describe('ring-served timeline playback (U3)', () => {
         expect(got.key).toBe(key);
         expect(got.spots.length).toBeGreaterThan(0);
         expect(ctl().bundles.has(key)).toBe(true);
+    });
+});
+describe('bundle invalidation + moment refresh (U4)', () => {
+    // app.js's mid-timeline band/SNR handlers (KTD-12) wipe the bundle LRU and
+    // re-emit the current moment through refreshMoment — without snapping the
+    // playhead (unlike seek(), which would yank a playing playhead back to its
+    // 5-minute bucket).
+    const NOW_MS = 1_730_000_000_000;
+    const NOW_SEC = Math.floor(NOW_MS / 1000);
+    const H = 60 * 60;
+
+    const ctl = () => __internals.controller;
+    let moments;
+
+    const mkSpot = (t, band = '20m') => ({
+        t,
+        lat: 52.5, lng: 7.0, snr: -6,
+        locator: 'JO32', reporterLocator: 'JO31',
+        sourceType: 'mqtt', band,
+        sender: 'DL1ABC', receiver: 'DL9ET',
+        __recvMs: NOW_MS, __recvAge: NOW_SEC - t,
+    });
+
+    const setupDom = () => {
+        document.body.innerHTML = `
+            <input id="qth" value="JO32" />
+            <input id="ssb-min-db" value="0" />
+            <input id="cw-min-db" value="-15" />
+            <input type="checkbox" id="surroundings" />
+            <input type="radio" name="min-snr" value="none" checked />
+            <div id="band-container"></div>
+            <input type="checkbox" class="band-enable" value="20m" checked />
+            <input type="checkbox" class="band-enable" value="40m" checked />
+        `;
+    };
+
+    const resetController = () => {
+        const c = ctl();
+        c.active = false;
+        c.playing = false;
+        c.playhead = 0;
+        c.bundle = null;
+        c.bundles.clear();
+        c.bundleOrder = [];
+        c.inflightKeys.clear();
+        c.inflight = null;
+        c.loading = false;
+        c.t0 = 0;
+        c.t1 = 0;
+        c.qth = '';
+        c.reach = Infinity;
+        c.listeners.moment.length = 0;
+        c.listeners.status.length = 0;
+        c.listeners.exit = null;
+        document.body.classList.remove('timeline-active');
+        const bar = document.getElementById('timeline-bar');
+        if (bar) bar.remove();
+    };
+
+    beforeEach(() => {
+        resetController();
+        sessionRing.clear();
+        state.streamedFilter = { bands: new Set(['20m', '40m']), minSnrMode: 'none', ssbMinDb: '0', cwMinDb: '-15' };
+        setupDom();
+        moments = [];
+        ctl().listeners.moment.push((live, ph) => { moments.push({ live, ph }); });
+        global.fetch = vi.fn(async () => { throw new Error('unexpected /api/history fetch'); });
+        vi.spyOn(Date, 'now').mockReturnValue(NOW_MS);
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+        resetController();
+        sessionRing.clear();
+        state.streamedFilter = null;
+    });
+
+    it('invalidateBundles drops the LRU, the current bundle and in-flight keys', async () => {
+        for (let t = NOW_SEC - H; t <= NOW_SEC; t += 60) sessionRing.push(mkSpot(t));
+        await enterTimeline(H);
+        const key0 = ctl().bundle?.key;
+        expect(key0).toBeTruthy();
+        expect(ctl().bundles.size).toBeGreaterThan(0);
+        ctl().inflightKeys.set('pending', Promise.resolve({}));
+
+        invalidateBundles();
+
+        expect(ctl().bundles.size).toBe(0);
+        expect(ctl().bundleOrder.length).toBe(0);
+        expect(ctl().bundle).toBeNull();
+        expect(ctl().inflightKeys.size).toBe(0);
+    });
+
+    it('refreshMoment re-resolves the playhead bundle without snapping and re-emits', async () => {
+        for (let t = NOW_SEC - H; t <= NOW_SEC; t += 60) sessionRing.push(mkSpot(t));
+        await enterTimeline(H);
+        expect(moments.length).toBe(1);
+
+        // Park the playhead between 5-minute scrub snaps (mid-playback state).
+        const between = NOW_SEC - 123; // not 5-minute-aligned
+        ctl().playhead = between;
+        ctl().bundle = null; // simulate a stale/absent bundle at the playhead
+
+        await refreshMoment();
+
+        expect(moments.length).toBe(2);
+        // No snap: the emitted playhead is the parked one, not its bucket.
+        expect(moments[1].ph).toBe(between);
+        // The bundle was re-resolved for the playhead's chunk.
+        expect(ctl().bundle).toBeTruthy();
     });
 });

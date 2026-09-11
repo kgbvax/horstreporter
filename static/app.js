@@ -13,7 +13,7 @@ import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, clearW
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming, icon } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
-import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL } from './timeline.js';
+import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL, invalidateBundles as invalidateTimelineBundles, refreshMoment as refreshTimelineMoment } from './timeline.js';
 import { updateAfterglow, notifyMapMoved, hideAfterglow } from './afterglow.js';
 import { sessionRing } from './session-ring.js';
 
@@ -46,7 +46,10 @@ function setBandFocus(band) {
 
 // Re-style pills immediately on interaction (the render loop also calls
 // updateBandLabels, but this gives instant feedback before the throttled render).
+// Timeline gate (KTD-10): mid-replay this must not paint the live array over
+// the moment; the pills restyle via the moment re-render in scheduleRender.
 function refreshBandPills() {
+    if (isTimelineActive()) return;
     try { updateBandLabels(getRenderableMapSpots(state.liveSpots)); } catch (_) { /* pre-init */ }
 }
 
@@ -92,6 +95,19 @@ function streamFilterNeedsReconnect() {
 function restartStreamIfSubscribed() {
     const btnSubmit = document.getElementById('btn-submit');
     if (!btnSubmit || !isStreaming(btnSubmit)) return;
+
+    if (isTimelineActive()) {
+        // KTD-12: mid-timeline band/SNR changes never restart the stream. The
+        // bundle LRU is dropped so the next moment re-synthesizes against the
+        // new filter, and the current moment is re-emitted: a narrowing
+        // re-slices from the ring (band-disable / SNR-raise), a widening falls
+        // through to the archive path for that chunk (AE2). Either way the
+        // stream is untouched; a widening is reconciled with the stream filter
+        // on exit (stopTimelineMode -> restartStreamIfSubscribed).
+        invalidateTimelineBundles();
+        void refreshTimelineMoment().catch((err) => console.warn('timeline moment refresh failed', err));
+        return;
+    }
 
     if (!streamFilterNeedsReconnect()) {
         // Server already sends everything matching the current filter; just
@@ -722,6 +738,11 @@ function resumeFromSoftPause() {
 }
 
 function syncSoftPauseWithVisibility() {
+    // Timeline gate (KTD-10): the visibility machinery owns state.softPaused
+    // only in live mode. Mid-replay, hiding/refocusing the tab must not pause
+    // or bulk-age anything and must not kick live rendering back on — the
+    // scheduleRender gate keeps rendering on the current moment regardless.
+    if (isTimelineActive()) return;
     if (document.hidden) {
         applySoftPause();
     } else {
@@ -1401,6 +1422,19 @@ export function scheduleRender() {
             incrementPerfCounter('render.schedule.calls', 1);
             endPerfTimer('render.schedule.queue_delay_ms', scheduleStart);
 
+            // Timeline gate (plan 2026-09-11-002 U4, KTD-10): while the timeline
+            // is active the live array is never painted over the moment, no
+            // matter which caller fired this render (SSE frame, age-prune tick,
+            // theme/projection toggle, band pill, auto-band cycle). Instead the
+            // retained moment is re-rendered with the current styles.
+            if (isTimelineActive()) {
+                renderTimelineMomentFrame();
+                lastRenderTime = Date.now();
+                state.renderPending = false;
+                endPerfTimer('render.frame.total_ms', rafStart);
+                return;
+            }
+
             const minutes = document.getElementById('minutes')?.value || 15;
             const renderSpots = getRenderableMapSpots(state.liveSpots);
             if (isAzimuthEnabled()) {
@@ -1632,6 +1666,11 @@ document.getElementById('btn-show-all')?.addEventListener('click', () => {
 });
 
 window.__horstSurroundingsChanged = () => {
+    // KTD-13 keys the ring on qth AND surroundings: when the surroundings
+    // toggle changes the delivered cohort, the ring's contents are foreign
+    // (startLiveStream's qth hook alone does not catch a surroundings-only
+    // change). Clear it unconditionally, before any re-stream.
+    sessionRing.clear();
     const btnSubmit = document.getElementById('btn-submit');
     if (btnSubmit && isStreaming(btnSubmit)) {
         setSubmitMode(btnSubmit, 'go');
@@ -1941,6 +1980,17 @@ function startLiveStream(preserveData = false) {
             state.renderInterval = null;
         }
         historyLoading = false;
+        // Mid-timeline the stream is torn down but the timeline stays active:
+        // the ring still serves every covered moment (the reject was
+        // deterministic, so no restart attempt), only uncovered windows fall
+        // through to /api/history. The exit path starts a fresh stream.
+        if (isTimelineActive()) {
+            streamRestartedDuringTimeline = false;
+            statusEl.innerHTML = `Status: <span style="color: red;">Live data ended — timeline shows session coverage only</span>`;
+            setFaviconColor('#dc3545'); // Red for error
+            if (btnSubmit) setSubmitMode(btnSubmit, 'go');
+            return;
+        }
         state.streamedFilter = null;
         statusEl.innerHTML = `Status: <span style="color: red;">${e.data}</span>`;
         setFaviconColor('#dc3545'); // Red for error
@@ -2022,6 +2072,34 @@ function startLiveStream(preserveData = false) {
         // only treat a CLOSED connection as fatal so a brief blip doesn't flap
         // the status red and tear down a stream that will recover on its own.
         if (es && es.readyState === EventSource.CLOSED) {
+            // KTD-11: fatal drop during the timeline — one silent restart
+            // attempt (the ring absorbs the reconnect dump and the render gate
+            // keeps the moment on screen). A second failure ends live coverage:
+            // surface the ring-staleness state instead of the generic error,
+            // but leave the timeline active — the ring still legitimately
+            // serves every covered moment (KTD-7); only windows past the ring's
+            // last received t fall through to /api/history.
+            if (isTimelineActive()) {
+                if (state.eventSource) {
+                    state.eventSource.close();
+                    state.eventSource = null;
+                }
+                if (!streamRestartedDuringTimeline) {
+                    streamRestartedDuringTimeline = true;
+                    console.warn("Stream closed during timeline — one silent restart attempt");
+                    startLiveStream(true);
+                    return;
+                }
+                streamRestartedDuringTimeline = false;
+                if (state.renderInterval) {
+                    clearInterval(state.renderInterval);
+                    state.renderInterval = null;
+                }
+                statusEl.innerHTML = `Status: <span style="color: red;">Live data ended — timeline shows session coverage only</span>`;
+                setFaviconColor('#dc3545'); // Red for error
+                if (btnSubmit) setSubmitMode(btnSubmit, 'go');
+                return;
+            }
             console.error("Stream closed (fatal):", e);
             if (state.eventSource) {
                 state.eventSource.close();
@@ -2065,6 +2143,22 @@ function startLiveStream(preserveData = false) {
     }, 5000);
 }
 
+// exitTimelineForRestart is the plain programmatic exit used when the timeline
+// must end because the stream cohort is about to change (qth / surroundings /
+// submit): no ring rebuild — the caller's full re-stream (or teardown) follows.
+// The ring itself is cleared by the callers that change the cohort (startLive
+// Stream's qth hook, the surroundings handler).
+function exitTimelineForRestart() {
+    if (!isTimelineActive()) return;
+    streamRestartedDuringTimeline = false;
+    exitTimeline();
+    hideAfterglow();
+    syncTimelineURL();
+    resetRenderFingerprint();
+    lastMomentSpots = null;
+    lastMomentPlayhead = 0;
+}
+
 document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!map) return;
@@ -2072,6 +2166,10 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
     const btnSubmit = document.getElementById('btn-submit');
 
     if (btnSubmit && isStreaming(btnSubmit)) {
+        // Submit (stop) click mid-timeline (KTD-12): exit the timeline first,
+        // then perform the original stop teardown. The ring survives — a later
+        // re-stream with the same qth keeps its coverage (U2 contract).
+        if (isTimelineActive()) exitTimelineForRestart();
         if (state.eventSource) {
             state.eventSource.close();
             state.eventSource = null;
@@ -2103,6 +2201,11 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         return;
     }
 
+    // Starting a stream (go) mid-timeline — the single point all qth-change
+    // paths funnel through (they set the submit button to 'go' first): exit
+    // the timeline, then the normal fresh re-stream runs. startLiveStream's
+    // qth hook clears the ring when the qth actually differs.
+    if (isTimelineActive()) exitTimelineForRestart();
     startLiveStream(false);
 });
 
@@ -2111,47 +2214,94 @@ window.addEventListener('pageshow', syncSoftPauseWithVisibility);
 window.addEventListener('focus', syncSoftPauseWithVisibility);
 
 // --- Time Travel (timeline.js integration) ---------------------------------
-// While the timeline is active the live stream is torn down and the map is
-// driven by timeline moments instead of state.liveSpots; exiting re-streams
-// from the server (the bundle's qth/filters are the live ones by construction,
-// so a plain startLiveStream restores byte-identical semantics).
+// While the timeline is active the SSE stream STAYS OPEN (KTD-3): rendering is
+// gated instead of the stream, so liveSpots and the session ring keep
+// accumulating while the map is driven by timeline moments. Exiting rebuilds
+// state.liveSpots from the ring's tail — no server dump (KTD-11).
 
-// Render the moment spots through the normal pipeline (age-graded, same
-// renderers) — bypassing the wall-clock age gate, since timeline ages are
-// data-time (playhead-relative) and always small.
+// The retained current moment (last emitted spots + playhead). The
+// scheduleRender gate re-renders it with current styles when style-affecting
+// controls change mid-replay (theme, projection, band focus, ...).
 let lastMomentPlayhead = 0;
+let lastMomentSpots = null;
+
+// Render the moment spots through the normal pipeline (same renderers) —
+// bypassing the wall-clock age gate, since timeline ages are data-time
+// (playhead-relative) and always small. Shared by the moment listener and the
+// timeline-gated scheduleRender.
+function renderTimelineMomentFrame(moved = false) {
+    if (!lastMomentSpots) return;
+    if (isAzimuthEnabled()) {
+        updateBandLabels(lastMomentSpots);
+        renderAzimuthScene({ spots: lastMomentSpots });
+        syncAzimuthZoomOutHint();
+    } else {
+        updateMapVisualization(lastMomentSpots, parseInt(document.getElementById('minutes')?.value || '15', 10));
+        // Afterglow overlay (Mercator only; azimuth renders its own scene).
+        // moved marks a playhead move (decay active); a gate re-render is a
+        // re-style, not a move, so no re-fade.
+        updateAfterglow(lastMomentSpots, lastMomentPlayhead, moved);
+    }
+}
+
 onTimelineMoment((spots, playhead) => {
     if (!isTimelineActive()) return;
     lastMomentPlayhead = playhead;
-    if (isAzimuthEnabled()) {
-        updateBandLabels(spots);
-        renderAzimuthScene({ spots });
-    } else {
-        updateMapVisualization(spots, parseInt(document.getElementById('minutes')?.value || '15', 10));
-    }
-    // Afterglow overlay (Mercator only; azimuth renders its own scene).
-    if (!isAzimuthEnabled()) updateAfterglow(spots, playhead, true);
+    lastMomentSpots = spots;
+    renderTimelineMomentFrame(true);
     updateBandLab();
     updateWsprMatrix();
     syncTimelineURL();
 });
 
+// One-shot flag for the KTD-11 mid-timeline fatal-drop restart attempt.
+let streamRestartedDuringTimeline = false;
+
+// KTD-11: rebuild state.liveSpots from the ring's last live window — deduped,
+// t-sorted, no server dump. The window comes from the current Max-Spot-Age
+// controls (the same semantics the render age gate uses). Ring entries are raw
+// historySpot-shaped copies without age fields, so ageSeconds is reconstructed
+// from the absolute t and the receive stamps are re-cohered: __recvAge is the
+// age at rebuild, __recvMs is now, so the render's true-age computation
+// (trueAge = __recvAge + (now - __recvMs)/1000) starts at exactly ageSeconds
+// and keeps aging smoothly — no bulk-aging, no over-aged empty map.
+function rebuildLiveSpotsFromRing() {
+    const nowMs = Date.now();
+    const nowSec = Math.floor(nowMs / 1000);
+    const windowSec = getCurrentMaxSpotAgeSeconds();
+    const raw = sessionRing.slice(Math.max(0, nowSec - windowSec), nowSec);
+    state.liveSpots = raw.map((s) => {
+        const ageSeconds = Math.max(0, nowSec - s.t);
+        return {
+            lat: s.lat,
+            lng: s.lng,
+            snr: s.snr,
+            locator: s.locator,
+            reporterLocator: s.reporterLocator,
+            sourceType: s.sourceType,
+            band: s.band,
+            sender: s.sender,
+            receiver: s.receiver,
+            ageSeconds,
+            __recvMs: nowMs,
+            __recvAge: ageSeconds,
+        };
+    });
+}
+
 async function startTimelineMode(rangeSeconds) {
     if (isTimelineActive()) return;
-    // Freeze the live view: stop the SSE stream and the age-prune loop so the
-    // live spot list stays intact under the timeline overlay.
-    if (state.eventSource) state.eventSource.close();
-    state.eventSource = null;
-    if (state.renderInterval) clearInterval(state.renderInterval);
-    state.renderInterval = null;
-    state.streamedFilter = null;
-    state.liveSpots = [];
+    // KTD-3: the SSE stream STAYS OPEN. Rendering is gated in scheduleRender
+    // instead, so liveSpots and the ring keep accumulating during the replay
+    // and the age-prune interval keeps bounding liveSpots memory. Only the
+    // timeline-incompatible overlays are cleared.
+    streamRestartedDuringTimeline = false;
     if (state.heatLayer) { map.removeLayer(state.heatLayer); state.heatLayer = null; }
     clearDxClusterMarkers();
     clearWsprMarkers();
     resetRenderFingerprint();
-    const btnSubmit = document.getElementById('btn-submit');
-    if (btnSubmit) setSubmitMode(btnSubmit, 'go');
+    // The submit button keeps reflecting the (still running) stream: a stop
+    // click mid-timeline must remain a stop action.
     const status = document.getElementById('stream-status');
     if (status) status.innerHTML = 'Status: Time travel — spots from history';
 
@@ -2164,8 +2314,10 @@ async function startTimelineMode(rangeSeconds) {
         console.warn('timeline enter failed', err);
         const statusEl = document.getElementById('stream-status');
         if (statusEl) statusEl.innerHTML = `Status: <span style="color: red;">Time travel failed: ${String(err?.message || err)}</span>`;
-        // Fall back to a fresh live stream so the map is never left dead.
-        startLiveStream(false);
+        // KTD-12: entry failure must NOT stack a second EventSource on the
+        // still-open stream. The stream keeps running; the status line carries
+        // the error. (With no stream running, e.g. a shared-URL restore, the
+        // error is the only surface — the user can still submit manually.)
         return;
     }
     if (!isTimelineActive()) return; // enterTimeline bailed (no qth)
@@ -2173,14 +2325,29 @@ async function startTimelineMode(rangeSeconds) {
 }
 
 function stopTimelineMode() {
+    streamRestartedDuringTimeline = false;
     exitTimeline();
     hideAfterglow();
     syncTimelineURL();
     resetRenderFingerprint();
-    // Restore live mode: the timeline bundle's qth/filters are the live ones,
-    // so a plain stream restart reproduces the exact pre-timeline map.
-    const savedQth = localStorage.getItem('qth');
-    if (savedQth) startLiveStream(false);
+    // Drop the retained moment so no stale frame survives the gate.
+    lastMomentSpots = null;
+    lastMomentPlayhead = 0;
+
+    if (state.eventSource) {
+        // KTD-11: rebuild the live list from the ring's tail — the SSE has been
+        // open the whole time, so no reconnect and no server dump. A filter
+        // change made during the replay (queued widening) is reconciled here
+        // through the existing restart semantics; when nothing changed this is
+        // a pure client-side refresh.
+        rebuildLiveSpotsFromRing();
+        scheduleRender();
+        restartStreamIfSubscribed();
+    } else if (localStorage.getItem('qth')) {
+        // The stream was not running at entry (shared-URL restore) or died
+        // mid-replay: a fresh stream is the only live source. One dump accepted.
+        startLiveStream(false);
+    }
 }
 
 // The bar's Live button exits through timeline.js; hook the live restore here.
