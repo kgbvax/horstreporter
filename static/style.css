@@ -1239,6 +1239,25 @@ body[data-theme="dark"] .band-pill .band-nodata-tag {
 /* Solid primary still pops on the white map without the Bootstrap-blue weight. */
 #btn-submit { font-weight: 600; }
 
+/* Subscribed but stalled (stream-stalled, set by app.js when no frames are
+   arriving): red so a dead stream doesn't read as playing. */
+#btn-submit.stream-stalled {
+    background-color: #dc3545;
+    border-color: #dc3545;
+}
+#btn-submit.stream-stalled:hover {
+    background-color: #c82333;
+    border-color: #bd2130;
+}
+
+/* #qth is nested inside the #qth-root wrapper span, so Bootstrap's
+   .input-group > child radius-flattening never reaches it and its right
+   corners bulge against the geo (pin) button. Flatten the shared edge. */
+#qth {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
 /* Inputs/selects share the control border + accent focus ring (was Bootstrap blue). */
 .form-control,
 .form-select {
