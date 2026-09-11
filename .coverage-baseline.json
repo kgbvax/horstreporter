@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "captured_at": "2026-09-11",
+  "notes": "Go per-package statement-coverage floor (unit U8, same pattern as .perf-baseline.json). Floors, not aspirations: set at the measured post-work baseline. Checked by scripts/coverage-check.mjs with a 0.5 percentage-point tolerance. In-scope packages only - internal/awards* and internal/awardcontract are intentionally out of scope, and 0.0% 'no statements' packages are skipped.",
+  "packages": {
+    "horstreporter": 57.4,
+    "horstreporter/cmd/horstoperator-agent": 55.7
+  }
+}

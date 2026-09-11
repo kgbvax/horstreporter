@@ -46,11 +46,26 @@ go run ./cmd/horstprop -listen 127.0.0.1:9970
 # Backend tests
 go test ./...
 
+# Backend coverage gate (unit U8): re-measures per-package coverage with
+# `go test ./... -cover` and fails when an in-scope package (horstreporter,
+# cmd/horstoperator-agent) drops below .coverage-baseline.json by more than
+# 0.5pp. internal/awards*/awardcontract are out of scope by design. Run after
+# `go test ./...` — this is the Go side of the local coverage floor.
+npm run test:go:coverage   # (= go test ./... -cover && node scripts/coverage-check.mjs)
+
 # Frontend tests
 npm test
 
-# Frontend typecheck + tests
+# Frontend typecheck + tests (coverage floor enforces here)
 npm run check
+# `check` runs typecheck + `vitest run --coverage`; vitest
+# coverage.thresholds (vitest.config.js) floors static/ statements at the
+# measured post-work baseline (53.06%) — scoped to static/ only, with
+# static/vendor/**, src/**, scripts/**, static/sw.js and static/**/*.test.js
+# excluded. Text-only report: no coverage files are written to disk.
+#   npm run test:coverage  # same floor, standalone
+# NOTE: enforcement is LOCAL ONLY — there is no CI. The floors fire only when
+# these commands are actually run; nothing remote enforces them.
 
 # Mercator perf gate (catch draw/zoom regressions)
 npm run perf:gate:mercator

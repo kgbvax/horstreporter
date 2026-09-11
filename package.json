@@ -13,7 +13,10 @@
     "test:perf:mercator:assert": "node scripts/perf-assert.mjs .perf-baseline.json tmp/perf-reports",
     "perf:gate:mercator": "node scripts/perf-run-mercator-gate.mjs",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run test"
+    "test:coverage": "vitest run --coverage",
+    "test:go:coverage": "go test ./... -cover && node scripts/coverage-check.mjs",
+    "coverage:check": "node scripts/coverage-check.mjs",
+    "check": "npm run typecheck && npm run test:coverage"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
