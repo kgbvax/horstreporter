@@ -207,14 +207,61 @@ describe('TIMELINE_SPEEDS', () => {
 // fixture so ring-served and archive-fetched moments can be compared for
 // render parity (R9: set-identity, ±2s t tolerance).
 
-describe('ring-served timeline playback (U3)', () => {
-    // Hour-agnostic instant: 1730000000 is NOT hour-aligned (chunk tail of
-    // 2000s) and NOT 5-minute-aligned, so clamped chunk edges are exercised.
-    const NOW_MS = 1_730_000_000_000;
-    const NOW_SEC = Math.floor(NOW_MS / 1000);
-    const H = 60 * 60;
+// --- Shared fixtures (U3 + U4 describes) ------------------------------------
+// Hour-agnostic instant: 1730000000 is NOT hour-aligned (chunk tail of
+// 2000s) and NOT 5-minute-aligned, so clamped chunk edges are exercised.
+const NOW_MS = 1_730_000_000_000;
+const NOW_SEC = Math.floor(NOW_MS / 1000);
+const H = 60 * 60;
 
-    const ctl = () => __internals.controller;
+const ctl = () => __internals.controller;
+
+const mkSpot = (t, band = '20m') => ({
+    t,
+    lat: 52.5, lng: 7.0, snr: -6,
+    locator: 'JO32', reporterLocator: 'JO31',
+    sourceType: 'mqtt', band,
+    sender: 'DL1ABC', receiver: 'DL9ET',
+    __recvMs: NOW_MS, __recvAge: NOW_SEC - t, // derived t == t exactly
+});
+
+const setupDom = () => {
+    document.body.innerHTML = `
+        <input id="qth" value="JO32" />
+        <input id="ssb-min-db" value="0" />
+        <input id="cw-min-db" value="-15" />
+        <input type="checkbox" id="surroundings" />
+        <input type="radio" name="min-snr" value="none" checked />
+        <div id="band-container"></div>
+        <input type="checkbox" class="band-enable" value="20m" checked />
+        <input type="checkbox" class="band-enable" value="40m" checked />
+    `;
+};
+
+const resetController = () => {
+    const c = ctl();
+    c.active = false;
+    c.playing = false;
+    c.playhead = 0;
+    c.bundle = null;
+    c.bundles.clear();
+    c.bundleOrder = [];
+    c.inflightKeys.clear();
+    c.inflight = null;
+    c.loading = false;
+    c.t0 = 0;
+    c.t1 = 0;
+    c.qth = '';
+    c.reach = Infinity;
+    c.listeners.moment.length = 0;
+    c.listeners.status.length = 0;
+    c.listeners.exit = null;
+    document.body.classList.remove('timeline-active');
+    const bar = document.getElementById('timeline-bar');
+    if (bar) bar.remove();
+};
+
+describe('ring-served timeline playback (U3)', () => {
     let moments;
 
     // giveStreamFilter sets the filter the live stream is actually delivering
@@ -222,15 +269,6 @@ describe('ring-served timeline playback (U3)', () => {
     const giveStreamFilter = (bands = ['20m', '40m']) => {
         state.streamedFilter = { bands: new Set(bands), minSnrMode: 'none', ssbMinDb: '0', cwMinDb: '-15' };
     };
-
-    const mkSpot = (t, band = '20m') => ({
-        t,
-        lat: 52.5, lng: 7.0, snr: -6,
-        locator: 'JO32', reporterLocator: 'JO31',
-        sourceType: 'mqtt', band,
-        sender: 'DL1ABC', receiver: 'DL9ET',
-        __recvMs: NOW_MS, __recvAge: NOW_SEC - t, // derived t == t exactly
-    });
 
     // seedRing pushes the fixture into the ring and returns the same spots in
     // the /api/history payload shape (absolute t, no receive stamps) for the
@@ -263,42 +301,6 @@ describe('ring-served timeline playback (U3)', () => {
             };
         });
         return global.fetch;
-    };
-
-    const setupDom = () => {
-        document.body.innerHTML = `
-            <input id="qth" value="JO32" />
-            <input id="ssb-min-db" value="0" />
-            <input id="cw-min-db" value="-15" />
-            <input type="checkbox" id="surroundings" />
-            <input type="radio" name="min-snr" value="none" checked />
-            <div id="band-container"></div>
-            <input type="checkbox" class="band-enable" value="20m" checked />
-            <input type="checkbox" class="band-enable" value="40m" checked />
-        `;
-    };
-
-    const resetController = () => {
-        const c = ctl();
-        c.active = false;
-        c.playing = false;
-        c.playhead = 0;
-        c.bundle = null;
-        c.bundles.clear();
-        c.bundleOrder = [];
-        c.inflightKeys.clear();
-        c.inflight = null;
-        c.loading = false;
-        c.t0 = 0;
-        c.t1 = 0;
-        c.qth = '';
-        c.reach = Infinity;
-        c.listeners.moment.length = 0;
-        c.listeners.status.length = 0;
-        c.listeners.exit = null;
-        document.body.classList.remove('timeline-active');
-        const bar = document.getElementById('timeline-bar');
-        if (bar) bar.remove();
     };
 
     // assertMomentParity (R9): same rendered spot multiset, per-identity t
@@ -561,57 +563,7 @@ describe('bundle invalidation + moment refresh (U4)', () => {
     // re-emit the current moment through refreshMoment — without snapping the
     // playhead (unlike seek(), which would yank a playing playhead back to its
     // 5-minute bucket).
-    const NOW_MS = 1_730_000_000_000;
-    const NOW_SEC = Math.floor(NOW_MS / 1000);
-    const H = 60 * 60;
-
-    const ctl = () => __internals.controller;
     let moments;
-
-    const mkSpot = (t, band = '20m') => ({
-        t,
-        lat: 52.5, lng: 7.0, snr: -6,
-        locator: 'JO32', reporterLocator: 'JO31',
-        sourceType: 'mqtt', band,
-        sender: 'DL1ABC', receiver: 'DL9ET',
-        __recvMs: NOW_MS, __recvAge: NOW_SEC - t,
-    });
-
-    const setupDom = () => {
-        document.body.innerHTML = `
-            <input id="qth" value="JO32" />
-            <input id="ssb-min-db" value="0" />
-            <input id="cw-min-db" value="-15" />
-            <input type="checkbox" id="surroundings" />
-            <input type="radio" name="min-snr" value="none" checked />
-            <div id="band-container"></div>
-            <input type="checkbox" class="band-enable" value="20m" checked />
-            <input type="checkbox" class="band-enable" value="40m" checked />
-        `;
-    };
-
-    const resetController = () => {
-        const c = ctl();
-        c.active = false;
-        c.playing = false;
-        c.playhead = 0;
-        c.bundle = null;
-        c.bundles.clear();
-        c.bundleOrder = [];
-        c.inflightKeys.clear();
-        c.inflight = null;
-        c.loading = false;
-        c.t0 = 0;
-        c.t1 = 0;
-        c.qth = '';
-        c.reach = Infinity;
-        c.listeners.moment.length = 0;
-        c.listeners.status.length = 0;
-        c.listeners.exit = null;
-        document.body.classList.remove('timeline-active');
-        const bar = document.getElementById('timeline-bar');
-        if (bar) bar.remove();
-    };
 
     beforeEach(() => {
         resetController();

@@ -124,7 +124,11 @@ const controller = {
     // byT: entries sorted ascending by derived t (ties keep insertion order).
     byT: [],
     // recv: entries in receive (push) order — eviction drops its prefix.
+    // recvHead is the index of the first retained entry: eviction advances it
+    // instead of splice-shifting the whole array per frame; the dead prefix is
+    // compacted away once it reaches half the array.
     recv: [],
+    recvHead: 0,
     // index: dedup key -> entry.
     index: new Map(),
     // coverage: cached merged [start, end] intervals in derived t, rebuilt
@@ -139,9 +143,10 @@ function insertByT(entry) {
     // Fast path: live streaming is t-increasing, so appends dominate.
     if (arr.length === 0 || entry.t >= arr[arr.length - 1].t) {
         arr.push(entry);
-        return;
+        return true;
     }
     arr.splice(lowerBound(arr, entry.t), 0, entry);
+    return false;
 }
 
 function removeFromByT(entry) {
@@ -159,20 +164,38 @@ function removeFromByT(entry) {
 
 // evict drops the receive-order prefix: first everything received more than
 // RING_DEPTH_SECONDS before the current frame, then a batch back down to the
-// count cap (mirrors the MAX_LIVE_SPOTS oldest-arrived batch drop).
+// count cap (mirrors the MAX_LIVE_SPOTS oldest-arrived batch drop). Returns
+// how many entries were dropped. The recv prefix is dropped by advancing
+// recvHead (splice would shift the whole 50k array per frame once saturated);
+// byT is unlinked in one batch when the dropped entries happen to also be its
+// prefix (the t-increasing steady state), falling back to per-entry removal
+// when a reconnect dump's interior-t entries were interleaved.
 function evict(recvNowMs) {
     const cutoffMs = recvNowMs - RING_DEPTH_SECONDS * 1000;
-    let n = 0;
     const recv = controller.recv;
-    while (n < recv.length && recv[n].recvMs < cutoffMs) n++;
-    if (recv.length - n > RING_MAX_SPOTS) n = recv.length - RING_MAX_SPOTS;
-    if (n <= 0) return;
-    const dropped = recv.splice(0, n);
-    for (const entry of dropped) {
-        controller.index.delete(entry.key);
-        removeFromByT(entry);
+    const first = controller.recvHead;
+    let n = 0;
+    while (first + n < recv.length && recv[first + n].recvMs < cutoffMs) n++;
+    const retained = recv.length - first - n;
+    if (retained > RING_MAX_SPOTS) n = retained - RING_MAX_SPOTS;
+    if (n <= 0) return 0;
+    let isByTPrefix = true;
+    for (let i = 0; i < n; i++) {
+        controller.index.delete(recv[first + i].key);
+        if (isByTPrefix && controller.byT[i] !== recv[first + i]) isByTPrefix = false;
     }
-    coverageDirty = true;
+    if (isByTPrefix) {
+        controller.byT.splice(0, n);
+    } else {
+        for (let i = 0; i < n; i++) removeFromByT(recv[first + i]);
+    }
+    controller.recvHead = first + n;
+    // Compaction: once the dead prefix is large, splice it off in one shift.
+    if (controller.recvHead >= 8192 && controller.recvHead * 2 >= recv.length) {
+        recv.splice(0, controller.recvHead);
+        controller.recvHead = 0;
+    }
+    return n;
 }
 
 // buildCoverageIntervals merges the retained spots' derived t into maximal
@@ -220,9 +243,21 @@ function push(spot) {
     const entry = { key, t, recvMs, recvAge, raw };
     controller.index.set(key, entry);
     controller.recv.push(entry);
-    insertByT(entry);
-    evict(recvMs);
-    coverageDirty = true;
+    const appended = insertByT(entry);
+    const evicted = evict(recvMs);
+    // Coverage maintenance on the hot path: a live append (t increases, no
+    // eviction) only ever extends the final interval, so patch it in O(1)
+    // instead of flagging a full O(ring) rebuild — the play-tick retry loop
+    // calls covers() many times between frames. An interior insert (reconnect
+    // dump) or any eviction invalidates the interior shape → full rebuild.
+    if (!evicted && !coverageDirty && appended) {
+        const ivs = controller.coverage;
+        const last = ivs.length ? ivs[ivs.length - 1] : null;
+        if (last && t - last[1] <= COVERAGE_GAP_SECONDS) last[1] = t;
+        else ivs.push([t, t]);
+    } else {
+        coverageDirty = true;
+    }
     return true;
 }
 
@@ -269,6 +304,7 @@ function sliceFiltered(t0, t1, filter) {
 function clear() {
     controller.byT = [];
     controller.recv = [];
+    controller.recvHead = 0;
     controller.index = new Map();
     controller.coverage = [];
     coverageDirty = true;
@@ -299,6 +335,4 @@ export const __internals = {
     controller,
     deriveT,
     spotIdentity,
-    buildCoverageIntervals,
-    lowerBound,
 };

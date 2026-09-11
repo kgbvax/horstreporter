@@ -6,7 +6,7 @@ let currentDxccLabelLayer = null;
 
 import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, hexToRgb, blendOverlayColors, icon } from './utils.js';
 import { selectProminentDxccLabels } from './azimuth-runtime.js';
-import { dataNow } from './data-now.js';
+import { dataNow, GRAYLINE_BUCKET_MS } from './data-now.js';
 import { endPerfTimer, incrementPerfCounter, startPerfTimer } from './perf.js';
 
 let worldGeoJsonData = null;
@@ -50,7 +50,6 @@ function scheduleDxccLabelSync(delayMs = 120) {
 let currentDxccLabelLayerKey = null;
 let dxccSyncRevision = 0;
 const WEB_MERCATOR_MAX_LAT = 85.05112878;
-const GRAYLINE_BUCKET_MS = 5 * 60 * 1000;
 const DXCC_SHOW_ALL_ZOOM_THRESHOLD = 5.0;
 const MERCATOR_TILE_SIZE_PX = 256;
 // Effectively unbounded longitude so east/west panning + worldCopyJump keep

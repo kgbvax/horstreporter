@@ -8,8 +8,14 @@ let overrideMs = null;
 
 // Pin the clock to a data time (ms). Non-finite values keep the wall clock.
 export function setDataNowMs(value) {
-    overrideMs = (typeof value === 'number' && Number.isFinite(value)) ? value : null;
+    overrideMs = Number.isFinite(value) ? value : null;
 }
+
+// Grayline overlay rebuild cadence (ms): the terminator only moves meaningfully
+// in 5-minute steps, so map.js and azimuth-runtime.js bucket the overlay time
+// on this and app.js's live refresh fires once per bucket. Lives beside the
+// clock it buckets because every consumer already imports this module.
+export const GRAYLINE_BUCKET_MS = 5 * 60 * 1000;
 
 // Restore the wall clock (timeline exit).
 export function clearDataNowOverride() {

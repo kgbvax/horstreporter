@@ -795,7 +795,7 @@ describe('app.js data-now clock (U5)', () => {
         azimuthEnabled = false;
     });
 
-    it('passes the current clock value to renderAzimuthScene on the live render path (U6)', async () => {
+    it('live render path leaves dataNowMs unset — drawGrayline defaults to the clock (U6)', async () => {
         const { state, renderers } = await importAppFresh();
         azimuthEnabled = true;
 
@@ -804,9 +804,8 @@ describe('app.js data-now clock (U5)', () => {
         deliverFrame(es, makeSpot(0, { locator: 'LIVE1' }));
         await flushRender();
 
-        expect(renderers.renderAzimuthScene).toHaveBeenCalledWith(
-            expect.objectContaining({ dataNowMs: NOW_MS })
-        );
+        const call = renderers.renderAzimuthScene.mock.calls.at(-1)?.[0] || {};
+        expect('dataNowMs' in call).toBe(false); // drawGrayline reads dataNow() itself
         azimuthEnabled = false;
     });
 

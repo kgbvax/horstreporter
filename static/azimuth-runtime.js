@@ -1,6 +1,6 @@
 import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, gridSnrOpacity, topQuartileMean, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
 import { radialLine, strokeCircle } from './canvas-draw.js';
-import { dataNow } from './data-now.js';
+import { dataNow, GRAYLINE_BUCKET_MS } from './data-now.js';
 
 const EARTH_RADIUS_KM = 6371;
 const ANTIPODE_KM = Math.PI * EARTH_RADIUS_KM;
@@ -278,7 +278,7 @@ export function initAzimuthCanvas() {
         window.addEventListener('resize', () => {
             const c = ensureCanvas();
             if (c) resizeCanvasToElement(c);
-            if (state.enabled) renderAzimuthScene({ spots: state.lastSpots, style: state.lastStyle, dataNowMs: dataNow() });
+            if (state.enabled) renderAzimuthScene({ spots: state.lastSpots, style: state.lastStyle });
         });
         state.resizeAttached = true;
     }
@@ -961,7 +961,7 @@ export function getAzimuthLatLngFromClientPoint(clientX, clientY) {
 // that clock: the 320ms recompute throttle below stays on wall-clock Date.now().
 function drawGrayline(ctx, width, height, dataNowMs) {
     const overlayMs = (dataNowMs ?? dataNow());
-    const bucket = Math.floor(overlayMs / (5 * 60 * 1000));
+    const bucket = Math.floor(overlayMs / GRAYLINE_BUCKET_MS);
     const nowMs = Date.now();
     const key = `${width}x${height}:${state.theme}:${state.zoom.toFixed(2)}:${state.horizonKm}:${state.center[0].toFixed(3)}:${state.center[1].toFixed(3)}:${bucket}`;
 
@@ -989,7 +989,7 @@ function drawGrayline(ctx, width, height, dataNowMs) {
     const overlayCtx = overlayCanvas.getContext('2d');
     if (!overlayCtx) return;
 
-    const subsolarPoint = getSubsolarPoint(new Date(bucket * 5 * 60 * 1000));
+    const subsolarPoint = getSubsolarPoint(new Date(bucket * GRAYLINE_BUCKET_MS));
     const twilightFill = hexToRgb(state.theme === 'dark' ? '#9a8371' : '#b08b72');
     const nightFill = hexToRgb(state.theme === 'dark' ? '#01050a' : '#182534');
     const maxDim = Math.max(width, height);
