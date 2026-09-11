@@ -327,7 +327,10 @@ func (s *dxPostgresStore) mergePendingBack(global map[baselineGlobalKey]baseline
 	}
 }
 
-func (s *dxPostgresStore) initSchema(ctx context.Context) error {
+// initSchemaStmts returns the always-applied schema DDL: fresh installs and
+// existing deployments get the same shape. Extracted from initSchema so the
+// DDL arms can be asserted without a live Postgres.
+func initSchemaStmts() []string {
 	stmts := []string{
 		`CREATE EXTENSION IF NOT EXISTS postgis;`,
 		// v6 schema note: existing deploys with the old source4 shape must run
@@ -485,8 +488,12 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			v TEXT NOT NULL
 		);`,
 	}
-
 	stmts = append(stmts, cellfeedSchemaStmts()...)
+	return stmts
+}
+
+func (s *dxPostgresStore) initSchema(ctx context.Context) error {
+	stmts := initSchemaStmts()
 
 	for _, q := range stmts {
 		if _, err := s.pool.Exec(ctx, q); err != nil {
@@ -977,23 +984,42 @@ func (s *dxPostgresStore) mergeRawSpotsBack(rows []rawSpotRow) {
 		return
 	}
 	s.mu.Lock()
-	// Prepend the failed rows ahead of any rows added since the swap so they
-	// are retried first (oldest-first), keeping the stored order roughly stable.
-	combined := make([]rawSpotRow, 0, len(rows)+len(s.pendingRawSpots))
-	combined = append(combined, rows...)
-	combined = append(combined, s.pendingRawSpots...)
-	s.pendingRawSpots = combined
+	s.pendingRawSpots = mergeRawSpotRows(rows, s.pendingRawSpots)
 	s.trimPendingRawSpotsLocked()
 	s.mu.Unlock()
+}
+
+// mergeRawSpotRows prepends the failed rows ahead of any rows added since the
+// swap so they are retried first (oldest-first), keeping the stored order
+// roughly stable. Pure so the merge ordering can be tested without a pool.
+func mergeRawSpotRows(requeued, pending []rawSpotRow) []rawSpotRow {
+	combined := make([]rawSpotRow, 0, len(requeued)+len(pending))
+	combined = append(combined, requeued...)
+	combined = append(combined, pending...)
+	return combined
 }
 
 // trimPendingRawSpotsLocked drops the oldest buffered rows when the retry
 // buffer exceeds rawSpotMaxPendingRows. Caller must hold s.mu.
 func (s *dxPostgresStore) trimPendingRawSpotsLocked() {
-	if excess := len(s.pendingRawSpots) - rawSpotMaxPendingRows; excess > 0 {
-		s.pendingRawSpots = s.pendingRawSpots[excess:len(s.pendingRawSpots):len(s.pendingRawSpots)]
+	trimmed, excess := trimRawSpotRows(s.pendingRawSpots, rawSpotMaxPendingRows)
+	if excess > 0 {
+		s.pendingRawSpots = trimmed
 		logInfo("Raw spot retry buffer overflowed; dropped %d oldest rows (Postgres persisting slower than ingest)", excess)
 	}
+}
+
+// trimRawSpotRows returns the buffer trimmed to its newest cap rows plus the
+// number of oldest rows dropped (0 when the buffer is within capacity). The
+// returned slice is re-sliced with its own cap so appends never clobber the
+// caller's backing array. Pure so the overflow behaviour can be tested
+// without a pool.
+func trimRawSpotRows(rows []rawSpotRow, limit int) ([]rawSpotRow, int) {
+	excess := len(rows) - limit
+	if excess <= 0 {
+		return rows, 0
+	}
+	return rows[excess:len(rows):len(rows)], excess
 }
 
 // buildRawSpotInsertSQL builds one multi-VALUES INSERT for a chunk of precomputed
@@ -1038,7 +1064,23 @@ func buildRawSpotInsertSQL(chunk []rawSpotRow) (string, []any) {
 	return b.String(), args
 }
 
-func (s *dxPostgresStore) insertRawSpot(ctx context.Context, m MQTTMessage, band, sourceType, spotter string, frequencyKHz *float64, comment string) error {
+// rawSpotSingleInsertSQL is the single-row raw-spot INSERT: 13 positional
+// parameters matching rawSpotInsertArgs. Extracted so the column/parameter
+// arms can be asserted without a database.
+const rawSpotSingleInsertSQL = `
+		INSERT INTO dx_raw_spots (
+			spot_time, band, sender_callsign, receiver_callsign,
+			sender_locator, receiver_locator, mode, signal_report_db,
+			source_grid4,
+			source_type, spotter_callsign, frequency_khz, comment
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+	`
+
+// rawSpotInsertArgs normalizes the caller-supplied columns of one raw-spot row
+// into the 13 positional args of rawSpotSingleInsertSQL. Pure so the
+// normalization arms can be tested without a database.
+func rawSpotInsertArgs(m MQTTMessage, band, sourceType, spotter string, frequencyKHz *float64, comment string) []any {
 	if band == "" {
 		band = normalizeBand(m.B)
 	}
@@ -1052,15 +1094,7 @@ func (s *dxPostgresStore) insertRawSpot(ctx context.Context, m MQTTMessage, band
 		sourceType = "mqtt"
 	}
 
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO dx_raw_spots (
-			spot_time, band, sender_callsign, receiver_callsign,
-			sender_locator, receiver_locator, mode, signal_report_db,
-			source_grid4,
-			source_type, spotter_callsign, frequency_khz, comment
-		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-	`,
+	return []any{
 		m.T,
 		band,
 		strings.ToUpper(strings.TrimSpace(m.SC)),
@@ -1074,21 +1108,17 @@ func (s *dxPostgresStore) insertRawSpot(ctx context.Context, m MQTTMessage, band
 		strings.ToUpper(strings.TrimSpace(spotter)),
 		frequencyKHz,
 		strings.TrimSpace(comment),
-	)
+	}
+}
+
+func (s *dxPostgresStore) insertRawSpot(ctx context.Context, m MQTTMessage, band, sourceType, spotter string, frequencyKHz *float64, comment string) error {
+	_, err := s.pool.Exec(ctx, rawSpotSingleInsertSQL,
+		rawSpotInsertArgs(m, band, sourceType, spotter, frequencyKHz, comment)...)
 	return err
 }
 
 func (s *dxPostgresStore) bandPairs(ctx context.Context, table string, _ []string, band string, slot int) ([]baselinePair, error) {
-	// Only dx_baseline_global is queried here now (the target table was removed
-	// in v8; cluster queries go through clusterBandPairs). The targets arg is
-	// kept for signature stability but unused.
-	q := `
-		SELECT distance_tier, snr_tier, SUM(count)::bigint
-		FROM dx_baseline_global
-		WHERE band = $1 AND slot_of_day = $2
-		GROUP BY distance_tier, snr_tier
-	`
-	args := []any{band, slot}
+	q, args := bandPairsQuery(band, slot)
 	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -1154,8 +1184,32 @@ func (s *dxPostgresStore) allBandBaselinePairs(operatorCluster string) (map[band
 	return clusterIdx, globalIdx, nil
 }
 
+// bandPairsQuery builds the per-band baseline query and its positional args.
+// Only dx_baseline_global is queried here now (the target table was removed
+// in v8; cluster queries go through clusterBandPairs). The targets arg is
+// kept for signature stability but unused at the call site. Pure so the arm
+// can be asserted without a database.
+func bandPairsQuery(band string, slot int) (string, []any) {
+	return `
+		SELECT distance_tier, snr_tier, SUM(count)::bigint
+		FROM dx_baseline_global
+		WHERE band = $1 AND slot_of_day = $2
+		GROUP BY distance_tier, snr_tier
+	`, []any{band, slot}
+}
+
+// bandSlotRowSource is the row shape scanBandSlotPairs drains — pgx.Rows
+// narrowed to the four methods the scan uses, so a hand-rolled fake can feed
+// the grouping logic in tests without a live Postgres.
+type bandSlotRowSource interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+	Close()
+}
+
 // scanBandSlotPairs drains rows into a map[bandSlotKey][]baselinePair.
-func scanBandSlotPairs(rows pgx.Rows) (map[bandSlotKey][]baselinePair, error) {
+func scanBandSlotPairs(rows bandSlotRowSource) (map[bandSlotKey][]baselinePair, error) {
 	defer rows.Close()
 	idx := make(map[bandSlotKey][]baselinePair, 1024)
 	for rows.Next() {

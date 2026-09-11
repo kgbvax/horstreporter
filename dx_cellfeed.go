@@ -78,16 +78,11 @@ func cellfeedSchemaStmts() []string {
 	}
 }
 
-// upsertProplabCellBuckets persists closed cell buckets additively: counts
-// accumulate on conflict (e.g. a late flush), medians are replaced by the
-// newest flush, dist_max takes the greatest.
-func (s *dxPostgresStore) upsertProplabCellBuckets(ctx context.Context, rows []proplab.CellRow) error {
-	if s == nil || len(rows) == 0 {
-		return nil
-	}
-	batch := &pgx.Batch{}
-	for _, r := range rows {
-		batch.Queue(`
+// proplabCellBucketUpsertSQL is the additive cell-bucket upsert template: 12
+// positional parameters matching proplabCellBucketUpsertArgs. Extracted so the
+// conflict arm can be asserted without a database.
+func proplabCellBucketUpsertSQL() string {
+	return `
 			INSERT INTO proplab_cell_buckets
 			(bucket_start, band, cell4, region, lane, spot_count, link_count, reporter_count,
 			 snr_median, snr_p10, dist_median_km, dist_max_km)
@@ -101,8 +96,28 @@ func (s *dxPostgresStore) upsertProplabCellBuckets(ctx context.Context, rows []p
 				snr_p10        = EXCLUDED.snr_p10,
 				dist_median_km = EXCLUDED.dist_median_km,
 				dist_max_km    = GREATEST(proplab_cell_buckets.dist_max_km, EXCLUDED.dist_max_km)
-		`, r.BucketStart, r.Band, r.Cell4, r.Region, r.Lane,
-			r.SpotCount, r.LinkCount, r.ReporterCount, r.SnrMedian, r.SnrP10, r.DistMedianKm, r.DistMaxKm)
+		`
+}
+
+// proplabCellBucketUpsertArgs builds the 12 positional args of
+// proplabCellBucketUpsertSQL for one closed bucket row. Pure.
+func proplabCellBucketUpsertArgs(r proplab.CellRow) []any {
+	return []any{
+		r.BucketStart, r.Band, r.Cell4, r.Region, r.Lane,
+		r.SpotCount, r.LinkCount, r.ReporterCount, r.SnrMedian, r.SnrP10, r.DistMedianKm, r.DistMaxKm,
+	}
+}
+
+// upsertProplabCellBuckets persists closed cell buckets additively: counts
+// accumulate on conflict (e.g. a late flush), medians are replaced by the
+// newest flush, dist_max takes the greatest.
+func (s *dxPostgresStore) upsertProplabCellBuckets(ctx context.Context, rows []proplab.CellRow) error {
+	if s == nil || len(rows) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for _, r := range rows {
+		batch.Queue(proplabCellBucketUpsertSQL(), proplabCellBucketUpsertArgs(r)...)
 	}
 	br := s.pool.SendBatch(ctx, batch)
 	defer func() { _ = br.Close() }()
@@ -114,6 +129,23 @@ func (s *dxPostgresStore) upsertProplabCellBuckets(ctx context.Context, rows []p
 	return br.Close()
 }
 
+// proplabSWUpsertSQL is the space-weather upsert template: 3 positional
+// parameters matching proplabSWUpsertArgs. Extracted so the conflict arm can
+// be asserted without a database.
+func proplabSWUpsertSQL() string {
+	return `
+			INSERT INTO proplab_sw_series (series, obs_time, value)
+			VALUES ($1,$2,$3)
+			ON CONFLICT (series, obs_time) DO UPDATE SET value = EXCLUDED.value
+		`
+}
+
+// proplabSWUpsertArgs builds the 3 positional args of proplabSWUpsertSQL for
+// one space-weather observation. Pure.
+func proplabSWUpsertArgs(r proplabSWRow) []any {
+	return []any{r.Series, r.ObsTime, r.Value}
+}
+
 // upsertProplabSW inserts or replaces a single space-weather observation.
 func (s *dxPostgresStore) upsertProplabSW(ctx context.Context, rows []proplabSWRow) error {
 	if s == nil || len(rows) == 0 {
@@ -121,11 +153,7 @@ func (s *dxPostgresStore) upsertProplabSW(ctx context.Context, rows []proplabSWR
 	}
 	batch := &pgx.Batch{}
 	for _, r := range rows {
-		batch.Queue(`
-			INSERT INTO proplab_sw_series (series, obs_time, value)
-			VALUES ($1,$2,$3)
-			ON CONFLICT (series, obs_time) DO UPDATE SET value = EXCLUDED.value
-		`, r.Series, r.ObsTime, r.Value)
+		batch.Queue(proplabSWUpsertSQL(), proplabSWUpsertArgs(r)...)
 	}
 	br := s.pool.SendBatch(ctx, batch)
 	defer func() { _ = br.Close() }()
@@ -150,6 +178,32 @@ const (
 	cellfeedPrunePassBudget   = 2 * time.Minute
 )
 
+// cellfeedPruneTarget names one table the cell-feed prune deletes from and the
+// timestamp column it filters on.
+type cellfeedPruneTarget struct {
+	table string
+	col   string
+}
+
+// cellfeedPruneTargets lists the tables (in prune order) with their cutoff
+// column. Pure so the table/column arms can be asserted without a database.
+func cellfeedPruneTargets() []cellfeedPruneTarget {
+	return []cellfeedPruneTarget{
+		{table: "proplab_cell_buckets", col: "bucket_start"},
+		{table: "proplab_sw_series", col: "obs_time"},
+	}
+}
+
+// cellfeedPruneSQL builds one batched DELETE for a prune target: bounded by
+// ctid sub-select LIMIT so a contested PG never runs a 20k-row delete inside
+// one statement timeout. Pure.
+func cellfeedPruneSQL(t cellfeedPruneTarget) string {
+	return fmt.Sprintf(`
+				DELETE FROM %s
+				WHERE ctid IN (SELECT ctid FROM %s WHERE %s < $1 LIMIT %d)
+			`, t.table, t.table, t.col, cellfeedPruneBatchSize)
+}
+
 // pruneCellFeedOlderThan removes cell bucket / SW rows older than cutoff.
 func (s *dxPostgresStore) pruneCellFeedOlderThan(cutoff int64) (int64, error) {
 	if s == nil {
@@ -157,21 +211,14 @@ func (s *dxPostgresStore) pruneCellFeedOlderThan(cutoff int64) (int64, error) {
 	}
 	var total int64
 	var lastErr error
-	for _, table := range []string{"proplab_cell_buckets", "proplab_sw_series"} {
-		col := "bucket_start"
-		if table == "proplab_sw_series" {
-			col = "obs_time"
-		}
+	for _, target := range cellfeedPruneTargets() {
 		passStart := time.Now()
 		for b := 0; b < cellfeedPruneMaxBatches; b++ {
 			if time.Since(passStart) > cellfeedPrunePassBudget {
 				break
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), cellfeedPruneBatchTimeout)
-			res, err := s.pool.Exec(ctx, fmt.Sprintf(`
-				DELETE FROM %s
-				WHERE ctid IN (SELECT ctid FROM %s WHERE %s < $1 LIMIT %d)
-			`, table, table, col, cellfeedPruneBatchSize), cutoff)
+			res, err := s.pool.Exec(ctx, cellfeedPruneSQL(target), cutoff)
 			cancel()
 			if err != nil {
 				lastErr = err
@@ -281,7 +328,7 @@ func (s *CellBucketFeed) Observe(m MQTTMessage) {
 	rc := strings.ToUpper(strings.TrimSpace(m.RC))
 	bucketStart := proplab.AlignBucketStart(m.T)
 
-	key := fmt.Sprintf("%s|%s|%s|%s|%d", band, lane, sc, rc, bucketStart)
+	key := cellDedupKey(band, lane, sc, rc, bucketStart)
 	now := time.Now().Unix()
 
 	s.mu.Lock()
@@ -315,6 +362,13 @@ func (s *CellBucketFeed) cleanupDedup() {
 			delete(s.dedup, k)
 		}
 	}
+}
+
+// cellDedupKey builds the dedup-map key for one observed spot: band × lane ×
+// both callsigns × bucket start, so the same spot delivered by both ingest
+// paths within the dedup window collapses. Pure.
+func cellDedupKey(band, lane, sc, rc string, bucketStart int64) string {
+	return fmt.Sprintf("%s|%s|%s|%s|%d", band, lane, sc, rc, bucketStart)
 }
 
 // toProplabSpot converts an ingest message into the engine's Spot contract.
