@@ -295,8 +295,13 @@ function buildMercatorGraylineDataUrl(theme, subsolarPoint) {
     // In dark theme the base map is near-black, so night shading alone gives no
     // visible day/night contrast — lift the sunlit side with a warm tint so
     // "day" actually reads brighter. Light theme's bright tiles need no lift.
+    // The twilight band is also dialed down here (shared defaults suit the
+    // azimuthal/light rendering): on dark tiles its warm wash used to read
+    // brighter than the day side, inverting the brightness ordering.
+    const dark = theme === 'dark';
     const dayFill = hexToRgb('#f5e9c8');
-    const maxDayOpacity = 0.14;
+    const maxDayOpacity = 0.26;
+    const twilightOptions = dark ? { maxGraylineOpacity: 0.10, maxNightOpacity: 0.42 } : {};
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
 
@@ -304,11 +309,12 @@ function buildMercatorGraylineDataUrl(theme, subsolarPoint) {
         const lat = mercatorYToLat(y / (height - 1));
         for (let x = 0; x < width; x += 1) {
             const lng = -180 + ((x / (width - 1)) * 360);
-            const { graylineOpacity, nightOpacity, zenithAngle } = getGraylineOverlayOpacities(lat, lng, subsolarPoint);
-            // Full lift below 30° solar zenith, fading linearly to 0 at the
-            // terminator (90°); the twilight band takes over from there.
-            const dayOpacity = theme === 'dark' && zenithAngle < 90
-                ? maxDayOpacity * Math.min(1, (90 - zenithAngle) / 60)
+            const { graylineOpacity, nightOpacity, zenithAngle } = getGraylineOverlayOpacities(lat, lng, subsolarPoint, twilightOptions);
+            // Lift stays visible at high sun angles (morning/evening day side):
+            // sqrt falloff from full at the subsolar point to ~29% of max just
+            // before the terminator (90°), where twilight takes over.
+            const dayOpacity = dark && zenithAngle < 90
+                ? maxDayOpacity * Math.sqrt(Math.max(0, 1 - zenithAngle / 90))
                 : 0;
             if (graylineOpacity <= 0 && nightOpacity <= 0 && dayOpacity <= 0) continue;
 
