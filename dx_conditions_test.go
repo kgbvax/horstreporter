@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -226,5 +227,127 @@ func TestBaselineActivityForBandClusterFallback(t *testing.T) {
 	act, clusterUsed = baselineActivityForBand(global, cluster, "JN68", "20m", 10, 60*24*30)
 	if !clusterUsed || act == 0 {
 		t.Errorf("cluster fallback: act=%v clusterUsed=%v, want cluster", act, clusterUsed)
+	}
+}
+
+// TestBaselineP90DistanceForBand unit-tests the two-tier p90 distance fallback
+// (grid-cluster → global) used by the hot-bands DX-surge detector.
+func TestBaselineP90DistanceForBand(t *testing.T) {
+	global := map[string]*baselineBucket{}
+	cluster := map[string]*baselineBucket{}
+
+	tests := []struct {
+		name          string
+		setup         func()
+		operatorClstr string
+		band          string
+		hour          int
+		wantKm        float64
+		wantCluster   bool
+	}{
+		{
+			name: "cluster bucket present wins over global",
+			setup: func() {
+				global[baselineKey("20m", 10, 0, 1)] = &baselineBucket{Count: 100}
+				cluster[baselineClusterKey("JN68", "20m", 10, 4, 0)] = &baselineBucket{Count: 100}
+			},
+			operatorClstr: "JN68", band: "20m", hour: 10,
+			wantKm: 11500, wantCluster: true, // all mass in tier 4 → its upper bound (see TestP90FromTierCounts)
+		},
+		{
+			name: "unknown cluster falls back to global",
+			setup: func() {
+				global[baselineKey("20m", 10, 0, 1)] = &baselineBucket{Count: 100}
+			},
+			operatorClstr: "ZZ99", band: "20m", hour: 10,
+			wantKm: 450, wantCluster: false,
+		},
+		{
+			name: "empty operator cluster uses global",
+			setup: func() {
+				global[baselineKey("20m", 10, 0, 1)] = &baselineBucket{Count: 100}
+			},
+			operatorClstr: "", band: "20m", hour: 10,
+			wantKm: 450, wantCluster: false,
+		},
+		{
+			name: "zero-count cluster buckets do not count as cluster data",
+			setup: func() {
+				global[baselineKey("20m", 10, 0, 1)] = &baselineBucket{Count: 100}
+				cluster[baselineClusterKey("JN68", "20m", 10, 4, 0)] = &baselineBucket{Count: 0}
+			},
+			operatorClstr: "JN68", band: "20m", hour: 10,
+			wantKm: 450, wantCluster: false,
+		},
+		{
+			name:          "no data anywhere yields zero",
+			setup:         func() {},
+			operatorClstr: "JN68", band: "20m", hour: 10,
+			wantKm: 0, wantCluster: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			global, cluster = map[string]*baselineBucket{}, map[string]*baselineBucket{}
+			tc.setup()
+			km, usedCluster := baselineP90DistanceForBand(global, cluster, tc.operatorClstr, tc.band, tc.hour)
+			if math.Abs(km-tc.wantKm) > 1 {
+				t.Errorf("p90 = %v, want %v", km, tc.wantKm)
+			}
+			if usedCluster != tc.wantCluster {
+				t.Errorf("clusterUsed = %v, want %v", usedCluster, tc.wantCluster)
+			}
+		})
+	}
+}
+
+// TestBaselineClusterKeyFromBase pins the cluster key composition against the
+// four-dimension builder it must wrap.
+func TestBaselineClusterKeyFromBase(t *testing.T) {
+	base := baselineKey("20m", 10, 2, 1)
+	if got := baselineClusterKeyFromBase("JN68", base); got != "JN68|"+base {
+		t.Errorf("baselineClusterKeyFromBase = %q, want %q", got, "JN68|"+base)
+	}
+	if got := baselineClusterKeyFromBase("JN68", base); got != baselineClusterKey("JN68", "20m", 10, 2, 1) {
+		t.Errorf("baselineClusterKeyFromBase = %q, want %q (same as baselineClusterKey)", got, baselineClusterKey("JN68", "20m", 10, 2, 1))
+	}
+	// Different anchors must not collide for the same base key.
+	if a, b := baselineClusterKeyFromBase("JN68", base), baselineClusterKeyFromBase("EM86", base); a == b {
+		t.Errorf("distinct anchors collapsed to the same key %q", a)
+	}
+}
+
+// TestNumBuckets pins the baseline bucket accounting: one global bucket per
+// (band, slot, distance, snr) observation plus one cluster bucket per locator
+// end (JN68 for the German end, EM86 for the US end here).
+func TestNumBuckets(t *testing.T) {
+	e := newDxBaselineEngine("")
+	if got := e.NumBuckets(); got != 0 {
+		t.Fatalf("fresh engine NumBuckets = %d, want 0", got)
+	}
+
+	now := int64(1700000000)
+	base := MQTTMessage{SC: "DL1ABC", RC: "W1XYZ", SL: "JO62QM", RL: "FN31AB", T: now, MD: "FT8"}
+
+	m20 := base
+	m20.B, m20.RP = "20m", -10
+	e.Observe(m20)
+	if got := e.NumBuckets(); got != 3 { // 1 global + 2 cluster anchors (JN68, EM86)
+		t.Fatalf("after first spot NumBuckets = %d, want 3", got)
+	}
+
+	m40 := base
+	m40.B, m40.RP = "40m", -30
+	e.Observe(m40)
+	if got := e.NumBuckets(); got != 6 {
+		t.Fatalf("after second band NumBuckets = %d, want 6", got)
+	}
+
+	// A same-band message with a different SNR tier opens new buckets.
+	m20b := base
+	m20b.B, m20b.RP = "20m", 5
+	e.Observe(m20b)
+	if got := e.NumBuckets(); got != 9 {
+		t.Fatalf("after higher SNR tier NumBuckets = %d, want 9", got)
 	}
 }

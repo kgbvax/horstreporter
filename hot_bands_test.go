@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -275,4 +276,145 @@ func classifyHotBandsForTest(cond dxConditionsResponse, currentBand string, base
 		}
 	}
 	return out
+}
+
+// TestLookupBaselineP90ClusterFallback exercises lookupBaselineP90 through the
+// global-swap pattern (main_test.go style): a fresh in-memory engine seeded
+// with one global and one cluster bucket, assigned to the dxBaseline global
+// and restored afterwards.
+func TestLookupBaselineP90ClusterFallback(t *testing.T) {
+	orig := dxBaseline
+	defer func() { dxBaseline = orig }()
+
+	const slot = 10
+	e := newDxBaselineEngine("")
+	e.buckets[baselineKey("20m", slot, 0, 1)] = &baselineBucket{Band: "20m", SlotOfDay: slot, DistanceTier: 0, SnrTier: 1, Count: 100}
+	e.clusterBuckets[baselineClusterKey("JN68", "20m", slot, 4, 0)] = &baselineBucket{Band: "20m", SlotOfDay: slot, DistanceTier: 4, SnrTier: 0, Count: 100}
+	dxBaseline = e
+
+	// Cluster has data for JN68 → cluster tier wins (all mass in tier 4).
+	km, used := dxBaseline.lookupBaselineP90("JN68", "20m", slot)
+	if !used || math.Abs(km-11500) > 1 {
+		t.Errorf("cluster lookup = (%v, %v), want (11500, true)", km, used)
+	}
+
+	// Unknown cluster → global fallback (tier 0).
+	km, used = dxBaseline.lookupBaselineP90("ZZ99", "20m", slot)
+	if used || math.Abs(km-450) > 1 {
+		t.Errorf("global fallback = (%v, %v), want (450, false)", km, used)
+	}
+
+	// Empty operator cluster → global fallback.
+	km, used = dxBaseline.lookupBaselineP90("", "20m", slot)
+	if used || math.Abs(km-450) > 1 {
+		t.Errorf("empty cluster = (%v, %v), want (450, false)", km, used)
+	}
+
+	// No data at all for the band.
+	km, used = dxBaseline.lookupBaselineP90("JN68", "17m", slot)
+	if used || km != 0 {
+		t.Errorf("no data = (%v, %v), want (0, false)", km, used)
+	}
+
+	// A nil engine never panics.
+	var nilEngine *DxBaselineEngine
+	km, used = nilEngine.lookupBaselineP90("JN68", "20m", slot)
+	if used || km != 0 {
+		t.Errorf("nil engine = (%v, %v), want (0, false)", km, used)
+	}
+}
+
+// TestHotBandsEmptyBaselineStableEmpty verifies that HotBands on an engine
+// without any baseline data returns a stable, empty recommendation list (the
+// frontend hides the indicator for exactly this case) and propagates the qth.
+func TestHotBandsEmptyBaselineStableEmpty(t *testing.T) {
+	e := newDxBaselineEngine("")
+	now := int64(1700000000)
+
+	resp := e.HotBands("JO62qm", false, 15, -24, "all", nil, now)
+	if resp.QTH != "JO62QM" {
+		t.Errorf("QTH = %q, want JO62QM (normalized)", resp.QTH)
+	}
+	if len(resp.Recommendations) != 0 {
+		t.Errorf("empty baseline produced recommendations: %+v", resp.Recommendations)
+	}
+	if resp.Recommendations == nil {
+		t.Errorf("Recommendations must be an empty slice, not nil (frontend hides the indicator)")
+	}
+
+	// Empty qth short-circuits before any band evaluation.
+	resp = e.HotBands("", false, 15, -24, "all", nil, now)
+	if len(resp.Recommendations) != 0 {
+		t.Errorf("empty qth produced recommendations: %+v", resp.Recommendations)
+	}
+}
+
+// TestHotBandsRisingRecFromSeededBaseline is an end-to-end run of HotBands
+// against a seeded in-memory baseline: a 15m band with a rising live sparkline
+// and modest baseline support must surface exactly one "rising" recommendation.
+// Baseline buckets, the observed-event ring, and the event span are seeded
+// directly (package-internal access) so no Postgres or Observe funnel is
+// involved.
+//
+// Seeded shape, at slot = utcSlotOfDay(now):
+//   - global 15m baseline: 1600 events in SNR tier 0 + 400 in tier 1
+//     (distance tier 3) → baselineActivity ≈ 1.09 spots/min over a 61-day span
+//   - event ring: 8/14/18 spots in the last three 75s bins of a 15-min window
+//     → normalized sparkline 44.44/77.78/100 (sustained ≥ 2, trend "rising")
+//   - live history: 40 spots over the 15-min window → 2.67 spots/min live rate
+func TestHotBandsRisingRecFromSeededBaseline(t *testing.T) {
+	const now = int64(1700000000)
+	slot := utcSlotOfDay(now)
+
+	e := newDxBaselineEngine("")
+	e.mu.Lock()
+	e.buckets[baselineKey("15m", slot, 3, 0)] = &baselineBucket{Band: "15m", SlotOfDay: slot, DistanceTier: 3, SnrTier: 0, Count: 1600}
+	e.buckets[baselineKey("15m", slot, 3, 1)] = &baselineBucket{Band: "15m", SlotOfDay: slot, DistanceTier: 3, SnrTier: 1, Count: 400}
+	events := make([]dxObservedEvent, 0, 40)
+	for i := 0; i < 8; i++ {
+		events = append(events, dxObservedEvent{T: now - 200, B: "15m", SC: fmt.Sprintf("DK%dAB", i), RC: fmt.Sprintf("W%dXY", i), SL: "JO62QM", RL: "FN31AA", RP: -10})
+	}
+	for i := 0; i < 14; i++ {
+		events = append(events, dxObservedEvent{T: now - 120, B: "15m", SC: fmt.Sprintf("OK%dAB", i), RC: "W9XY", SL: "JO62QM", RL: "FN31AA", RP: -10})
+	}
+	for i := 0; i < 18; i++ {
+		events = append(events, dxObservedEvent{T: now - 30, B: "15m", SC: fmt.Sprintf("SM%dAB", i), RC: "K8XY", SL: "JO62QM", RL: "FN31AA", RP: -10})
+	}
+	e.events = events
+	e.firstEventAt = now - 61*86400
+	e.lastEventAt = now
+	e.mu.Unlock()
+
+	history := make([]MQTTMessage, 0, 40)
+	for i := 0; i < 40; i++ {
+		history = append(history, MQTTMessage{
+			T: now - 90, SC: fmt.Sprintf("DK%dABC", i), RC: fmt.Sprintf("W%dXYZ", i),
+			SL: "JO62QM", RL: "FN31AA", RP: -10, B: "15m", MD: "FT8",
+		})
+	}
+
+	resp := e.HotBands("JO62qm", false, 15, -24, "all", history, now)
+
+	if len(resp.Recommendations) != 1 {
+		t.Fatalf("expected exactly 1 recommendation, got %d: %+v", len(resp.Recommendations), resp.Recommendations)
+	}
+	rec := resp.Recommendations[0]
+	if rec.Band != "15m" {
+		t.Errorf("band = %q, want 15m", rec.Band)
+	}
+	if rec.Kind != "rising" {
+		t.Errorf("kind = %q, want rising", rec.Kind)
+	}
+	if rec.Priority != "normal" {
+		t.Errorf("priority = %q, want normal", rec.Priority)
+	}
+	if rec.SustainedBins != 3 {
+		t.Errorf("sustained bins = %d, want 3", rec.SustainedBins)
+	}
+	if rec.Trend != "rising" {
+		t.Errorf("trend = %q, want rising", rec.Trend)
+	}
+	if rec.SpotsPerMinute != 2.67 {
+		t.Errorf("spots_per_minute = %v, want 2.67 (40 spots / 15 min)", rec.SpotsPerMinute)
+	}
 }

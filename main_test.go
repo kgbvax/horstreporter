@@ -1785,3 +1785,101 @@ func TestActivityScoreNormImplausibleBaseline(t *testing.T) {
 		}
 	}
 }
+
+// TestMaskDSN pins the credential redaction used by the DX Postgres startup
+// log lines. maskDSN parses URL-style DSNs and swaps the password for "***";
+// anything it cannot parse as a URL with userinfo passes through unchanged.
+func TestMaskDSN(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			// Characterization: the replacement password "***" is URL-escaped
+			// by url.URL.String() to "%2A%2A%2A" — still redacted, but the log
+			// shows the escaped form rather than a literal "***".
+			name: "URL with password is redacted (escaped asterisks)",
+			in:   "postgres://hk:sekret@db.example.com:5432/dxdata?sslmode=disable",
+			want: "postgres://hk:%2A%2A%2A@db.example.com:5432/dxdata?sslmode=disable",
+		},
+		{
+			name: "URL with password and no query",
+			in:   "postgres://hk:sekret@localhost:5432/dxdata",
+			want: "postgres://hk:%2A%2A%2A@localhost:5432/dxdata",
+		},
+		{
+			name: "URL with userinfo but no password unchanged",
+			in:   "postgres://hk@localhost:5432/dxdata",
+			want: "postgres://hk@localhost:5432/dxdata",
+		},
+		{
+			name: "URL without userinfo unchanged",
+			in:   "postgres://localhost:5432/dxdata",
+			want: "postgres://localhost:5432/dxdata",
+		},
+		{
+			name: "empty string unchanged",
+			in:   "",
+			want: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := maskDSN(tc.in); got != tc.want {
+				t.Errorf("maskDSN(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMaskDSNKeyValueFormCharacterization documents that key-value DSNs
+// ("host=… password=…") pass through maskDSN UNREDACTED: url.Parse on such a
+// string yields no userinfo, so the password would reach the log verbatim.
+// Characterization-first: if key-value DSN redaction is added, update this.
+func TestMaskDSNKeyValueFormCharacterization(t *testing.T) {
+	in := "host=localhost user=hk password=sekret dbname=dxdata"
+	if got := maskDSN(in); got != in {
+		t.Errorf("maskDSN(key-value DSN) = %q, want unchanged %q (current behaviour)", got, in)
+	}
+}
+
+// TestDSNSource pins the audit-friendly startup log line that reports where
+// the effective DX Postgres DSN came from. Precedence: non-empty flag value >
+// non-empty DX_POSTGRES_DSN env > built-in default; whitespace-only values
+// count as unset.
+func TestDSNSource(t *testing.T) {
+	orig, had := os.LookupEnv("DX_POSTGRES_DSN")
+	defer func() {
+		if had {
+			_ = os.Setenv("DX_POSTGRES_DSN", orig)
+		} else {
+			_ = os.Unsetenv("DX_POSTGRES_DSN")
+		}
+	}()
+
+	cases := []struct {
+		name    string
+		flagVal string
+		env     string
+		want    string
+	}{
+		{"flag wins over env", "flag-dsn", "postgres://env", "flag -dx-postgres-dsn"},
+		{"flag whitespace-only falls back to env", "   ", "postgres://env", "env DX_POSTGRES_DSN"},
+		{"env used when flag empty", "", "postgres://env", "env DX_POSTGRES_DSN"},
+		{"env whitespace-only counts as unset", "", "   ", "built-in default"},
+		{"built-in default when both unset", "", "", "built-in default"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.env == "" {
+				_ = os.Unsetenv("DX_POSTGRES_DSN")
+			} else {
+				_ = os.Setenv("DX_POSTGRES_DSN", tc.env)
+			}
+			if got := dsnSource(tc.flagVal); got != tc.want {
+				t.Errorf("dsnSource(flag=%q, env=%q) = %q, want %q", tc.flagVal, tc.env, got, tc.want)
+			}
+		})
+	}
+}
