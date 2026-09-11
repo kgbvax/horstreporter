@@ -15,6 +15,8 @@
 //     playhead feed and draws the decaying canvas overlay.
 
 import { getMinSnrMode, getSelectedBand, getEnabledBands } from './utils.js';
+import { state } from './state.js';
+import { sessionRing } from './session-ring.js';
 
 // --- Tunables ------------------------------------------------------------
 
@@ -293,6 +295,62 @@ async function fetchBundle(t0, t1) {
     }
 }
 
+// ringCohortSatisfies: can the session ring answer the current UI filter? The
+// ring holds only what the live server stream delivered (session-ring.js is
+// fed from the SSE onmessage hook), so a bundle may be synthesized from it
+// only when the current filter is a narrowing (or equal) of the filter the
+// stream actually fetched — state.streamedFilter (app.js). Widening (enabling
+// an unseen band, lowering an SNR threshold, changing the SNR mode) asks for
+// data the server never delivered; serving it from the ring would render a
+// silent hole, so it falls through to /api/history (AE2, KTD-12). The qth
+// guard matches the cohort too: app.js clears the ring on a qth change, so a
+// qth the timeline was not entered with is foreign.
+function ringCohortSatisfies(f) {
+    const sf = state.streamedFilter;
+    if (!sf) return false;
+    if ((f.qth || '') !== controller.qth) return false;
+    if (String(f.minSnrMode || 'none') !== String(sf.minSnrMode || 'none')) return false;
+    // An empty enabled-band set means "all bands" (the fetch path omits the
+    // param) — that is the widest filter, never a narrowing.
+    if (f.enabledBands.size === 0) return false;
+    for (const band of f.enabledBands) {
+        if (!sf.bands.has(band)) return false;
+    }
+    // Raising an SNR threshold narrows; lowering it widens (the raised
+    // threshold would exclude spots the stream delivered).
+    if (f.minSnrMode === 'ssb' && f.ssbMinDb < parseInt(sf.ssbMinDb ?? '0', 10)) return false;
+    if (f.minSnrMode === 'cw' && f.cwMinDb < parseInt(sf.cwMinDb ?? '-15', 10)) return false;
+    return true;
+}
+
+// tryRingBundle serves a chunk window from the session ring (plan U3): a
+// zero-fetch stand-in for fetchBundle, shaped exactly like the bundle
+// fetchBundle constructs (key, t0, t1, spots sorted by t ascending) so
+// sliceMoment and toLiveSpot work unmodified. Returns null when the ring
+// cannot serve the window — uncovered (below ring.minT or an interior gap,
+// KTD-7), a filter wider than the delivered cohort, or a foreign qth — and
+// the caller falls through to the archive path unchanged. Never touches
+// controller.inflightKeys: a ring-served chunk needs no dedup (it resolves
+// synchronously) and must not interfere with an already-in-flight fetch.
+function tryRingBundle(chunkT0, chunkT1, key) {
+    const f = currentFilterState();
+    if (!ringCohortSatisfies(f)) return null;
+    if (!sessionRing.covers(chunkT0, chunkT1)) return null;
+    const bundle = {
+        key,
+        t0: chunkT0,
+        t1: chunkT1,
+        spots: sessionRing.sliceFiltered(chunkT0, chunkT1, {
+            enabledBands: f.enabledBands,
+            minSnrMode: f.minSnrMode,
+            ssbMinDb: f.ssbMinDb,
+            cwMinDb: f.cwMinDb,
+        }),
+    };
+    putBundle(key, bundle);
+    return bundle;
+}
+
 // chunkBoundsFor returns the [t0,t1] of the 1-hour fetch chunk covering time t
 // within the active range: [floor(t/1h)*1h, +1h), clamped to the range.
 export function chunkBoundsFor(t, rangeT0, rangeT1) {
@@ -306,7 +364,10 @@ export function chunkBoundsFor(t, rangeT0, rangeT1) {
 }
 
 // ensurePlayheadBundle guarantees controller.bundle covers the current
-// playhead, fetching its chunk on demand.
+// playhead, fetching its chunk on demand — or serving it from the session
+// ring when the chunk lies inside the session's own received coverage
+// (zero-fetch rewind; the only /api/history fetch gateway is below, so seek,
+// play ticks and prefetch all consult the ring through this single path).
 async function ensurePlayheadBundle() {
     const t = controller.playhead;
     const [chunkT0, chunkT1] = chunkBoundsFor(t, controller.t0, controller.t1);
@@ -315,6 +376,18 @@ async function ensurePlayheadBundle() {
     if (b) {
         controller.bundle = b;
         return b;
+    }
+    // Ring consult (plan 2026-09-11-002 U3): the ring handles the non-hour-
+    // aligned clamped edges (first/last chunk of a range) and the future-side
+    // overhang of the chunk containing "now" via its coverage contract. On a
+    // hit the bundle is synthesized (filter applied at slice time, so
+    // narrowing re-slices without refetching) and put into the LRU like a
+    // fetched one; controller.loading stays untouched — no loading UI for a
+    // synchronous local slice.
+    const rb = tryRingBundle(chunkT0, chunkT1, key);
+    if (rb) {
+        controller.bundle = rb;
+        return rb;
     }
     controller.loading = true;
     emitStatus();
@@ -435,7 +508,8 @@ export async function enterTimeline(rangeSeconds = 60 * 60) {
 
 // exitTimeline restores live mode: stops playback, clears the bar, drops
 // bundles (they are re-fetchable; holding them across sessions risks stale
-// qth semantics).
+// qth semantics). The session ring is NOT wiped here: it holds the raw
+// received cohort, not qth/filter-scoped bundles — only bundles are stale.
 export function exitTimeline() {
     if (!controller.active) return;
     controller.playing = false;
@@ -662,4 +736,6 @@ export const __internals = {
     maybePrefetch,
     renderBar,
     ensureBar,
+    tryRingBundle,
+    ringCohortSatisfies,
 };

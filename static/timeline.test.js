@@ -3,7 +3,7 @@
 // and URL round-trip. DOM-dependent controller paths stay untested here (they
 // run under the browser).
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import {
     MOMENT_WINDOW_SECONDS,
@@ -18,7 +18,13 @@ import {
     chunkBoundsFor,
     nextPrefetchAt,
     readTimelineURL,
+    enterTimeline,
+    exitTimeline,
+    seek,
+    __internals,
 } from './timeline.js';
+import { sessionRing } from './session-ring.js';
+import { state } from './state.js';
 
 describe('snapToScrub', () => {
     it('rounds to the nearest 5-minute boundary', () => {
@@ -186,5 +192,365 @@ describe('URL state', () => {
 describe('TIMELINE_SPEEDS', () => {
     it('matches the spec presets', () => {
         expect(TIMELINE_SPEEDS).toEqual([60, 240, 600]);
+    });
+});
+
+// --- Unit U3 (plan 2026-09-11-002): ring-served timeline playback ---------
+//
+// The bundle-cache miss in ensurePlayheadBundle consults the session ring:
+// covered 1-hour chunks are synthesized locally (zero /api/history fetches),
+// uncovered chunks fall through to the archive fetch unchanged. session-ring.js
+// is imported REAL (it is pure) and seeded via push() with synthetic
+// __recvMs/__recvAge stamps; /api/history is a fetch mock that serves the same
+// fixture so ring-served and archive-fetched moments can be compared for
+// render parity (R9: set-identity, ±2s t tolerance).
+
+describe('ring-served timeline playback (U3)', () => {
+    // Hour-agnostic instant: 1730000000 is NOT hour-aligned (chunk tail of
+    // 2000s) and NOT 5-minute-aligned, so clamped chunk edges are exercised.
+    const NOW_MS = 1_730_000_000_000;
+    const NOW_SEC = Math.floor(NOW_MS / 1000);
+    const H = 60 * 60;
+
+    const ctl = () => __internals.controller;
+    let moments;
+
+    // giveStreamFilter sets the filter the live stream is actually delivering
+    // (state.streamedFilter, app.js) — the ring's cohort was filtered by it.
+    const giveStreamFilter = (bands = ['20m', '40m']) => {
+        state.streamedFilter = { bands: new Set(bands), minSnrMode: 'none', ssbMinDb: '0', cwMinDb: '-15' };
+    };
+
+    const mkSpot = (t, band = '20m') => ({
+        t,
+        lat: 52.5, lng: 7.0, snr: -6,
+        locator: 'JO32', reporterLocator: 'JO31',
+        sourceType: 'mqtt', band,
+        sender: 'DL1ABC', receiver: 'DL9ET',
+        __recvMs: NOW_MS, __recvAge: NOW_SEC - t, // derived t == t exactly
+    });
+
+    // seedRing pushes the fixture into the ring and returns the same spots in
+    // the /api/history payload shape (absolute t, no receive stamps) for the
+    // fetch mock.
+    const seedRing = (fromT, toT, bands = ['20m']) => {
+        const archive = [];
+        for (let t = fromT; t <= toT; t += 60) {
+            for (const band of bands) {
+                const s = mkSpot(t, band);
+                sessionRing.push(s);
+                const { __recvMs, __recvAge, ...raw } = s;
+                archive.push(raw);
+            }
+        }
+        return archive;
+    };
+
+    // installFetch mocks /api/history serving the fixture within the queried
+    // window (mirrors the server: spots are window-clipped and t-sorted).
+    const installFetch = (archiveSpots) => {
+        global.fetch = vi.fn(async (url) => {
+            const u = new URL(String(url), 'http://localhost');
+            const t0 = parseInt(u.searchParams.get('t0'), 10);
+            const t1 = parseInt(u.searchParams.get('t1'), 10);
+            return {
+                ok: true,
+                headers: { get: () => null },
+                text: async () => '',
+                json: async () => ({ t0, t1, spots: archiveSpots.filter((s) => s.t >= t0 && s.t <= t1) }),
+            };
+        });
+        return global.fetch;
+    };
+
+    const setupDom = () => {
+        document.body.innerHTML = `
+            <input id="qth" value="JO32" />
+            <input id="ssb-min-db" value="0" />
+            <input id="cw-min-db" value="-15" />
+            <input type="checkbox" id="surroundings" />
+            <input type="radio" name="min-snr" value="none" checked />
+            <div id="band-container"></div>
+            <input type="checkbox" class="band-enable" value="20m" checked />
+            <input type="checkbox" class="band-enable" value="40m" checked />
+        `;
+    };
+
+    const resetController = () => {
+        const c = ctl();
+        c.active = false;
+        c.playing = false;
+        c.playhead = 0;
+        c.bundle = null;
+        c.bundles.clear();
+        c.bundleOrder = [];
+        c.inflightKeys.clear();
+        c.inflight = null;
+        c.loading = false;
+        c.t0 = 0;
+        c.t1 = 0;
+        c.qth = '';
+        c.reach = Infinity;
+        c.listeners.moment.length = 0;
+        c.listeners.status.length = 0;
+        c.listeners.exit = null;
+        document.body.classList.remove('timeline-active');
+        const bar = document.getElementById('timeline-bar');
+        if (bar) bar.remove();
+    };
+
+    // assertMomentParity (R9): same rendered spot multiset, per-identity t
+    // within ±2s (live frames derive t from the receive stamps; archive spots
+    // carry server t).
+    const assertMomentParity = (a, b) => {
+        expect(a.ph).toBe(b.ph);
+        const ident = (s) => `${s.band}|${s.sender}|${s.receiver}|${s.locator}|${s.reporterLocator}`;
+        const collect = (m) => {
+            const map = new Map();
+            for (const s of m.live) {
+                if (!map.has(ident(s))) map.set(ident(s), []);
+                map.get(ident(s)).push(m.ph - s.ageSeconds);
+            }
+            return map;
+        };
+        const ma = collect(a);
+        const mb = collect(b);
+        expect([...mb.keys()].sort()).toEqual([...ma.keys()].sort());
+        for (const [k, tb] of mb) {
+            const ta = ma.get(k).sort((x, y) => x - y);
+            tb.sort((x, y) => x - y);
+            expect(ta.length).toBe(tb.length);
+            for (let i = 0; i < ta.length; i++) {
+                expect(Math.abs(ta[i] - tb[i])).toBeLessThanOrEqual(2);
+            }
+        }
+    };
+
+    beforeEach(() => {
+        resetController();
+        sessionRing.clear();
+        state.streamedFilter = null;
+        setupDom();
+        moments = [];
+        ctl().listeners.moment.push((live, ph) => { moments.push({ live, ph }); });
+        global.fetch = vi.fn(async () => { throw new Error('unexpected /api/history fetch'); });
+        vi.spyOn(Date, 'now').mockReturnValue(NOW_MS);
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+        resetController();
+    });
+
+    it('in-coverage seek synthesizes a bundle with zero fetches and emits the same moment an archive bundle would', async () => {
+        const archive = seedRing(NOW_SEC - 2 * H, NOW_SEC);
+        giveStreamFilter();
+        const fetchMock = installFetch(archive);
+
+        await enterTimeline(2 * H);
+        expect(fetchMock).not.toHaveBeenCalled();
+        await seek(NOW_SEC - 2 * H + 900); // first chunk (range-clamped edge)
+        expect(fetchMock).not.toHaveBeenCalled();
+        const ringRun = { enter: moments[0], seeked: moments[moments.length - 1] };
+
+        // Same fixture through the archive path (ring emptied).
+        resetController();
+        sessionRing.clear();
+        moments = [];
+        ctl().listeners.moment.push((live, ph) => { moments.push({ live, ph }); });
+        await enterTimeline(2 * H);
+        await seek(NOW_SEC - 2 * H + 900);
+        const archRun = { enter: moments[0], seeked: moments[moments.length - 1] };
+        expect(fetchMock).toHaveBeenCalledTimes(2); // enter chunk + seek chunk
+        assertMomentParity(ringRun.enter, archRun.enter);
+        assertMomentParity(ringRun.seeked, archRun.seeked);
+    });
+
+    it('an uncovered chunk (before ring.minT) falls through to /api/history', async () => {
+        const archive = seedRing(NOW_SEC - H, NOW_SEC); // ring covers only the last hour
+        giveStreamFilter();
+        const fetchMock = installFetch(archive);
+
+        await enterTimeline(2 * H);
+        expect(fetchMock).not.toHaveBeenCalled(); // playhead chunk covered
+
+        const seekT = NOW_SEC - 2 * H + 900;
+        await seek(seekT);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [ct0, ct1] = chunkBoundsFor(seekT, NOW_SEC - 2 * H, NOW_SEC);
+        const u = new URL(fetchMock.mock.calls[0][0], 'http://localhost');
+        expect(u.searchParams.get('t0')).toBe(String(ct0));
+        expect(u.searchParams.get('t1')).toBe(String(ct1));
+    });
+
+    it('an interior gap in the ring makes the spanning chunk fall through to /api/history', async () => {
+        // 10-minute hole inside the chunk containing the initial playhead.
+        const archive = [
+            ...seedRing(NOW_SEC - H, NOW_SEC - H + 1100),
+            ...seedRing(NOW_SEC - H + 1700, NOW_SEC),
+        ];
+        giveStreamFilter();
+        const fetchMock = installFetch(archive);
+
+        await enterTimeline(H);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('a narrowing filter change re-slices the ring with no fetch; widening falls through (AE2)', async () => {
+        const archive = seedRing(NOW_SEC - 2 * H, NOW_SEC, ['20m', '40m']);
+        giveStreamFilter(['20m', '40m']); // stream delivered both bands
+        const fetchMock = installFetch(archive);
+
+        await enterTimeline(2 * H);
+        expect(fetchMock).not.toHaveBeenCalled();
+
+        // Narrowing: disable 40m → re-slice the first chunk, no fetch, the
+        // moment is 20m-only.
+        document.querySelector('.band-enable[value="40m"]').checked = false;
+        await seek(NOW_SEC - 2 * H + 900);
+        expect(fetchMock).not.toHaveBeenCalled();
+        const m = moments[moments.length - 1];
+        expect(m.live.length).toBeGreaterThan(0);
+        expect(m.live.every((s) => s.band === '20m')).toBe(true);
+
+        // Widening: re-enable 40m when the stream never delivered it. The
+        // wide-filter key of THIS chunk has no cached bundle (the enter chunk
+        // was a different window) and the delivered cohort no longer vouches
+        // for 40m → fall through to /api/history.
+        state.streamedFilter = { bands: new Set(['20m']), minSnrMode: 'none', ssbMinDb: '0', cwMinDb: '-15' };
+        document.querySelector('.band-enable[value="40m"]').checked = true;
+        await seek(NOW_SEC - 2 * H + 900);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('the chunk containing "now" serves its covered portion; moments never extend beyond lastReceived', async () => {
+        const lastT = NOW_SEC - 100; // stream stopped 100s ago
+        const archive = seedRing(NOW_SEC - 2 * H, lastT);
+        giveStreamFilter();
+        const fetchMock = installFetch(archive);
+
+        await enterTimeline(H); // chunk t1 = "now" overhangs ring.lastT by 100s
+        expect(fetchMock).not.toHaveBeenCalled();
+        const m = moments[moments.length - 1];
+        expect(m.ph).toBe(NOW_SEC);
+        expect(m.live.length).toBeGreaterThan(0);
+        const maxT = Math.max(...m.live.map((s) => m.ph - s.ageSeconds));
+        expect(maxT).toBeLessThanOrEqual(lastT);
+    });
+
+    it('enter/exit LRU wipes still occur; the ring survives across them', async () => {
+        const archive = seedRing(NOW_SEC - H, NOW_SEC);
+        giveStreamFilter();
+        const fetchMock = installFetch(archive);
+
+        await enterTimeline(H);
+        expect(ctl().bundles.size).toBe(1); // ring bundle entered the LRU
+        const ringCount = sessionRing.stats().count;
+        expect(ringCount).toBe(61);
+
+        exitTimeline();
+        expect(ctl().bundles.size).toBe(0); // bundles wiped on exit
+        expect(ctl().bundle).toBeNull();
+        expect(sessionRing.stats().count).toBe(ringCount); // ring survives
+
+        await enterTimeline(H);
+        expect(fetchMock).not.toHaveBeenCalled(); // still zero-fetch after re-entry
+    });
+
+    it('prefetching the next chunk during playback resolves from the ring with zero fetches', async () => {
+        const archive = seedRing(NOW_SEC - 2 * H, NOW_SEC);
+        giveStreamFilter();
+        const fetchMock = installFetch(archive);
+
+        await enterTimeline(2 * H);
+        await seek(NOW_SEC - 2 * H + 900);
+        const b = ctl().bundle;
+        expect(b.t1).toBeLessThan(ctl().t1); // a next chunk exists
+
+        // Simulate the play tick crossing the chunk edge; maybePrefetch then
+        // resolves the next chunk through the same ensurePlayheadBundle path.
+        ctl().playhead = b.t1 + 50;
+        __internals.maybePrefetch();
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(ctl().bundle.t0).toBe(chunkBoundsFor(b.t1 + 50, ctl().t0, ctl().t1)[0]);
+        expect(ctl().bundle.spots.length).toBeGreaterThan(0);
+    });
+
+    it('a ring-served chunk never populates inflightKeys', async () => {
+        seedRing(NOW_SEC - 2 * H, NOW_SEC);
+        giveStreamFilter();
+        installFetch([]);
+        await enterTimeline(2 * H);
+        await seek(NOW_SEC - 2 * H + 900);
+        expect(global.fetch).not.toHaveBeenCalled();
+        expect(ctl().inflightKeys.size).toBe(0);
+    });
+
+    it('a ring back-fill preempts an in-flight chunk fetch without touching the dedup map', async () => {
+        seedRing(NOW_SEC - H, NOW_SEC); // final hour only: the first chunk is uncovered
+        giveStreamFilter();
+        let resolveFetch;
+        global.fetch = vi.fn((url) => new Promise((res) => {
+            const u = new URL(String(url), 'http://localhost');
+            const t0 = Number(u.searchParams.get('t0'));
+            const t1 = Number(u.searchParams.get('t1'));
+            const settle = () => res({ ok: true, headers: { get: () => null }, text: async () => '', json: async () => ({ t0, t1, spots: [] }) });
+            resolveFetch = settle;
+            setTimeout(settle, 200); // never hangs, even when red
+        }));
+
+        await enterTimeline(2 * H);
+        expect(global.fetch).not.toHaveBeenCalled();
+
+        const [ct0, ct1] = chunkBoundsFor(NOW_SEC - 5000, NOW_SEC - 2 * H, NOW_SEC);
+        const key = __internals.bundleCacheKey(ct0, ct1);
+        const seekP = seek(NOW_SEC - 5000); // uncovered chunk → fetch starts (pending)
+        await Promise.resolve();
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+        expect(ctl().inflightKeys.has(key)).toBe(true);
+
+        // The reconnect dump back-fills the window while the fetch is pending.
+        seedRing(NOW_SEC - 2 * H, NOW_SEC - H - 60);
+        await seek(NOW_SEC - 5000); // now ring-covered → served, no second fetch
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+        expect(ctl().inflightKeys.has(key)).toBe(true); // ring path left dedup alone
+        expect(ctl().bundle.key).toBe(key);
+
+        resolveFetch();
+        await seekP;
+        expect(ctl().inflightKeys.has(key)).toBe(false); // fetch cleanup intact
+    });
+
+    it('tryRingBundle returns null for a foreign qth or without a delivered stream filter', async () => {
+        const archive = seedRing(NOW_SEC - H, NOW_SEC);
+        giveStreamFilter();
+        const fetchMock = installFetch(archive);
+        await enterTimeline(H);
+        expect(fetchMock).not.toHaveBeenCalled();
+
+        const [ct0, ct1] = chunkBoundsFor(NOW_SEC - 1800, NOW_SEC - H, NOW_SEC);
+        const key = __internals.bundleCacheKey(ct0, ct1);
+
+        // Foreign qth (changed without re-entering the timeline): fall through.
+        document.getElementById('qth').value = 'JO33';
+        expect(__internals.tryRingBundle(ct0, ct1, key)).toBeNull();
+        document.getElementById('qth').value = 'JO32';
+
+        // No active stream (null streamedFilter): nothing vouches for the
+        // cohort's filter → fall through.
+        state.streamedFilter = null;
+        expect(__internals.tryRingBundle(ct0, ct1, key)).toBeNull();
+
+        // Uncovered window: fall through.
+        state.streamedFilter = { bands: new Set(['20m']), minSnrMode: 'none', ssbMinDb: '0', cwMinDb: '-15' };
+        expect(__internals.tryRingBundle(NOW_SEC - 2 * H - 60, NOW_SEC - 2 * H, key)).toBeNull();
+
+        // Covered again (delivered filter restored): synthesized, LRU-populated.
+        giveStreamFilter();
+        const got = __internals.tryRingBundle(ct0, ct1, key);
+        expect(got).not.toBeNull();
+        expect(got.key).toBe(key);
+        expect(got.spots.length).toBeGreaterThan(0);
+        expect(ctl().bundles.has(key)).toBe(true);
     });
 });
