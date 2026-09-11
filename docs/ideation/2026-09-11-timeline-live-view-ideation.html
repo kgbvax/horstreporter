@@ -1,0 +1,345 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Timeline &amp; Live View Ideation</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fcfcfa; --ink: #1c1c1e; --muted: #5f5f66; --line: #e3e3de;
+    --card: #ffffff; --soft: #f2f2ee; --accent: #2456a6; --accent-soft: #eaf0fa;
+    --warn-soft: #faf1e4; --warn-ink: #8a5a18; --ok-ink: #1e6b45;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #191a1c; --ink: #e6e6e4; --muted: #9d9da4; --line: #33343a;
+      --card: #202125; --soft: #26272c; --accent: #7fa8e8; --accent-soft: #232c3d;
+      --warn-soft: #2e2718; --warn-ink: #d8a75c; --ok-ink: #6fc394;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  .page { max-width: 920px; margin-inline: auto; padding: 2.2rem 1.4rem 4rem; }
+  header.doc { border-bottom: 2px solid var(--ink); padding-bottom: 1.1rem; margin-bottom: 2rem; }
+  .eyebrow { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 .35rem; }
+  h1 { font-size: 1.55rem; line-height: 1.25; margin: 0 0 .6rem; }
+  .meta { display: flex; flex-wrap: wrap; gap: .4rem .5rem; }
+  .meta span {
+    font-size: 12px; background: var(--soft); border: 1px solid var(--line);
+    border-radius: 999px; padding: .15rem .6rem; color: var(--muted);
+  }
+  .meta span b { color: var(--ink); font-weight: 600; }
+  h2 { font-size: 1.12rem; margin: 2.4rem 0 .8rem; }
+  h3 { font-size: 1.02rem; margin: 1.4rem 0 .5rem; }
+  p { max-width: 72ch; }
+  .prose p, .prose li { max-width: 72ch; }
+  section { margin-bottom: 2.2rem; }
+  .jumplist { padding: .6rem 1rem; background: var(--soft); border: 1px solid var(--line); border-radius: 10px; }
+  .jumplist ul { margin: 0; padding-left: 1.1rem; columns: 2; }
+  .jumplist a { color: var(--accent); text-decoration: none; }
+  article.idea {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 1rem 1.2rem .4rem; margin: 1rem 0;
+  }
+  .idea-head { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+  .id-chip {
+    font-size: 11px; font-weight: 700; background: var(--accent-soft); color: var(--accent);
+    border-radius: 999px; padding: .12rem .55rem; white-space: nowrap;
+  }
+  .axis-chip {
+    font-size: 11px; background: var(--soft); color: var(--muted);
+    border-radius: 999px; padding: .12rem .55rem; white-space: nowrap;
+  }
+  .idea-head h3 { margin: 0; font-size: 1.05rem; }
+  dl.fields { display: grid; grid-template-columns: max-content 1fr; gap: .3rem .9rem; margin: .8rem 0; }
+  dl.fields dt { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding-top: .2em; }
+  dl.fields dd { margin: 0; min-width: 0; }
+  dl.fields dd + dd { margin-top: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em; background: var(--soft); border-radius: 4px; padding: .05em .35em; }
+  .basis { font-size: 13.5px; color: var(--muted); }
+  .basis code { color: var(--ink); }
+  .tagline { font-weight: 600; }
+  figure.diagram { margin: 1rem 0; padding: .8rem; background: var(--soft); border: 1px solid var(--line); border-radius: 10px; }
+  figure.diagram svg { display: block; width: 100%; height: auto; }
+  figcaption { font-size: 12px; color: var(--muted); margin-top: .5rem; }
+  table.rej { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  table.rej th, table.rej td { border-bottom: 1px solid var(--line); padding: .45rem .55rem; text-align: left; vertical-align: top; }
+  table.rej th { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  table.rej td:first-child { color: var(--muted); white-space: nowrap; }
+  .callout {
+    background: var(--warn-soft); color: var(--warn-ink); border-radius: 10px;
+    padding: .7rem 1rem; font-size: 13.5px; max-width: 72ch;
+  }
+  footer.composition-signal {
+    margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
+    font-size: 12px; color: var(--muted);
+  }
+  a { color: var(--accent); }
+  .jump-target:target { outline: 2px solid var(--accent); outline-offset: 6px; border-radius: 12px; }
+</style>
+
+<div class="page">
+
+<header class="doc">
+  <p class="eyebrow">Ideation · ce-ideate</p>
+  <h1>Timeline &amp; Live View — Ranked Directions</h1>
+  <div class="meta">
+    <span>Date <b><time datetime="2026-09-11">2026-09-11</time></b></span>
+    <span>Topic <b>timeline-live-view</b></span>
+    <span>Focus <b>Timeline &amp; live view</b></span>
+    <span>Mode <b>repo-grounded</b></span>
+    <span>Raw <b>48 ideas → 7 survivors</b></span>
+  </div>
+</header>
+
+<section id="grounding-context">
+  <h2>Grounding Context</h2>
+  <div class="prose">
+    <p>Branch <code>ui-stalled-stop-button</code> carries the uncommitted successor to the removed time-travel/replay feature (deleted Sep 2026, commit <code>53c171c</code>): <code>history.go</code> serves <code>/api/history</code> — per-window gzipped spot bundles from the Postgres archive under hard guards (24h span cap, 50k-spot cap with <code>truncated</code> flag, 120/h per-IP limiter, concurrency gate of 4 → 503, 16-entry/10-min LRU, <code>X-History-Reach</code> header). <code>static/timeline.js</code> is the client playhead machine (1-hour chunk fetches, LRU of 4, prefetch, speeds 60/240/600x, 5-min scrub snap, presets, loop, <code>?tl=1&amp;t0&amp;t1&amp;spd</code> URL). The <code>toLiveSpot</code> moment contract reshapes past data to live-spot form so the existing Mercator/azimuth render pipeline runs unmodified. <code>static/afterglow.js</code> adds a Mercator-only decay canvas (5-min exponential in data-time). A red stop button (<code>setSubmitMode</code> <code>data-mode</code> contract) marks the live seam.</p>
+    <p><strong>Pain points verified in the working tree:</strong> the scrub bar is a blind 0–1000 range input that fetches a chunk per input event; the client never reads <code>truncated</code> or displays <code>X-History-Reach</code>; <code>syncTimelineURL</code> does <code>replaceState</code> per emitted moment (~24 fps) and URL restore seeks to <code>t1</code>, contradicting info.md's "exact past view" promise; afterglow decays via a hardcoded <code>moved=true</code> plus a 400ms wall-clock window with <code>MOVE_THRESHOLD</code>/<code>FADE_IN_MS</code> declared but unused; azimuth renders moments at fixed alpha 0.8 (no decay); the marker layer and afterglow double-ink the same coordinates; no SSE heartbeat exists (the live loop writes only on spot arrival, <code>safeSend</code> drops silently, favicon never decays — the stall watchdog added in <code>8eb14e6</code> was deleted same-day in <code>8fd80dc</code>); grayline no longer follows the playhead (the removed <code>overlayNowMs</code> was not re-pointed); all analytical surfaces (ActivityByBin chart, band baseline, prop_intel matrix) stay pinned to now during playback; the removed predecessor had step buttons, an editable loop range, a density histogram, and grayline-follows-playhead.</p>
+    <p>External research found no ham-radio spot tool with trail/afterglow animation (open lane); SUSE Observability's playhead/pause/brush/"Back to Live" pattern and SDR-waterfall "persistence" (decay vs max-hold) are the closest adjacent patterns. HamRBN's shutdown is the cautionary tale: dots-on-map replay alone wasn't sticky — time-resolved conditions were the value.</p>
+  </div>
+</section>
+
+<section id="topic-axes">
+  <h2>Topic Axes</h2>
+  <ul class="prose">
+    <li>1. Transport &amp; scrubbing UX — playhead, speeds, scrub, presets, loop, URL, back-to-live</li>
+    <li>2. Afterglow &amp; trail rendering — decay model, phosphor, dual projections, draw perf</li>
+    <li>3. History data architecture &amp; depth — chunks, server cache, /api/history, hub.history vs dx_raw_spots</li>
+    <li>4. Live seam &amp; stream health — SSE teardown/restore, stall indicators, resume-from-live</li>
+    <li>5. Analytical value of time — density/heat strips, per-band activity, conditions at a past moment</li>
+  </ul>
+</section>
+
+<section id="ranked-ideas">
+  <h2>Ranked Ideas</h2>
+  <nav class="jumplist">
+    <ul>
+      <li><a href="#idea1">1. One-ink alpha contract</a></li>
+      <li><a href="#idea2">2. Density/honesty scrub bar</a></li>
+      <li><a href="#idea3">3. One transport, live as edge case</a></li>
+      <li><a href="#idea4">4. Panels ride the playhead</a></li>
+      <li><a href="#idea5">5. Shuttle scrub</a></li>
+      <li><a href="#idea6">6. Coarse two-tier history</a></li>
+      <li><a href="#idea7">7. Client session ring</a></li>
+    </ul>
+  </nav>
+
+  <article class="idea jump-target" id="idea1">
+    <div class="idea-head"><span class="id-chip">I1</span><h3>One-ink alpha contract: decay becomes a property of the spot draw</h3>
+      <span class="axis-chip">axis 2 · Afterglow &amp; trail rendering</span></div>
+    <div class="prose">
+      <p>Lift decay out of the separate afterglow canvas and into the moment contract every renderer already consumes. The playhead-relative <code>ageSeconds</code> each renderer receives becomes the input to one shared alpha policy; "moving" is real playhead velocity (data-time delta per wall-second, tested against the declared <code>MOVE_THRESHOLD</code>) instead of the hardcoded <code>true</code> from <code>app.js:2110</code> plus a 400ms wall-clock window; the decay constant scales with playback speed so the same visual story plays at 60x and 600x (today a 5-min data-time tau at 600x is a 1.5-second strobe). Both projections consume it — the Mercator hull draw and the azimuth scene loop (currently fixed <code>globalAlpha = 0.8</code>, i.e. time-blind) — and the separate afterglow canvas that double-inks coordinates the marker layer already paints is deleted.</p>
+      <dl class="fields">
+        <dt>Basis</dt><dd class="basis"><span class="tagline">direct:</span> <code>app.js:2110</code> — <code>updateAfterglow(spots, playhead, true)</code> (verified); <code>afterglow.js:124</code> — <code>const moving = (nowMs - lastMoveAt) &lt; 400;</code> with <code>MOVE_THRESHOLD</code> declared at :32 and never referenced; <code>FADE_IN_MS</code> exported and unit-tested but absent from the draw path; <code>azimuth-runtime.js:1849</code> — <code>ctx.globalAlpha = 0.8;</code> with no per-spot age term; <code>renderers.js:780</code> — fixed hull opacity 0.9/0.18, so afterglow's "matches the live map's look" claim is numerically false. <span class="tagline">external:</span> SDR-waterfall persistence vocabulary (decay vs max-hold), analog-scope phosphor.</dd>
+        <dt>Rationale</dt><dd>Three verified defects (dead decay trigger, time-blind azimuth, double-ink) share one root cause: decay policy lives in the wrong place. The moment contract was the branch's one load-bearing abstraction decision — this finishes it. Every future time-aware surface (heat layer, KDE field, trend halo) inherits decay for free, and one visual language covers both projections.</dd>
+        <dt>Downsides</dt><dd>Touches the render path both projections share — needs the manual wheel-zoom/scrub profile the perf gate can't do (it mocks <code>L</code>); the paused-view parity target ("byte-match the live renderer") needs a deliberate spec decision.</dd>
+        <dt>Confidence</dt><dd>90%</dd>
+        <dt>Complexity</dt><dd>Medium</dd>
+      </dl>
+      <figure class="diagram">
+        <svg viewBox="0 0 840 150" role="img" aria-label="Before and after: two ink layers versus one alpha policy">
+          <rect x="10" y="14" width="380" height="120" rx="10" fill="var(--soft)" stroke="var(--line)"/>
+          <rect x="60" y="34" width="280" height="36" rx="6" fill="var(--accent-soft)" stroke="var(--accent)"/>
+          <text x="200" y="57" text-anchor="middle" font-size="13" fill="var(--ink)">afterglow canvas (decay, Mercator only)</text>
+          <rect x="60" y="80" width="280" height="36" rx="6" fill="var(--soft)" stroke="var(--line)"/>
+          <text x="200" y="103" text-anchor="middle" font-size="13" fill="var(--ink)">markers (fixed opacity)</text>
+          <text x="200" y="127" text-anchor="middle" font-size="11" fill="var(--muted)">today: double-ink · azimuth gets no decay</text>
+          <path d="M 410 74 L 446 74" stroke="var(--muted)" stroke-width="2" marker-end="url(#arr)"/>
+          <defs><marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L7,4 L0,8 z" fill="var(--muted)"/></marker></defs>
+          <rect x="456" y="14" width="374" height="120" rx="10" fill="var(--soft)" stroke="var(--line)"/>
+          <rect x="496" y="34" width="294" height="36" rx="6" fill="var(--accent-soft)" stroke="var(--accent)"/>
+          <text x="643" y="51" text-anchor="middle" font-size="13" fill="var(--ink)">one alpha policy per spot draw</text>
+          <text x="643" y="65" text-anchor="middle" font-size="11" fill="var(--muted)">shared by Mercator hulls + azimuth scene</text>
+          <rect x="496" y="88" width="294" height="28" rx="6" fill="var(--soft)" stroke="var(--line)"/>
+          <text x="643" y="106" text-anchor="middle" font-size="12" fill="var(--ink)">driven by playhead velocity + speed-scaled tau</text>
+          <text x="643" y="127" text-anchor="middle" font-size="11" fill="var(--muted)">after: one ink · both projections age</text>
+        </svg>
+        <figcaption>Move decay from a bolt-on canvas into the draw itself; the separate layer disappears.</figcaption>
+      </figure>
+    </div>
+  </article>
+
+  <article class="idea jump-target" id="idea2">
+    <div class="idea-head"><span class="id-chip">I2</span><h3>The density/honesty scrub bar</h3>
+      <span class="axis-chip">axes 1+3 · Transport · History data</span></div>
+    <div class="prose">
+      <p style="margin-top:0">Replace the blind 0–1000 range input with a strip the data paints: per-5-min-bin spot density in the canonical band palette, per-band color mix, chunk-coverage shading (hatched for unfetched), the <code>truncated</code> extent marked, and the <code>X-History-Reach</code> boundary as a hard left edge — three server signals the client already receives and silently drops. Add preview-on-drag (hover renders the hovered moment, release commits) and event ticks: the opening/closing classifier the backend already has (<code>hot_bands.go</code> <code>sustainedRecentBins</code>, the 48-slot baseline) pointed at the scrub rail, so operators scrub to events rather than to times. The removed timetravel shipped the histogram half (<code>/api/replay/histogram</code>); this is its return with honest data behind it.</p>
+      <dl class="fields">
+        <dt>Basis</dt><dd class="basis"><span class="tagline">direct:</span> <code>timeline.js:557-563</code> — <code>pause(); seek(snapToScrub(t))</code> on every input event; <code>timeline.js:538</code> — the bar's only hint is "Scrub snaps to 5 min"; <code>timeline.js:277-282</code> — client copies only <code>t0/t1/spots</code>, <code>truncated</code> never read; <code>timeline.js:272-276</code> — <code>reach</code> stored, <code>renderBar</code> never shows it; <code>history.go:449-453</code> — the server's comment promises the client can "disable deeper scrubbing honestly instead of misreading an empty map as 'dead bands'"; old <code>timetravel.js:249-262</code> histogram under the bar. <span class="tagline">external:</span> SUSE Observability brush/zoom; HamRBN's 7-day time slider as primary navigation.</dd>
+        <dt>Rationale</dt><dd>Scrubbing is the feature's primary interaction and currently its least-informed control. A silent failure mode looks like physics: scrub into an unserved window, get an empty moment, conclude the band was dead. The server already pays bytes to tell the truth; the client just never listens. The client also holds per-chunk raw spots and computes nothing from them for the bar.</dd>
+        <dt>Downsides</dt><dd>A canvas/SVG strip under the bar adds a second rendered surface to the perf-sensitive bottom bar; event detection needs a decision (client over held chunks vs server endpoint) and a baseline-fetch dependency for ticks.</dd>
+        <dt>Confidence</dt><dd>85%</dd>
+        <dt>Complexity</dt><dd>Medium</dd>
+      </dl>
+      <figure class="diagram">
+        <svg viewBox="0 0 840 120" role="img" aria-label="The scrub bar as a density strip versus a bare slider">
+          <rect x="40" y="20" width="760" height="30" rx="6" fill="var(--soft)" stroke="var(--line)"/>
+          <text x="70" y="40" font-size="12" fill="var(--muted)">today: bare range input — no density, no coverage, no reach</text>
+          <text x="820" y="40" font-size="12" fill="var(--muted)" text-anchor="end">playhead</text>
+          <line x1="800" y1="26" x2="800" y2="44" stroke="var(--accent)" stroke-width="2"/>
+          <rect x="40" y="70" width="760" height="30" rx="6" fill="var(--soft)" stroke="var(--line)"/>
+          <g>
+            <rect x="44" y="74" width="60" height="22" fill="var(--accent-soft)"/>
+            <rect x="104" y="78" width="34" height="18" fill="var(--accent-soft)" opacity=".65"/>
+            <rect x="138" y="70" width="80" height="26" fill="var(--accent-soft)" opacity=".9"/>
+            <rect x="218" y="80" width="50" height="16" fill="var(--soft)" stroke="var(--line)" stroke-dasharray="3 3"/>
+            <rect x="268" y="72" width="90" height="24" fill="var(--accent-soft)"/>
+            <rect x="358" y="76" width="60" height="20" fill="var(--accent-soft)" opacity=".7"/>
+            <rect x="418" y="80" width="120" height="16" fill="var(--soft)" stroke="var(--line)" stroke-dasharray="3 3"/>
+            <rect x="538" y="70" width="100" height="26" fill="var(--accent-soft)" opacity=".9"/>
+            <rect x="600" y="78" width="60" height="18" fill="var(--accent-soft)" opacity=".6"/>
+            <rect x="660" y="72" width="140" height="24" fill="var(--accent-soft)" opacity=".8"/>
+          </g>
+          <line x1="40" y1="100" x2="800" y2="100" stroke="var(--line)"/>
+          <line x1="44" y1="66" x2="44" y2="104" stroke="var(--warn-ink)" stroke-width="2"/>
+          <text x="46" y="62" font-size="10" fill="var(--warn-ink)">reach edge</text>
+          <path d="M 690 66 l 5 -8 l 5 8 z" fill="var(--accent)"/>
+          <text x="700" y="64" font-size="10" fill="var(--accent)">event tick</text>
+          <text x="820" y="112" font-size="11" fill="var(--muted)" text-anchor="end">density + hatched gaps + truncation + reach + events</text>
+        </svg>
+        <figcaption>The bar becomes a content map of the past 24h, not a position slider.</figcaption>
+      </figure>
+    </div>
+  </article>
+
+  <article class="idea jump-target" id="idea3">
+    <div class="idea-head"><span class="id-chip">I3</span><span class="axis-chip">axes 4+1 · Live seam · Transport</span></div>
+    <div class="prose">
+      <p style="margin-top:0"><strong>3. One transport state machine — live is the playhead pinned to the edge.</strong> Replace "timeline mode" (SSE torn down by hand, restored from localStorage, full history dump re-received on exit) with one transport — <code>streaming | paused-at-T | timeline-at-T</code> — where live is the playhead pinned to the moving edge and scrubbing is a playhead assignment over buffered data. Keep the SSE connection open under timeline (the soft-pause machinery and its catch-up already exist at <code>app.js:702-721</code>); on exit, re-age in place instead of reconnecting. Add the health channel that makes the whole thing honest: a 15s server heartbeat tick (the live SSE loop's <code>select</code> has no tick case, so a quiet band sends nothing and client-side silence is undecidable — the reason the stall watchdog was added and deleted the same day) plus expectation-relative health (compare observed traffic to the 48-slot baseline). A shared <code>dataNow()</code> clock restores grayline-follows-playhead (the removed <code>overlayNowMs</code> was never re-pointed — replay currently shows the past under today's terminator) and gives the URL a defined write point: only at mode boundaries, never per frame.</p>
+      <dl class="fields">
+        <dt>Basis</dt><dd class="basis"><span class="tagline">direct:</span> <code>server.go:392-409</code> — live loop <code>select</code> has only ctx.Done + client.send cases; <code>hub.go:104-112</code> — <code>safeSend</code> drops silently under backpressure; <code>app.js:702-721</code> — <code>resumeFromSoftPause()</code> catch-up exists; <code>app.js:2116-2133</code> — timeline entry closes EventSource and wipes <code>state.liveSpots</code>; no <code>overlayNowMs</code> matches in static/; <code>app.js:2169-2175</code> — restore seeks <code>tl.t1</code>; <code>static/info.md:33</code> — "send someone the exact past view" (contradicted). <span class="tagline">external:</span> SUSE Observability buffered-live pattern with "Back to Live"; DJ slip mode (track keeps turning, muted, under the scratch).</dd>
+        <dt>Rationale</dt><dd>The byte-identical <code>toLiveSpot</code> contract already proves the moment path and live path are the same render pipeline — the remaining separation is lifecycle, and that's where all the pain lives (reconnect on exit, dump-suppression flags, favicon that never decays, the deleted watchdog). A server tick is the only signal that can distinguish "quiet band" from "dead stream" — the client cannot, which is why every client-side heuristic has been wrong enough to delete.</dd>
+        <dt>Downsides</dt><dd>Largest rework in the set: state machine + wire-protocol addition + seam rewrite; needs a deliberate re-litigation of the stop-button semantics that <code>8fd80dc</code> settled by deletion. A held-open connection consumes a hub channel per client during timeline (backpressure already absorbed by buffer + burst guard).</dd>
+        <dt>Confidence</dt><dd>75%</dd>
+        <dt>Complexity</dt><dd>High</dd>
+      </dl>
+      <figure class="diagram">
+        <svg viewBox="0 0 840 170" role="img" aria-label="Transport state machine: streaming, paused at T, timeline at T, live as edge">
+          <defs>
+            <marker id="arr2" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L7,4 L0,8 z" fill="var(--muted)"/></marker>
+          </defs>
+          <rect x="40" y="55" width="200" height="60" rx="10" fill="var(--accent-soft)" stroke="var(--accent)"/>
+          <text x="140" y="80" text-anchor="middle" font-size="13" fill="var(--ink)">streaming</text>
+          <text x="140" y="99" text-anchor="middle" font-size="11" fill="var(--muted)">playhead at live edge</text>
+          <rect x="320" y="55" width="200" height="60" rx="10" fill="var(--soft)" stroke="var(--line)"/>
+          <text x="420" y="80" text-anchor="middle" font-size="13" fill="var(--ink)">timeline-at-T</text>
+          <text x="420" y="99" text-anchor="middle" font-size="11" fill="var(--muted)">SSE held open, apply paused</text>
+          <rect x="600" y="55" width="200" height="60" rx="10" fill="var(--soft)" stroke="var(--line)"/>
+          <text x="700" y="80" text-anchor="middle" font-size="13" fill="var(--ink)">paused-at-T</text>
+          <text x="700" y="99" text-anchor="middle" font-size="11" fill="var(--muted)">scrub dwell / inspect</text>
+          <path d="M 240 72 L 318 72" stroke="var(--muted)" stroke-width="1.6" marker-end="url(#arr2)"/>
+          <text x="279" y="64" text-anchor="middle" font-size="10.5" fill="var(--muted)">scrub back</text>
+          <path d="M 318 98 L 240 98" stroke="var(--muted)" stroke-width="1.6" marker-end="url(#arr2)"/>
+          <text x="279" y="113" text-anchor="middle" font-size="10.5" fill="var(--muted)">"live" re-pins edge</text>
+          <path d="M 520 85 L 598 85" stroke="var(--muted)" stroke-width="1.6" marker-end="url(#arr2)"/>
+          <text x="559" y="77" text-anchor="middle" font-size="10.5" fill="var(--muted)">dwell</text>
+          <path d="M 598 120 C 520 150, 440 120, 420 117" stroke="var(--muted)" stroke-width="1.4" fill="none" marker-end="url(#arr2)"/>
+          <text x="500" y="140" text-anchor="middle" font-size="10.5" fill="var(--muted)">release / play</text>
+          <text x="140" y="30" font-size="10.5" fill="var(--muted)">no teardown on any edge — one state variable replaces ~50 lines of close/wipe/restore</text>
+        </svg>
+        <figcaption>Three states, one playhead; live is an edge condition, not a mode.</figcaption>
+      </figure>
+    </div>
+  </article>
+
+  <article class="idea jump-target" id="idea4">
+    <div class="idea-head"><span class="id-chip">I4</span><span class="axis-chip">axis 5 · Analytical value of time</span></div>
+    <div class="prose">
+      <p style="margin-top:0"><strong>4. Panels ride the playhead.</strong> Fix the mixed-time UI: during playback the map shows time T while Band Stats bins an emptied <code>state.liveSpots</code> and the WSPR matrix keeps polling <code>minutes=15</code> against now. Compute the playhead-relative aggregates client-side from chunk bundles the client already holds — the same 12-bin ActivityByBin shape the server emits, binning the same way <code>band-lab.js</code> already bins live spots by <code>ageSeconds</code> — so "Reports over time" and the band activity picture follow the playhead, labeled with it. Extend the same data to shade <em>absence</em>: where observed fell far below expected-for-that-slot (the 48-slot baseline is a public JSON field), mark the blackout on the strip — "when did propagation break, and for how long" becomes navigable. The WSPR matrix's band×region chips need server-side climatology z-scores and are deliberately deferred to a separate <code>at=</code> work item on the conditions endpoints.</p>
+      <dl class="fields">
+        <dt>Basis</dt><dd class="basis"><span class="tagline">direct:</span> <code>wspr-matrix.js:319</code> — <code>params.set('minutes', '15');</code> (now-anchored, no playhead input); <code>app.js:2111-2112</code> — moment listener calls <code>updateBandLab(); updateWsprMatrix();</code> with no playhead argument; <code>band-lab.js:575-594</code> — client-side binning by <code>ageSeconds</code> already exists; <code>dx_conditions.go</code> — ActivityByBin (12 bins) and <code>BaselineActivityBySlot</code> (48 slots) shapes already defined and the slot series is a public JSON field.</dd>
+        <dt>Rationale</dt><dd>HamRBN's lesson: dots-on-map replay alone wasn't sticky — time-resolved conditions were the value. The client already holds 10k spots per chunk (the raw material for every aggregate) and computes nothing; meanwhile the analytics it re-invokes report a different time than the map shows, which quietly teaches users the analytics are decorative. This converts the timeline from a map replay into a replay of the analytical product.</dd>
+        <dt>Downsides</dt><dd>Client binning must respect the RBN/WSPR-out-of-baseline rules (source-aware binning is already modeled server-side, so the shape exists); per-frame binning must be amortized (bin once per chunk load, not per frame).</dd>
+        <dt>Confidence</dt><dd>80%</dd>
+        <dt>Complexity</dt><dd>Medium</dd>
+      </dl>
+    </div>
+  </article>
+
+  <article class="idea jump-target" id="idea5">
+    <div class="idea-head"><span class="id-chip">I5</span><span class="axis-chip">axes 1+3 · Transport · History data</span></div>
+    <div class="prose">
+      <p style="margin-top:0"><strong>5. Shuttle scrub: coarse during the drag, full fidelity on release.</strong> Borrow the film-NLE proxy workflow: while the thumb is being dragged, render a coarse moment built entirely from data already in the client (decimated cached chunks) and fetch a full-resolution chunk only on release, play, or a dwell &gt;300ms on one position. Scrubbing becomes zero-network; the server stops paying PG connections and gate 503s for a sampling gesture the eye can't read at full fidelity anyway.</p>
+      <dl class="fields">
+        <dt>Basis</dt><dd class="basis"><span class="tagline">direct:</span> <code>timeline.js:557-563</code> — pause + <code>seek()</code> per input event, each driving <code>ensurePlayheadBundle()</code> into the server gate (<code>history.go</code>: 4-slot semaphore, 503, client retries 4x, 16-entry LRU, one PG connection per miss, 120/h limiter). <span class="tagline">reasoned:</span> scrubbing is a sampling gesture — no human perceives per-pixel fidelity at drag speed — so serving it at full fidelity pays scarce PG-connection cost for information the eye can't use. <span class="tagline">external:</span> offline/proxy conform in film editing; DICOM coarse thumbnails during fast scroll.</dd>
+        <dt>Rationale</dt><dd>Removes three structural frictions at once (per-input fetches, gate retries, server LRU thrash) instead of tuning each, and makes deep 24h scrubbing feel local rather than rate-limited — on the prod box where each cache miss holds a connection.</dd>
+        <dt>Downsides</dt><dd>Coarse-vs-full fidelity switch must not flash visibly; dwell threshold needs tuning against FT8 cadence.</dd>
+        <dt>Confidence</dt><dd>85%</dd>
+        <dt>Complexity</dt><dd>Low</dd>
+      </dl>
+    </div>
+  </article>
+
+  <article class="idea jump-target" id="idea6">
+    <div class="idea-head"><span class="id-chip">I6</span><span class="axis-chip">axis 3 · History data architecture</span></div>
+    <div class="prose">
+      <p style="margin-top:0"><strong>6. Coarse two-tier history: bins for the whole day, spots for the playhead.</strong> Extend <code>/api/history</code> with a coarse tier the way genome browsers ship bigWig next to BAM: one cheap request returning the entire 24h as per-5-min × band bins (count, unique grids, median SNR — a few hundred KB), with full per-spot chunks fetched only for the playhead's neighborhood. The coarse tier powers the density strip (I2), honest reach, and scrubbing; the spot tier stays exactly as it is. The binning pattern exists in-repo twice (ActivityByBin, 15-min cell buckets) — both pinned to "now" only because nobody pointed the accumulator at an arbitrary historical window.</p>
+      <dl class="fields">
+        <dt>Basis</dt><dd class="basis"><span class="tagline">direct:</span> <code>timeline.js:44-50</code> — "a 24h span materializes ~240k rows server-side and would blow the 50k bundle cap, hiding all the deep hours the user just asked for"; <code>history.go:477-483</code> oldest-first truncation the client never surfaces. <span class="tagline">reasoned:</span> "all raw, any range" fails at the cap and "all coarse" fails the moment view — the two-tier split is the only shape that satisfies both; the aggregation primitive is already in the codebase. <span class="tagline">external:</span> bigWig/BAM overview-vs-zoom pattern in genomics.</dd>
+        <dt>Rationale</dt><dd>Dissolves several pain points at once: the 50k cap becomes harmless (the coarse view is never truncated), the server LRU/PG-connection-per-miss loses its worst case, the unread <code>truncated</code> flag gets an honest surface, and per-IP rate limiting stops fighting legitimate 24h sessions.</dd>
+        <dt>Downsides</dt><dd>A new endpoint shape and cache entry on the one new backend endpoint this feature owns; must respect the single-binary and no-per-spot-scoring boundaries (it does — counts and medians are conditions analytics).</dd>
+        <dt>Confidence</dt><dd>75%</dd>
+        <dt>Complexity</dt><dd>Medium</dd>
+      </dl>
+    </div>
+  </article>
+
+  <article class="idea jump-target" id="idea7">
+    <div class="idea-head"><span class="id-chip">I7</span><span class="axis-chip">axis 3 · History data architecture</span></div>
+    <div class="prose">
+      <p style="margin-top:0"><strong>7. Client session ring: the client retains what the stream already sent it.</strong> Today the client wipes its chunk cache on every timeline enter and exit and treats Postgres as the primary history source. Flip it: retain every live frame received in a bounded local ring (a QTH-filtered hour is realistically a few thousand spots — <code>history.go</code>'s own comment — so a 6h ring is cheap). The default 1h/6h ranges are then served from the session's own accumulation at zero fetch cost; a band/SNR filter change becomes a re-slice of held data instead of an LRU wipe (the bundle already carries <code>band</code> and <code>snr</code> per spot); Postgres is demoted to what it actually is: the path for deep windows, foreign shared URLs, and fresh tabs — best-effort, with depth surfaced (the table already lost everything once).</p>
+      <dl class="fields">
+        <dt>Basis</dt><dd class="basis"><span class="tagline">direct:</span> <code>timeline.js:41-42</code> — chunk memory math and <code>BUNDLE_CACHE_MAX = 4</code>; <code>timeline.js:412-419</code> — "clearing is still the safe, cheap choice on every fresh entry" (the client throws away data it could keep for free); history.go comment on QTH-filtered 24h size. <span class="tagline">reasoned:</span> session longevity becomes reach — the longer the tab is open, the deeper the personal timeline — independent of the memory/disk-constrained prod box; the PG path's untested status stops being load-bearing for the common case.</dd>
+        <dt>Rationale</dt><dd>Dissolves three pain points at once (server LRU thrash, PG connection per miss, per-entry cache wipe) with no wire-format change — the cheapest de-risking of the whole server path.</dd>
+        <dt>Downsides</dt><dd>Ring eviction policy needs care on memory; the ring only reaches as far as the session — deep windows still hit the archive path, so the honest-depth surface (I2) stays necessary.</dd>
+        <dt>Confidence</dt><dd>85%</dd>
+        <dt>Complexity</dt><dd>Low</dd>
+      </dl>
+    </div>
+  </article>
+</section>
+
+<section id="recommended-path">
+  <h2>Recommended Path</h2>
+  <p class="prose">Post-ideation stress-testing (three adversarial reviewers against the working tree) endorsed the survivors with corrections. Where a card's text is corrected below, the note here supersedes it:</p>
+  <ol class="prose">
+    <li><strong>I7 session ring, narrowed</strong> — ring stores <em>received</em> frames keyed by (qth, filter tuple); re-slicing works only for <em>narrowing</em> filter changes (live spots are server-filtered via <code>spotAllowed</code>, so widening or qth changes must fall through to the archive); timeline mode currently closes SSE, so the ring stops growing at enter-time unless the SSE lifecycle changes — claims shrink accordingly. Fold in the <code>dataNow()</code> clock (grayline follows playhead): it is provably independent of both the tick and the state machine (<code>map.js:394</code> uses <code>Date.now()</code>; no grayline sync on timeline moments today), and every later item inherits the fix.</li>
+    <li><strong>I3a server heartbeat tick, standalone</strong> — third <code>select</code> case in the per-connection live loop, hub fan-out untouched. Hard constraints found: emit as an SSE comment or named event with empty data — an unnamed <code>data:</code> frame would be JSON-parsed into <code>state.liveSpots</code> as a junk spot (no shape validation); horstprop parses every <code>data:</code> line and only <em>accidentally</em> filters the tick today (<code>feed.go:36-38</code>), so a feed test must make zero-PropReports safe by construction; the tick is inert until a client consumer lands, and that consumer must surface tick-silence vs spot-silence in the status line only — never the red=not-playing button semantics settled by <code>8fd80dc</code>.</li>
+    <li><strong>I2 honesty scrub bar</strong> — needs a small <code>history.go</code> prerequisite: X-History-Reach is emitted only on the no-Postgres fallback path (<code>history.go:457,472</code>) and never on cache hits, so on prod the header never arrives; <code>truncated</code> is near-inert under 1h chunking. Coverage shading must derive from a persistent fetched-window list, not the 4-slot LRU (evicted chunks would render as "covered"), and the strip is honest <em>loaded-vs-unknown</em>, never <em>loaded-vs-empty</em>. Full-24h density stays out of scope until I6.</li>
+    <li><strong>I5 scrub fetch policy, reframed</strong> — coarse-from-cached-chunks inverts in practice: chunks exist only for visited positions and the LRU holds 4 of ~24, so dragged-into-uncached territory must render as "unknown" (I2's vocabulary) rather than as an empty moment. The real value is the dwell/debounce fetch policy.</li>
+    <li><strong>I1 one-ink alpha contract, kept as top pick but re-shaped</strong> — do <em>not</em> delete the afterglow canvas in the first cut: in the default grid-snr style the Mercator layer is aggregated SNR-opacity squares behind a rebuild-gating fingerprint and structurally cannot carry per-spot alpha, so the canvas survives as the carrier of the contract alpha (deletion only in active-area style, later). Define alpha as one <em>continuous</em> function of (data-age, playhead velocity) — velocity carried in the moment payload — not a boolean profile switch; speed-scaled tau as a switch bakes a ~5.8x pause/play pop into the shared contract. Aggregated surfaces (azimuth KDE 1s cache, Mercator squares) decay in steps unless per-frame recompute is explicitly budgeted — accept stepped decay there and document it. Migrate <code>test/afterglow.test.js</code> pinned semantics in the same item; add a timeline-playback perf scenario first (the gate stubs Leaflet and emits no moments, and the moment listener currently renders unthrottled at raf rate).</li>
+    <li><strong>I4 panels ride the playhead</strong> — unchanged.</li>
+    <li><strong>I6 coarse two-tier</strong> — unchanged; unlocks whole-24h density for the strip and makes the 50k cap harmless.</li>
+    <li><strong>I3b transport state machine</strong> — last, as the only High-complexity item; the tick and clock it spawned are already landed.</li>
+  </ol>
+</section>
+
+<section id="rejection-summary">
+  <h2>Rejection Summary</h2>
+  <p class="prose">48 raw ideas from five frames (pain &amp; friction; inversion/removal/automation; leverage &amp; compounding; cross-domain analogy; assumption-breaking + constraint-flipping), merged to 20 candidates, adversarially verified (14 sound, 6 weak, zero fabricated citations), arbitrated to 7. Cut:</p>
+  <table class="rej">
+    <tr><th>#</th><th>Idea</th><th>Reason rejected</th></tr>
+    <tr><td>–</td><td>Event-indexed transport (next/prev opening jumps)</td><td>merged into I2 as its event ticks — same bar surface, stronger combined</td></tr>
+    <tr><td>–</td><td>URL clip semantics (share a clip, not a playhead)</td><td>folded into I3 (URL written at mode boundaries only); standalone payoff smallest</td></tr>
+    <tr><td>–</td><td>Event-paced playback (spots/sec dial)</td><td>weak — redefines the bar's linear time mapping and makes the clock readout non-monotonic; opt-in mode at best</td></tr>
+    <tr><td>–</td><td>Memory-window trail (afterglow renders beyond the moment)</td><td>sound but narrow rendering-composition question; folded as an option of the afterglow package (I1)</td></tr>
+    <tr><td>–</td><td>Lane-streak afterglow (trail = path, not spot)</td><td>sound but the perf claim is unproven (pilot needed); below the cut vs I1</td></tr>
+    <tr><td>–</td><td>Persistence modes (decay / max-hold / long-persistence)</td><td>mode knob sound, but the horstapp-widget payoff claim is refuted (widgets render no map); follow-on mode to I1</td></tr>
+    <tr><td>–</td><td>Difference-image mode (render the residual)</td><td>sound and novel; axis-2 crowded — better as a brainstorm variant of the afterglow modes</td></tr>
+    <tr><td>–</td><td>Content-addressable columnar tiles</td><td>too expensive relative to value; flush-time precompute risks write amplification on the box with the documented flush-path OOM history; I6 captures most of the benefit</td></tr>
+    <tr><td>–</td><td>Deep aggregate replay from cell buckets</td><td>weak — buckets are global midpoint-cell aggregates, not QTH-filtered; would break live-filter parity</td></tr>
+    <tr><td>–</td><td>Superset fetch, client-side filter</td><td>subsumed by I7 (filter change = re-slice of held data)</td></tr>
+    <tr><td>–</td><td>prop_intel / dx_conditions <code>at=</code> parameter</td><td>real re-anchoring work in the scoring endpoints — a separate work item, noted as follow-on to I4</td></tr>
+    <tr><td>–</td><td>Climatology strip (60-day distance-vs-hour baseline)</td><td>new 60-day aggregate pipeline collides with documented prod disk pressure; scope overreach</td></tr>
+    <tr><td>–</td><td>Blackout/absence shading as standalone</td><td>folded as an extension of I4 (expected-vs-observed is client-computable)</td></tr>
+  </table>
+</section>
+
+<footer class="composition-signal">
+  Composed <time datetime="2026-09-11">2026-09-11</time> by ce-ideate from a repo-grounded run on "Timeline &amp; live view" (branch <code>ui-stalled-stop-button</code>); evidence in <code>/tmp/compound-engineering-501/ce-ideate/43ecef2b/</code>.
+</footer>
+
+</div>

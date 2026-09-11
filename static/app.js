@@ -13,6 +13,8 @@ import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, clearW
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming, icon } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
+import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL } from './timeline.js';
+import { updateAfterglow, notifyMapMoved, hideAfterglow } from './afterglow.js';
 
 // --- Azimuth Zoom State ---
 const AZIMUTH_MAX_HORIZON_KM = 20015;
@@ -1127,6 +1129,7 @@ export function attachMapEvents() {
         zoomStartedAt = 0;
         incrementPerfCounter('mercator.interaction.zoom_end', 1);
         finishMercatorInteraction();
+        if (isTimelineActive()) notifyMapMoved();
     });
 
     map.on('movestart', () => {
@@ -1142,6 +1145,7 @@ export function attachMapEvents() {
         panStartedAt = 0;
         incrementPerfCounter('mercator.interaction.pan_end', 1);
         finishMercatorInteraction();
+        if (isTimelineActive()) notifyMapMoved();
     });
 
 	const setQthAndRestart = (locator) => {
@@ -2082,6 +2086,100 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
 document.addEventListener('visibilitychange', syncSoftPauseWithVisibility);
 window.addEventListener('pageshow', syncSoftPauseWithVisibility);
 window.addEventListener('focus', syncSoftPauseWithVisibility);
+
+// --- Time Travel (timeline.js integration) ---------------------------------
+// While the timeline is active the live stream is torn down and the map is
+// driven by timeline moments instead of state.liveSpots; exiting re-streams
+// from the server (the bundle's qth/filters are the live ones by construction,
+// so a plain startLiveStream restores byte-identical semantics).
+
+// Render the moment spots through the normal pipeline (age-graded, same
+// renderers) — bypassing the wall-clock age gate, since timeline ages are
+// data-time (playhead-relative) and always small.
+let lastMomentPlayhead = 0;
+onTimelineMoment((spots, playhead) => {
+    if (!isTimelineActive()) return;
+    lastMomentPlayhead = playhead;
+    if (isAzimuthEnabled()) {
+        updateBandLabels(spots);
+        renderAzimuthScene({ spots });
+    } else {
+        updateMapVisualization(spots, parseInt(document.getElementById('minutes')?.value || '15', 10));
+    }
+    // Afterglow overlay (Mercator only; azimuth renders its own scene).
+    if (!isAzimuthEnabled()) updateAfterglow(spots, playhead, true);
+    updateBandLab();
+    updateWsprMatrix();
+    syncTimelineURL();
+});
+
+async function startTimelineMode(rangeSeconds) {
+    if (isTimelineActive()) return;
+    // Freeze the live view: stop the SSE stream and the age-prune loop so the
+    // live spot list stays intact under the timeline overlay.
+    if (state.eventSource) state.eventSource.close();
+    state.eventSource = null;
+    if (state.renderInterval) clearInterval(state.renderInterval);
+    state.renderInterval = null;
+    state.streamedFilter = null;
+    state.liveSpots = [];
+    if (state.heatLayer) { map.removeLayer(state.heatLayer); state.heatLayer = null; }
+    clearDxClusterMarkers();
+    clearWsprMarkers();
+    resetRenderFingerprint();
+    const btnSubmit = document.getElementById('btn-submit');
+    if (btnSubmit) setSubmitMode(btnSubmit, 'go');
+    const status = document.getElementById('stream-status');
+    if (status) status.innerHTML = 'Status: Time travel — spots from history';
+
+    try {
+        await enterTimeline(rangeSeconds);
+    } catch (err) {
+        // A superseded/aborted fetch (rapid re-entry, mode exit during load) is
+        // benign — only a real failure tears the mode down.
+        if ((err?.name || '') === 'AbortError') return;
+        console.warn('timeline enter failed', err);
+        const statusEl = document.getElementById('stream-status');
+        if (statusEl) statusEl.innerHTML = `Status: <span style="color: red;">Time travel failed: ${String(err?.message || err)}</span>`;
+        // Fall back to a fresh live stream so the map is never left dead.
+        startLiveStream(false);
+        return;
+    }
+    if (!isTimelineActive()) return; // enterTimeline bailed (no qth)
+    timelinePlay();
+}
+
+function stopTimelineMode() {
+    exitTimeline();
+    hideAfterglow();
+    syncTimelineURL();
+    resetRenderFingerprint();
+    // Restore live mode: the timeline bundle's qth/filters are the live ones,
+    // so a plain stream restart reproduces the exact pre-timeline map.
+    const savedQth = localStorage.getItem('qth');
+    if (savedQth) startLiveStream(false);
+}
+
+// The bar's Live button exits through timeline.js; hook the live restore here.
+onTimelineExit(stopTimelineMode);
+
+// Auto-enter from a shared URL (?tl=1&t0=&t1=&spd=). Runs once the app is
+// otherwise booted; a missing live stream (not subscribed) is fine — the
+// timeline bundle renders the past and stopTimelineMode re-streams on exit.
+function maybeRestoreTimelineFromURL() {
+    const tl = readTimelineURL();
+    if (!tl) return;
+    const span = Math.max(60, Math.min(24 * 60 * 60, tl.t1 - tl.t0));
+    void startTimelineMode(span).then(() => {
+        if (isTimelineActive()) void seek(tl.t1);
+    });
+}
+setTimeout(maybeRestoreTimelineFromURL, 1200);
+
+// Sidebar entry point: Time Travel button (1h default; presets inside the bar).
+document.getElementById('btn-timeline')?.addEventListener('click', () => {
+    void startTimelineMode(60 * 60);
+});
 
 // Fallback pass in case autostart check happened before submit wiring was ready.
 maybeAutoStartSavedQth();

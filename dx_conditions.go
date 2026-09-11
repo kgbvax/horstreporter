@@ -357,6 +357,31 @@ func (e *DxBaselineEngine) LoadSpotsBetweenFiltered(start, end int64, includeDXC
 	return st.loadSpotsBetweenWithSourceFilter(start, end, includeDXCluster)
 }
 
+// LoadSpotsRangeForTargets returns the raw spots in [start,end] matching the
+// QTH tokens (locator prefix / exact callsign), with the token filter pushed
+// down into Postgres (see loadSpotsRangeForTargets). Backs /api/history.
+func (e *DxBaselineEngine) LoadSpotsRangeForTargets(start, end int64, tokens []string, includeDXCluster bool) ([]MQTTMessage, error) {
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return nil, nil
+	}
+	return st.loadSpotsRangeForTargets(start, end, tokens, includeDXCluster)
+}
+
+// HasSpotStore reports whether the engine has a Postgres store backing it —
+// /api/history uses this to decide between the archive path and the
+// hub.history fallback.
+func (e *DxBaselineEngine) HasSpotStore() bool {
+	if e == nil {
+		return false
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.store != nil
+}
+
 // CountSpotsBetweenFiltered returns the number of spots in the window under
 // the same source filter as LoadSpotsBetweenFiltered, so the caller can
 // allocate the destination slice exactly once.

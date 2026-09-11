@@ -136,6 +136,11 @@ var maxClients int
 var logLevel = "INFO"
 var liveHistoryRetentionMinutes = defaultLiveHistoryRetentionMinutes
 
+// dxClusterEnabled mirrors the -dxcluster-enable flag for non-main packages
+// (history.go uses it to keep the /api/history archive load's source filter
+// in sync with the live ingest).
+var dxClusterEnabled bool
+
 type streamAccountingState struct {
 	sessionsStarted   atomic.Int64
 	sessionsCompleted atomic.Int64
@@ -279,6 +284,10 @@ func main() {
 	pushVAPIDSubscriberFlag := flag.String("push-vapid-subscriber", "", "mailto: URL in the VAPID JWT (identifies the sending server to the push service). Defaults to mailto:horstreporter@example.com.")
 	pushTrustedProxyCIDRFlag := flag.String("push-trusted-proxy-cidr", "", "Comma-separated CIDR ranges of trusted TLS-terminating proxies whose X-Forwarded-For header is honored for push rate-limiting (e.g. \"10.0.0.0/8,172.16.0.0/12\"). When unset, X-Forwarded-For is NOT trusted and the client IP is taken from RemoteAddr — this prevents spoofed-XFF rate-limit bypass. Only applies when -push-enable is set.")
 	flag.Parse()
+
+	// Package-level mirror for non-main packages (history.go archive load
+	// mirrors the live stream's includeDXCluster semantics).
+	dxClusterEnabled = *dxClusterEnable
 
 	// Override logLevel from flag if provided
 	if *logLevelFlag != "" {
@@ -603,6 +612,7 @@ func main() {
 	// for horstapp compatibility.
 	appMux.HandleFunc("/api/prop_intel/v2", propIntelV2Handler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
+	appMux.HandleFunc("/api/history", historyHandler)
 	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)
 	// Web Push (U5): VAPID public key for the browser subscription flow,
 	// subscribe/unsubscribe, and a subscription-status endpoint used by

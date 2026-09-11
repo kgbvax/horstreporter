@@ -1491,3 +1491,72 @@ body[data-theme="dark"] .band-pill .band-nodata-tag {
     justify-content: space-between;
     margin-top: 2px;
 }
+
+/* --- Time Travel timeline bar -------------------------------------------- */
+/* Fixed bottom-center bar, shown only while body.timeline-active. Uses the
+   app's CSS variables so it themes with light/dark like every other surface. */
+.timeline-bar {
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: 16px;
+    z-index: 1100;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 12px;
+    background: color-mix(in srgb, var(--bg-color) 92%, transparent);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: 0 4px 16px var(--shadow-color, rgba(0, 0, 0, 0.25));
+    backdrop-filter: blur(6px);
+    max-width: min(860px, calc(100vw - 24px));
+    user-select: none;
+}
+.timeline-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.timeline-row-presets {
+    justify-content: space-between;
+    gap: 12px;
+}
+.timeline-btn {
+    white-space: nowrap;
+}
+.timeline-scrub {
+    flex: 1 1 auto;
+    min-width: 180px;
+}
+.timeline-clock {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.85rem;
+    color: var(--text-color);
+    white-space: nowrap;
+    min-width: 15ch;
+    text-align: center;
+}
+.timeline-presets {
+    flex: 0 0 auto;
+}
+.timeline-hint {
+    font-size: 0.75rem;
+    color: var(--text-color);
+    opacity: 0.65;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.timeline-speed .btn.active {
+    background-color: var(--accent);
+    border-color: var(--accent);
+    color: var(--bg-color);
+}
+/* Afterglow overlay canvas sits above tiles, below markers. */
+.afterglow-canvas {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 350;
+}

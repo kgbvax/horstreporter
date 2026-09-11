@@ -1694,6 +1694,90 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 	return out, rows.Err()
 }
 
+// historyQueryTimeout caps one /api/history range query. Generous enough for
+// a 24h locator-pushdown scan on the prod box's slowest window, short enough
+// that an abusive request can't pin a pool connection for minutes.
+const historyQueryTimeout = 45 * time.Second
+
+// loadSpotsRangeForTargets returns the raw spots in [start,end] that match the
+// given QTH tokens (locator prefix or exact callsign — the same matching the
+// live stream applies via matchAndCreateSpot), with the pushdown pushed into
+// Postgres through the sargable ~>=~/~<~ locator prefix-range arms (and the
+// = ANY callsign arm) so a 24h window uses the (locator, spot_time) indexes
+// instead of materializing the whole window in Go. Row mapping and source
+// semantics mirror loadSpotsBetweenWithSourceFilter; includeDXCluster=false
+// also excludes rbn rows (the /api/history source filter is
+// mqtt|dxcluster|wspr only — rbn spots never carried a locator in the first
+// place, so this is a cheap correctness guard rather than a semantic change).
+//
+// The token filter is intentionally a *superset* of matchAndCreateSpot's
+// decision (e.g. a spot matching only via area-rings would be missed here):
+// /api/history re-runs full matchAndCreateSpot in Go on the returned rows, so
+// area-of-interest matching still works correctly against the slightly larger
+// pre-filtered set.
+func (s *dxPostgresStore) loadSpotsRangeForTargets(start, end int64, tokens []string, includeDXCluster bool) ([]MQTTMessage, error) {
+	if s == nil || len(tokens) == 0 {
+		return nil, nil
+	}
+	norm := make([]string, 0, len(tokens))
+	seen := make(map[string]struct{}, len(tokens))
+	for _, t := range tokens {
+		u := strings.ToUpper(strings.TrimSpace(t))
+		if u == "" {
+			continue
+		}
+		if _, dup := seen[u]; dup {
+			continue
+		}
+		seen[u] = struct{}{}
+		norm = append(norm, u)
+	}
+	if len(norm) == 0 {
+		return nil, nil
+	}
+	locators, calls := splitTargetTokens(norm)
+
+	args := []any{start, end}
+	arms := make([]string, 0, len(locators)+1)
+	arms, args, _ = appendTargetArms(arms, args, len(args)+1, locators, calls)
+
+	src := "LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster'"
+	if includeDXCluster {
+		src = "($3::bool OR LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster')"
+		args = append(args, true)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), historyQueryTimeout)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+		SELECT
+			spot_time, sender_callsign, sender_locator,
+			receiver_callsign, receiver_locator,
+			band, mode, signal_report_db,
+			COALESCE(frequency_khz, 0), COALESCE(comment, ''),
+			COALESCE(source_type, 'mqtt')
+		FROM dx_raw_spots
+		WHERE spot_time BETWEEN $1 AND $2
+		  AND (%s)
+		  AND (%s)
+		ORDER BY spot_time ASC
+	`, strings.Join(arms, "\n\t\t  OR "), src), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]MQTTMessage, 0, 1024)
+	for rows.Next() {
+		var m MQTTMessage
+		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP, &m.F, &m.CM, &m.Source); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // pruneRawSpotsOlderThan deletes dx_raw_spots rows whose spot_time is older
 // than `cutoff` (a Unix-seconds value). Returns the total number of rows
 // deleted across all batches.

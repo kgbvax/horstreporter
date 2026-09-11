@@ -23,6 +23,15 @@ It is effectively an alternate frontend for <a href="https://www.pskreporter.inf
 * Hover over colored map features to see detailed statistics (Min/Max/Avg SNR) and top reports for that area.
 * Click anywhere on the map to quickly set a new target locator and refresh the data.  
 
+## Time Travel
+The **Time Travel** button (below the spot-age slider) rewinds the map to past propagation. It uses the same QTH, band filters and SNR thresholds as the live map, so a past moment looks exactly like the live moment did.
+
+* **Scrub:** Drag the timeline to move through the past (snaps to 5-minute steps). The playhead shows a *trailing 15-minute window* — the same view the live map gives you.
+* **Animate:** Press play to relive a period as a time lapse (60×/240×/600× — a full day in under 3 minutes at 600×). Spots **fade in as they happen and glow out** in data-time (≈5 min decay), so you see when activity actually occurred: a band opening floods the map, a closing band's glow dies away. Pause, and the map settles into a plain snapshot of that moment.
+* **Ranges:** 1h / 6h / 24h. On the production server (with its spot archive) the full 24 hours is available; without an archive only the server's in-memory history (~60 min) can be replayed.
+* **Exit:** The *Live* button in the bar returns you to the live stream.
+* **Share:** While in time travel the URL carries the window (`?tl=1&t0=…&t1=…`), so you can send someone the exact past view.
+
 
 
 # Origin
@@ -40,6 +49,8 @@ The green plushy dragon in the lower left is called "Horst-Kevin".
 
 ## Implementation note
 In its core horstreporter subscribes to the pskreporter firehose *once* and does the 1:n fan-out / filtering for each client by itself. This is an explicit choice to not overload the pskreporter servers. Horstreporter also maintains a short history so that new clients don't have to wait for data to arrive from the event stream. Most visualization and interaction logic is done in the browser, while derived DX condition scoring is computed server-side and exposed via `/api/dx_conditions`.
+
+Time Travel serves its past views from the same raw-spot archive the DX baseline uses (`/api/history`, one gzipped bundle per requested window; immutable windows are cached server-side). When no archive is configured it falls back to the in-memory rolling history and reports its reach honestly.
 
 This project is open-source under Affero GPL.
 
