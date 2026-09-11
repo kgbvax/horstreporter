@@ -1,9 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestSustainedRecentBins(t *testing.T) {
@@ -416,5 +420,161 @@ func TestHotBandsRisingRecFromSeededBaseline(t *testing.T) {
 	}
 	if rec.SpotsPerMinute != 2.67 {
 		t.Errorf("spots_per_minute = %v, want 2.67 (40 spots / 15 min)", rec.SpotsPerMinute)
+	}
+}
+// TestHotBandsHandlerSeededBaseline runs hotBandsHandler end-to-end over
+// HTTP against the seeded-baseline fixture from
+// TestHotBandsRisingRecFromSeededBaseline, this time reading the live window
+// from the hub.history global like the real request path does. Skips if a
+// 30-minute UTC slot boundary is crossed mid-test (the engine's `now` comes
+// from time.Now in the handler, which tests cannot pin).
+func TestHotBandsHandlerSeededBaseline(t *testing.T) {
+	origBaseline := dxBaseline
+	defer func() { dxBaseline = origBaseline }()
+
+	now := time.Now().Unix()
+	slot := utcSlotOfDay(now)
+
+	e := newDxBaselineEngine("")
+	e.mu.Lock()
+	e.buckets[baselineKey("15m", slot, 3, 0)] = &baselineBucket{Band: "15m", SlotOfDay: slot, DistanceTier: 3, SnrTier: 0, Count: 1600}
+	e.buckets[baselineKey("15m", slot, 3, 1)] = &baselineBucket{Band: "15m", SlotOfDay: slot, DistanceTier: 3, SnrTier: 1, Count: 400}
+	events := make([]dxObservedEvent, 0, 40)
+	for i := 0; i < 8; i++ {
+		events = append(events, dxObservedEvent{T: now - 200, B: "15m", SC: fmt.Sprintf("DK%dAB", i), RC: fmt.Sprintf("W%dXY", i), SL: "JO62QM", RL: "FN31AA", RP: -10})
+	}
+	for i := 0; i < 14; i++ {
+		events = append(events, dxObservedEvent{T: now - 120, B: "15m", SC: fmt.Sprintf("OK%dAB", i), RC: "W9XY", SL: "JO62QM", RL: "FN31AA", RP: -10})
+	}
+	for i := 0; i < 18; i++ {
+		events = append(events, dxObservedEvent{T: now - 30, B: "15m", SC: fmt.Sprintf("SM%dAB", i), RC: "K8XY", SL: "JO62QM", RL: "FN31AA", RP: -10})
+	}
+	e.events = events
+	e.firstEventAt = now - 61*86400
+	e.lastEventAt = now
+	e.mu.Unlock()
+	dxBaseline = e
+
+	hub.Lock()
+	origHistory := hub.history
+	hub.history = make([]MQTTMessage, 0, 40)
+	for i := 0; i < 40; i++ {
+		hub.history = append(hub.history, MQTTMessage{
+			T: now - 90, SC: fmt.Sprintf("DK%dABC", i), RC: fmt.Sprintf("W%dXYZ", i),
+			SL: "JO62QM", RL: "FN31AA", RP: -10, B: "15m", MD: "FT8", Source: "mqtt",
+		})
+	}
+	hub.Unlock()
+	defer func() {
+		hub.Lock()
+		hub.history = origHistory
+		hub.Unlock()
+	}()
+
+	server := httptest.NewServer(http.HandlerFunc(hotBandsHandler))
+	defer server.Close()
+
+	// minutes=15 pins the window to the fixture the seeded sparkline was built
+	// for (the handler's default is 20 minutes, which re-bins the events).
+	httpResp, err := http.Get(server.URL + "/api/hot_bands?qth=JO62qm&current_band=all&minutes=15")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer httpResp.Body.Close()
+	if httpResp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", httpResp.StatusCode)
+	}
+	if ctype := httpResp.Header.Get("Content-Type"); ctype != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", ctype)
+	}
+
+	// If the UTC slot rolled over between seeding and evaluation the seeded
+	// sparkline no longer lines up with the handler's slot — skip, don't flake.
+	if utcSlotOfDay(time.Now().Unix()) != slot {
+		t.Skipf("UTC slot boundary crossed during test")
+	}
+
+	var decoded map[string]any
+	if err := json.NewDecoder(httpResp.Body).Decode(&decoded); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	for _, key := range []string{"qth", "surroundings", "current_band", "current_slot_of_day", "generated_at", "baseline_history_minutes", "recommendations"} {
+		if _, ok := decoded[key]; !ok {
+			t.Errorf("response missing key %q: %v", key, decoded)
+		}
+	}
+
+	recsRaw, ok := decoded["recommendations"].([]any)
+	if !ok {
+		t.Fatalf("recommendations must be a list: %v", decoded["recommendations"])
+	}
+	if len(recsRaw) != 1 {
+		t.Fatalf("expected exactly 1 recommendation, got %d: %v", len(recsRaw), recsRaw)
+	}
+	rec, ok := recsRaw[0].(map[string]any)
+	if !ok {
+		t.Fatalf("recommendation must be an object: %v", recsRaw[0])
+	}
+	if rec["band"] != "15m" {
+		t.Errorf("band = %v, want 15m", rec["band"])
+	}
+	if rec["kind"] != "rising" {
+		t.Errorf("kind = %v, want rising", rec["kind"])
+	}
+	if rec["priority"] != "normal" {
+		t.Errorf("priority = %v, want normal", rec["priority"])
+	}
+	if int(rec["sustained_bins"].(float64)) != 3 {
+		t.Errorf("sustained_bins = %v, want 3", rec["sustained_bins"])
+	}
+	if rec["trend"] != "rising" {
+		t.Errorf("trend = %v, want rising", rec["trend"])
+	}
+	if rec["spots_per_minute"] != 2.67 {
+		t.Errorf("spots_per_minute = %v, want 2.67", rec["spots_per_minute"])
+	}
+}
+
+// TestHotBandsHandlerDegradesWithoutBaseline: with no baseline engine wired the
+// handler answers 200 with an empty (non-nil) recommendation list and echoes
+// the normalized qth; a missing qth is a 400 before anything is evaluated.
+// Non-positive and oversized minutes values are tolerated (clamped, no error).
+func TestHotBandsHandlerDegradesWithoutBaseline(t *testing.T) {
+	origBaseline := dxBaseline
+	defer func() { dxBaseline = origBaseline }()
+	dxBaseline = nil
+
+	server := httptest.NewServer(http.HandlerFunc(hotBandsHandler))
+	defer server.Close()
+
+	// Missing qth → 400.
+	resp, err := http.Get(server.URL + "/api/hot_bands")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing qth: status = %d, want 400", resp.StatusCode)
+	}
+
+	// No baseline + present qth → stable empty recommendations.
+	// minutes=99999 clamps to maxDxWindowMinutes without erroring.
+	resp, err = http.Get(server.URL + "/api/hot_bands?qth=JO62qm&minutes=99999")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("no-baseline status = %d, want 200", resp.StatusCode)
+	}
+	var decoded hotBandsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if decoded.QTH != "JO62QM" {
+		t.Errorf("QTH = %q, want JO62QM (normalized uppercase)", decoded.QTH)
+	}
+	if decoded.Recommendations == nil || len(decoded.Recommendations) != 0 {
+		t.Errorf("recommendations = %v, want an empty non-nil slice", decoded.Recommendations)
 	}
 }

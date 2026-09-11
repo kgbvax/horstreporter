@@ -1883,3 +1883,192 @@ func TestDSNSource(t *testing.T) {
 		})
 	}
 }
+
+// TestPropIntelV2HandlerStructureAndFromHere runs /api/prop_intel/v2 end-to-end
+// over HTTP: it seeds hub.history (from-here + global-mesh wspr spots) and a
+// fresh (empty) propBaseline climatology via the global-swap pattern, then
+// asserts the (band × region) envelope and the from_here filter. A missing qth
+// is a 400.
+func TestPropIntelV2HandlerStructureAndFromHere(t *testing.T) {
+	savedBaseline := propBaseline
+	defer func() { propBaseline = savedBaseline }()
+	propBaseline = newPropBaselineEngine("", "")
+
+	now := time.Now().Unix()
+	hub.Lock()
+	origHistory := hub.history
+	hub.history = []MQTTMessage{
+		// from-here: operator at JO62 (receiver end), remote in NA
+		{Source: "wspr", B: "20m", T: now - 100, SC: "OP", SL: "JO62QM", RC: "TX", RL: "FN31AB", RP: 5, TXPower: 43, MD: "FT8"},
+		// global-mesh: neither end is the operator, receiver lands in NA
+		{Source: "wspr", B: "40m", T: now - 100, SC: "RX", SL: "FN31AB", RC: "TX", RL: "EM10AB", RP: 5, TXPower: 43, MD: "FT8"},
+	}
+	hub.Unlock()
+	defer func() {
+		hub.Lock()
+		hub.history = origHistory
+		hub.Unlock()
+	}()
+
+	server := httptest.NewServer(http.HandlerFunc(propIntelV2Handler))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/api/prop_intel/v2?qth=JO62")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if ctype := resp.Header.Get("Content-Type"); ctype != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", ctype)
+	}
+
+	var decoded propIntelV2Response
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if decoded.QTH != "JO62" {
+		t.Errorf("QTH = %q, want JO62", decoded.QTH)
+	}
+	if decoded.FromHere {
+		t.Errorf("FromHere must default to false without the query param")
+	}
+	if len(decoded.SourcesRequested) == 0 {
+		t.Errorf("SourcesRequested must echo the resolved selection (default: all profiles)")
+	}
+	var hasWspr bool
+	for _, name := range decoded.SourcesRequested {
+		if name == "wspr" {
+			hasWspr = true
+		}
+	}
+	if !hasWspr {
+		t.Errorf("wspr must be in the default source selection: %v", decoded.SourcesRequested)
+	}
+	if len(decoded.BandOrder) == 0 || len(decoded.Regions) == 0 || len(decoded.RegionNames) == 0 {
+		t.Errorf("band_order/regions/region_names must be populated: %+v", decoded)
+	}
+	if len(decoded.Cells) != 2 {
+		t.Fatalf("expected 2 (band × region) cells, got %d: %+v", len(decoded.Cells), decoded.Cells)
+	}
+	// Cells are sorted by band then region, and each cell carries per-source rows.
+	if decoded.Cells[0].Band != "20m" || decoded.Cells[1].Band != "40m" {
+		t.Errorf("cells must be sorted by band: %+v", decoded.Cells)
+	}
+	for _, c := range decoded.Cells {
+		if c.Band == "" || c.Region == "" {
+			t.Errorf("cell band/region must be set: %+v", c)
+		}
+		if len(c.PerSource) == 0 || len(c.ActiveSources) == 0 {
+			t.Errorf("cell %s/%s must carry per-source evidence: %+v", c.Band, c.Region, c)
+		}
+	}
+	// Spot counts: 20m cell from the from-here spot, 40m from the mesh spot.
+	if decoded.Cells[0].SpotCount != 1 || decoded.Cells[1].SpotCount != 1 {
+		t.Errorf("spot counts = %d/%d, want 1/1", decoded.Cells[0].SpotCount, decoded.Cells[1].SpotCount)
+	}
+
+	// from_here=true filters to the cell whose path touches the operator's QTH.
+	resp, err = http.Get(server.URL + "/api/prop_intel/v2?qth=JO62&from_here=true")
+	if err != nil {
+		t.Fatalf("from_here request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	var filtered propIntelV2Response
+	if err := json.NewDecoder(resp.Body).Decode(&filtered); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if !filtered.FromHere {
+		t.Errorf("FromHere must be stamped true")
+	}
+	if len(filtered.Cells) != 1 || filtered.Cells[0].Band != "20m" || !filtered.Cells[0].FromHere {
+		t.Fatalf("from_here filter must keep only the 20m from-here cell: %+v", filtered.Cells)
+	}
+
+	// Missing qth → 400.
+	resp, err = http.Get(server.URL + "/api/prop_intel/v2")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing qth: status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestCachedStaticHandlerEtagAndConditional covers the static-asset handler:
+// content ETags plus Cache-Control: no-cache on known assets, a 304 on a
+// matching If-None-Match, and no ETag for unknown paths.
+func TestCachedStaticHandlerEtagAndConditional(t *testing.T) {
+	staticFS := os.DirFS("static")
+	server := httptest.NewServer(cachedStaticHandler(staticFS))
+	defer server.Close()
+
+	// Root serves index.html with the precomputed ETag + no-cache directive.
+	resp, err := http.Get(server.URL + "/")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("root status = %d, want 200", resp.StatusCode)
+	}
+	etag := resp.Header.Get("ETag")
+	if etag == "" {
+		t.Fatal("root must carry a content ETag")
+	}
+	if resp.Header.Get("Cache-Control") != "no-cache" {
+		t.Fatalf("Cache-Control = %q, want no-cache", resp.Header.Get("Cache-Control"))
+	}
+	if len(body) == 0 {
+		t.Fatal("index.html body must not be empty")
+	}
+
+	// A non-index asset gets the same treatment.
+	resp, err = http.Get(server.URL + "/app.js")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("app.js status = %d, want 200", resp.StatusCode)
+	}
+	jsEtag := resp.Header.Get("ETag")
+	if jsEtag == "" || jsEtag == etag {
+		t.Fatalf("app.js must carry its own content ETag, got %q (index %q)", jsEtag, etag)
+	}
+
+	// A matching If-None-Match round-trips as a cheap 304.
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/app.js", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("If-None-Match", jsEtag)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("conditional request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotModified {
+		t.Fatalf("conditional status = %d, want 304", resp.StatusCode)
+	}
+
+	// An unknown path must not get a fabricated ETag (plain 404).
+	resp, err = http.Get(server.URL + "/does-not-exist.js")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown asset status = %d, want 404", resp.StatusCode)
+	}
+	if resp.Header.Get("ETag") != "" {
+		t.Fatalf("unknown asset must have no ETag, got %q", resp.Header.Get("ETag"))
+	}
+}
