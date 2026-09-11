@@ -1,5 +1,6 @@
 import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, gridSnrOpacity, topQuartileMean, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
 import { radialLine, strokeCircle } from './canvas-draw.js';
+import { dataNow } from './data-now.js';
 
 const EARTH_RADIUS_KM = 6371;
 const ANTIPODE_KM = Math.PI * EARTH_RADIUS_KM;
@@ -277,7 +278,7 @@ export function initAzimuthCanvas() {
         window.addEventListener('resize', () => {
             const c = ensureCanvas();
             if (c) resizeCanvasToElement(c);
-            if (state.enabled) renderAzimuthScene({ spots: state.lastSpots, style: state.lastStyle });
+            if (state.enabled) renderAzimuthScene({ spots: state.lastSpots, style: state.lastStyle, dataNowMs: dataNow() });
         });
         state.resizeAttached = true;
     }
@@ -953,8 +954,14 @@ export function getAzimuthLatLngFromClientPoint(clientX, clientY) {
 }
 
 
-function drawGrayline(ctx, width, height) {
-    const bucket = Math.floor(Date.now() / (5 * 60 * 1000));
+// drawGrayline renders the night/twilight overlay for the grayline time basis.
+// The terminator time comes from dataNowMs when the caller carries it (timeline
+// playhead, plan 2026-09-11-002 U6) and otherwise from the shared dataNow()
+// clock (wall clock in live mode, KTD-9). Only the bucket/key derivation reads
+// that clock: the 320ms recompute throttle below stays on wall-clock Date.now().
+function drawGrayline(ctx, width, height, dataNowMs) {
+    const overlayMs = (dataNowMs ?? dataNow());
+    const bucket = Math.floor(overlayMs / (5 * 60 * 1000));
     const nowMs = Date.now();
     const key = `${width}x${height}:${state.theme}:${state.zoom.toFixed(2)}:${state.horizonKm}:${state.center[0].toFixed(3)}:${state.center[1].toFixed(3)}:${bucket}`;
 
@@ -1049,6 +1056,10 @@ function drawGrayline(ctx, width, height) {
     };
     ctx.drawImage(overlayCanvas, 0, 0, width, height);
 }
+
+// Test seam (same pattern as timeline.js/session-ring.js): the grayline cache
+// key machinery without going through the full scene render.
+export const __internals = { state, drawGrayline };
 
 // bearingFromCenter returns the initial great-circle bearing (0–360°, 0 = N) from
 // the station center to a point.
@@ -1870,7 +1881,7 @@ function withHorizonClip(ctx, width, height, drawFn) {
     ctx.restore();
 }
 
-export function renderAzimuthScene({ spots = [], style } = {}) {
+export function renderAzimuthScene({ spots = [], style, dataNowMs } = {}) {
     if (!state.enabled) return;
     const perfEnabled = typeof window !== 'undefined' && window.localStorage?.getItem('azimuthProfile') === 'true';
     const nowMs = () => (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
@@ -1926,7 +1937,7 @@ export function renderAzimuthScene({ spots = [], style } = {}) {
 
         if (getGraylineEnabled()) {
             if (profile) profile.graylineStart = nowMs();
-            drawGrayline(state.ctx, width, height);
+            drawGrayline(state.ctx, width, height, dataNowMs);
             if (profile) profile.graylineEnd = nowMs();
         }
 

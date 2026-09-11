@@ -15,7 +15,7 @@ import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, start
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
 import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL, invalidateBundles as invalidateTimelineBundles, refreshMoment as refreshTimelineMoment } from './timeline.js';
 import { updateAfterglow, notifyMapMoved, hideAfterglow } from './afterglow.js';
-import { setDataNowMs, clearDataNowOverride } from './data-now.js';
+import { dataNow, setDataNowMs, clearDataNowOverride } from './data-now.js';
 import { sessionRing } from './session-ring.js';
 
 // --- Azimuth Zoom State ---
@@ -1440,7 +1440,10 @@ export function scheduleRender() {
             const renderSpots = getRenderableMapSpots(state.liveSpots);
             if (isAzimuthEnabled()) {
                 updateBandLabels(renderSpots);
-                renderAzimuthScene({ spots: renderSpots });
+                // The clock's current value keeps the grayline cache key
+                // consistent within a bucket across re-renders (U6, KTD-9):
+                // wall clock in live mode, the pinned playhead in timeline.
+                renderAzimuthScene({ spots: renderSpots, dataNowMs: dataNow() });
                 syncAzimuthZoomOutHint();
                 endPerfTimer('render.azimuth.frame_ms', rafStart);
             } else {
@@ -2235,7 +2238,11 @@ function renderTimelineMomentFrame(moved = false) {
     if (!lastMomentSpots) return;
     if (isAzimuthEnabled()) {
         updateBandLabels(lastMomentSpots);
-        renderAzimuthScene({ spots: lastMomentSpots });
+        // Pass the playhead the moment carries (U6): the azimuth grayline cache
+        // key buckets on it, so scrub snaps to 5-minute buckets and playback
+        // rebuilds only per bucket crossing (KTD-8). Same value on the gate
+        // re-render path — this function is shared.
+        renderAzimuthScene({ spots: lastMomentSpots, dataNowMs: lastMomentPlayhead * 1000 });
         syncAzimuthZoomOutHint();
     } else {
         updateMapVisualization(lastMomentSpots, parseInt(document.getElementById('minutes')?.value || '15', 10));

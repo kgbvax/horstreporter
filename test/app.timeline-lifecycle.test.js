@@ -774,6 +774,42 @@ describe('app.js data-now clock (U5)', () => {
         expect(syncMercatorGraylineLayer).toHaveBeenCalled();
     });
 
+    it('passes the playhead-derived dataNowMs to renderAzimuthScene on the moment and gate paths (U6)', async () => {
+        const { renderers } = await importAppFresh();
+        timelineMock.timelineActive = true;
+        azimuthEnabled = true;
+
+        emitMoment([makeSpot(30)], 1_700_000_123);
+        expect(renderers.renderAzimuthScene).toHaveBeenCalledWith(
+            expect.objectContaining({ dataNowMs: 1_700_000_123_000 })
+        );
+
+        // The scheduleRender gate re-render (style change mid-replay) reuses
+        // the retained moment, so it passes the same playhead value.
+        renderers.renderAzimuthScene.mockClear();
+        await flushRender();
+        expect(renderers.renderAzimuthScene).toHaveBeenCalledWith(
+            expect.objectContaining({ dataNowMs: 1_700_000_123_000 })
+        );
+
+        azimuthEnabled = false;
+    });
+
+    it('passes the current clock value to renderAzimuthScene on the live render path (U6)', async () => {
+        const { state, renderers } = await importAppFresh();
+        azimuthEnabled = true;
+
+        const es = await startStream();
+        fireEsEvent(es, 'history_end');
+        deliverFrame(es, makeSpot(0, { locator: 'LIVE1' }));
+        await flushRender();
+
+        expect(renderers.renderAzimuthScene).toHaveBeenCalledWith(
+            expect.objectContaining({ dataNowMs: NOW_MS })
+        );
+        azimuthEnabled = false;
+    });
+
     it('live-mode refresh stays idle while the timeline is active', async () => {
         vi.useFakeTimers({ now: NOW_MS });
         await importAppFresh();

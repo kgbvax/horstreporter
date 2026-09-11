@@ -1,5 +1,15 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { haversineKm } from '../static/utils.js';
+
+// Wrap (not replace) the solar helpers so recompute counts and the subsolar
+// time basis are observable while every other utils export stays real.
+vi.mock('../static/utils.js', async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+        ...actual,
+        getSubsolarPoint: vi.fn((date) => actual.getSubsolarPoint(date))
+    };
+});
 
 let az;
 
@@ -562,5 +572,142 @@ describe('createAzimuthRenderPlan scene composition', () => {
         } finally {
             az.setAzimuthDxccLabelDensity(1.0);
         }
+    });
+});
+
+// --- U6 (plan 2026-09-11-002): azimuth grayline keys on the dataNow clock ---
+// drawGrayline is reached through the module's __internals export; a recompute
+// is observable as one getSubsolarPoint call (cache-hit and throttle paths
+// never reach the subsolar computation). The 320ms recompute throttle stays
+// keyed on wall-clock Date.now() (KTD-9) — verified below with an
+// intentionally large data-time offset.
+const BUCKET_MS = 5 * 60 * 1000;
+const WALL_MS = 1_730_000_000_000;
+const PLAYHEAD_MS = 1_700_000_123_000; // 113_000ms into its bucket
+
+describe('azimuth grayline playhead clock (plan 2026-09-11-002 U6, KTD-8/9)', () => {
+    let getSubsolarPoint;
+
+    function installCanvasStub() {
+        // jsdom has no canvas 2D implementation; a minimal stub lets the
+        // recompute's sample pass run and the overlay cache be written.
+        const fakeCtx = {
+            createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+            putImageData: vi.fn(),
+            clearRect: vi.fn(),
+            drawImage: vi.fn(),
+            imageSmoothingEnabled: true,
+            imageSmoothingQuality: 'low'
+        };
+        vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(fakeCtx);
+    }
+
+    function resetGraylineCache() {
+        az.__internals.state.graylineOverlayCache = { key: '', canvas: null, computedAtMs: 0 };
+    }
+
+    beforeEach(async () => {
+        vi.useFakeTimers({ now: WALL_MS });
+        installCanvasStub();
+        resetGraylineCache();
+        az.__internals.state.center = [20, 0];
+        az.__internals.state.theme = 'light';
+        az.__internals.state.zoom = 1.5;
+        az.__internals.state.horizonKm = 16000;
+        ({ getSubsolarPoint } = await import('../static/utils.js'));
+        vi.mocked(getSubsolarPoint).mockClear();
+    });
+
+    afterEach(async () => {
+        const { clearDataNowOverride } = await import('../static/data-now.js');
+        clearDataNowOverride();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    function draw(dataNowMs) {
+        const ctx = { drawImage: vi.fn() };
+        az.__internals.drawGrayline(ctx, 300, 300, dataNowMs);
+        return ctx;
+    }
+
+    it('live mode (no dataNowMs): the bucket derives from the wall clock', () => {
+        const bucket = Math.floor(WALL_MS / BUCKET_MS);
+        draw(undefined);
+
+        expect(getSubsolarPoint).toHaveBeenCalledTimes(1);
+        expect(getSubsolarPoint).toHaveBeenCalledWith(new Date(bucket * BUCKET_MS));
+        expect(az.__internals.state.graylineOverlayCache.key.endsWith(`:${bucket}`)).toBe(true);
+    });
+
+    it('scrub: two playheads inside one 5-minute bucket yield a single recompute', () => {
+        draw(PLAYHEAD_MS);
+        vi.advanceTimersByTime(400); // wall gap proves this is the KEY hit, not the throttle
+        draw(PLAYHEAD_MS + 60_000);
+
+        expect(getSubsolarPoint).toHaveBeenCalledTimes(1);
+        const key = az.__internals.state.graylineOverlayCache.key;
+        expect(key.endsWith(`:${Math.floor(PLAYHEAD_MS / BUCKET_MS)}`)).toBe(true);
+    });
+
+    it('scrub: a playhead in a different bucket recomputes with the new bucket', () => {
+        draw(PLAYHEAD_MS);
+        vi.advanceTimersByTime(400); // past the 320ms throttle so the new bucket can rebuild
+        draw(PLAYHEAD_MS + BUCKET_MS + 60_000);
+
+        expect(getSubsolarPoint).toHaveBeenCalledTimes(2);
+        expect(getSubsolarPoint).toHaveBeenLastCalledWith(
+            new Date(Math.floor((PLAYHEAD_MS + BUCKET_MS + 60_000) / BUCKET_MS) * BUCKET_MS)
+        );
+    });
+
+    it('playback 600x: recomputes track bucket crossings, not frames (no per-frame storm)', () => {
+        // 600x of a 50ms wall frame = 30s of playhead per frame; 40 frames span
+        // 20min of playhead (4 bucket crossings) in 2s of wall time.
+        const frames = 40;
+        for (let i = 0; i < frames; i++) {
+            draw(PLAYHEAD_MS + i * 30_000);
+            if (i < frames - 1) vi.advanceTimersByTime(50);
+        }
+
+        const buckets = new Set();
+        for (let i = 0; i < frames; i++) {
+            buckets.add(Math.floor((PLAYHEAD_MS + i * 30_000) / BUCKET_MS));
+        }
+        expect(getSubsolarPoint).toHaveBeenCalledTimes(buckets.size);
+        expect(buckets.size).toBe(4); // pinned: well below 40 frames
+        expect(getSubsolarPoint).toHaveBeenCalledTimes(4);
+    });
+
+    it('replay determinism: the same playhead bucket reuses the cached overlay', () => {
+        const first = draw(PLAYHEAD_MS);
+        const cached = az.__internals.state.graylineOverlayCache.canvas;
+        vi.advanceTimersByTime(1000); // replay re-entry arrives later on the wall clock too
+        const second = draw(PLAYHEAD_MS);
+
+        expect(getSubsolarPoint).toHaveBeenCalledTimes(1);
+        expect(second.drawImage).toHaveBeenCalledWith(cached, 0, 0, 300, 300);
+        expect(first.drawImage).toHaveBeenCalledWith(cached, 0, 0, 300, 300);
+    });
+
+    it('the 320ms recompute throttle stays keyed on wall-clock Date.now()', () => {
+        // Prime the cache with a mismatched key (so the key-hit path cannot
+        // serve it) computed 100ms ago on the wall clock; the data clock sits
+        // in a fresh bucket, far from the wall clock.
+        const cachedCanvas = { width: 300, height: 300 };
+        az.__internals.state.graylineOverlayCache = {
+            key: 'foreign-key',
+            canvas: cachedCanvas,
+            computedAtMs: Date.now() - 100
+        };
+
+        const throttled = draw(PLAYHEAD_MS + BUCKET_MS);
+        expect(getSubsolarPoint).not.toHaveBeenCalled();
+        expect(throttled.drawImage).toHaveBeenCalledWith(cachedCanvas, 0, 0, 300, 300);
+
+        // Past the wall-clock throttle the same data clock recomputes.
+        vi.advanceTimersByTime(400);
+        draw(PLAYHEAD_MS + BUCKET_MS);
+        expect(getSubsolarPoint).toHaveBeenCalledTimes(1);
     });
 });
