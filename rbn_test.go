@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"bufio"
+	"net"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestParseRBNSpot(t *testing.T) {
 	tests := []struct {
@@ -158,5 +164,264 @@ func TestSourceTypeForMessage(t *testing.T) {
 				t.Fatalf("sourceTypeForMessage() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// --- U3: RBN prompt handling, TCP session, and spot handling ---------------
+
+func TestAwaitRBNDetectsCallPrompt(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- awaitRBNPrompt(bufio.NewReader(clientConn))
+	}()
+	go func() {
+		_ = serverConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		_, _ = serverConn.Write([]byte("Please enter your call, e.g. DL1ABC: "))
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("awaitRBNPrompt error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("awaitRBNPrompt did not return when the prompt arrived")
+	}
+}
+
+func TestAwaitRBNPromptCaseInsensitiveAndMidStream(t *testing.T) {
+	// The needle "your call" must match lowercased input inside a stream of
+	// unrelated bytes (the accumulated 256-byte tail scan).
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- awaitRBNPrompt(bufio.NewReader(clientConn))
+	}()
+	go func() {
+		payload := strings.Repeat("Welcome ", 30) + "ENTER Your Call: "
+		_ = serverConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		_, _ = serverConn.Write([]byte(payload))
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("awaitRBNPrompt error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("awaitRBNPrompt did not return")
+	}
+}
+
+func TestAwaitRBNPromptEndsOnClosedConnection(t *testing.T) {
+	// "No hang when the prompt never arrives": a closed connection must end
+	// the wait with an error. (The real path is additionally bounded by the
+	// caller's SetReadDeadline; see the DX-cluster deadline test for the
+	// timeout-vs-EOF characterization.)
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	_ = serverConn.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- awaitRBNPrompt(bufio.NewReader(clientConn))
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected error on closed connection, got nil")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("awaitRBNPrompt did not return after the connection closed")
+	}
+}
+
+func TestRunRBNSessionHandshakeAndSpots(t *testing.T) {
+	isolateHubForIngest(t, false)
+
+	const callsign = "DL1ABC"
+	script := func(conn net.Conn, reader *bufio.Reader) error {
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+		if _, err := conn.Write([]byte("Please enter your call: ")); err != nil {
+			return err
+		}
+		call, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		if got := strings.TrimRight(call, "\r\n"); got != callsign {
+			return &testScriptError{step: "callsign", got: got, want: callsign}
+		}
+		if _, err := conn.Write([]byte(
+			"Welcome to the Reverse Beacon Network\r\n" +
+				"DX de W3LPL-#:      14024.0  N0CALL         CW   22 dB   EN91   1234 Z\r\n" +
+				"\r\n" +
+				"DX de OH2X-#: 7035.0 W1XYZ CW broken\r\n")); err != nil {
+			return err
+		}
+		return conn.Close()
+	}
+	addr, serverDone := startTestTCPServer(t, script)
+
+	_, _, _, parsedBefore, _, _, droppedBefore := rbnAccounting.snapshot()
+	cfg := rbnConfig{Enabled: true, Callsign: callsign}
+	err := runRBNSession(addr, cfg)
+
+	// The relay closed the stream → the session reports it for the reconnect loop.
+	if err == nil || !strings.Contains(err.Error(), "rbn connection closed") {
+		t.Fatalf("expected 'rbn connection closed' after EOF, got %v", err)
+	}
+	select {
+	case serr := <-serverDone:
+		if serr != nil {
+			t.Fatalf("server script failed: %v", serr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("server script did not finish")
+	}
+
+	_, _, _, parsed, _, _, dropped := rbnAccounting.snapshot()
+	if got := parsed - parsedBefore; got != 1 {
+		t.Errorf("parsedSpots delta = %d, want 1", got)
+	}
+	// No resolver → no DX locator → dropped from live (but still parsed).
+	if got := dropped - droppedBefore; got != 1 {
+		t.Errorf("droppedNoLoc delta = %d, want 1", got)
+	}
+}
+
+func TestRunRBNSessionRequiresCallsign(t *testing.T) {
+	isolateHubForIngest(t, false)
+
+	// No callsign configured: the relay's prompt is drained, no callsign is
+	// sent, and the session returns the configuration error (the reconnect
+	// loop keeps retrying until one is set).
+	script := func(conn net.Conn, reader *bufio.Reader) error {
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+		if _, err := conn.Write([]byte("Please enter your call: ")); err != nil {
+			return err
+		}
+		call, err := reader.ReadString('\n')
+		if err == nil && call != "" {
+			return &testScriptError{step: "callsign must not be sent", got: strings.TrimRight(call, "\r\n"), want: ""}
+		}
+		return nil
+	}
+	addr, serverDone := startTestTCPServer(t, script)
+
+	cfg := rbnConfig{Enabled: true} // no callsign
+	err := runRBNSession(addr, cfg)
+	if err == nil || !strings.Contains(err.Error(), "none configured") {
+		t.Fatalf("expected 'none configured' error, got %v", err)
+	}
+	select {
+	case serr := <-serverDone:
+		if serr != nil {
+			t.Fatalf("server script failed: %v", serr)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("server script did not finish")
+	}
+}
+
+func TestHandleRBNSpotPopulatesLiveFields(t *testing.T) {
+	isolateHubForIngest(t, false)
+
+	resolver := &stubResolver{
+		locators: map[string]string{"W3LPL-#": "FM18"},
+		infos:    map[string]CallsignInfo{"N0CALL": {Locator: "fn31pr", Name: "Bob", Country: "United States"}},
+	}
+
+	_, _, _, _, _, forwardedBefore, droppedBefore := rbnAccounting.snapshot()
+	handleRBNSpot(rbnSpot{
+		Skimmer:      "W3LPL-#",
+		DXCall:       "N0CALL",
+		FrequencyKHz: 14024.0,
+		Mode:         "CW",
+		DB:           22,
+		ObservedAt:   1700000000,
+	}, resolver, nil)
+	_, _, _, _, _, forwardedAfter, droppedAfter := rbnAccounting.snapshot()
+	if got := forwardedAfter - forwardedBefore; got != 1 {
+		t.Fatalf("forwardedSpots delta = %d, want 1", got)
+	}
+	if got := droppedAfter - droppedBefore; got != 0 {
+		t.Fatalf("droppedNoLoc delta = %d, want 0", got)
+	}
+
+	hub.RLock()
+	defer hub.RUnlock()
+	if len(hub.history) != 1 {
+		t.Fatalf("expected 1 forwarded RBN spot, got %d", len(hub.history))
+	}
+	m := hub.history[0]
+	if m.SC != "W3LPL-#" || m.RC != "N0CALL" {
+		t.Errorf("SC/RC = %q/%q, want W3LPL-#/N0CALL (skimmer→DX)", m.SC, m.RC)
+	}
+	if m.RL != "FN31PR" || m.SL != "FM18" {
+		t.Errorf("RL/SL = %q/%q, want FN31PR/FM18", m.RL, m.SL)
+	}
+	if m.MD != "CW" {
+		t.Errorf("MD = %q, want CW (real over-the-air mode)", m.MD)
+	}
+	if m.RP != 22 {
+		t.Errorf("RP = %d, want 22 (skimmer dB)", m.RP)
+	}
+	if m.Source != "rbn" {
+		t.Errorf("Source = %q, want rbn", m.Source)
+	}
+	if m.B != "20m" {
+		t.Errorf("B = %q, want 20m", m.B)
+	}
+	if m.F != 14024.0 {
+		t.Errorf("F = %v, want 14024", m.F)
+	}
+	if m.OpName != "Bob" {
+		t.Errorf("OpName = %q, want Bob", m.OpName)
+	}
+}
+
+func TestHandleRBNSpotDropsWithoutDXLocator(t *testing.T) {
+	isolateHubForIngest(t, false)
+
+	_, _, _, _, _, forwardedBefore, droppedBefore := rbnAccounting.snapshot()
+	// No resolver at all → no locators → unusable for live.
+	handleRBNSpot(rbnSpot{Skimmer: "W3LPL", DXCall: "N0CALL", FrequencyKHz: 14024.0, Mode: "CW", DB: 20, ObservedAt: 1000}, nil, nil)
+	_, _, _, _, _, forwardedAfter, droppedAfter := rbnAccounting.snapshot()
+	if got := droppedAfter - droppedBefore; got != 1 {
+		t.Fatalf("droppedNoLoc delta = %d, want 1", got)
+	}
+	if got := forwardedAfter - forwardedBefore; got != 0 {
+		t.Fatalf("forwardedSpots delta = %d, want 0", got)
+	}
+
+	hub.RLock()
+	defer hub.RUnlock()
+	if len(hub.history) != 0 {
+		t.Fatalf("expected dropped RBN spot not to reach hub.history, got %d", len(hub.history))
+	}
+}
+
+func TestIsRBNSpotUsableForLive(t *testing.T) {
+	if !isRBNSpotUsableForLive(MQTTMessage{B: "20m", RL: "JO62"}) {
+		t.Error("band + DX locator should be usable")
+	}
+	// Skimmer locator alone is not enough (mirrors the DX-cluster rule).
+	if isRBNSpotUsableForLive(MQTTMessage{B: "20m", RL: "", SL: "JO62"}) {
+		t.Error("skimmer locator alone should not be usable")
+	}
+	if isRBNSpotUsableForLive(MQTTMessage{B: "", RL: "JO62"}) {
+		t.Error("empty band should not be usable")
+	}
+	if isRBNSpotUsableForLive(MQTTMessage{B: "20m", RL: "W1AW"}) {
+		t.Error("callsign as locator should not be usable")
 	}
 }

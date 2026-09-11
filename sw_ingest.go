@@ -26,13 +26,18 @@ import (
 //   - OVATION auroral power (hemispheric estimate)
 //   - D-RAP highest-affected-frequency grid
 
-const (
+// SWPC feed URLs. Package vars (same defer-swap pattern as main_test.go's
+// globals) so tests can point them at a mock upstream; the values are the
+// production URLs. swDrapURL has no poller today (D-RAP consumer removed
+// 2026-08-04) and stays a constant.
+var (
 	swKpURL      = "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"
 	swF107URL    = "https://services.swpc.noaa.gov/text/daily-solar-indices.txt"
 	swXrayURL    = "https://services.swpc.noaa.gov/json/goes/primary/xrays-6-hour.json"
 	swOvationURL = "https://services.swpc.noaa.gov/json/ovation_aurora_latest.json"
-	swDrapURL    = "https://services.swpc.noaa.gov/text/drap_global_frequencies.txt"
 )
+
+const swDrapURL = "https://services.swpc.noaa.gov/text/drap_global_frequencies.txt"
 
 type swIngestService struct {
 	store  *dxPostgresStore
