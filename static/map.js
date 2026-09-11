@@ -292,6 +292,11 @@ function buildMercatorGraylineDataUrl(theme, subsolarPoint) {
 
     const twilightFill = hexToRgb(theme === 'dark' ? '#9a8371' : '#b08b72');
     const nightFill = hexToRgb(theme === 'dark' ? '#01050a' : '#182534');
+    // In dark theme the base map is near-black, so night shading alone gives no
+    // visible day/night contrast — lift the sunlit side with a warm tint so
+    // "day" actually reads brighter. Light theme's bright tiles need no lift.
+    const dayFill = hexToRgb('#f5e9c8');
+    const maxDayOpacity = 0.14;
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
 
@@ -299,10 +304,16 @@ function buildMercatorGraylineDataUrl(theme, subsolarPoint) {
         const lat = mercatorYToLat(y / (height - 1));
         for (let x = 0; x < width; x += 1) {
             const lng = -180 + ((x / (width - 1)) * 360);
-            const { graylineOpacity, nightOpacity } = getGraylineOverlayOpacities(lat, lng, subsolarPoint);
-            if (graylineOpacity <= 0 && nightOpacity <= 0) continue;
+            const { graylineOpacity, nightOpacity, zenithAngle } = getGraylineOverlayOpacities(lat, lng, subsolarPoint);
+            // Full lift below 30° solar zenith, fading linearly to 0 at the
+            // terminator (90°); the twilight band takes over from there.
+            const dayOpacity = theme === 'dark' && zenithAngle < 90
+                ? maxDayOpacity * Math.min(1, (90 - zenithAngle) / 60)
+                : 0;
+            if (graylineOpacity <= 0 && nightOpacity <= 0 && dayOpacity <= 0) continue;
 
             let pixel = { r: 0, g: 0, b: 0, a: 0 };
+            pixel = blendOverlayColors(pixel, dayFill, dayOpacity);
             pixel = blendOverlayColors(pixel, twilightFill, graylineOpacity);
             pixel = blendOverlayColors(pixel, nightFill, nightOpacity);
 
