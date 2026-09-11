@@ -584,6 +584,89 @@ describe('map.js grayline overlay degradation', () => {
     });
 });
 
+describe('map.js grayline clock basis (plan 2026-09-11-002 U5, KTD-9)', () => {
+    // jsdom has no canvas 2D context; a minimal stub lets
+    // buildMercatorGraylineDataUrl succeed so the bucket/cache-key derivation
+    // is observable through getSubsolarPoint + L.imageOverlay.
+    function installCanvasStub() {
+        const fakeCtx = {
+            createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+            putImageData: vi.fn()
+        };
+        vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(fakeCtx);
+        vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,GRAYLINE');
+    }
+
+    const WALL_MS = 1_730_000_000_000;       // wall bucket floor(…/300000) = 5766666
+    const PLAYHEAD_MS = 1_700_000_123_000;   // override bucket floor(…/300000) = 5666666
+    const BUCKET_MS = 5 * 60 * 1000;
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        utilsMockState.countryColoring = false;
+        utilsMockState.grayline = true;
+        setupDom();
+        installLeafletMock();
+        installCanvasStub();
+        document.body.setAttribute('data-theme', 'light');
+    });
+
+    afterEach(async () => {
+        const { clearDataNowOverride } = await import('../static/data-now.js');
+        clearDataNowOverride();
+        vi.useRealTimers();
+    });
+
+    it('derives the bucket from the dataNow() clock, not Date.now()', async () => {
+        vi.useFakeTimers({ now: WALL_MS });
+        await importFreshMapModule();
+        mapModule.initMap([52, 7], 2);
+        const { setDataNowMs } = await import('../static/data-now.js');
+        const mockGetSubsolarPoint = vi.mocked((await import('../static/utils.js')).getSubsolarPoint);
+
+        setDataNowMs(PLAYHEAD_MS);
+        await mapModule.syncMercatorGraylineLayer({ enabled: true, force: true });
+
+        // The subsolar point must come from the overridden (playhead) bucket;
+        // a Date.now()-keyed bucket would differ here.
+        const expectedBucketStart = new Date(Math.floor(PLAYHEAD_MS / BUCKET_MS) * BUCKET_MS);
+        expect(mockGetSubsolarPoint).toHaveBeenCalledWith(expectedBucketStart);
+    });
+
+    it('falls back to the wall-clock bucket when no override is set (live mode)', async () => {
+        vi.useFakeTimers({ now: WALL_MS });
+        await importFreshMapModule();
+        mapModule.initMap([52, 7], 2);
+        const mockGetSubsolarPoint = vi.mocked((await import('../static/utils.js')).getSubsolarPoint);
+
+        await mapModule.syncMercatorGraylineLayer({ enabled: true, force: true });
+
+        const expectedBucketStart = new Date(Math.floor(WALL_MS / BUCKET_MS) * BUCKET_MS);
+        expect(mockGetSubsolarPoint).toHaveBeenCalledWith(expectedBucketStart);
+    });
+
+    it('does not rebuild the overlay within a clock bucket, rebuilds on crossing', async () => {
+        vi.useFakeTimers({ now: WALL_MS });
+        await importFreshMapModule();
+        mapModule.initMap([52, 7], 2);
+        const { setDataNowMs } = await import('../static/data-now.js');
+
+        setDataNowMs(PLAYHEAD_MS);
+        await mapModule.syncMercatorGraylineLayer({ enabled: true, force: true });
+        const built = globalThis.L.imageOverlay.mock.calls.length;
+
+        // Within the same 5-minute bucket: key dedupe, no rebuild.
+        setDataNowMs(PLAYHEAD_MS + 60_000);
+        await mapModule.syncMercatorGraylineLayer();
+        expect(globalThis.L.imageOverlay.mock.calls.length).toBe(built);
+
+        // Crossing into the next bucket: rebuild happens.
+        setDataNowMs(PLAYHEAD_MS + BUCKET_MS + 60_000);
+        await mapModule.syncMercatorGraylineLayer();
+        expect(globalThis.L.imageOverlay.mock.calls.length).toBeGreaterThan(built);
+    });
+});
+
 afterEach(() => {
     delete globalThis.L;
     vi.restoreAllMocks();

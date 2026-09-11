@@ -692,3 +692,98 @@ describe('app.js timeline lifecycle (U4)', () => {
         }
     });
 });
+// --- Unit U5 (plan 2026-09-11-002): shared dataNow() clock + Mercator
+// playhead grayline. app.js pins the clock to the playhead on every moment,
+// clears it on timeline exit, and syncs the Mercator grayline layer
+// moment-driven (map.js's bucket/key check dedupes within a bucket). Live mode
+// gains a wall-clock refresh so the terminator advances over wall time.
+describe('app.js data-now clock (U5)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        azimuthEnabled = false;
+        installLocalStorageMock();
+        localStorage.clear();
+        setupDom();
+        window.history.replaceState({}, '', '/');
+
+        global.EventSource = eventSourceMock;
+        window.EventSource = eventSourceMock;
+
+        global.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ snapshot_at: 0, generated_at: 0, spots: [] }),
+            text: async () => ''
+        }));
+
+        vi.spyOn(Date, 'now').mockReturnValue(NOW_MS);
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    // data-now.js is a singleton module; import it through the same (fresh)
+    // module registry importAppFresh just built so the test observes the
+    // instance app.js actually drives.
+    async function importDataNow() {
+        return import('../static/data-now.js');
+    }
+
+    it('pins dataNow() to the playhead and syncs the mercator grayline layer on each moment', async () => {
+        await importAppFresh();
+        const { dataNow, clearDataNowOverride, getDataNowMs } = await importDataNow();
+        const { syncMercatorGraylineLayer } = await import('../static/map.js');
+
+        timelineMock.timelineActive = true;
+        emitMoment([makeSpot(30)], 1_700_000_123);
+
+        expect(getDataNowMs()).toBe(1_700_000_123_000);
+        expect(dataNow()).toBe(1_700_000_123_000);
+        expect(syncMercatorGraylineLayer).toHaveBeenCalled();
+        clearDataNowOverride();
+    });
+
+    it('clears the clock override on timeline exit so live mode is wall clock again', async () => {
+        await importAppFresh();
+        const { getDataNowMs, dataNow } = await importDataNow();
+
+        timelineMock.timelineActive = true;
+        emitMoment([makeSpot(30)], 1_700_000_123);
+        expect(getDataNowMs()).toBe(1_700_000_123_000);
+
+        exitViaBar();
+        expect(getDataNowMs()).toBeNull();
+        expect(dataNow()).toBe(NOW_MS);
+    });
+
+    it('live-mode refresh: a wall-clock tick inside the 5-minute bucket does not sync, a tick past the boundary does', async () => {
+        vi.useFakeTimers({ now: NOW_MS });
+        await importAppFresh();
+        const { clearDataNowOverride } = await importDataNow();
+        const { syncMercatorGraylineLayer } = await import('../static/map.js');
+        syncMercatorGraylineLayer.mockClear();
+        clearDataNowOverride();
+
+        // NOW_MS % 300000 = 200000: 61s of wall time stays in the bucket.
+        vi.advanceTimersByTime(61_000);
+        expect(syncMercatorGraylineLayer).not.toHaveBeenCalled();
+
+        // Crossing into the next bucket: the refresh syncs the grayline layer.
+        vi.advanceTimersByTime(60_000);
+        expect(syncMercatorGraylineLayer).toHaveBeenCalled();
+    });
+
+    it('live-mode refresh stays idle while the timeline is active', async () => {
+        vi.useFakeTimers({ now: NOW_MS });
+        await importAppFresh();
+        const { clearDataNowOverride } = await importDataNow();
+        const { syncMercatorGraylineLayer } = await import('../static/map.js');
+        syncMercatorGraylineLayer.mockClear();
+        clearDataNowOverride();
+
+        timelineMock.timelineActive = true;
+        vi.advanceTimersByTime(10 * 60_000);
+        expect(syncMercatorGraylineLayer).not.toHaveBeenCalled();
+    });
+});

@@ -15,6 +15,7 @@ import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, start
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
 import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL, invalidateBundles as invalidateTimelineBundles, refreshMoment as refreshTimelineMoment } from './timeline.js';
 import { updateAfterglow, notifyMapMoved, hideAfterglow } from './afterglow.js';
+import { setDataNowMs, clearDataNowOverride } from './data-now.js';
 import { sessionRing } from './session-ring.js';
 
 // --- Azimuth Zoom State ---
@@ -2157,6 +2158,7 @@ function exitTimelineForRestart() {
     resetRenderFingerprint();
     lastMomentSpots = null;
     lastMomentPlayhead = 0;
+    clearDataNowOverride();
 }
 
 document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
@@ -2241,6 +2243,14 @@ function renderTimelineMomentFrame(moved = false) {
         // moved marks a playhead move (decay active); a gate re-render is a
         // re-style, not a move, so no re-fade.
         updateAfterglow(lastMomentSpots, lastMomentPlayhead, moved);
+        // Moment-driven grayline sync (plan 2026-09-11-002 U5, R8): the clock
+        // is pinned to the playhead by the moment listener, and the layer's
+        // 5-minute bucket/key check in map.js dedupes within a bucket — so
+        // every moment (or gate re-render) syncs cheaply and only a playhead
+        // bucket crossing rebuilds the overlay. No separate force rule: the
+        // cache key always reflects the last built bucket, so a mismatch (e.g.
+        // theme change mid-replay) rebuilds on its own.
+        void syncMercatorGraylineLayer();
     }
 }
 
@@ -2248,6 +2258,9 @@ onTimelineMoment((spots, playhead) => {
     if (!isTimelineActive()) return;
     lastMomentPlayhead = playhead;
     lastMomentSpots = spots;
+    // Pin the shared grayline clock (KTD-9) to the playhead so map.js's
+    // bucket/key derivation (and azimuth's in U6) follows data time.
+    setDataNowMs(playhead * 1000);
     renderTimelineMomentFrame(true);
     updateBandLab();
     updateWsprMatrix();
@@ -2330,9 +2343,11 @@ function stopTimelineMode() {
     hideAfterglow();
     syncTimelineURL();
     resetRenderFingerprint();
-    // Drop the retained moment so no stale frame survives the gate.
+    // Drop the retained moment so no stale frame survives the gate, and
+    // restore the grayline clock to the wall (live mode).
     lastMomentSpots = null;
     lastMomentPlayhead = 0;
+    clearDataNowOverride();
 
     if (state.eventSource) {
         // KTD-11: rebuild the live list from the ring's tail — the SSE has been
@@ -2352,6 +2367,23 @@ function stopTimelineMode() {
 
 // The bar's Live button exits through timeline.js; hook the live restore here.
 onTimelineExit(stopTimelineMode);
+
+// Live-mode grayline refresh (plan 2026-09-11-002 U5, R8): without it the
+// terminator only rebuilt on boot/theme/projection syncs, so a 5-minute wall
+// bucket could pass unrefreshed for minutes. Wall-clock cadence (KTD-9): the
+// check below reads Date.now() only, and only fires once per 5-minute wall
+// bucket (the same bucket size map.js keys on); when the layer is disabled or
+// the azimuth projection is active (U6 owns that leg) the sync is skipped.
+const GRAYLINE_LIVE_REFRESH_MS = 60 * 1000;
+const GRAYLINE_LIVE_BUCKET_MS = 5 * 60 * 1000;
+let lastGraylineLiveBucket = Math.floor(Date.now() / GRAYLINE_LIVE_BUCKET_MS);
+setInterval(() => {
+    if (isTimelineActive() || isAzimuthEnabled()) return;
+    const bucket = Math.floor(Date.now() / GRAYLINE_LIVE_BUCKET_MS);
+    if (bucket === lastGraylineLiveBucket) return;
+    lastGraylineLiveBucket = bucket;
+    void syncMercatorGraylineLayer();
+}, GRAYLINE_LIVE_REFRESH_MS);
 
 // Auto-enter from a shared URL (?tl=1&t0=&t1=&spd=). Runs once the app is
 // otherwise booted; a missing live stream (not subscribed) is fine — the

@@ -6,6 +6,7 @@ let currentDxccLabelLayer = null;
 
 import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, hexToRgb, blendOverlayColors, icon } from './utils.js';
 import { selectProminentDxccLabels } from './azimuth-runtime.js';
+import { dataNow } from './data-now.js';
 import { endPerfTimer, incrementPerfCounter, startPerfTimer } from './perf.js';
 
 let worldGeoJsonData = null;
@@ -391,7 +392,10 @@ export async function syncMercatorGraylineLayer(options = {}) {
         return;
     }
 
-    const overlayTime = Date.now();
+    // Grayline time basis (plan 2026-09-11-002 U5, KTD-9): the shared clock —
+    // playhead time during a timeline replay, wall clock in live mode. Only
+    // this basis reads the clock; all cadence guards stay on Date.now().
+    const overlayTime = dataNow();
     const bucket = Math.floor(overlayTime / GRAYLINE_BUCKET_MS);
     const key = `${theme}:${bucket}`;
     if (!force && currentGraylineLayer && currentGraylineLayerKey === key) {
