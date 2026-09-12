@@ -557,6 +557,27 @@ describe('ring-served timeline playback (U3)', () => {
         expect(got.spots.length).toBeGreaterThan(0);
         expect(ctl().bundles.has(key)).toBe(true);
     });
+
+    it('skips WSPR spots in emitted moments (replay is unconditional; live keeps its own toggle)', async () => {
+        // Seed one minute-step fixture, then splice a wspr spot into the ring
+        // and the archive so BOTH chunk sources carry it.
+        const archive = seedRing(NOW_SEC - 2 * H, NOW_SEC);
+        const wspr = { ...mkSpot(NOW_SEC - H), sourceType: 'wspr' };
+        sessionRing.push(wspr);
+        const { __recvMs, __recvAge, ...rawWspr } = wspr;
+        archive.push(rawWspr);
+        archive.sort((a, b) => a.t - b.t);
+        giveStreamFilter();
+        installFetch(archive);
+
+        await enterTimeline(2 * H);
+        await seek(NOW_SEC - H); // playhead inside the minute the wspr spot lands in
+        expect(moments.length).toBeGreaterThan(0);
+        for (const { live } of moments) {
+            expect(live.some((s) => s.sourceType === 'wspr')).toBe(false);
+            expect(live.length).toBeGreaterThan(0); // mqtt spots still render
+        }
+    });
 });
 describe('bundle invalidation + moment refresh (U4)', () => {
     // app.js's mid-timeline band/SNR handlers (KTD-12) wipe the bundle LRU and

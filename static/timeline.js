@@ -412,10 +412,18 @@ async function ensurePlayheadBundle() {
     }
 }
 
+// Time travel skips WSPR spots (sourceType 'wspr'): they are reference-only
+// upstream (kept out of the FT8-SNR baseline like RBN) and add replay noise
+// without changing the conditions picture. The live map keeps them, gated by
+// its own show-wspr toggle; replay is unconditional.
+function timelineSpots(spots) {
+    return spots.filter((s) => String(s?.sourceType || '').toLowerCase() !== 'wspr');
+}
+
 function emitCurrentMoment() {
     const b = controller.bundle;
     if (!b) return;
-    const spots = sliceMoment(b.spots, controller.playhead);
+    const spots = timelineSpots(sliceMoment(b.spots, controller.playhead));
     controller.listeners.moment.forEach((fn) => { try { fn(spots.map((s) => toLiveSpot(s, controller.playhead)), controller.playhead); } catch (_) { /* listener error */ } });
     renderBar({
         active: true, loading: controller.loading, playing: controller.playing,
