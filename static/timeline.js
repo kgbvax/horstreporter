@@ -78,6 +78,7 @@ const controller = {
     bundles: new Map(), // LRU: key -> {t0, t1, spots} (keyed by exact chunk window)
     bundleOrder: [],
     inflight: null, // AbortController of the most recent fetch
+    inflightKey: null, // chunk key the inflight AbortController belongs to
     inflightKeys: new Map(), // chunk key -> in-flight fetch promise (dedup)
     loading: false,
     reach: Infinity, // server-advertised oldest servable time (Infinity w/ archive)
@@ -256,10 +257,10 @@ async function fetchBundle(t0, t1) {
     }
 
     const ac = new AbortController();
-    // Registered before the await so exitTimeline/invalidateBundles abort the
-    // fetch that is actually running (the finally assignment alone only lands
-    // after completion).
+    // Registered before the await so exitTimeline/invalidateBundles/supersede
+    // abort the fetch that is actually running.
     controller.inflight = ac;
+    controller.inflightKey = key;
     const promise = (async () => {
         let resp;
         for (let attempt = 0; ; attempt++) {
@@ -295,7 +296,11 @@ async function fetchBundle(t0, t1) {
         return await promise;
     } finally {
         controller.inflightKeys.delete(key);
-        controller.inflight = ac;
+        // Clear only if still current: a newer fetch has meanwhile registered
+        // its own AbortController, and clobbering it here would leave
+        // exit/supersede aborting a dead controller.
+        if (controller.inflight === ac) controller.inflight = null;
+        if (controller.inflightKey === key) controller.inflightKey = null;
     }
 }
 
@@ -400,6 +405,18 @@ async function ensurePlayheadBundle() {
         controller.bundle = rb;
         return rb;
     }
+    // Latest-wins supersede: a scrub drag fires a seek per input event, and
+    // every chunk boundary the drag crosses starts a fetch for a position the
+    // user has already scrubbed past. Left alone those stale fetches pile up
+    // against the server's global concurrency cap (4), drawing 503s and
+    // retry backoff onto the ONE fetch the user is actually waiting for —
+    // the "scrubbing feels slow" failure. Only the newest position matters,
+    // so abort any in-flight fetch for a different chunk; the final position
+    // starts immediately and the server never sees more than one concurrent
+    // fetch from this client.
+    if (controller.inflight && controller.inflightKey && controller.inflightKey !== key) {
+        controller.inflight.abort();
+    }
     controller.loading = true;
     emitStatus();
     try {
@@ -463,15 +480,55 @@ function playTick(ts) {
     if (controller.playing) controller.rafId = requestAnimationFrame(playTick);
 }
 
-// maybePrefetch: while playing, fetch the NEXT chunk (or the current one, if
-// somehow uncovered) once the playhead is within PREFETCH_AHEAD of the chunk
-// edge — so playback at 600x crosses edges without a visible loading pause.
+// maybePrefetch: while playing, warm the NEXT chunk once the playhead is
+// within PREFETCH_AHEAD of the chunk edge — so playback at 600x crosses edges
+// without a visible loading pause. The prefetch must target the next chunk
+// explicitly (ensurePlayheadBundle would resolve the still-covered current
+// chunk and never prefetch). Ring-covered next chunks are skipped: crossing
+// resolves from the ring synchronously anyway (zero-fetch rewind), so a
+// fetch would only spend rate budget.
 function maybePrefetch() {
     const b = controller.bundle;
     if (!b || controller.loading) return;
-    if (b.t1 < controller.t1 && controller.t1 - b.t1 >= PREFETCH_AHEAD_SECONDS && controller.playhead >= b.t1 - PREFETCH_AHEAD_SECONDS) {
-        void ensurePlayheadBundle().catch(() => { /* prefetch failure is non-fatal */ });
+    // Playhead already crossed the chunk edge: resolve the covering chunk now
+    // (ring/LRU hit → zero fetches; miss → the fetch the crossing needs
+    // anyway, shared with playTick's own ensure call via inflight dedup).
+    if (controller.playhead < b.t0 || controller.playhead > b.t1) {
+        void ensurePlayheadBundle().catch(() => { /* next tick retries */ });
+        return;
     }
+    if (b.t1 >= controller.t1) return; // last chunk: nothing ahead to fetch
+    if (controller.playhead < b.t1 - PREFETCH_AHEAD_SECONDS) return;
+    const [nt0, nt1] = chunkBoundsFor(b.t1, controller.t0, controller.t1);
+    const key = bundleCacheKey(nt0, nt1);
+    if (tryRingBundle(nt0, nt1, key)) return;
+    void fetchBundle(nt0, nt1).catch(() => { /* prefetch failure is non-fatal */ });
+}
+
+// Neighbor prefetch (scrub latency): after a seek settles, warm the chunks on
+// both sides of the playhead so scrubbing back and forth resolves from the
+// bundle LRU instead of a cold /api/history round trip (cold Postgres chunks
+// measured ~2s on prod; cached ones ~85ms). Debounced so a drag warms only
+// the final position's neighbors; fetchBundle's cache/in-flight dedup keeps
+// repeats free. Playback skips this — its own maybePrefetch covers the road
+// ahead without spending rate budget behind it.
+const NEIGHBOR_PREFETCH_IDLE_MS = 600;
+let neighborPrefetchTimer = 0;
+function scheduleNeighborPrefetch() {
+    clearTimeout(neighborPrefetchTimer);
+    neighborPrefetchTimer = 0;
+    if (controller.playing) return;
+    neighborPrefetchTimer = setTimeout(() => {
+        neighborPrefetchTimer = 0;
+        if (!controller.active || controller.playing) return;
+        const [ct0, ct1] = chunkBoundsFor(controller.playhead, controller.t0, controller.t1);
+        const neighbors = [];
+        if (ct0 > controller.t0) neighbors.push(chunkBoundsFor(ct0 - 1, controller.t0, controller.t1));
+        if (ct1 < controller.t1) neighbors.push(chunkBoundsFor(ct1 + 1, controller.t0, controller.t1));
+        for (const [t0, t1] of neighbors) {
+            void fetchBundle(t0, t1).catch(() => { /* neighbor prefetch is best-effort */ });
+        }
+    }, NEIGHBOR_PREFETCH_IDLE_MS);
 }
 
 // --- Public API ----------------------------------------------------------
@@ -530,6 +587,8 @@ export async function enterTimeline(rangeSeconds = 60 * 60) {
 export function exitTimeline() {
     if (!controller.active) return;
     controller.playing = false;
+    clearTimeout(neighborPrefetchTimer);
+    neighborPrefetchTimer = 0;
     cancelAnimationFrame(controller.rafId);
     controller.rafId = 0;
     controller.inflight?.abort();
@@ -544,8 +603,20 @@ export async function seek(t) {
     if (!controller.active) return;
     const snapped = snapToScrub(clampPlayhead(t, controller.t0, controller.t1));
     controller.playhead = snapped;
-    await ensurePlayheadBundle();
+    try {
+        await ensurePlayheadBundle();
+    } catch (err) {
+        // Superseded scrub (a newer seek aborted this chunk fetch) is benign —
+        // the newer seek owns the moment. A real fetch failure must not
+        // reject unhandled out of the scrub input handler, nor leave the bar
+        // stuck: unstick it and keep the last good moment rendered.
+        if ((err?.name || '') === 'AbortError') return;
+        emitStatus();
+        return;
+    }
+    if (!controller.active) return; // exited mid-load
     emitCurrentMoment();
+    scheduleNeighborPrefetch();
 }
 
 // invalidateBundles drops every cached bundle so the next moment re-synthesizes
@@ -558,8 +629,11 @@ export async function seek(t) {
 // otherwise unconditionally reassign controller.bundle and re-cache the
 // old-filter chunk into the fresh LRU (review #3).
 export function invalidateBundles() {
+    clearTimeout(neighborPrefetchTimer);
+    neighborPrefetchTimer = 0;
     controller.inflight?.abort();
     controller.inflight = null;
+    controller.inflightKey = null;
     clearBundles();
 }
 
@@ -572,6 +646,7 @@ export async function refreshMoment() {
     if (!controller.active) return;
     await ensurePlayheadBundle();
     emitCurrentMoment();
+    scheduleNeighborPrefetch();
 }
 
 // play starts (or resumes) animation; pause stops it in place.

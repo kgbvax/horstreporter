@@ -2,6 +2,8 @@ export let map;
 let currentTileLayer = null;
 let currentCountryLayer = null;
 let currentGraylineLayer = null;
+// Previous grayline groups awaiting decode-guarded retirement (atomic swap).
+const pendingGraylineRetirements = new Set();
 let currentDxccLabelLayer = null;
 
 import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, hexToRgb, blendOverlayColors, icon } from './utils.js';
@@ -58,10 +60,12 @@ const MERCATOR_HORIZONTAL_PAN_LIMIT_DEG = 360 * 1000;
 // Replicate the grayline overlay across this many world copies on each side so
 // the terminator is never interrupted when panning across the antimeridian.
 const GRAYLINE_WORLD_COPIES = 2;
-const graylineOverlayCache = {
-    key: '',
-    dataUrl: null
-};
+// Rendered-terminator cache, keyed `theme:bucket` (insertion-ordered LRU).
+// Scrubbing replays cross bucket boundaries constantly and revisit buckets
+// back and forth; rebuilding a data URL is a full per-pixel canvas pass, so a
+// single-entry cache made every revisit a rebuild. 24 buckets = 2h per theme.
+const GRAYLINE_CACHE_MAX_ENTRIES = 24;
+const graylineOverlayCache = new Map();
 
 // Tile layers are created lazily so this module can be parsed even if the
 // Leaflet global `L` is not yet available at module-evaluation time.
@@ -249,6 +253,13 @@ function removeGraylineLayer() {
         map.removeLayer(currentGraylineLayer);
         currentGraylineLayer = null;
     }
+    // Retire-sweep: a bucket swap in flight keeps its previous group until the
+    // replacement decodes; tearing the layer down now (toggle off, theme/proj
+    // rebuild) must not leave that group behind.
+    for (const g of pendingGraylineRetirements) {
+        if (map) map.removeLayer(g);
+    }
+    pendingGraylineRetirements.clear();
     currentGraylineLayerKey = null;
 }
 
@@ -401,14 +412,20 @@ export async function syncMercatorGraylineLayer(options = {}) {
         return;
     }
 
-    removeGraylineLayer();
-
-    let dataUrl = graylineOverlayCache.dataUrl;
-    if (graylineOverlayCache.key !== key || !dataUrl) {
+    let dataUrl = graylineOverlayCache.get(key);
+    if (dataUrl) {
+        // LRU refresh: re-insert so the eviction order tracks actual reuse.
+        graylineOverlayCache.delete(key);
+        graylineOverlayCache.set(key, dataUrl);
+    } else {
         const subsolarPoint = getSubsolarPoint(new Date(bucket * GRAYLINE_BUCKET_MS));
         dataUrl = buildMercatorGraylineDataUrl(theme, subsolarPoint);
-        graylineOverlayCache.key = key;
-        graylineOverlayCache.dataUrl = dataUrl;
+        if (dataUrl) {
+            graylineOverlayCache.set(key, dataUrl);
+            while (graylineOverlayCache.size > GRAYLINE_CACHE_MAX_ENTRIES) {
+                graylineOverlayCache.delete(graylineOverlayCache.keys().next().value);
+            }
+        }
     }
 
     if (!dataUrl) return;
@@ -425,9 +442,25 @@ export async function syncMercatorGraylineLayer(options = {}) {
             opacity: 1
         }).addTo(graylineGroup);
     }
+    // Atomic swap: the previous overlay stays on the map until the
+    // replacement's images have decoded, so a bucket crossing (every scrub
+    // snap) never shows overlay-less frames — the remove→build→add sequence
+    // used to blink the terminator on every scrub step. The two terminators
+    // differ by at most one 5-minute bucket, so the overlap is invisible.
+    const prevGroup = currentGraylineLayer;
     graylineGroup.addTo(map);
     currentGraylineLayer = graylineGroup;
     currentGraylineLayerKey = key;
+    const newImgs = (graylineGroup.getLayers?.() || [])
+        .map((l) => l.getElement?.())
+        .filter(Boolean);
+    if (prevGroup) pendingGraylineRetirements.add(prevGroup);
+    Promise.all(newImgs.map((el) => (el.decode ? el.decode().catch(() => {}) : Promise.resolve())))
+        .catch(() => { /* decode failure: retire anyway, opacity-1 img still paints */ })
+        .then(() => {
+            pendingGraylineRetirements.delete(prevGroup);
+            if (prevGroup && map) map.removeLayer(prevGroup);
+        });
 }
 
 function currentProjection() {
@@ -613,6 +646,10 @@ export function setTheme(theme) {
         map.removeLayer(currentGraylineLayer);
         currentGraylineLayer = null;
     }
+    for (const g of pendingGraylineRetirements) {
+        if (map) map.removeLayer(g);
+    }
+    pendingGraylineRetirements.clear();
     if (currentDxccLabelLayer && map) {
         map.removeLayer(currentDxccLabelLayer);
         currentDxccLabelLayer = null;
