@@ -219,6 +219,12 @@ function getIntervals() {
 
 function push(spot) {
     if (!spot) return false;
+    // WSPR spots never enter the ring: they are reference-only upstream (kept
+    // out of the FT8-SNR baseline like RBN) and time travel skips them, so
+    // storing them would spend ring capacity on spots replay can never serve.
+    // /api/history bundles still carry them; timeline.js filters those at
+    // emission. Enforced here (not at the feed site) so every feeder is safe.
+    if (String(spot.sourceType || '').toLowerCase().trim() === 'wspr') return false;
     const recvMs = Number.isFinite(spot.__recvMs) ? spot.__recvMs : Date.now();
     const recvAge = Number.isFinite(spot.__recvAge)
         ? spot.__recvAge

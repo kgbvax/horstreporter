@@ -413,9 +413,10 @@ async function ensurePlayheadBundle() {
 }
 
 // Time travel skips WSPR spots (sourceType 'wspr'): they are reference-only
-// upstream (kept out of the FT8-SNR baseline like RBN) and add replay noise
-// without changing the conditions picture. The live map keeps them, gated by
-// its own show-wspr toggle; replay is unconditional.
+// upstream (kept out of the FT8-SNR baseline like RBN). The session ring
+// already rejects them at push; this filter covers the /api/history archive
+// leg, whose bundles still carry them. The live map keeps wspr, gated by its
+// own show-wspr toggle.
 function timelineSpots(spots) {
     return spots.filter((s) => String(s?.sourceType || '').toLowerCase() !== 'wspr');
 }

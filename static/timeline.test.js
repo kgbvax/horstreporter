@@ -558,12 +558,12 @@ describe('ring-served timeline playback (U3)', () => {
         expect(ctl().bundles.has(key)).toBe(true);
     });
 
-    it('skips WSPR spots in emitted moments (replay is unconditional; live keeps its own toggle)', async () => {
-        // Seed one minute-step fixture, then splice a wspr spot into the ring
-        // and the archive so BOTH chunk sources carry it.
+    it('skips WSPR spots in emitted moments (the ring rejects them; archive chunks are filtered at emission)', async () => {
+        // Seed one minute-step fixture, then splice a wspr spot into the
+        // archive leg only — the ring push below must REJECT it.
         const archive = seedRing(NOW_SEC - 2 * H, NOW_SEC);
         const wspr = { ...mkSpot(NOW_SEC - H), sourceType: 'wspr' };
-        sessionRing.push(wspr);
+        expect(sessionRing.push(wspr)).toBe(false);
         const { __recvMs, __recvAge, ...rawWspr } = wspr;
         archive.push(rawWspr);
         archive.sort((a, b) => a.t - b.t);

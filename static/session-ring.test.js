@@ -273,18 +273,31 @@ describe('filter re-slice (streamClientFilter.spotAllowed replica)', () => {
         expect(got.map((s) => s.band).sort()).toEqual(['20m', '20m', '40m']);
     });
 
-    it('dxcluster and wspr spots are never SNR-filtered', () => {
+    it('dxcluster spots are never SNR-filtered (wspr exemption is unreachable in-ring)', () => {
         sessionRing.clear();
         sessionRing.push(makeSpot({ recvAge: 0, sourceType: 'dxcluster', snr: -80, band: '20m' }));
-        sessionRing.push(makeSpot({ recvAge: 10, sourceType: 'wspr', snr: -80, band: '20m' }));
         sessionRing.push(makeSpot({ recvAge: 20, sourceType: 'mqtt', snr: -80, band: '20m' }));
         sessionRing.push(makeSpot({ recvAge: 30, sourceType: '', snr: -80, band: '20m' })); // empty = mqtt-calibrated
         sessionRing.push(makeSpot({ recvAge: 40, sourceType: 'rbn', snr: -80, band: '20m' })); // rbn = mqtt-calibrated scale
         const strict = { enabledBands: new Set(['20m']), minSnrMode: 'cw', ssbMinDb: 0, cwMinDb: 0 };
         const got = sessionRing.sliceFiltered(0, Infinity, strict);
         // Per server.go:506-528 the SNR thresholds apply to "", mqtt and rbn
-        // (empty sourceType counts as mqtt-calibrated); dxcluster/wspr are exempt.
-        expect(got.map((s) => s.sourceType).sort()).toEqual(['dxcluster', 'wspr']);
+        // (empty sourceType counts as mqtt-calibrated); dxcluster is exempt.
+        expect(got.map((s) => s.sourceType).sort()).toEqual(['dxcluster']);
+        // The wspr leg of that exemption is still true of the pure filter but
+        // cannot arise from the ring: push rejects wspr outright (below).
+        expect(filterAllowed({ sourceType: 'wspr', snr: -80, band: '20m' }, strict)).toBe(true);
+    });
+
+    it('wspr spots never enter the ring (reference-only; time travel skips them)', () => {
+        sessionRing.clear();
+        expect(sessionRing.push(makeSpot({ recvAge: 0, sourceType: 'wspr', snr: -5, band: '20m' }))).toBe(false);
+        expect(sessionRing.slice(0, Infinity)).toHaveLength(0);
+        // Coverage stays untouched: no phantom intervals from rejected spots.
+        expect(sessionRing.covers(0, Infinity)).toBe(false);
+        // A neighboring mqtt spot is unaffected.
+        expect(sessionRing.push(makeSpot({ recvAge: 5, sourceType: 'mqtt', snr: -5, band: '20m' }))).toBe(true);
+        expect(sessionRing.slice(0, Infinity).map((s) => s.sourceType)).toEqual(['mqtt']);
     });
 
     it('empty enabledBands set means all bands allowed', () => {
@@ -374,7 +387,8 @@ describe('__internals', () => {
 // type — while the live wire strips sender/receiver for non-dxcluster spots
 // (server.go:467-485), so the ring only ever saw them for dxcluster. The
 // comparison is therefore render-equivalent, not byte-identical (KTD-5):
-// sender/receiver for mqtt/wspr are excluded from the comparison (the
+// sender/receiver for non-dxcluster (e.g. mqtt) are excluded from the
+// comparison (the
 // renderers consume them only in the dxcluster popup), and t is compared with
 // a ±2s tolerance because live frames derive t from the receive stamps
 // (t = floor(recvMs/1000) − recvAge) and inherit client/server clock skew.
@@ -389,10 +403,11 @@ describe('__internals', () => {
 //     satisfies), just without the DOM-dependent cohort gate — the gate and
 //     the fall-through are U3/AE2 territory, already covered.
 describe('render parity: ring-synthesized vs recorded /api/history bundle (U7)', () => {
-    // 1-hour window, one spot every 60s, cycling mqtt/wspr/dxcluster. Ages are
-    // stamped relative to a notional stream "now" = T0 + 3600, so the pushes
-    // model exactly the connect/reconnect dump: a short receive burst whose
-    // content spans the last hour in derived t.
+    // 1-hour window, one spot every 60s, cycling mqtt/dxcluster (wspr is not
+    // part of the ring contract — push rejects it, see the ring-feed describe).
+    // Ages are stamped relative to a notional stream "now" = T0 + 3600, so the
+    // pushes model exactly the connect/reconnect dump: a short receive burst
+    // whose content spans the last hour in derived t.
     const T0 = 1_730_000_000; // unix seconds (not hour-aligned)
     const HOUR = 60 * 60;
     const NOW = T0 + HOUR;
@@ -434,7 +449,7 @@ describe('render parity: ring-synthesized vs recorded /api/history bundle (U7)',
         const recorded = [];
         for (let i = 0; i <= 60; i++) {
             const t = T0 + i * 60;
-            const sourceType = ['mqtt', 'wspr', 'dxcluster'][i % 3];
+            const sourceType = ['mqtt', 'dxcluster'][i % 2];
             const age = NOW - t;
             sessionRing.push(makeWireSpot(t, sourceType, age, i));
             recorded.push(makeRecordedSpot(t, sourceType));
@@ -531,27 +546,22 @@ describe('render parity: ring-synthesized vs recorded /api/history bundle (U7)',
         }
     });
 
-    it('the archive leg carries sender/receiver for mqtt/wspr while the ring (live-wire) leg does not — the KTD-5 exclusion is load-bearing', () => {
+    it('the archive leg carries sender/receiver for mqtt while the ring (live-wire) leg does not — the KTD-5 exclusion is load-bearing', () => {
         const recorded = seed();
         // Sanity: the recorded historySpots are the FULL server shape (the
         // server includes sender/receiver for every source type), so a naive
         // byte-compare of the two legs would fail.
         const recMqtt = recorded.find((s) => s.sourceType === 'mqtt');
-        const recWspr = recorded.find((s) => s.sourceType === 'wspr');
         expect(recMqtt.sender).toBe('DL1ABC');
-        expect(recWspr.receiver).toBe('DL9ET');
 
         const ringRaws = sessionRing.slice(0, Infinity);
         const ringMqtt = ringRaws.find((s) => s.sourceType === 'mqtt');
-        const ringWspr = ringRaws.find((s) => s.sourceType === 'wspr');
         // The live wire strips sender/receiver for non-dxcluster spots, so the
         // ring (fed from the SSE) never saw them. Matching live rendering.
         expect(ringMqtt.sender).toBeUndefined();
         expect(ringMqtt.receiver).toBeUndefined();
-        expect(ringWspr.sender).toBeUndefined();
-        expect(ringWspr.receiver).toBeUndefined();
 
-        // Rendered through toLiveSpot at the same playhead: the mqtt/wspr
+        // Rendered through toLiveSpot at the same playhead: the mqtt
         // dxcluster-popup inputs differ between the legs and MUST be excluded
         // from the comparison, while the rendered map/tooltip inputs match.
         const playhead = NOW;

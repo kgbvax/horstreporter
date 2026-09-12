@@ -2058,7 +2058,8 @@ function startLiveStream(preserveData = false) {
         // the ring — connect-time and reconnect history dumps included, since
         // they flow through this same handler. Unconditional: the feed must
         // not depend on any render gate (the timeline relies on the ring's
-        // coverage even while live rendering is suppressed).
+        // coverage even while live rendering is suppressed). The ring itself
+        // rejects wspr spots (reference-only; time travel skips them).
         sessionRing.push(spot);
         state.liveSpots.push(spot);
         setFaviconColor('#28a745'); // Green for active receiving
