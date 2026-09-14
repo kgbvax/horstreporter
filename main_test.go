@@ -1833,14 +1833,60 @@ func TestMaskDSN(t *testing.T) {
 	}
 }
 
-// TestMaskDSNKeyValueFormCharacterization documents that key-value DSNs
-// ("host=… password=…") pass through maskDSN UNREDACTED: url.Parse on such a
-// string yields no userinfo, so the password would reach the log verbatim.
-// Characterization-first: if key-value DSN redaction is added, update this.
-func TestMaskDSNKeyValueFormCharacterization(t *testing.T) {
-	in := "host=localhost user=hk password=sekret dbname=dxdata"
-	if got := maskDSN(in); got != in {
-		t.Errorf("maskDSN(key-value DSN) = %q, want unchanged %q (current behaviour)", got, in)
+// TestMaskDSNKeyValueForm pins redaction of libpq key-value DSNs
+// ("host=… password=…"), which url.Parse does not treat as credentials —
+// without the key-value pass the password would reach the log verbatim.
+// Quoted values (libpq allows '…' / "…" for values with spaces) and the
+// PASSWORD= uppercase spelling are covered too.
+func TestMaskDSNKeyValueForm(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "bare key-value DSN redacted",
+			in:   "host=localhost user=hk password=sekret dbname=dxdata",
+			want: "host=localhost user=hk password=*** dbname=dxdata",
+		},
+		{
+			name: "single-quoted value redacted",
+			in:   `host=localhost password='two words' dbname=dxdata`,
+			want: `host=localhost password=*** dbname=dxdata`,
+		},
+		{
+			name: "double-quoted value redacted",
+			in:   `host=localhost password="two words" dbname=dxdata`,
+			want: `host=localhost password=*** dbname=dxdata`,
+		},
+		{
+			name: "uppercase key redacted",
+			in:   "host=localhost PASSWORD=sekret",
+			want: "host=localhost PASSWORD=***",
+		},
+		{
+			name: "spaced equals sign redacted",
+			in:   "host=localhost password = sekret",
+			want: "host=localhost password = ***",
+		},
+		{
+			name: "no password present unchanged",
+			in:   "host=localhost user=hk dbname=dxdata sslmode=disable",
+			want: "host=localhost user=hk dbname=dxdata sslmode=disable",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := maskDSN(tc.in); got != tc.want {
+				t.Errorf("maskDSN(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+
+	// A URL DSN whose query carries a password is redacted there as well.
+	in := "postgres://hk@db.example.com:5432/dxdata?password=sekret"
+	if got := maskDSN(in); got != "postgres://hk@db.example.com:5432/dxdata?password=***" {
+		t.Errorf("maskDSN(query password) = %q, want query password masked", got)
 	}
 }
 

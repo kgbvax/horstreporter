@@ -11,6 +11,7 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 	"os"
+	"regexp"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -27,17 +28,20 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// maskDSN redacts the password in a URL-style DSN so it can be logged safely.
+// maskDSN redacts the password in a DSN so it can be logged safely. It handles
+// both URL-style DSNs (postgres://user:pw@host/db) and libpq key-value form
+// ("host=… password=…"), which url.Parse does not treat as credentials.
+var dsnPasswordKVRe = regexp.MustCompile(`(?i)(password\s*=\s*)("[^"]*"|'[^']*'|\S+)`)
+
 func maskDSN(dsn string) string {
-	u, err := url.Parse(dsn)
-	if err != nil || u.User == nil {
-		return dsn
+	masked := dsn
+	if u, err := url.Parse(dsn); err == nil && u.User != nil {
+		if _, hasPw := u.User.Password(); hasPw {
+			u.User = url.UserPassword(u.User.Username(), "***")
+			masked = u.String()
+		}
 	}
-	if _, hasPw := u.User.Password(); hasPw {
-		u.User = url.UserPassword(u.User.Username(), "***")
-		return u.String()
-	}
-	return dsn
+	return dsnPasswordKVRe.ReplaceAllString(masked, `${1}***`)
 }
 
 // dsnSource reports where the effective Postgres DSN came from, for an
