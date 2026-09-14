@@ -303,13 +303,18 @@ func latLngToLocator(lat, lng float64, precision int) string {
 	if precision == 2 {
 		return string([]byte{byte('A' + fieldLng), byte('A' + fieldLat)})
 	}
-	x := float64(fieldLng)*10 + ((lng + 180 - float64(fieldLng)*20) / 2)
-	y := float64(fieldLat)*10 + ((lat + 90 - float64(fieldLat)*10) / 1)
-	if x >= 100 {
-		x = 99
+	// Sub-square position within the field: columns span 2° of longitude, rows
+	// 1° of latitude. locatorSquareXY packs field+subsquare into x = field*10+col
+	// and y = field*10+row over a 0..179 domain, so clamp the row/col to 0..9 —
+	// an input clamped onto the grid's far edge (lat=90 / lng=180) lands on the
+	// next field index and must fold back into field RR, not spill past it.
+	col := int((lng + 180 - float64(fieldLng)*20) / 2)
+	row := int(lat + 90 - float64(fieldLat)*10)
+	if col >= 10 {
+		col = 9
 	}
-	if y >= 100 {
-		y = 99
+	if row >= 10 {
+		row = 9
 	}
-	return squareXYToLocator(int(x), int(y))
+	return squareXYToLocator(fieldLng*10+col, fieldLat*10+row)
 }
