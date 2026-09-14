@@ -462,12 +462,18 @@ func upsertEnvFile(path string, updates map[string]string) error {
 	return os.Rename(tmp, path)
 }
 
+// quoteEnvValue quotes a value for the .env file. The shared loader
+// (internal/dotenv.Load) and parseEnvFile strip only the surrounding quotes and
+// never unescape, so embedded quotes are written as-is inside the wrapping
+// quotes — the loader's first/last-quote strip then recovers the original
+// value exactly (quote→load round-trip). Backslash-escaping here would leak
+// the backslashes into every reloaded value.
 func quoteEnvValue(v string) string {
 	if v == "" {
 		return ""
 	}
 	if strings.ContainsAny(v, " \t#\"'") {
-		return `"` + strings.ReplaceAll(v, `"`, `\"`) + `"`
+		return `"` + v + `"`
 	}
 	return v
 }

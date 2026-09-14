@@ -193,8 +193,9 @@ func TestUpsertEnvFile(t *testing.T) {
 
 	t.Run("quotes values with special characters", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), ".env")
-		// Embedded quotes are escaped on write; parseEnvFile is display-only and
-		// strips the surrounding quotes but not the escapes — pin that as-is.
+		// Embedded quotes are written as-is inside the wrapping quotes: the
+		// loader strips only the first/last quote, so the value must parse
+		// back exactly (quote→load round-trip, no backslash escapes).
 		if err := upsertEnvFile(path, map[string]string{"STATION_NAME": `Shack #1 "main"`}); err != nil {
 			t.Fatal(err)
 		}
@@ -202,12 +203,11 @@ func TestUpsertEnvFile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(raw), `STATION_NAME="Shack #1 \"main\""`) {
-			t.Errorf("raw line = %q, want quoted + escaped", raw)
+		if !strings.Contains(string(raw), `STATION_NAME="Shack #1 "main""`) {
+			t.Errorf("raw line = %q, want quoted without escapes", raw)
 		}
-		got := parseEnvFile(path)
-		if got["STATION_NAME"] != `Shack #1 \"main\"` {
-			t.Errorf("parseEnvFile = %q (escapes are preserved as-is)", got["STATION_NAME"])
+		if got := parseEnvFile(path)[`STATION_NAME`]; got != `Shack #1 "main"` {
+			t.Errorf("parseEnvFile round-trip = %q, want the original value", got)
 		}
 	})
 
@@ -224,7 +224,9 @@ func TestQuoteEnvValue(t *testing.T) {
 		{"plain", "plain"},
 		{"with space", `"with space"`},
 		{"hash#", `"hash#"`},
-		{"say \"hi\"", `"say \"hi\""`},
+		{"say \"hi\"", `"say "hi""`},
+		{"ends with quote\"", `"ends with quote""`},
+		{"'single'", `"'single'"`},
 	}
 	for _, c := range cases {
 		if got := quoteEnvValue(c.in); got != c.want {
