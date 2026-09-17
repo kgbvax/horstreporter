@@ -408,6 +408,8 @@ func bandFromFrequencyKHz(freq float64) string {
 		return "4m"
 	case freq >= 144000 && freq < 148000:
 		return "2m"
+	case freq >= 430000 && freq < 440000:
+		return "70cm"
 	default:
 		return ""
 	}
