@@ -409,9 +409,10 @@ function renderMatrix() {
     const maxCount = Math.max(...cells.map((c) => c.spot_count || 0), 1);
 
     let html = renderSourceChips();
+    const regionNames = (data && data.region_names) || {};
     html += '<table class="wspr-matrix-table"><thead><tr><th></th>';
     for (const region of WSPR_REGIONS) {
-        html += `<th title="${region}">${region}</th>`;
+        html += `<th title="${regionNames[region] || region}">${region}</th>`;
     }
     html += '</tr></thead><tbody>';
 
