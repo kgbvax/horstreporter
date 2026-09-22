@@ -275,7 +275,7 @@ func main() {
 	qrzPasswordFlag := flag.String("qrz-password", "", "QRZ password for optional callsign->locator enrichment")
 	liveHistoryRetentionFlag := flag.Int("live-history-minutes", defaultLiveHistoryRetentionMinutes, "Maximum age of retained live spots in minutes")
 	dxBaselineMaxEventsFlag := flag.Int("dx-baseline-max-events", defaultDxBaselineMaxEvents, "Maximum number of retained DX baseline events")
-	dxRawSpotRetentionDaysFlag := flag.Int("dx-raw-spot-retention-days", 60, "Delete dx_raw_spots rows older than this many days (0 disables retention).")
+	dxRawSpotRetentionDaysFlag := flag.Int("dx-raw-spot-retention-days", 4, "Delete dx_raw_spots rows older than this many days (0 disables retention).")
 	proplabCellRetentionDaysFlag := flag.Int("proplab-cell-retention-days", 60, "Delete proplab cell bucket / SW series rows older than this many days (0 disables retention).")
 	// 35d covers the 30-day regionCalendarStats / WsprRegionCalendarStats lookback
 	// (propIntelRegionBaselineDaysBack = dxlensRegionStatsLookbackDays = 30) with headroom.
