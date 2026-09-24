@@ -172,12 +172,12 @@ body[data-theme="dark"] .leaflet-control-attribution a {
     color: var(--accent);
 }
 
-/* Dark mode: Bootstrap pins .text-muted to a light-theme grey (#6c757d); map
-   the muted status rows in the controls panel and opmode readouts to the
-   brighter --status-color token. */
-body[data-theme="dark"] #controls .text-muted,
-body[data-theme="dark"] #map-stack .text-muted {
-    color: var(--status-color);
+/* Dark mode: Bootstrap's .text-muted is `color: var(--bs-secondary-color)
+   !important`, so a plain color override never wins. Retarget the variable
+   instead so every muted row (controls, map overlays, Band Stats) picks up
+   the brighter --status-color token. */
+body[data-theme="dark"] {
+    --bs-secondary-color: var(--status-color);
 }
 
 .dxcc-entity-marker {
@@ -205,22 +205,6 @@ body[data-theme="dark"] #map-stack .text-muted {
 
 #controls {
     background-color: var(--bg-color);
-}
-
-#controls::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-image: url('hk.jpg');
-    background-repeat: no-repeat;
-    background-position: bottom center;
-    background-size: 100% auto;
-    opacity: 0.33;
-    z-index: -1;
-    pointer-events: none;
 }
 
 #stream-status {
@@ -908,6 +892,23 @@ body[data-theme="dark"] .wspr-heat-scale {
         min-height: 44px;
     }
 
+    /* Band Stats is an in-flow column on desktop; on a phone that squeezes the
+       map to a sliver, so overlay it full-screen (below #controls). */
+    .band-lab-window {
+        position: absolute;
+        inset: 0;
+        flex: none;
+        width: auto;
+        min-width: 0;
+        max-width: none;
+        border-right: 0;
+        z-index: 1150;
+    }
+
+    .band-lab-window-resize {
+        display: none;
+    }
+
     .band-enable {
         width: 22px !important;
         height: 22px !important;
@@ -942,9 +943,9 @@ body[data-theme="dark"] .wspr-heat-scale {
     outline: 2px solid var(--text-color, #111);
     outline-offset: 1px;
 }
+/* The band name must never truncate; the "no data" tag gives way first. */
 .band-pill .band-pill-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex-shrink: 0;
 }
 .band-pill .band-focus-icon {
     font-size: 0.95rem;
@@ -953,9 +954,12 @@ body[data-theme="dark"] .wspr-heat-scale {
     flex-shrink: 0;
 }
 .band-pill .band-nodata-tag {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     background: rgba(0, 0, 0, 0.22);
     border-radius: 0.25rem;
-    padding: 0 0.3rem;
+    padding: 0 0.2rem;
     white-space: nowrap;
 }
 
