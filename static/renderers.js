@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, regionForLocatorCached } from './utils.js';
+import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, pillTextColor, regionForLocatorCached } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTimer } from './perf.js';
 
 // Rendered-state fingerprint for the grid-snr heat layer. Unlike the old
@@ -485,7 +485,9 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
         const isFocused = enabled && band === effectiveFocus;
         const shown = enabled && (effectiveFocus === 'all' || isFocused);
 
-        pill.style.setProperty('--band', bandColors[band] || '#6c757d');
+        const color = bandColors[band] || '#6c757d';
+        pill.style.setProperty('--band', color);
+        pill.style.setProperty('--band-on', pillTextColor(color));
         pill.dataset.state = !enabled ? 'off' : (hasData ? 'live' : 'quiet');
         pill.classList.toggle('is-focused', isFocused);
         pill.classList.toggle('is-dimmed', soloing && !shown);
