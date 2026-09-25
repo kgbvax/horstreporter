@@ -1592,6 +1592,9 @@ document.getElementById('show-wspr-spots')?.addEventListener('change', (e) => {
 function activateBandPill(pill) {
     const band = pill?.dataset?.band;
     if (!band) return;
+    // A disabled band can't be soloed (its .band-solo button is disabled too;
+    // this guards clicks on the row's padding).
+    if (!getEnabledBands().has(band)) return;
     if (getSelectedBand() === band) {
         setBandFocus('all'); // release focus -> show all enabled
     } else {
@@ -1601,22 +1604,29 @@ function activateBandPill(pill) {
 }
 
 const bandContainerEl = document.getElementById('band-container');
+// Click anywhere on a row (incl. its .band-solo button, which also covers
+// keyboard Enter/Space natively) solos that band; the checkbox is separate.
 bandContainerEl?.addEventListener('click', (e) => {
     if (e.target.closest('.band-enable')) return; // checkbox handled separately
     const pill = e.target.closest('.band-pill');
     if (pill) activateBandPill(pill);
 });
+// Enter on a band checkbox would submit #fetch-form (implicit submission) and
+// stop the stream; make it toggle like Space instead.
 bandContainerEl?.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    if (e.target.closest('.band-enable')) return;
-    const pill = e.target.closest('.band-pill');
-    if (!pill) return;
+    if (e.key !== 'Enter') return;
+    const cb = e.target.closest('.band-enable');
+    if (!cb) return;
     e.preventDefault();
-    activateBandPill(pill);
+    cb.click();
 });
 bandContainerEl?.addEventListener('change', (e) => {
     const cb = e.target.closest('.band-enable');
     if (!cb) return;
+    // Keep the row's solo button in step right away (updateBandLabels also
+    // sets it, but can be deferred, e.g. while Time Travel is paused).
+    const solo = cb.closest('.band-row')?.querySelector('.band-solo');
+    if (solo) solo.disabled = !cb.checked;
     // Toggling enabled must NOT change focus; just persist the set and re-render.
     localStorage.setItem(`enable-${cb.value}`, cb.checked);
     applyBandChange();

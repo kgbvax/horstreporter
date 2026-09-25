@@ -196,6 +196,41 @@ describe('app.js DK3JF mode behavior', () => {
         }));
     });
 
+    it('band rail: clicking a row solos/un-solos; the checkbox and disabled bands never solo', async () => {
+        const rowHtml = (band, checked) => `<div class="band-wrapper band-pill band-row" data-band="${band}">
+            <input type="checkbox" class="form-check-input band-enable" value="${band}" ${checked ? 'checked' : ''}>
+            <button type="button" class="band-solo"><span class="band-pill-name">${band}</span></button></div>`;
+        document.getElementById('band-container').innerHTML = rowHtml('20m', true) + rowHtml('40m', false);
+        await importAppFresh();
+        const container = document.getElementById('band-container');
+        const chip20 = document.querySelector('[data-band="20m"] .band-pill-name');
+
+        chip20.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        expect(container.dataset.focusBand).toBe('20m');
+        chip20.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        expect(container.dataset.focusBand).toBe('');
+
+        document.querySelector('.band-enable[value="20m"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        expect(container.dataset.focusBand).toBe('');
+
+        // 40m is off: a click that still reaches the row (padding, or a child of
+        // its disabled button in Chrome/Safari) must not solo it.
+        document.querySelector('[data-band="40m"] .band-pill-name').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        expect(container.dataset.focusBand).toBe('');
+    });
+
+    it('band rail: Enter on a band checkbox toggles it instead of submitting the form', async () => {
+        document.getElementById('band-container').innerHTML = `<div class="band-row" data-band="20m">
+            <input type="checkbox" class="band-enable" value="20m" checked><button type="button" class="band-solo"></button></div>`;
+        await importAppFresh();
+        const cb = document.querySelector('#band-container .band-enable');
+        const ev = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+        cb.dispatchEvent(ev);
+        expect(ev.defaultPrevented).toBe(true);
+        expect(cb.checked).toBe(false);
+        expect(document.querySelector('#band-container .band-solo').disabled).toBe(true);
+    });
+
     it('initializes with DK3JF disabled: keeps projection/azimuth options available and only disables 2m', async () => {
         localStorage.setItem('dk3jfModeEnabled', 'false');
         localStorage.setItem('mapProjection', 'azimuthal');
