@@ -497,7 +497,21 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
         const line = pill.querySelector('.band-spark polyline');
         if (line) line.setAttribute('points', enabled && act ? sparkPoints(act.line, sparkPeak) : '');
 
-        pill.setAttribute('aria-pressed', isFocused ? 'true' : 'false');
+        // The solo button (sibling of the enable checkbox, not its parent).
+        // Its name stays "Show only <band>"; the live count goes into the
+        // aria-describedby text, which screen readers don't re-announce on
+        // every update the way they do a changing name.
+        const solo = pill.querySelector('.band-solo');
+        if (solo) {
+            solo.setAttribute('aria-pressed', isFocused ? 'true' : 'false');
+            solo.disabled = !enabled; // soloing a disabled band has no effect
+        }
+        const desc = pill.querySelector(`#band-desc-${band}`);
+        if (desc) {
+            const n = act?.count || 0;
+            desc.textContent = !enabled ? 'band disabled'
+                : n === 0 ? 'no spots' : `${n} ${n === 1 ? 'spot' : 'spots'}`;
+        }
     });
 }
 

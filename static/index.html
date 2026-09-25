@@ -40,100 +40,141 @@
             <div class="form-sections d-flex flex-column gap-2">
             <div id="band-container" class="w-100 bg-transparent mb-2" style="font-size: 0.9rem;" data-focus-band="">
                 <!-- Band rail: one row per band in frequency order; the name chip is the
-                     band-color key. Checkbox =
-                     enable; row click = solo. Count + sparkline are filled by
+                     band-color key. Two sibling controls per row, never nested:
+                     the checkbox enables the band, the button solos it (a click
+                     anywhere else on the row solos too). Count, sparkline and the
+                     button's aria-pressed/-label/disabled are set by
                      updateBandLabels (renderers.js). -->
                 <div class="band-rail" role="group" aria-label="Bands">
-                    <div class="band-wrapper band-pill band-row" data-band="160m" style="--band: #8B0000" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                        <input type="checkbox" class="form-check-input band-enable" value="160m" title="Enable / disable band">
-                        <span class="band-pill-name">160m</span>
-                        <span class="band-count"></span>
-                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
-                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    <div class="band-wrapper band-pill band-row" data-band="160m" style="--band: #8B0000">
+                        <input type="checkbox" class="form-check-input band-enable" value="160m" aria-label="Enable 160m" title="Enable 160m">
+                        <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 160m" title="Show only 160m" aria-describedby="band-desc-160m">
+                            <span class="band-pill-name">160m</span>
+                            <span class="band-count"></span>
+                            <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                            <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                        </button>
+                        <span class="visually-hidden" id="band-desc-160m"></span>
                     </div>
-                    <div class="band-wrapper band-pill band-row" data-band="80m" style="--band: #800080" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                        <input type="checkbox" class="form-check-input band-enable" value="80m" checked title="Enable / disable band">
-                        <span class="band-pill-name">80m</span>
-                        <span class="band-count"></span>
-                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
-                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    <div class="band-wrapper band-pill band-row" data-band="80m" style="--band: #800080">
+                        <input type="checkbox" class="form-check-input band-enable" value="80m" checked aria-label="Enable 80m" title="Enable 80m">
+                        <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 80m" title="Show only 80m" aria-describedby="band-desc-80m">
+                            <span class="band-pill-name">80m</span>
+                            <span class="band-count"></span>
+                            <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                            <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                        </button>
+                        <span class="visually-hidden" id="band-desc-80m"></span>
                     </div>
-                    <div class="band-wrapper band-pill band-row" data-band="60m" style="--band: #4B0082" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                        <input type="checkbox" class="form-check-input band-enable" value="60m" title="Enable / disable band">
-                        <span class="band-pill-name">60m</span>
-                        <span class="band-count"></span>
-                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
-                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    <div class="band-wrapper band-pill band-row" data-band="60m" style="--band: #4B0082">
+                        <input type="checkbox" class="form-check-input band-enable" value="60m" aria-label="Enable 60m" title="Enable 60m">
+                        <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 60m" title="Show only 60m" aria-describedby="band-desc-60m">
+                            <span class="band-pill-name">60m</span>
+                            <span class="band-count"></span>
+                            <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                            <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                        </button>
+                        <span class="visually-hidden" id="band-desc-60m"></span>
                     </div>
-                    <div class="band-wrapper band-pill band-row" data-band="40m" style="--band: #0000FF" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                        <input type="checkbox" class="form-check-input band-enable" value="40m" checked title="Enable / disable band">
-                        <span class="band-pill-name">40m</span>
-                        <span class="band-count"></span>
-                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
-                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    <div class="band-wrapper band-pill band-row" data-band="40m" style="--band: #0000FF">
+                        <input type="checkbox" class="form-check-input band-enable" value="40m" checked aria-label="Enable 40m" title="Enable 40m">
+                        <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 40m" title="Show only 40m" aria-describedby="band-desc-40m">
+                            <span class="band-pill-name">40m</span>
+                            <span class="band-count"></span>
+                            <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                            <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                        </button>
+                        <span class="visually-hidden" id="band-desc-40m"></span>
                     </div>
-                    <div class="band-wrapper band-pill band-row" data-band="30m" style="--band: #03b1b1" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                        <input type="checkbox" class="form-check-input band-enable" value="30m" title="Enable / disable band">
-                        <span class="band-pill-name">30m</span>
-                        <span class="band-count"></span>
-                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
-                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    <div class="band-wrapper band-pill band-row" data-band="30m" style="--band: #03b1b1">
+                        <input type="checkbox" class="form-check-input band-enable" value="30m" aria-label="Enable 30m" title="Enable 30m">
+                        <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 30m" title="Show only 30m" aria-describedby="band-desc-30m">
+                            <span class="band-pill-name">30m</span>
+                            <span class="band-count"></span>
+                            <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                            <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                        </button>
+                        <span class="visually-hidden" id="band-desc-30m"></span>
                     </div>
-                    <div class="band-wrapper band-pill band-row" data-band="20m" style="--band: #008000" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                        <input type="checkbox" class="form-check-input band-enable" value="20m" checked title="Enable / disable band">
-                        <span class="band-pill-name">20m</span>
-                        <span class="band-count"></span>
-                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
-                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    <div class="band-wrapper band-pill band-row" data-band="20m" style="--band: #008000">
+                        <input type="checkbox" class="form-check-input band-enable" value="20m" checked aria-label="Enable 20m" title="Enable 20m">
+                        <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 20m" title="Show only 20m" aria-describedby="band-desc-20m">
+                            <span class="band-pill-name">20m</span>
+                            <span class="band-count"></span>
+                            <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                            <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                        </button>
+                        <span class="visually-hidden" id="band-desc-20m"></span>
                     </div>
-                    <div class="band-wrapper band-pill band-row" data-band="17m" style="--band: #808000" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                        <input type="checkbox" class="form-check-input band-enable" value="17m" checked title="Enable / disable band">
-                        <span class="band-pill-name">17m</span>
-                        <span class="band-count"></span>
-                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
-                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    <div class="band-wrapper band-pill band-row" data-band="17m" style="--band: #808000">
+                        <input type="checkbox" class="form-check-input band-enable" value="17m" checked aria-label="Enable 17m" title="Enable 17m">
+                        <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 17m" title="Show only 17m" aria-describedby="band-desc-17m">
+                            <span class="band-pill-name">17m</span>
+                            <span class="band-count"></span>
+                            <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                            <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                        </button>
+                        <span class="visually-hidden" id="band-desc-17m"></span>
                     </div>
-                    <div class="band-wrapper band-pill band-row" data-band="15m" style="--band: #FFA500" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                        <input type="checkbox" class="form-check-input band-enable" value="15m" checked title="Enable / disable band">
-                        <span class="band-pill-name">15m</span>
-                        <span class="band-count"></span>
-                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
-                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    <div class="band-wrapper band-pill band-row" data-band="15m" style="--band: #FFA500">
+                        <input type="checkbox" class="form-check-input band-enable" value="15m" checked aria-label="Enable 15m" title="Enable 15m">
+                        <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 15m" title="Show only 15m" aria-describedby="band-desc-15m">
+                            <span class="band-pill-name">15m</span>
+                            <span class="band-count"></span>
+                            <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                            <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                        </button>
+                        <span class="visually-hidden" id="band-desc-15m"></span>
                     </div>
-                    <div class="band-wrapper band-pill band-row" data-band="12m" style="--band: #00FFFF" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                        <input type="checkbox" class="form-check-input band-enable" value="12m" checked title="Enable / disable band">
-                        <span class="band-pill-name">12m</span>
-                        <span class="band-count"></span>
-                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
-                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    <div class="band-wrapper band-pill band-row" data-band="12m" style="--band: #00FFFF">
+                        <input type="checkbox" class="form-check-input band-enable" value="12m" checked aria-label="Enable 12m" title="Enable 12m">
+                        <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 12m" title="Show only 12m" aria-describedby="band-desc-12m">
+                            <span class="band-pill-name">12m</span>
+                            <span class="band-count"></span>
+                            <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                            <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                        </button>
+                        <span class="visually-hidden" id="band-desc-12m"></span>
                     </div>
-                    <div class="band-wrapper band-pill band-row" data-band="10m" style="--band: #FF0000" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                        <input type="checkbox" class="form-check-input band-enable" value="10m" checked title="Enable / disable band">
-                        <span class="band-pill-name">10m</span>
-                        <span class="band-count"></span>
-                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
-                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    <div class="band-wrapper band-pill band-row" data-band="10m" style="--band: #FF0000">
+                        <input type="checkbox" class="form-check-input band-enable" value="10m" checked aria-label="Enable 10m" title="Enable 10m">
+                        <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 10m" title="Show only 10m" aria-describedby="band-desc-10m">
+                            <span class="band-pill-name">10m</span>
+                            <span class="band-count"></span>
+                            <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                            <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                        </button>
+                        <span class="visually-hidden" id="band-desc-10m"></span>
                     </div>
-                    <div class="band-wrapper band-pill band-row" data-band="6m" style="--band: #FF00FF" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                        <input type="checkbox" class="form-check-input band-enable" value="6m" checked title="Enable / disable band">
-                        <span class="band-pill-name">6m</span>
-                        <span class="band-count"></span>
-                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
-                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    <div class="band-wrapper band-pill band-row" data-band="6m" style="--band: #FF00FF">
+                        <input type="checkbox" class="form-check-input band-enable" value="6m" checked aria-label="Enable 6m" title="Enable 6m">
+                        <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 6m" title="Show only 6m" aria-describedby="band-desc-6m">
+                            <span class="band-pill-name">6m</span>
+                            <span class="band-count"></span>
+                            <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                            <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                        </button>
+                        <span class="visually-hidden" id="band-desc-6m"></span>
                     </div>
-                    <div class="band-wrapper band-pill band-row" data-band="4m" style="--band: #FF1493" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                        <input type="checkbox" class="form-check-input band-enable" value="4m" title="Enable / disable band">
-                        <span class="band-pill-name">4m</span>
-                        <span class="band-count"></span>
-                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
-                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    <div class="band-wrapper band-pill band-row" data-band="4m" style="--band: #FF1493">
+                        <input type="checkbox" class="form-check-input band-enable" value="4m" aria-label="Enable 4m" title="Enable 4m">
+                        <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 4m" title="Show only 4m" aria-describedby="band-desc-4m">
+                            <span class="band-pill-name">4m</span>
+                            <span class="band-count"></span>
+                            <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                            <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                        </button>
+                        <span class="visually-hidden" id="band-desc-4m"></span>
                     </div>
-                    <div id="band-wrapper-2m" class="band-wrapper band-pill band-row" data-band="2m" style="--band: #008080" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                        <input type="checkbox" class="form-check-input band-enable" value="2m" title="Enable / disable band">
-                        <span class="band-pill-name">2m</span>
-                        <span class="band-count"></span>
-                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
-                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    <div id="band-wrapper-2m" class="band-wrapper band-pill band-row" data-band="2m" style="--band: #008080">
+                        <input type="checkbox" class="form-check-input band-enable" value="2m" aria-label="Enable 2m" title="Enable 2m">
+                        <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 2m" title="Show only 2m" aria-describedby="band-desc-2m">
+                            <span class="band-pill-name">2m</span>
+                            <span class="band-count"></span>
+                            <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                            <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                        </button>
+                        <span class="visually-hidden" id="band-desc-2m"></span>
                     </div>
                 </div>
             </div>
