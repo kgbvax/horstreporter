@@ -12,9 +12,6 @@
     <link rel="stylesheet" href="style.css" />
 </head>
 <body class="d-flex vh-100 overflow-hidden m-0 position-relative">
-    <button id="show-sidebar" class="btn btn-secondary shadow-sm position-absolute" style="top: 15px; left: 0; z-index: 1000; display: none; border-radius: 0 4px 4px 0;" title="Show controls">
-        <svg class="icon" data-glyph="fa-chevron-right" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M311 233Q320 243 320 256Q320 269 311 279L119 471Q109 480 96 480Q83 480 73 471Q64 461 64 448Q64 435 73 425L243 256L73 87Q64 77 64 64Q64 51 73 41Q83 32 96 32Q109 32 119 41L311 233Z"/></svg>
-    </button>
     <div id="top-right-controls" class="d-flex align-items-center gap-2" style="position: absolute; top: 15px; right: 15px; z-index: 1000;">
     </div>
     <div id="controls" class="d-flex flex-column p-3 border-end overflow-auto z-1 position-relative" style="max-width: 320px; width: 100%; transition: margin-left 0.3s, background-color 0.3s, border-color 0.3s;">
@@ -202,10 +199,12 @@
                             <input type="number" id="azimuth-horizon-km" class="form-control form-control-sm w-auto" value="16000" min="1000" max="20015" step="100" style="max-width: 100px;" readonly title="Derived automatically from azimuth zoom" />
                         </label>
                     </div>
-                    <!-- Opmode status (read-only) -->
-                    <div class="small text-muted" id="opmode-status-row">opmode status: <strong id="opmode-status">disabled</strong></div>
-                    <div class="small text-muted" id="opmode-station-row">station: <strong id="opmode-station">n/a</strong></div>
-                    <div class="small text-muted" id="opmode-heading-row">antenna: <strong id="opmode-heading">n/a</strong></div>
+                    <!-- Operator status (read-only): only shown in operator mode (opmode.js updateBranding) -->
+                    <div id="opmode-status-rows" hidden>
+                        <div class="small text-muted" id="opmode-status-row">opmode status: <strong id="opmode-status">disabled</strong></div>
+                        <div class="small text-muted" id="opmode-station-row">station: <strong id="opmode-station">n/a</strong></div>
+                        <div class="small text-muted" id="opmode-heading-row">antenna: <strong id="opmode-heading">n/a</strong></div>
+                    </div>
                 </div>
             </details>
             <details class="settings-section" name="settings" id="notifications-section">
@@ -213,7 +212,7 @@
                 <div class="settings-body d-flex flex-column gap-2 small">
                     <!-- U5: Web Push settings. The push.js module wires this up;
                          it stays hidden on browsers without Web Push support. -->
-                    <div id="push-settings-root" class="d-flex flex-column gap-2">
+                    <div id="push-settings-root" class="push-settings-root">
                         <div class="d-flex align-items-center gap-2">
                             <input type="checkbox" id="push-enable" autocomplete="off">
                             <label for="push-enable" class="mb-0">Enable push notifications</label>
@@ -226,30 +225,14 @@
                             push disabled — re-enable
                         </div>
                         <div id="push-status" class="small text-muted" data-kind="idle"></div>
-                        <div id="push-pref-matrix" class="push-pref-matrix d-flex flex-column gap-1" style="display:none;">
+                        <div id="push-pref-matrix" class="push-pref-matrix" hidden>
                             <label class="d-flex align-items-center gap-2 small">
                                 <input type="checkbox" id="push-pref-all" autocomplete="off">
                                 all surges
                             </label>
                             <div class="push-pref-grid">
-                                <div class="push-pref-cell push-pref-header-cell"></div>
-                                <!-- Region headers -->
-                                <!-- Filled dynamically by push.js? No — rendered statically
-                                     so the checkbox IDs are stable for tests. -->
-                                <div class="push-pref-cell push-pref-header-cell" title="Europe">EU</div>
-                                <div class="push-pref-cell push-pref-header-cell" title="North America">NA</div>
-                                <div class="push-pref-cell push-pref-header-cell" title="South America">SA</div>
-                                <div class="push-pref-cell push-pref-header-cell" title="Africa">AF</div>
-                                <div class="push-pref-cell push-pref-header-cell" title="Asia">AS</div>
-                                <div class="push-pref-cell push-pref-header-cell" title="Oceania">OC</div>
-                                <div class="push-pref-cell push-pref-header-cell" title="Antarctica">AN</div>
-                                <div class="push-pref-cell push-pref-header-cell" title="Japan">JA</div>
-                                <div class="push-pref-cell push-pref-header-cell" title="Australia">VK</div>
-                                <div class="push-pref-cell push-pref-header-cell" title="Hawaii">KH6</div>
-                                <div class="push-pref-cell push-pref-header-cell" title="Caribbean">CAR</div>
-                                <!-- Rows: one per band, 13 checkboxes each -->
-                                <!-- Generated by push.js? No — rendered statically for stable IDs. -->
-                                <!-- band rows injected here by push.js at init -->
+                                <!-- header row + band rows are built by push.js (buildPrefGridRows)
+                                     from PUSH_REGIONS, so headers always match the columns -->
                             </div>
                         </div>
                     </div>
@@ -289,6 +272,7 @@
     <div id="map-stack" class="flex-grow-1 h-100 position-relative">
         <div id="map" class="w-100 h-100"></div>
         <div id="map-toggles" class="map-toggles">
+            <button id="show-sidebar" type="button" class="panel-toggle is-translucent" title="Show controls" aria-label="Show controls" style="display: none;"><svg class="icon" data-glyph="fa-chevron-right" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M311 233Q320 243 320 256Q320 269 311 279L119 471Q109 480 96 480Q83 480 73 471Q64 461 64 448Q64 435 73 425L243 256L73 87Q64 77 64 64Q64 51 73 41Q83 32 96 32Q109 32 119 41L311 233Z"/></svg></button>
             <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show Band Stats">Stats</button>
             <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show Propagation Intelligence Matrix">Prop</button>
             <button id="band-solo-clear" type="button" class="panel-toggle band-solo-clear" title="Show all enabled bands" style="display: none;"><span class="band-solo-name"></span> <span aria-hidden="true">&times;</span></button>

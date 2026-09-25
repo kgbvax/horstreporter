@@ -25,6 +25,10 @@ const SW_PATH = '/sw.js?v=1';
 import { WSPR_REGIONS } from './utils.js';
 const PUSH_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
 const PUSH_REGIONS = WSPR_REGIONS;
+const PUSH_REGION_NAMES = {
+    EU: 'Europe', NA: 'North America', SA: 'South America', AF: 'Africa', AS: 'Asia',
+    JA: 'Japan', OC: 'Oceania', VK: 'Australia', KH6: 'Hawaii', CAR: 'Caribbean', AN: 'Antarctica',
+};
 
 function isPushSupported() {
     return ('serviceWorker' in navigator) && ('PushManager' in window);
@@ -211,6 +215,19 @@ function buildPrefGridRows() {
     if (!grid) return;
     // If the rows are already built (e.g. a second init call), no-op.
     if (grid.querySelector('.push-pref-band-label')) return;
+    // Header row comes from the same PUSH_REGIONS list as the checkbox
+    // columns, so the two can't drift apart (a static header row once did).
+    grid.querySelectorAll('.push-pref-header-cell').forEach((el) => el.remove());
+    const corner = document.createElement('div');
+    corner.className = 'push-pref-cell push-pref-header-cell';
+    grid.appendChild(corner);
+    for (const region of PUSH_REGIONS) {
+        const head = document.createElement('div');
+        head.className = 'push-pref-cell push-pref-header-cell';
+        head.textContent = region;
+        head.title = PUSH_REGION_NAMES[region] || region;
+        grid.appendChild(head);
+    }
     for (const band of PUSH_BANDS) {
         const label = document.createElement('div');
         label.className = 'push-pref-cell push-pref-band-label';
@@ -242,7 +259,9 @@ let cachedAppServerKey = null;
 export async function initPushUI() {
     const root = document.getElementById('push-settings-root');
     if (!root || !isPushSupported()) {
-        if (root) root.style.display = 'none';
+        // [hidden], not style.display: Bootstrap's .d-flex is display:flex
+        // !important and would win over an inline display:none.
+        if (root) root.hidden = true;
         // The Notifications section holds nothing else; drop it entirely.
         const section = document.getElementById('notifications-section');
         if (section) section.hidden = true;
@@ -288,13 +307,13 @@ export async function initPushUI() {
             currentSubscription = sub;
             const prefs = readPreferences();
             await postSubscription(sub, prefs);
-            if (matrixRoot) matrixRoot.style.display = 'block';
+            if (matrixRoot) matrixRoot.hidden = false;
             setStatus('push enabled', 'ok');
             setReEnableIndicator(false);
         } catch (err) {
             setStatus(`push enable failed: ${err.message || err}`, 'error');
             enableCheckbox.checked = false;
-            if (matrixRoot) matrixRoot.style.display = 'none';
+            if (matrixRoot) matrixRoot.hidden = true;
         }
     }
 
@@ -318,7 +337,7 @@ export async function initPushUI() {
                 }
             }
         } finally {
-            if (matrixRoot) matrixRoot.style.display = 'none';
+            if (matrixRoot) matrixRoot.hidden = true;
             setStatus('push disabled', 'idle');
         }
     }
@@ -391,7 +410,7 @@ export async function initPushUI() {
                 if (Object.keys(prefs).length === 0) prefs['all'] = true;
                 await postSubscription(existing, prefs);
                 if (enableCheckbox) enableCheckbox.checked = true;
-                if (matrixRoot) matrixRoot.style.display = 'block';
+                if (matrixRoot) matrixRoot.hidden = false;
                 setStatus('push re-enabled after restart', 'ok');
                 setReEnableIndicator(false);
             }

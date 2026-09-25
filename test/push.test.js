@@ -140,7 +140,7 @@ beforeEach(() => {
             <div id="push-ios-hint" style="display:none;"></div>
             <div id="push-reenable-hint" style="display:none;"></div>
             <div id="push-status"></div>
-            <div id="push-pref-matrix" style="display:none;">
+            <div id="push-pref-matrix" hidden>
                 <input type="checkbox" id="push-pref-all" />
                 <div class="push-pref-grid">
                     <div class="push-pref-cell push-pref-header-cell"></div>
@@ -310,7 +310,7 @@ describe('push.js UI: feature detection hides the panel when unsupported', () =>
             const result = await mod.initPushUI();
             expect(result).toBeNull();
             const root = document.getElementById('push-settings-root');
-            expect(root.style.display).toBe('none');
+            expect(root.hidden).toBe(true);
         } finally {
             // Restore a fresh mock for subsequent tests.
             installMockServiceWorker({ existingSubscription: null });
@@ -397,6 +397,41 @@ describe('push.js UI: preference matrix reads "all" correctly', () => {
             // at least assert the helper returns an object.
             expect(typeof prefs).toBe('object');
         }
+    });
+});
+
+describe('push.js UI: preference grid headers line up with their columns', () => {
+    it('rebuilds the header row in PUSH_REGIONS order so each checkbox sits under its region', async () => {
+        Object.defineProperty(window, 'PushManager', { value: function () {}, configurable: true });
+        const mod = await import('../static/push.js');
+        await mod.initPushUI();
+        const grid = document.querySelector('.push-pref-grid');
+        const cells = Array.from(grid.children);
+        const cols = 12; // band label + 11 regions (style.css .push-pref-grid)
+        const headers = cells.slice(0, cols).map((c) => c.textContent.trim());
+        expect(headers.slice(1)).toEqual(['EU', 'NA', 'SA', 'AF', 'AS', 'JA', 'OC', 'VK', 'KH6', 'CAR', 'AN']);
+        expect(grid.querySelectorAll('.push-pref-header-cell').length).toBe(cols);
+        let checked = 0;
+        cells.forEach((cell, i) => {
+            const cb = cell.querySelector('input[type="checkbox"]');
+            if (!cb) return;
+            expect(cb.dataset.region).toBe(headers[i % cols]);
+            checked += 1;
+        });
+        expect(checked).toBe(13 * 11);
+    });
+
+    it('reveals the preference matrix via [hidden] once push is enabled', async () => {
+        // [hidden] rather than style.display: Bootstrap's .d-flex utility is
+        // display:flex !important and beat the inline style (matrix always showed).
+        Object.defineProperty(window, 'PushManager', { value: function () {}, configurable: true });
+        const mod = await import('../static/push.js');
+        const ctrl = await mod.initPushUI();
+        const matrix = document.getElementById('push-pref-matrix');
+        expect(matrix.hidden).toBe(true);
+        document.getElementById('push-enable').checked = true;
+        await ctrl.enable();
+        expect(matrix.hidden).toBe(false);
     });
 });
 

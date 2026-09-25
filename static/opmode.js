@@ -113,6 +113,9 @@ function updateBranding(isOperatorModeActive) {
     if (heading) {
         heading.textContent = isOperatorModeActive ? 'horstoperator' : 'horstreporter';
     }
+    // Agent/station/antenna readouts mean nothing without the local agent.
+    const statusRows = document.getElementById('opmode-status-rows');
+    if (statusRows) statusRows.hidden = !isOperatorModeActive;
 }
 
 function extractStation(payload) {

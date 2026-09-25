@@ -7,6 +7,9 @@ vi.mock('../static/utils.js', () => ({
     WSPR_REGIONS: ['EU', 'NA', 'SA', 'AF', 'AS', 'JA', 'OC', 'VK', 'KH6', 'CAR', 'AN'],
     bandColors: { all: '#555', '20m': '#e67e22', '10m': '#16a095' },
     getMinSnrMode: () => document.querySelector('input[name="min-snr"]:checked')?.value || 'none',
+    // Same contract as utils.getEnabledBands: checked .band-enable values.
+    getEnabledBands: () => new Set(Array.from(document.querySelectorAll('.band-enable'))
+        .filter((cb) => cb.checked).map((cb) => cb.value)),
 }));
 
 import { initWsprMatrix, __test } from '../static/wspr-matrix.js';
@@ -496,6 +499,33 @@ describe('wspr-matrix (Prop) panel', () => {
         expect(html).toContain('wspr: 30 spots');
         expect(html).toContain('rbn: 4 spots');
         expect(html).toContain('z=3.3');
+    });
+
+    it('omits rows for bands disabled in the band rail', async () => {
+        document.body.insertAdjacentHTML('beforeend', `
+            <input type="checkbox" class="band-enable" value="20m" checked />
+            <input type="checkbox" class="band-enable" value="2m" />`);
+        mockFetch({
+            cells: [makeCell({ band: '20m', region: 'EU' }), makeCell({ band: '2m', region: 'EU' })],
+        });
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+
+        const rows = Array.from(document.querySelectorAll('.wspr-matrix-band')).map((td) => td.textContent);
+        expect(rows).toEqual(['20m']);
+    });
+
+    it('says so when every open band is disabled', async () => {
+        document.body.insertAdjacentHTML('beforeend', `
+            <input type="checkbox" class="band-enable" value="2m" />`);
+        mockFetch({ cells: [makeCell({ band: '2m', region: 'EU' })] });
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(document.querySelector('.wspr-matrix-band')).toBeNull();
+        expect(document.getElementById(BODY_ID).textContent).toContain('No paths open on the enabled bands.');
     });
 
     it('clicking a cell sets the drill-down filter and shows the clear button; clicking again clears', async () => {
