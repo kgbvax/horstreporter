@@ -304,17 +304,9 @@ function buildMercatorGraylineDataUrl(theme, subsolarPoint) {
 
     const twilightFill = hexToRgb(theme === 'dark' ? '#9a8371' : '#b08b72');
     const nightFill = hexToRgb(theme === 'dark' ? '#01050a' : '#182534');
-    // In dark theme the base map is near-black, so night shading alone gives no
-    // visible day/night contrast — lift the sunlit side with a warm tint so
-    // "day" actually reads brighter. Light theme's bright tiles need no lift.
-    // Dark theme composes ONE monotonic warm lift (see curve below) and drops
-    // the twilight wash: stacked day + twilight used to compound into a halo
-    // at the terminator that was brighter than the day side before it, so the
-    // night→day transition read as a glow hump instead of a clean ramp.
-    const dark = theme === 'dark';
-    const dayFill = hexToRgb('#f5e9c8');
-    const maxDayOpacity = 0.26;
-    const twilightOptions = dark ? { maxNightOpacity: 0.42 } : {};
+    // Same shading as the azimuthal view in both themes (azimuth-runtime.js
+    // drawGrayline): a twilight wash plus night darkening, no day lift, so the
+    // two projections read alike in dark mode too.
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
 
@@ -322,20 +314,11 @@ function buildMercatorGraylineDataUrl(theme, subsolarPoint) {
         const lat = mercatorYToLat(y / (height - 1));
         for (let x = 0; x < width; x += 1) {
             const lng = -180 + ((x / (width - 1)) * 360);
-            const { graylineOpacity, nightOpacity, zenithAngle } = getGraylineOverlayOpacities(lat, lng, subsolarPoint, twilightOptions);
-            // Monotonic warm lift: full at the subsolar point, sqrt falloff to
-            // zero at 100° zenith — i.e. it runs THROUGH the terminator so the
-            // twilight zone only hands over to the night darkening, never
-            // stacks on a fading day lift (which is what humped before).
-            const dayOpacity = dark && zenithAngle < 100
-                ? maxDayOpacity * Math.sqrt(Math.max(0, 1 - zenithAngle / 100))
-                : 0;
-            const twilightOpacity = dark ? 0 : graylineOpacity;
-            if (twilightOpacity <= 0 && nightOpacity <= 0 && dayOpacity <= 0) continue;
+            const { graylineOpacity, nightOpacity } = getGraylineOverlayOpacities(lat, lng, subsolarPoint);
+            if (graylineOpacity <= 0 && nightOpacity <= 0) continue;
 
             let pixel = { r: 0, g: 0, b: 0, a: 0 };
-            pixel = blendOverlayColors(pixel, dayFill, dayOpacity);
-            pixel = blendOverlayColors(pixel, twilightFill, twilightOpacity);
+            pixel = blendOverlayColors(pixel, twilightFill, graylineOpacity);
             pixel = blendOverlayColors(pixel, nightFill, nightOpacity);
 
             const offset = (y * width * 4) + (x * 4);
