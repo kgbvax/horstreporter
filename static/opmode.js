@@ -209,7 +209,7 @@ function setStatus(text, isError = false) {
     const statusEl = document.getElementById('opmode-status');
     if (!statusEl) return;
     statusEl.textContent = text;
-    statusEl.style.color = isError ? '#b02a37' : '';
+    statusEl.classList.toggle('status-danger', Boolean(isError));
 }
 
 function formatStationText(station) {

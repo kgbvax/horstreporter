@@ -33,6 +33,12 @@ let horstKevin = null;
 // the #horst-kevin element in index.html is also hidden via inline display:none.
 const HORST_KEVIN_ENABLED = false;
 
+// Tab favicon status dot. Same semantics as the --status-* tokens in style.css
+// (live = brand teal, waiting = amber, error = danger fill); the tab bar is
+// outside the page theme, so these are fixed mid-tones that read on light and
+// dark browser chrome.
+const FAVICON = { idle: '#6c757d', waiting: '#e0a000', live: '#1f9e8f', error: '#c62828' };
+
 // --- Band selector (pills) ---------------------------------------------------
 // Band order matches the panel layout. Focus = solo band ('all' = no solo),
 // stored on #band-container[data-focus-band]; enabled = checkbox set. The two
@@ -1725,7 +1731,7 @@ function showStreamError(message) {
     if (statusEl) {
         statusEl.textContent = 'Status: ';
         const span = document.createElement('span');
-        span.style.color = 'red';
+        span.className = 'status-danger';
         span.textContent = message;
         statusEl.appendChild(span);
     } else {
@@ -1908,7 +1914,7 @@ function startLiveStream(preserveData = false) {
     const seenKeys = preserveData ? new Set(state.liveSpots.map(spotKey)) : null;
 
     state.eventSource = new EventSource(`/api/stream?${params.toString()}`);
-    setFaviconColor('#ffa500'); // Orange for connecting/waiting
+    setFaviconColor(FAVICON.waiting);
     hotBandIndicator?.refresh();
     horstKevin?.refresh();
 
@@ -1919,8 +1925,8 @@ function startLiveStream(preserveData = false) {
     // timeline stays active — the ring still serves every covered moment
     // (KTD-7), only uncovered windows fall through to /api/history.
     function surfaceTimelineCoverageEnded() {
-        statusEl.innerHTML = `Status: <span style="color: red;">Live data ended — timeline shows session coverage only</span>`;
-        setFaviconColor('#dc3545'); // Red for error
+        statusEl.innerHTML = `Status: <span class="status-danger">Live data ended — timeline shows session coverage only</span>`;
+        setFaviconColor(FAVICON.error);
         if (btnSubmit) setSubmitMode(btnSubmit, 'go');
     }
 
@@ -1931,8 +1937,8 @@ function startLiveStream(preserveData = false) {
         // otherwise a reconnect paints the dump in chunks mid-stream. Harmless
         // on the initial connect (historyLoading is already true).
         historyLoading = true;
-        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: orange;">${preserveData ? '(Updating band data...)' : '(Fetching history...)'}</span> <div class="spinner"></div>`;
-        setFaviconColor('#ffa500'); // Orange until data arrives
+        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span class="status-warn">${preserveData ? '(Updating band data...)' : '(Fetching history...)'}</span> <div class="spinner"></div>`;
+        setFaviconColor(FAVICON.waiting); // until data arrives
     };
 
     state.eventSource.addEventListener('server_error', (e) => {
@@ -1953,14 +1959,14 @@ function startLiveStream(preserveData = false) {
             return;
         }
         state.streamedFilter = null;
-        statusEl.innerHTML = `Status: <span style="color: red;">${e.data}</span>`;
-        setFaviconColor('#dc3545'); // Red for error
+        statusEl.innerHTML = `Status: <span class="status-danger">${e.data}</span>`;
+        setFaviconColor(FAVICON.error);
         if (btnSubmit) setSubmitMode(btnSubmit, 'go');
     });
 
     state.eventSource.addEventListener('history_end', () => {
         historyLoading = false;
-        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span>`;
+        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span class="status-ok">Receiving data (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span>`;
         lastStatusUpdate = Date.now();
         scheduleRender();
     });
@@ -2008,15 +2014,15 @@ function startLiveStream(preserveData = false) {
         // rejects wspr spots (reference-only; time travel skips them).
         sessionRing.push(spot);
         state.liveSpots.push(spot);
-        setFaviconColor('#28a745'); // Green for active receiving
+        setFaviconColor(FAVICON.live);
 
         // Throttle DOM text updates to max ~4 times a second
         const now = Date.now();
         if (now - lastStatusUpdate > 250) {
             if (historyLoading && !preserveData) {
-                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: orange;">Fetching history (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span> <div class="spinner"></div>`;
+                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span class="status-warn">Fetching history (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span> <div class="spinner"></div>`;
             } else {
-                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span style="color: green;">Receiving data (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span>`;
+                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span class="status-ok">Receiving data (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span>`;
             }
             lastStatusUpdate = now;
         }
@@ -2071,15 +2077,15 @@ function startLiveStream(preserveData = false) {
             }
             historyLoading = false;
             state.streamedFilter = null;
-            statusEl.innerHTML = `Status: <span style="color: red;">Connection error / Disconnected</span>`;
-            setFaviconColor('#dc3545'); // Red for error
+            statusEl.innerHTML = `Status: <span class="status-danger">Connection error / Disconnected</span>`;
+            setFaviconColor(FAVICON.error);
             if (btnSubmit) setSubmitMode(btnSubmit, 'go');
             return;
         }
         // Transient — reconnecting. Surface it but don't tear down.
         console.warn("Stream error (reconnecting):", e);
-        statusEl.innerHTML = `Status: <span style="color: orange;">Reconnecting…</span>`;
-        setFaviconColor('#ffa500');
+        statusEl.innerHTML = `Status: <span class="status-warn">Reconnecting…</span>`;
+        setFaviconColor(FAVICON.waiting);
     };
 
     state.renderInterval = setInterval(() => {
@@ -2166,7 +2172,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         setSubmitMode(btnSubmit, 'go');
         const status = document.getElementById('stream-status');
         if (status) status.innerHTML = 'Status: Not subscribed';
-        setFaviconColor('#6c757d');
+        setFaviconColor(FAVICON.idle);
         updateBandLab({ force: true });
         updateWsprMatrix();
         return;
@@ -2299,7 +2305,7 @@ async function startTimelineMode(rangeSeconds) {
         if ((err?.name || '') === 'AbortError') return;
         console.warn('timeline enter failed', err);
         const statusEl = document.getElementById('stream-status');
-        if (statusEl) statusEl.innerHTML = `Status: <span style="color: red;">Time travel failed: ${String(err?.message || err)}</span>`;
+        if (statusEl) statusEl.innerHTML = `Status: <span class="status-danger">Time travel failed: ${String(err?.message || err)}</span>`;
         // KTD-12: entry failure must NOT stack a second EventSource on the
         // still-open stream. The stream keeps running; the status line carries
         // the error. (With no stream running, e.g. a shared-URL restore, the

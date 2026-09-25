@@ -52,7 +52,7 @@
                 return response.text();
             })
             .then(text => document.getElementById('content').innerHTML = marked.parse(text))
-            .catch(err => document.getElementById('content').innerHTML = `<p style="color:red;">Error loading info: ${err.message}</p>`);
+            .catch(err => document.getElementById('content').innerHTML = `<p class="status-danger">Error loading info: ${err.message}</p>`);
 
         // Sync the iframe's theme with the parent window
         try {
