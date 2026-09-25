@@ -41,16 +41,6 @@
             <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
                 <div class="btn-group w-100" role="group" id="style-group"></div>
             </div>
-            <!-- Grid style brightness legend: squares are graded by the mean
-                 SNR of their strongest quarter of reports on a continuous
-                 opacity ramp. Shown only while the Grid style is active. -->
-            <div id="grid-snr-legend" class="grid-snr-legend" hidden>
-                <div class="grid-legend-body"
-                     title="A grid square's brightness is the mean SNR of its strongest 25% of recent reports, so one lucky decode no longer lights up a square.">
-                    <div class="grid-legend-ramp" aria-hidden="true"></div>
-                    <div class="grid-legend-ticks" aria-hidden="true"><span>-10</span><span>0</span><span>+10</span><span>+20 dB</span></div>
-                </div>
-            </div>
             <div class="form-sections d-flex flex-column gap-2">
             <div id="band-container" class="w-100 bg-transparent mb-2" style="font-size: 0.9rem;" data-focus-band="">
                 <!-- Band rail: one row per band in frequency order; the name chip is the

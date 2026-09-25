@@ -1578,46 +1578,6 @@ body[data-theme="dark"] .band-row {
     opacity: 0.35;
 }
 
-/* Grid-SNR brightness legend (opacity ramp under the style selector).
-   Checkerboard behind the translucent gradient so the ramp reads as alpha. */
-#grid-snr-legend {
-    font-size: 0.78rem;
-    color: var(--status-color);
-}
-.grid-legend-body {
-    padding: 4px 2px 0;
-}
-.grid-legend-ramp {
-    position: relative;
-    height: 10px;
-    border: 1px solid var(--border-color);
-    border-radius: 2px;
-    overflow: hidden;
-    background-image:
-        linear-gradient(45deg, var(--border-color) 25%, transparent 25%, transparent 75%, var(--border-color) 75%),
-        linear-gradient(45deg, var(--border-color) 25%, transparent 25%, transparent 75%, var(--border-color) 75%);
-    background-color: var(--bg-color);
-    background-size: 6px 6px;
-    background-position: 0 0, 3px 3px;
-}
-.grid-legend-ramp::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    /* continuous ramp, same anchors as gridSnrOpacity():
-       -10 dB -> 0.15, 0 dB -> 0.45, +10 dB -> 0.60, +20 dB -> 0.75 */
-    background: linear-gradient(to right,
-        color-mix(in srgb, var(--text-color) 15%, transparent) 0%,
-        color-mix(in srgb, var(--text-color) 45%, transparent) 33.33%,
-        color-mix(in srgb, var(--text-color) 60%, transparent) 66.67%,
-        color-mix(in srgb, var(--text-color) 75%, transparent) 100%);
-}
-.grid-legend-ticks {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 2px;
-}
-
 /* --- Time Travel timeline bar -------------------------------------------- */
 /* Fixed bottom-center bar, shown only while body.timeline-active. Uses the
    app's CSS variables so it themes with light/dark like every other surface. */

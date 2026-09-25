@@ -3,7 +3,7 @@ import { loadConfig } from './config.js';
 import { isChaseQueueEnabled } from './cq-flag.js';
 import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineLayer, syncMercatorDxccLabelLayer, setMercatorDxHighlight, clearMercatorDxHighlight } from './map.js';
 import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, getAzimuthCenter, setAzimuthEnabled, setAzimuthDragging, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled, getAzimuthLatLngFromClientPoint, getAzimuthHiddenGridSquaresCount, setAzimuthDxSpotHighlight } from './azimuth-runtime.js';
-import { initUI, attachUITooltipEvents, initGridSnrLegend } from './ui.js';
+import { initUI, attachUITooltipEvents } from './ui.js';
 import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
 import { initWsprMatrix, updateWsprMatrix, clearDrillDown, updateDrillDownButton } from './wspr-matrix.js';
 import { initHotBandIndicator } from './hot-band-indicator.js';
@@ -1255,9 +1255,6 @@ if (captureConfig?.enabled) {
     installPerfDebugApi();
     // Render hook for migrated Svelte controls (SNR sliders) to trigger renders.
     window.__horstScheduleRender = scheduleRender;
-    // Grid-SNR legend: defer until the Svelte control bundle has mounted the
-    // style radios so legend visibility syncs on first show.
-    setTimeout(initGridSnrLegend, 0);
     window.__horstApplyProjection = applyProjectionMode;
     window.__horstQthInput = syncProjectionCenterToActiveQth;
     initMap(initialCenter, initialZoom);
