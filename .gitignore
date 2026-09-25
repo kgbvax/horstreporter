@@ -69,3 +69,6 @@ dx_baseline.json
 
 # ce-optimize scratch
 .context/
+
+# Vite leaves a compiled config copy behind when a build is interrupted
+vite.config.js.timestamp-*
