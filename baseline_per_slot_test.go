@@ -56,7 +56,7 @@ func TestBaselineActivityForBandAllSlotsTargetWins(t *testing.T) {
 		Band: band, SlotOfDay: 25, DistanceTier: 2, SnrTier: 2, Count: 60,
 	}
 
-	rates, used := baselineActivityForBandAllSlots(global, target, "JO22", band, historyMinutes)
+	rates, used := baselineActivityForBandAllSlots(global, target, "JO22", band, historyMinutes, historyMinutes)
 	if got := len(rates); got != SlotsOfDay {
 		t.Fatalf("rates len = %d, want %d", got, SlotsOfDay)
 	}
@@ -107,7 +107,7 @@ func TestBaselineActivityForBandAllSlotsFallsBackPerSlot(t *testing.T) {
 		Band: band, SlotOfDay: 30, Count: 90,
 	}
 
-	rates, used := baselineActivityForBandAllSlots(global, target, "JO22", band, historyMinutes)
+	rates, used := baselineActivityForBandAllSlots(global, target, "JO22", band, historyMinutes, historyMinutes)
 
 	if math.Abs(rates[24]-1.0) > 1e-6 || !used[24] {
 		t.Errorf("slot 24: rate=%v used=%v, want 1.0 true", rates[24], used[24])
@@ -131,7 +131,7 @@ func TestBaselineActivityForBandAllSlotsHistoryScaling(t *testing.T) {
 	target[baselineClusterKey("JO22", band, 12, 2, 2)] = &baselineBucket{
 		Band: band, SlotOfDay: 12, Count: 210,
 	}
-	rates, used := baselineActivityForBandAllSlots(nil, target, "JO22", band, 7*24*60)
+	rates, used := baselineActivityForBandAllSlots(nil, target, "JO22", band, 7*24*60, 7*24*60)
 	if !used[12] {
 		t.Fatalf("slot 12 should be cluster-used")
 	}

@@ -104,7 +104,11 @@ export function initHotBandIndicator({ getQth, getSurroundings, getCurrentBand, 
         const lines = [`${r.band} · ${r.reason || r.kind || ''}`];
         if (typeof r.spots_per_minute === 'number') {
             const live = r.spots_per_minute.toFixed(2);
-            if (typeof r.baseline_activity === 'number' && r.baseline_activity > 0) {
+            // activity_ratio is the like-for-like regional ratio; baseline_activity
+            // is the whole region's rate, not comparable with your squares' rate.
+            if (r.activity_level && typeof r.activity_ratio === 'number') {
+                lines.push(`rate: ${live}/min (${r.activity_ratio.toFixed(1)}× normal)`);
+            } else if (typeof r.baseline_activity === 'number' && r.baseline_activity > 0) {
                 lines.push(`rate: ${live}/min (baseline ${r.baseline_activity.toFixed(2)})`);
             } else {
                 lines.push(`rate: ${live}/min`);

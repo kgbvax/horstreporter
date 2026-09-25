@@ -302,7 +302,8 @@
         </div>
         <div id="band-lab-legend-help" class="band-lab-legend-help" style="display:none;" role="status" aria-live="polite">
             <div><strong>Distance vs SNR:</strong> dots=reports, green dashed=cw -15 dB, orange dashed=phone 0 dB, faint verticals=P50/P90 distance.</div>
-            <div><strong>Reports over time + baseline:</strong> bars=spots/min in the selected window, red dashed=hourly baseline (steps at 30-min UTC slot boundaries; grey when a global fallback is shown).</div>
+            <div><strong>Reports over time + baseline:</strong> bars=spots/min in the selected window, red dashed=normal rate for the time of day (steps at 30-min UTC slot boundaries), taken from your 6×6-square region's history and scaled to your squares' current share of the region's reports; grey when a global fallback is shown.</div>
+            <div><strong>Band label:</strong> the region's reports over the last hour (or the selected window, if shorter) against its normal for the same time of day. above normal = 1.5× or more, below normal = 0.67× or less, normal in between. low sample = fewer than 20 reports both observed and expected. not scored = no FT8 reports at or above -15 dB for the band. longer / shorter reach = P90 path length at least 30% above / below normal.</div>
         </div>
         <div id="band-lab-content" class="band-lab-window-body">
             <div id="band-lab-summary" class="band-lab-summary small"></div>

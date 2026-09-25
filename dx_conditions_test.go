@@ -217,14 +217,14 @@ func TestBaselineActivityForBandClusterFallback(t *testing.T) {
 
 	// No cluster → global fallback.
 	global[baselineKey("20m", 10, 2, 1)] = &baselineBucket{Count: 100}
-	act, clusterUsed := baselineActivityForBand(global, cluster, "", "20m", 10, 60*24*30)
+	act, clusterUsed := baselineActivityForBand(global, cluster, "", "20m", 10, 60*24*30, 60*24*30)
 	if clusterUsed || act == 0 {
 		t.Errorf("global fallback: act=%v clusterUsed=%v, want global", act, clusterUsed)
 	}
 
 	// Cluster has data, operatorCluster set → cluster wins.
 	cluster[baselineClusterKey("JN68", "20m", 10, 2, 1)] = &baselineBucket{Count: 50}
-	act, clusterUsed = baselineActivityForBand(global, cluster, "JN68", "20m", 10, 60*24*30)
+	act, clusterUsed = baselineActivityForBand(global, cluster, "JN68", "20m", 10, 60*24*30, 60*24*30)
 	if !clusterUsed || act == 0 {
 		t.Errorf("cluster fallback: act=%v clusterUsed=%v, want cluster", act, clusterUsed)
 	}

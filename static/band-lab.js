@@ -33,6 +33,10 @@ const runtime = {
     dxInFlight: null,
     dxInFlightKey: '',
     dxAbortController: null,
+    // Last fetch attempt (success or failure), so a failing endpoint is
+    // retried once per fetch interval rather than on every spot update.
+    dxAttemptKey: '',
+    dxAttemptAt: 0,
     onLayoutChange: null,
     // Dirty-check state: skip the full pipeline when neither the spot set nor
     // the filters changed since the last update.
@@ -160,23 +164,33 @@ export function updateBandLab(options = {}) {
     const grouped = groupSpotsByBand(filtered);
     const requestSeq = ++runtime.updateSeq;
     const requestKey = `${qth}|${minutes}|${surroundings ? 1 : 0}`;
-    const hasFreshDx = runtime.dxCache && runtime.dxCacheKey === requestKey;
+    const hasDxForKey = Boolean(runtime.dxCache) && runtime.dxCacheKey === requestKey;
 
     // Render immediately from live spots to avoid a blank panel while dx_conditions loads.
-    renderSummary(summaryEl, { loading: !hasFreshDx });
-    renderBandCards(cardsEl, grouped, qth, minutes);
+    renderSummary(summaryEl, { loading: !hasDxForKey });
+    renderBandCards(cardsEl, grouped, qth, minutes, hasDxForKey);
 
-    // When the dx cache is already fresh, the second render is fully redundant
-    // (identical data) — skip it.
-    if (!hasFreshDx) {
+    // Refetch when the cached response is for another key OR older than the
+    // fetch interval. Checking the key alone meant dx_conditions was fetched
+    // once per qth/window and the labels, summary and baseline froze.
+    if (dxNeedsRefresh(runtime, requestKey, now)) {
         return ensureDxConditions(qth, minutes, surroundings).then(() => {
             // Ignore stale async responses after newer updates were scheduled.
             if (!runtime.enabled || requestSeq !== runtime.updateSeq) return;
+            const ready = Boolean(runtime.dxCache) && runtime.dxCacheKey === requestKey;
             renderSummary(summaryEl);
-            renderBandCards(cardsEl, grouped, qth, minutes);
+            renderBandCards(cardsEl, grouped, qth, minutes, ready);
         });
     }
     return null;
+}
+
+// dxNeedsRefresh reports whether the cached dx_conditions response must be
+// refetched for requestKey at time nowMs.
+export function dxNeedsRefresh(rt, requestKey, nowMs) {
+    if (rt.dxAttemptKey === requestKey && (nowMs - rt.dxAttemptAt) < DX_FETCH_INTERVAL_MS) return false;
+    if (!rt.dxCache || rt.dxCacheKey !== requestKey) return true;
+    return (nowMs - rt.lastDxFetchAt) >= DX_FETCH_INTERVAL_MS;
 }
 
 function filterSpots(spots, minutes) {
@@ -293,7 +307,7 @@ export function enabledBestBands(resp, enabled) {
     return { bestBands: pick(resp?.best_bands), recBands: pick(resp?.recommended_bands) };
 }
 
-function renderBandCards(cardsEl, grouped, qth, minutes) {
+function renderBandCards(cardsEl, grouped, qth, minutes, dxReady = false) {
     const bands = Array.from(grouped.keys()).sort((a, b) => compareBand(a, b));
     if (bands.length === 0) {
         runtime.lastBandKey = '';
@@ -302,27 +316,21 @@ function renderBandCards(cardsEl, grouped, qth, minutes) {
     }
 
     const qthCenter = getQthCenter(qth);
-    const dxBands = toBandMetricMap(runtime.dxCache);
+    // Only the response for the current qth/window: a cached one for another
+    // key would label the cards with the previous qth's verdicts until the
+    // fetch lands.
+    const dxBands = toBandMetricMap(dxReady ? runtime.dxCache : null);
     // Compute the qth→spot distance once and reuse it in both the axis cap and
     // every band's scatter chart (was 2x per band per update).
     const distanceCache = qthCenter ? computeDistanceCache(grouped, qthCenter) : null;
     const globalDistanceCapKm = qthCenter ? getGlobalDistanceCapKm(grouped, qthCenter, distanceCache) : null;
-    const allBandCounts = bands.map((band) => (grouped.get(band) || []).length);
-    const totalReportsAllBands = allBandCounts.reduce((sum, n) => sum + n, 0);
-    const maxReportsSingleBand = Math.max(0, ...allBandCounts);
 
-    // Per-band tier labels depend on the fresh dx metrics, which can arrive
-    // after the cards were first rendered (updateBandLab draws once from the
-    // cached dx response, then again when the fetch resolves). Bake them only
-    // into the DOM rebuild, but recompute + patch the label text on every
-    // pass — otherwise the labels freeze next to a live verdict badge.
-    const recs = new Map(bands.map((band) => [
-        band,
-        buildBandRecommendation(band, grouped.get(band) || [], dxBands.get(band), {
-            totalReportsAllBands,
-            maxReportsSingleBand
-        })
-    ]));
+    // Per-band labels depend on the fresh dx metrics, which can arrive after
+    // the cards were first rendered (updateBandLab draws once from the cached
+    // dx response, then again when the fetch resolves). Bake them only into
+    // the DOM rebuild, but recompute + patch the label text on every pass —
+    // otherwise the labels freeze next to a live verdict badge.
+    const recs = new Map(bands.map((band) => [band, bandHeadText(band, dxBands.get(band), dxReady)]));
 
     // Only rebuild the card DOM (and its <canvas> elements) when the band set
     // changes; otherwise redraw the charts in place, reusing the canvases.
@@ -338,7 +346,7 @@ function renderBandCards(cardsEl, grouped, qth, minutes) {
             return `
                 <div class="band-lab-card" style="border-left-color: ${bandColors[band] || '#999'};">
                     <div class="band-lab-card-head">
-                        <span class="band-lab-band" data-band-label="${safeBand}">${escapeHtml(`${band} - ${rec}`)}</span>
+                        <span class="band-lab-band" data-band-label="${safeBand}">${escapeHtml(rec)}</span>
                         <span class="band-lab-meta">${formatNumber(count)} reports</span>
                     </div>
                     <div class="band-lab-card-charts">
@@ -361,7 +369,7 @@ function renderBandCards(cardsEl, grouped, qth, minutes) {
         const safeBand = sanitizeBandId(band);
         const points = grouped.get(band) || [];
         const labelEl = cardsEl.querySelector(`[data-band-label="${safeBand}"]`);
-        if (labelEl) labelEl.textContent = `${band} - ${recs.get(band)}`;
+        if (labelEl) labelEl.textContent = recs.get(band);
         drawActivityChart(document.getElementById(`band-lab-activity-${safeBand}`), points, dxBands.get(band), minutes);
         drawScatterChart(document.getElementById(`band-lab-scatter-${safeBand}`), points, qthCenter, band, globalDistanceCapKm, distanceCache);
     }
@@ -579,7 +587,8 @@ export function utcSlotOfDayFromMs(timestampMs) {
 //
 // Shape:
 //   binRates[i]               — spots/min in bin i (i=0 oldest, i=11 newest)
-//   baselineRatesPerBin[i]    — historical spots/min for the slot containing bin i's centre
+//   baselineRatesPerBin[i]    — normal spots/min for the slot containing bin i's centre,
+//                               scaled to your squares by baseline_local_scale
 //   baselineClusterUsedPerBin[i] — true when the per-slot qth baseline was used
 //   yMax                       — y-axis upper bound in spots/min
 //   binMinutes                 — width of one bin in minutes
@@ -621,6 +630,14 @@ export function computeActivityChartData(points, bandMetrics, minutes, nowMs) {
     const slotUsedByCluster = Array.isArray(bandMetrics?.baseline_slot_used_by_cluster) ? bandMetrics.baseline_slot_used_by_cluster : [];
     const currentSlotBaselineRate = Math.max(0, Number(bandMetrics?.baseline_activity || 0));
     const currentSlotClusterUsed = bandMetrics?.cluster_baseline_used === true;
+    // The baseline is the 6x6-square region's normal; the bars are your
+    // squares only. baseline_local_scale (your squares' share of the region's
+    // reports on this band, same live span) puts the line in bar units, so
+    // bars vs line over the recent window shows the ratio the card label
+    // reports. 0 = no regional reports to scale by, so no line. Absent (older
+    // backend) = draw the unscaled line as before.
+    const rawScale = bandMetrics?.baseline_local_scale;
+    const baselineScale = typeof rawScale === 'number' && Number.isFinite(rawScale) && rawScale >= 0 ? rawScale : 1;
 
     const baselineRatesPerBin = new Array(ACTIVITY_BINS).fill(0);
     const baselineClusterUsedPerBin = new Array(ACTIVITY_BINS).fill(false);
@@ -648,7 +665,7 @@ export function computeActivityChartData(points, bandMetrics, minutes, nowMs) {
             rate = currentSlotBaselineRate;
             used = currentSlotClusterUsed;
         }
-        baselineRatesPerBin[i] = rate;
+        baselineRatesPerBin[i] = rate * baselineScale;
         baselineClusterUsedPerBin[i] = used;
         if (i === 0) {
             prevSlot = slot;
@@ -824,44 +841,54 @@ function parseBandMeters(band) {
     return m ? Number(m[1]) : Number.NaN;
 }
 
-function buildBandRecommendation(band, points, bandMetrics, sampleContext = {}) {
-    const score = Number(bandMetrics?.score || 0);
-    const confidence = confidence01(bandMetrics?.confidence);
-    const trend = String(bandMetrics?.trend || '').toLowerCase();
-    const count = points.length;
-    const totalReportsAllBands = Math.max(0, Number(sampleContext.totalReportsAllBands) || 0);
-    const maxReportsSingleBand = Math.max(0, Number(sampleContext.maxReportsSingleBand) || 0);
+// dxReady: dx_conditions for the current qth/window has arrived. A band with
+// live spots but no entry in it (only RBN/WSPR reports, or none at or above
+// the conditions SNR floor) is "not scored" rather than looking like it is
+// still loading.
+export function bandHeadText(band, bandMetrics, dxReady = false) {
+    const label = bandActivityLabel(bandMetrics) || (dxReady && !bandMetrics ? 'not scored' : '');
+    return label ? `${band} - ${label}` : band;
+}
 
-    if (count < 2) {
-        return 'low sample';
-    }
+const ACTIVITY_LEVEL_TEXT = {
+    above: 'above normal',
+    normal: 'normal',
+    below: 'below normal',
+};
 
-    let tier = 0; // 0=weak, 1=moderate, 2=strong
-    if (score >= 70 && confidence >= 0.55) {
-        tier = 2;
-    } else if (score >= 50 || (trend === 'improving' && confidence >= 0.35)) {
-        tier = 1;
+// Card label: the band against its own normal for this time of day, from the
+// backend's like-for-like regional comparison (activity_level /
+// activity_ratio), plus the DX-reach qualifier when the band's P90 path length
+// is off its normal. It deliberately does not compare bands with each other:
+// 10m carries a fraction of 40m's FT8 volume even when wide open. Empty until
+// dx metrics for the band have arrived, so the card never flashes a verdict
+// computed from missing data.
+export function bandActivityLabel(bandMetrics) {
+    const level = String(bandMetrics?.activity_level || '');
+    if (!level) return '';
+    let text;
+    if (level === 'low_sample') {
+        text = 'low sample';
+    } else if (level === 'no_baseline') {
+        text = 'no baseline';
+    } else if (ACTIVITY_LEVEL_TEXT[level]) {
+        text = `${ACTIVITY_LEVEL_TEXT[level]} ${formatRatio(bandMetrics.activity_ratio)}`;
+    } else {
+        return '';
     }
+    const reach = String(bandMetrics?.reach_level || '');
+    if (reach === 'longer' || reach === 'shorter') {
+        text += ` · ${reach} reach`;
+    }
+    return text;
+}
 
-    const reportShare = totalReportsAllBands > 0 ? count / totalReportsAllBands : 0;
-    const relativeToLeader = maxReportsSingleBand > 0 ? count / maxReportsSingleBand : 0;
-
-    // Evidence-based downgrades: require enough volume and relative presence.
-    if (count < 8) {
-        tier = Math.max(0, tier - 1);
-    }
-    if (count < 4) {
-        tier = Math.max(0, tier - 1);
-    }
-    if (maxReportsSingleBand >= 40 && relativeToLeader < 0.15) {
-        tier = Math.max(0, tier - 1);
-    }
-    if (totalReportsAllBands >= 120 && reportShare < 0.05) {
-        tier = Math.max(0, tier - 1);
-    }
-
-    const label = tier >= 2 ? 'strong' : tier === 1 ? 'moderate' : 'weak';
-    return label;
+function formatRatio(ratio) {
+    const r = Number(ratio);
+    if (!Number.isFinite(r) || r < 0) return '';
+    // Two decimals below 10 so the shown ratio never contradicts the level
+    // at a threshold (1.49 must not read "normal 1.5×").
+    return r >= 10 ? `${Math.round(r)}×` : `${r.toFixed(2)}×`;
 }
 
 // The backend reports confidence on a 0-99 scale, but the decision/tier
@@ -1016,6 +1043,8 @@ async function ensureDxConditions(qth, minutes, surroundings) {
 
     const controller = new AbortController();
     runtime.dxAbortController = controller;
+    runtime.dxAttemptKey = key;
+    runtime.dxAttemptAt = now;
     runtime.dxInFlightKey = key;
     runtime.dxInFlight = (async () => {
         try {
