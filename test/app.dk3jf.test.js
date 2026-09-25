@@ -68,7 +68,6 @@ vi.mock('../static/state.js', () => ({
     state: {
         liveSpots: [],
         renderPending: false,
-        cycleInterval: null,
         eventSource: null,
         renderInterval: null,
         heatLayer: null,
@@ -88,7 +87,6 @@ function setupDom() {
         <input id="minutes" value="15" />
         <input id="ssb-min-db" value="0" />
         <input id="cw-min-db" value="-15" />
-        <input id="cycle-time" value="3" />
 
         <input type="radio" name="min-snr" value="none" id="snr-none" />
         <input type="radio" name="min-snr" value="cw" id="snr-cw" />
@@ -124,9 +122,8 @@ function setupDom() {
 
         <button id="btn-geo" type="button"></button>
         <button id="btn-submit" type="button" data-mode="go" title="Go" aria-label="Go"><i class="fas fa-play"></i></button>
-        <button id="btn-cycle" type="button"></button>
 
-        <div id="current-band-display"></div>
+        <button id="band-solo-clear" type="button"><span class="band-solo-name"></span></button>
         <div id="stream-status"></div>
 
         <div id="map"></div>

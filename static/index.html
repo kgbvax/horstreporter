@@ -16,7 +16,6 @@
         <svg class="icon" data-glyph="fa-chevron-right" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M311 233Q320 243 320 256Q320 269 311 279L119 471Q109 480 96 480Q83 480 73 471Q64 461 64 448Q64 435 73 425L243 256L73 87Q64 77 64 64Q64 51 73 41Q83 32 96 32Q109 32 119 41L311 233Z"/></svg>
     </button>
     <div id="top-right-controls" class="d-flex align-items-center gap-2" style="position: absolute; top: 15px; right: 15px; z-index: 1000;">
-        <div id="current-band-display" class="h4 m-0 p-2 rounded" style="background-color: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); box-shadow: 0 2px 4px var(--shadow-color); transition: background-color 0.3s, color 0.3s; pointer-events: none;">All Bands</div>
     </div>
     <div id="controls" class="d-flex flex-column p-3 border-end overflow-auto z-1 position-relative" style="max-width: 320px; width: 100%; transition: margin-left 0.3s, background-color 0.3s, border-color 0.3s;">
         <div class="controls-header d-flex justify-content-between align-items-center mb-3">
@@ -54,14 +53,7 @@
             </div>
             <div class="form-sections d-flex flex-column gap-2">
             <div id="band-container" class="w-100 bg-transparent mb-2" style="font-size: 0.9rem;" data-focus-band="">
-                <div class="row g-2 mb-2">
-                    <div class="col-6">
-                        <button type="button" id="btn-show-all" class="btn btn-outline-secondary btn-sm w-100" title="Show all enabled bands">Show all</button>
-                    </div>
-                    <div class="col-6">
-                        <button type="button" id="btn-cycle" class="btn btn-outline-primary btn-sm w-100" title="Cycle enabled bands"><svg class="icon" data-glyph="fa-play" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M73 39Q49 25 25 38Q1 52 0 80V432Q1 460 25 474Q49 487 73 473L361 297Q383 283 384 256Q383 230 361 215L73 39Z"/></svg> Cycle</button>
-                    </div>
-                </div>
+                <button type="button" id="btn-show-all" class="btn btn-outline-secondary btn-sm w-100 mb-2" title="Show all enabled bands" disabled>Show all bands</button>
                 <!-- Band rail: one row per band in frequency order; the name chip is the
                      band-color key. Checkbox =
                      enable; row click = solo. Count + sparkline are filled by
@@ -207,10 +199,6 @@
                     </div>
                     <div id="snr-sliders-root" class="d-flex flex-column w-100 gap-3"></div>
                     <div class="d-flex flex-column w-100">
-                        <label class="d-flex align-items-center justify-content-between mb-0" for="cycle-time"><span>Band Cycle Time:</span> <span><span id="cycle-time-val">3</span> sec</span></label>
-                        <input type="range" id="cycle-time" class="form-range" min="1" max="60" step="1" value="3" />
-                    </div>
-                    <div class="d-flex flex-column w-100">
                     <div id="cluster-root" class="d-flex flex-column w-100"></div>
                     </div>
                     <!-- Opmode status (read-only) -->
@@ -302,6 +290,7 @@
         <div id="map-toggles" class="map-toggles">
             <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show Band Stats">Stats</button>
             <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show Propagation Intelligence Matrix">Prop</button>
+            <button id="band-solo-clear" type="button" class="panel-toggle band-solo-clear" title="Show all enabled bands" style="display: none;"><span class="band-solo-name"></span> <span aria-hidden="true">&times;</span></button>
             <button id="drill-down-clear" type="button" class="panel-toggle is-translucent" title="Clear grid-square filter" style="display: none;"></button>
         </div>
         <canvas id="azimuth-canvas" class="position-absolute top-0 start-0 w-100 h-100"></canvas>

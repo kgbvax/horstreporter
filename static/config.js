@@ -46,11 +46,6 @@ export function loadConfig() {
             bandContainer.dataset.focusBand = (savedBand && savedBand !== 'all') ? savedBand : '';
         }
 
-        const savedCycleTime = localStorage.getItem('cycleTime');
-        if (savedCycleTime !== null) {
-            const el = inputById('cycle-time');
-            if (el) el.value = savedCycleTime;
-        }
 
     } catch (e) {
         console.error("Error parsing saved form state", e);

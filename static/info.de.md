@@ -14,7 +14,6 @@ Es ist im Grunde ein alternatives Frontend für <a href="https://www.pskreporter
     * *Grid:* Fasst Spots in Maidenhead-Feldern zusammen. Die Farbe zeigt das dominierende Band, die Deckkraft die Signalstärke.
     * *Active Area:* Zeichnet dynamische Polygone um geclusterte Spots, um den gesamten Ausbreitungs-„Fußabdruck" zu zeigen.
 
-* **Band-Cycler:** Klicke auf das Play-Symbol unter der Bandliste, um automatisch durch die aktuell offenen Bänder zu schalten.
 * **Optionen:** Klappe das Optionen-Panel auf, um maximales Spot-Alter, Cluster-Abstand, Auto-Zoom-Verhalten und mehr zu ändern.
 * Wenn für dein Feld zu wenig Daten erscheinen, aktiviere **Adj. Squares** — damit werden auch die 8 umliegenden Felder einbezogen.
 

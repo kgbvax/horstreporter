@@ -1387,6 +1387,14 @@ body[data-theme="dark"] .band-row {
 /* Active state for the stateful overlay toggles — mirrors .opmode-beam-btn.active
    so a filled accent pill reads as "this card is open" in both themes. Placed
    after the :hover rules so it wins the equal-specificity tie. */
+/* Solo chip: band color + text set inline by updateCurrentBandDisplay. */
+.band-solo-clear,
+.band-solo-clear:hover {
+    filter: none;
+}
+.band-solo-clear:hover {
+    filter: brightness(1.08);
+}
 .panel-toggle.is-active,
 .panel-toggle.is-active:hover {
     background: var(--accent);

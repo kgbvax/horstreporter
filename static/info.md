@@ -14,7 +14,6 @@ It is effectively an alternate frontend for <a href="https://www.pskreporter.inf
     * *Grid:* Groups spots into Maidenhead squares. Color indicates the dominant band, opacity indicates signal strength.
     * *Active Area:* Draws dynamic polygons enclosing clustered spots to show the overall propagation footprint.
 
-* **Band Cycler:** Click the play icon under the band list to automatically cycle through currently open bands.
 * **Options:** Expand the Options panel to change maximum spot age, cluster grouping distance, auto-zoom behavior, and more.
 * If you don't see enough data for your square, try enabling **Adj. Squares** which also pulls data from the 8 squares around you.
 * **Operator mode** (when running behind the local operator agent with an UltraBeam antenna): the Options panel gains a **Beam direction** control — three buttons, *forward* / *180°* / *bi-dir* — that show and set the antenna's pattern live over MQTT. When the beam is left in **180°**, that button pulses an escalating red with a **REVERSE** warning; this is intentional, since a forgotten reverse beam is easy to miss.
