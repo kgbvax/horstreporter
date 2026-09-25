@@ -287,21 +287,21 @@
     </div>
     <div id="band-lab-window" class="band-lab-window is-hidden">
         <div class="band-lab-window-header">
-            <span>Band Stats</span>
+            <span>Band stats</span>
             <div class="band-lab-window-header-actions">
-                <label for="band-lab-time-range" class="visually-hidden">Band Stats time range</label>
-                <select id="band-lab-time-range" class="form-select form-select-sm" title="Band Stats time range">
-                    <option value="15">15m</option>
-                    <option value="30">30m</option>
-                    <option value="60">1h</option>
-                    <option value="120">2h</option>
+                <label for="band-lab-time-range" class="visually-hidden">Band stats time range</label>
+                <select id="band-lab-time-range" class="form-select form-select-sm" title="Band stats time range">
+                    <option value="15">15 min</option>
+                    <option value="30">30 min</option>
+                    <option value="60">1 h</option>
+                    <option value="120">2 h</option>
                 </select>
                 <button id="band-lab-legend-help-toggle" type="button" class="btn btn-sm btn-outline-secondary" title="Show chart legend help" aria-expanded="false" aria-controls="band-lab-legend-help">?</button>
-                <button id="band-lab-window-close" type="button" class="btn btn-sm btn-outline-secondary" title="Hide Band Stats">×</button>
+                <button id="band-lab-window-close" type="button" class="btn btn-sm btn-outline-secondary" title="Hide band stats" aria-label="Hide band stats">×</button>
             </div>
         </div>
         <div id="band-lab-legend-help" class="band-lab-legend-help" style="display:none;" role="status" aria-live="polite">
-            <div><strong>Distance vs SNR:</strong> dots=reports, green dashed=cw -15 dB, orange dashed=phone 0 dB, faint verticals=P50/P90 distance.</div>
+            <div><strong>Distance vs SNR:</strong> each dot is a report. The orange dashed line is the SSB threshold and the green dashed line the CW threshold, both set under Display. The faint vertical lines mark the P50 and P90 distance.</div>
             <div><strong>Reports over time + baseline:</strong> bars=spots/min in the selected window, red dashed=normal rate for the time of day (steps at 30-min UTC slot boundaries), taken from your 6×6-square region's history and scaled to your squares' current share of the region's reports; grey when a global fallback is shown.</div>
             <div><strong>Band label:</strong> the region's reports over the last hour (or the selected window, if shorter) against its normal for the same time of day. above normal = 1.5× or more, below normal = 0.67× or less, normal in between. low sample = fewer than 20 reports both observed and expected. not scored = no FT8 reports at or above -15 dB for the band. longer / shorter reach = P90 path length at least 30% above / below normal.</div>
         </div>
@@ -315,7 +315,7 @@
         <div id="map" class="w-100 h-100"></div>
         <div id="map-toggles" class="map-toggles">
             <button id="show-sidebar" type="button" class="panel-toggle is-translucent" title="Show controls" aria-label="Show controls" style="display: none;"><svg class="icon" data-glyph="fa-chevron-right" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M311 233Q320 243 320 256Q320 269 311 279L119 471Q109 480 96 480Q83 480 73 471Q64 461 64 448Q64 435 73 425L243 256L73 87Q64 77 64 64Q64 51 73 41Q83 32 96 32Q109 32 119 41L311 233Z"/></svg></button>
-            <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show Band Stats">Stats</button>
+            <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show band stats">Band stats</button>
             <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show Propagation Intelligence Matrix">Prop</button>
             <button id="band-solo-clear" type="button" class="panel-toggle band-solo-clear" title="Show all enabled bands" style="display: none;"><span class="band-solo-name"></span> <span aria-hidden="true">&times;</span></button>
             <button id="drill-down-clear" type="button" class="panel-toggle is-translucent" title="Clear grid-square filter" style="display: none;"></button>

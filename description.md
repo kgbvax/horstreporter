@@ -62,9 +62,9 @@ propagation on an interactive world map.
   and a rolling history window you set from 1 to 60 minutes.
 - **Context overlays:** a live grey-line terminator, DXCC country colouring, and
   entity labels with an adjustable density.
-- **Band Stats panel:** per-band distance-vs-SNR scatter and reports-over-time
-  charts, each compared against a historical baseline, plus a colour-coded
-  green/yellow/red/grey assessment with a confidence figure.
+- **Band stats panel:** per-band distance-vs-SNR scatter and reports-over-time
+  charts, each compared against a historical baseline, plus a single
+  good/fair/poor verdict (or "not enough data yet") with a confidence figure.
 - **Hands-free scanning:** an optional band-cycle mode that rotates through your
   selected bands automatically.
 

@@ -10,10 +10,22 @@ const WINDOW_SIZE_KEY = 'bandLabWindowSize';
 const TIME_RANGE_KEY = 'bandLabTimeRangeMinutes';
 const BAND_LAB_TIME_RANGE_MINUTES = [15, 30, 60, 120];
 
-// Canvas charts live on the Band Stats panel, whose background follows the
+// SNR thresholds from the Display section (src/SnrThresholds.svelte). Only the
+// slider for the active min-SNR mode is mounted; the other value lives in the
+// Svelte store. These are the slider defaults when neither is available.
+const DEFAULT_SSB_MIN_DB = 0;
+const DEFAULT_CW_MIN_DB = -15;
+const SSB_GUIDE_COLOR = '#f97316';
+const CW_GUIDE_COLOR = '#22c55e';
+
+// Summary verdict: below this confidence (0-1) the panel says there is not
+// enough data instead of passing on the backend's overall status.
+const VERDICT_MIN_CONFIDENCE = 0.4;
+
+// Canvas charts live on the Band stats panel, whose background follows the
 // theme. Axis text / gridlines that were tuned for a light surface vanish on
 // the dark surface, so pick them per theme. Data-driven colors (band colors,
-// phone/cw guide lines, baseline markers) are readable on both and stay fixed.
+// SSB/CW guide lines, baseline markers) are readable on both and stay fixed.
 const CHART_PALETTE_LIGHT = { axisText: '#334155', grid: '#64748b', frame: '#64748b' };
 const CHART_PALETTE_DARK = { axisText: '#cbd5e1', grid: '#94a3b8', frame: '#64748b' };
 function chartPalette() {
@@ -26,6 +38,9 @@ const runtime = {
     enabled: false,
     initialized: false,
     lastUpdateAt: 0,
+    // Trailing-edge timer for throttled updates, so the last change in a burst
+    // (e.g. dragging an SNR threshold slider) is always drawn.
+    trailingTimer: null,
     updateSeq: 0,
     lastDxFetchAt: 0,
     dxCache: null,
@@ -109,10 +124,27 @@ export function initBandLab(options = {}) {
             updateBandLab({ force: true });
         });
 
+        // The SNR threshold sliders and min-SNR radios are Svelte-mounted and
+        // the sliders re-mount on every mode switch, so listen at the document
+        // rather than on the elements. The charts filter by the thresholds and
+        // draw them as guides, so redraw on every change. The render loop also
+        // calls updateBandLab, but it skips frames while the map is paused or
+        // being dragged.
+        document.addEventListener('input', onSnrControlChange);
+        document.addEventListener('change', onSnrControlChange);
+
         runtime.initialized = true;
     }
 
     updateBandLab({ force: true });
+}
+
+function onSnrControlChange(event) {
+    const target = event?.target;
+    if (!target) return;
+    if (target.id === 'ssb-min-db' || target.id === 'cw-min-db' || target.name === 'min-snr') {
+        updateBandLab();
+    }
 }
 
 function setBandStatsVisible(windowEl, toggleButton, visible) {
@@ -130,9 +162,12 @@ export function updateBandLab(options = {}) {
 
     const now = Date.now();
     const force = options.force === true;
-    if (!force && (now - runtime.lastUpdateAt) < UPDATE_THROTTLE_MS) {
+    const sinceLast = now - runtime.lastUpdateAt;
+    if (!force && sinceLast < UPDATE_THROTTLE_MS) {
+        scheduleTrailingUpdate(UPDATE_THROTTLE_MS - sinceLast);
         return;
     }
+    cancelTrailingUpdate();
     runtime.lastUpdateAt = now;
 
     const summaryEl = document.getElementById('band-lab-summary');
@@ -144,23 +179,25 @@ export function updateBandLab(options = {}) {
     const surroundings = document.getElementById('surroundings')?.checked === true;
 
     if (!qth) {
-        summaryEl.innerHTML = '<div class="text-muted">Enter a qth to inspect band conditions.</div>';
+        summaryEl.innerHTML = '<div class="text-muted">Enter a locator to see band conditions.</div>';
         cardsEl.innerHTML = '';
+        runtime.lastBandKey = '';
         return;
     }
 
     // Dirty-check: skip the whole pipeline when neither the spot set nor the
     // filters changed since the last update (quiet periods between spot bursts).
     const spots = state.liveSpots;
+    const thresholds = getSnrThresholdsDb();
     const spotFingerprint = `${spots.length}:${spots[0]?.ageSeconds ?? ''}:${spots[spots.length - 1]?.ageSeconds ?? ''}`;
-    const filterFingerprint = `${qth}|${minutes}|${surroundings ? 1 : 0}|${getMinSnrMode()}|${document.getElementById('ssb-min-db')?.value || '0'}|${document.getElementById('cw-min-db')?.value || '-15'}|${getSelectedBand()}|${Array.from(getEnabledBands()).sort().join(',')}`;
+    const filterFingerprint = `${qth}|${minutes}|${surroundings ? 1 : 0}|${getMinSnrMode()}|${thresholds.ssbMinDb}|${thresholds.cwMinDb}|${getSelectedBand()}|${Array.from(getEnabledBands()).sort().join(',')}`;
     if (!force && spotFingerprint === runtime.lastSpotFingerprint && filterFingerprint === runtime.lastFilterFingerprint) {
         return;
     }
     runtime.lastSpotFingerprint = spotFingerprint;
     runtime.lastFilterFingerprint = filterFingerprint;
 
-    const filtered = filterSpots(spots, minutes);
+    const filtered = filterSpots(spots, minutes, thresholds);
     const grouped = groupSpotsByBand(filtered);
     const requestSeq = ++runtime.updateSeq;
     const requestKey = `${qth}|${minutes}|${surroundings ? 1 : 0}`;
@@ -168,7 +205,7 @@ export function updateBandLab(options = {}) {
 
     // Render immediately from live spots to avoid a blank panel while dx_conditions loads.
     renderSummary(summaryEl, { loading: !hasDxForKey });
-    renderBandCards(cardsEl, grouped, qth, minutes, hasDxForKey);
+    renderBandCards(cardsEl, grouped, qth, minutes, hasDxForKey, thresholds);
 
     // Refetch when the cached response is for another key OR older than the
     // fetch interval. Checking the key alone meant dx_conditions was fetched
@@ -179,7 +216,7 @@ export function updateBandLab(options = {}) {
             if (!runtime.enabled || requestSeq !== runtime.updateSeq) return;
             const ready = Boolean(runtime.dxCache) && runtime.dxCacheKey === requestKey;
             renderSummary(summaryEl);
-            renderBandCards(cardsEl, grouped, qth, minutes, ready);
+            renderBandCards(cardsEl, grouped, qth, minutes, ready, thresholds);
         });
     }
     return null;
@@ -193,10 +230,56 @@ export function dxNeedsRefresh(rt, requestKey, nowMs) {
     return (nowMs - rt.lastDxFetchAt) >= DX_FETCH_INTERVAL_MS;
 }
 
-function filterSpots(spots, minutes) {
+function scheduleTrailingUpdate(delayMs) {
+    if (runtime.trailingTimer) return;
+    runtime.trailingTimer = setTimeout(() => {
+        runtime.trailingTimer = null;
+        updateBandLab();
+    }, Math.max(0, delayMs));
+}
+
+function cancelTrailingUpdate() {
+    if (!runtime.trailingTimer) return;
+    clearTimeout(runtime.trailingTimer);
+    runtime.trailingTimer = null;
+}
+
+// getSnrThresholdsDb returns the SSB and CW min-SNR thresholds (dB) set under
+// Display. The mounted slider wins; an unmounted one (only the active mode's
+// slider exists) is read from the Svelte store, then the slider default.
+export function getSnrThresholdsDb() {
+    const store = readUiStoreSnapshot();
+    return {
+        ssbMinDb: readThresholdDb('ssb-min-db', store?.ssbMinDb, DEFAULT_SSB_MIN_DB),
+        cwMinDb: readThresholdDb('cw-min-db', store?.cwMinDb, DEFAULT_CW_MIN_DB),
+    };
+}
+
+function readThresholdDb(elementId, storeValue, fallback) {
+    const el = document.getElementById(elementId);
+    const fromDom = el ? Number.parseInt(el.value, 10) : Number.NaN;
+    if (Number.isFinite(fromDom)) return fromDom;
+    const fromStore = Number.parseInt(String(storeValue ?? ''), 10);
+    if (Number.isFinite(fromStore)) return fromStore;
+    return fallback;
+}
+
+function readUiStoreSnapshot() {
+    const store = typeof window !== 'undefined' ? window.__horstUiStore : null;
+    if (!store || typeof store.subscribe !== 'function') return null;
+    let snapshot = null;
+    try {
+        const unsubscribe = store.subscribe((value) => { snapshot = value; });
+        if (typeof unsubscribe === 'function') unsubscribe();
+    } catch {
+        return null;
+    }
+    return snapshot;
+}
+
+function filterSpots(spots, minutes, thresholds = getSnrThresholdsDb()) {
     const minSnrMode = getMinSnrMode();
-    const ssbMinDb = parseInt(document.getElementById('ssb-min-db')?.value || '0', 10);
-    const cwMinDb = parseInt(document.getElementById('cw-min-db')?.value || '-15', 10);
+    const { ssbMinDb, cwMinDb } = thresholds;
     const selectedBand = getSelectedBand();
     const enabledBands = getEnabledBands();
     const maxAgeSeconds = minutes * 60;
@@ -260,20 +343,19 @@ function renderSummary(summaryEl, options = {}) {
 
     const score = Number(resp.overall_score || 0);
     const confidence = confidence01(resp.confidence);
-    const condition = String(resp.condition || 'Unknown');
     const { bestBands, recBands } = enabledBestBands(resp, getEnabledBands());
 
     const top = recBands.length > 0 ? recBands : bestBands;
     const recommendation = top.length > 0
-        ? `Best now: ${top.slice(0, 3).join(', ')}`
+        ? `<strong>Best now:</strong> ${escapeHtml(top.slice(0, 3).join(', '))}`
         : 'No clear best band yet';
 
-    // The "worth it" verdict requires at least one band the backend actually
+    // The go verdict requires at least one enabled band the backend actually
     // recommends (green/yellow). best_bands is just the top scores and is
     // populated whenever any band has spots — feeding it here would let the
-    // verdict pass with zero recommended bands. The "Best now" line below
-    // keeps the fallback.
-    const decision = buildGlobalDecision(score, confidence, recBands.length);
+    // verdict pass with zero recommended bands. The "Best now" line keeps the
+    // fallback.
+    const decision = buildGlobalDecision(resp.status, confidence, recBands.length);
     const confidencePct = Math.round(confidence * 100);
 
     summaryEl.innerHTML = `
@@ -282,9 +364,8 @@ function renderSummary(summaryEl, options = {}) {
                 <span class="band-lab-decision-badge ${decision.className}">${escapeHtml(decision.label)}</span>
                 <span class="band-lab-confidence">confidence ${confidencePct}%</span>
             </div>
-            <div><strong>Condition:</strong> ${escapeHtml(condition)}</div>
             <div><strong>Score:</strong> ${Number.isFinite(score) ? score.toFixed(1) : 'n/a'}</div>
-            <div class="band-lab-summary-reco"><strong>Decision:</strong> ${escapeHtml(recommendation)}</div>
+            <div class="band-lab-summary-reco">${recommendation}</div>
         </div>
     `;
 }
@@ -307,7 +388,7 @@ export function enabledBestBands(resp, enabled) {
     return { bestBands: pick(resp?.best_bands), recBands: pick(resp?.recommended_bands) };
 }
 
-function renderBandCards(cardsEl, grouped, qth, minutes, dxReady = false) {
+function renderBandCards(cardsEl, grouped, qth, minutes, dxReady = false, thresholds = getSnrThresholdsDb()) {
     const bands = Array.from(grouped.keys()).sort((a, b) => compareBand(a, b));
     if (bands.length === 0) {
         runtime.lastBandKey = '';
@@ -335,7 +416,7 @@ function renderBandCards(cardsEl, grouped, qth, minutes, dxReady = false) {
     // Only rebuild the card DOM (and its <canvas> elements) when the band set
     // changes; otherwise redraw the charts in place, reusing the canvases.
     const bandKey = bands.join(',');
-    if (bandKey !== runtime.lastBandKey) {
+    if (bandKey !== runtime.lastBandKey || !cardsEl.querySelector('.band-lab-card')) {
         runtime.lastBandKey = bandKey;
         cardsEl.innerHTML = bands.map((band) => {
             const points = grouped.get(band) || [];
@@ -353,7 +434,7 @@ function renderBandCards(cardsEl, grouped, qth, minutes, dxReady = false) {
                         <div class="band-lab-chart-block">
                             <div class="band-lab-chart-title">Distance vs SNR</div>
                             <canvas id="band-lab-scatter-${safeBand}" width="230" height="120"></canvas>
-                            ${qthCenter ? '' : '<div class="band-lab-chart-note">Distance plot needs locator qth (e.g. JO32).</div>'}
+                            ${qthCenter ? '' : '<div class="band-lab-chart-note">The distance plot needs a grid locator such as JO32.</div>'}
                         </div>
                         <div class="band-lab-chart-block">
                             <div class="band-lab-chart-title">Reports over time + baseline</div>
@@ -371,7 +452,7 @@ function renderBandCards(cardsEl, grouped, qth, minutes, dxReady = false) {
         const labelEl = cardsEl.querySelector(`[data-band-label="${safeBand}"]`);
         if (labelEl) labelEl.textContent = recs.get(band);
         drawActivityChart(document.getElementById(`band-lab-activity-${safeBand}`), points, dxBands.get(band), minutes);
-        drawScatterChart(document.getElementById(`band-lab-scatter-${safeBand}`), points, qthCenter, band, globalDistanceCapKm, distanceCache);
+        drawScatterChart(document.getElementById(`band-lab-scatter-${safeBand}`), points, qthCenter, band, globalDistanceCapKm, distanceCache, thresholds);
     }
 }
 
@@ -421,10 +502,23 @@ function getQthCenter(qth) {
     };
 }
 
+// snrGuideSpecs: the dashed SNR guide lines on the Distance vs SNR chart, one
+// per threshold set under Display (see getSnrThresholdsDb).
+export function snrGuideSpecs(thresholds = {}) {
+    const ssb = Number.isFinite(thresholds.ssbMinDb) ? thresholds.ssbMinDb : DEFAULT_SSB_MIN_DB;
+    const cw = Number.isFinite(thresholds.cwMinDb) ? thresholds.cwMinDb : DEFAULT_CW_MIN_DB;
+    return [
+        { snr: ssb, color: SSB_GUIDE_COLOR, label: `SSB ${ssb} dB` },
+        { snr: cw, color: CW_GUIDE_COLOR, label: `CW ${cw} dB` },
+    ];
+}
+
 // Pure: turn spots + qth center into scatter samples + axis ranges, or null
 // when there is no usable distance data. Extracted from drawScatterChart so the
-// math is unit-testable without a canvas.
-export function computeScatterData(points, qthCenter, globalDistanceCapKm, distanceCache) {
+// math is unit-testable without a canvas. guideSnrs are the SNR guide values
+// (the SSB / CW thresholds); the SNR axis always spans them so a guide set
+// outside the -20..20 dB default range stays visible.
+export function computeScatterData(points, qthCenter, globalDistanceCapKm, distanceCache, guideSnrs = [DEFAULT_SSB_MIN_DB, DEFAULT_CW_MIN_DB]) {
     if (!qthCenter || !points || points.length === 0) return null;
     const samples = points
         .map((p) => ({
@@ -439,13 +533,14 @@ export function computeScatterData(points, qthCenter, globalDistanceCapKm, dista
     // chevron instead of plotting them off-chart or inflating the axis.
     const maxDist = Math.max(500, Number(globalDistanceCapKm) || 0);
     for (const s of samples) s.clipped = s.d > maxDist;
-    const minSnr = Math.min(-20, -15, ...samples.map((s) => s.s));
-    const maxSnr = Math.max(20, 0, ...samples.map((s) => s.s));
+    const guides = (Array.isArray(guideSnrs) ? guideSnrs : []).map(Number).filter(Number.isFinite);
+    const minSnr = Math.min(-20, ...guides, ...samples.map((s) => s.s));
+    const maxSnr = Math.max(20, ...guides, ...samples.map((s) => s.s));
     const snrRange = Math.max(10, maxSnr - minSnr);
     return { samples, maxDist, minSnr, maxSnr, snrRange };
 }
 
-function drawScatterChart(canvas, points, qthCenter, band, globalDistanceCapKm, distanceCache) {
+function drawScatterChart(canvas, points, qthCenter, band, globalDistanceCapKm, distanceCache, thresholds) {
     const prepared = prepareCanvas(canvas, 230, 120);
     if (!prepared) return;
     const { ctx, w, h } = prepared;
@@ -458,26 +553,33 @@ function drawScatterChart(canvas, points, qthCenter, band, globalDistanceCapKm, 
     const pal = chartPalette();
     drawChartFrame(ctx, pad, pw, ph, pal);
 
-    const data = computeScatterData(points, qthCenter, globalDistanceCapKm, distanceCache);
+    const guides = snrGuideSpecs(thresholds);
+    const data = computeScatterData(points, qthCenter, globalDistanceCapKm, distanceCache, guides.map((g) => g.snr));
     if (!data) {
-        drawNoData(ctx, w, h, 'no distance data', pal);
+        drawNoData(ctx, w, h, 'No distance data', pal);
         return;
     }
     const { samples, maxDist, minSnr, maxSnr, snrRange } = data;
 
-    const drawSnrGuide = (snr, color, label) => {
-        const y = pad.t + ph - ((snr - minSnr) / snrRange) * ph;
-        if (!Number.isFinite(y) || y < pad.t || y > (pad.t + ph)) return;
-        ctx.strokeStyle = hexToRgba(color, 0.85);
+    // Labels sit just above their line at the left edge. When the two
+    // thresholds are close enough for the labels to collide, the later one
+    // moves to the right edge.
+    const placedLabelYs = [];
+    for (const guide of guides) {
+        const y = pad.t + ph - ((guide.snr - minSnr) / snrRange) * ph;
+        if (!Number.isFinite(y) || y < pad.t || y > (pad.t + ph)) continue;
+        ctx.strokeStyle = hexToRgba(guide.color, 0.85);
         dashedLine(ctx, pad.l, y, pad.l + pw, y, [4, 3], 1);
 
-        ctx.fillStyle = hexToRgba(color, 0.95);
+        const labelY = Math.max(pad.t + 10, y - 2);
+        const collides = placedLabelYs.some((placedY) => Math.abs(placedY - labelY) < 11);
+        ctx.fillStyle = hexToRgba(guide.color, 0.95);
         ctx.font = '10px sans-serif';
-        ctx.fillText(label, pad.l + 3, Math.max(pad.t + 10, y - 2));
-    };
-
-    drawSnrGuide(0, '#f97316', 'phone 0 dB');
-    drawSnrGuide(-15, '#22c55e', 'cw -15 dB');
+        ctx.textAlign = collides ? 'right' : 'left';
+        ctx.fillText(guide.label, collides ? pad.l + pw - 3 : pad.l + 3, labelY);
+        ctx.textAlign = 'left';
+        placedLabelYs.push(labelY);
+    }
 
     const sortedDistances = samples.map((s) => s.d).sort((a, b) => a - b);
     const p50Dist = quantileSorted(sortedDistances, 0.5);
@@ -776,7 +878,7 @@ function drawActivityChart(canvas, points, bandMetrics, minutes) {
         ctx.font = '10px sans-serif';
         ctx.textAlign = 'right';
         ctx.fillText(
-            lastSegment.used ? 'baseline' : 'baseline·global',
+            lastSegment.used ? 'Baseline' : 'Global baseline',
             pad.l + pw - 4,
             Math.max(pad.t + 10, lastSegment.y - 3)
         );
@@ -791,10 +893,17 @@ function drawActivityChart(canvas, points, bandMetrics, minutes) {
     ctx.fillText(formatRate(yMax / 2), pad.l - 4, pad.t + (ph / 2) + 3);
     ctx.fillText('0', pad.l - 4, pad.t + ph + 3);
     ctx.textAlign = 'left';
-    ctx.fillText(`last ${minutes}m`, pad.l, pad.t + ph + 12);
+    ctx.fillText(`Last ${formatWindowMinutes(minutes)}`, pad.l, pad.t + ph + 12);
     ctx.textAlign = 'right';
     ctx.fillText('spots/min', pad.l + pw, pad.t + ph + 12);
     ctx.textAlign = 'left';
+}
+
+// formatWindowMinutes renders a look-back window as "15 min" / "1 h" / "2 h".
+export function formatWindowMinutes(minutes) {
+    const m = Math.max(0, Math.round(Number(minutes) || 0));
+    if (m >= 60 && m % 60 === 0) return `${m / 60} h`;
+    return `${m} min`;
 }
 
 function drawChartFrame(ctx, pad, pw, ph, pal = CHART_PALETTE_LIGHT) {
@@ -847,7 +956,7 @@ function parseBandMeters(band) {
 // still loading.
 export function bandHeadText(band, bandMetrics, dxReady = false) {
     const label = bandActivityLabel(bandMetrics) || (dxReady && !bandMetrics ? 'not scored' : '');
-    return label ? `${band} - ${label}` : band;
+    return label ? `${band}: ${label}` : band;
 }
 
 const ACTIVITY_LEVEL_TEXT = {
@@ -878,7 +987,7 @@ export function bandActivityLabel(bandMetrics) {
     }
     const reach = String(bandMetrics?.reach_level || '');
     if (reach === 'longer' || reach === 'shorter') {
-        text += ` · ${reach} reach`;
+        text += `, ${reach} reach`;
     }
     return text;
 }
@@ -900,14 +1009,31 @@ function confidence01(raw) {
     return Math.max(0, Math.min(1, v / 100));
 }
 
-function buildGlobalDecision(score, confidence, recommendedCount) {
-    if (score >= 70 && confidence >= 0.55 && recommendedCount > 0) {
-        return { label: 'Worth turning radio on', className: 'is-go' };
+const VERDICT_NO_DATA = { label: 'Not enough data yet', className: 'is-wait' };
+const VERDICT_GOOD = { label: 'Good: worth turning the radio on', className: 'is-go' };
+const VERDICT_FAIR = { label: 'Fair: worth monitoring', className: 'is-watch' };
+const VERDICT_POOR = { label: 'Poor: low payoff now', className: 'is-wait' };
+
+// buildGlobalDecision is the panel's single verdict. It follows the backend's
+// overall status (dx_conditions.go classifyOverallStatus: green >= 65,
+// yellow >= 35, else red; grey below 15 confidence) so it cannot contradict
+// the condition the backend reports. confidence is 0-1 (see confidence01).
+// Below VERDICT_MIN_CONFIDENCE, or for grey / missing status, there is not
+// enough data. Green needs at least one recommended enabled band; without one
+// it reads as fair.
+export function buildGlobalDecision(status, confidence, recommendedCount) {
+    const conf = Number(confidence);
+    if (!Number.isFinite(conf) || conf < VERDICT_MIN_CONFIDENCE) return VERDICT_NO_DATA;
+    switch (String(status || '')) {
+        case 'green':
+            return recommendedCount > 0 ? VERDICT_GOOD : VERDICT_FAIR;
+        case 'yellow':
+            return VERDICT_FAIR;
+        case 'red':
+            return VERDICT_POOR;
+        default:
+            return VERDICT_NO_DATA;
     }
-    if (score >= 50 || confidence >= 0.4) {
-        return { label: 'Maybe — monitor a few minutes', className: 'is-watch' };
-    }
-    return { label: 'Likely low payoff now', className: 'is-wait' };
 }
 
 function quantileSorted(sorted, q) {
@@ -1065,7 +1191,7 @@ async function ensureDxConditions(qth, minutes, surroundings) {
                 return runtime.dxCache;
             }
             if (!runtime.dxCache) {
-                console.warn('Band Lab dx_conditions fetch failed:', err);
+                console.warn('Band stats dx_conditions fetch failed:', err);
             }
             return runtime.dxCache;
         } finally {
