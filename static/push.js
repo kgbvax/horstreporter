@@ -243,6 +243,9 @@ export async function initPushUI() {
     const root = document.getElementById('push-settings-root');
     if (!root || !isPushSupported()) {
         if (root) root.style.display = 'none';
+        // The Notifications section holds nothing else; drop it entirely.
+        const section = document.getElementById('notifications-section');
+        if (section) section.hidden = true;
         return null;
     }
 

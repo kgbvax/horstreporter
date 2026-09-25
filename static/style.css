@@ -873,6 +873,48 @@ body[data-theme="dark"] .wspr-heat-scale {
     }
 }
 
+/* Settings sections (Layers / Display / Notifications): an exclusive
+   <details name="settings"> accordion below the band rail. */
+.settings-section {
+    border-bottom: 1px solid var(--border-color);
+}
+.settings-section > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 2px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+}
+.settings-section > summary::-webkit-details-marker {
+    display: none;
+}
+.settings-section > summary::after {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg) translateY(-2px);
+    opacity: 0.6;
+    transition: transform 0.15s ease;
+}
+.settings-section[open] > summary::after {
+    transform: rotate(225deg) translateY(-2px);
+}
+.settings-section > summary:focus-visible {
+    outline: 2px solid var(--text-color, #111);
+    outline-offset: 2px;
+}
+.settings-body {
+    padding: 2px 2px 12px;
+}
+@media (prefers-reduced-motion: reduce) {
+    .settings-section > summary::after { transition: none; }
+}
+
 /* Options toggle grid */
 .options-toggles-grid {
     display: grid;
@@ -1008,7 +1050,10 @@ body[data-theme="dark"] .band-row {
 .band-row[data-state="live"] .band-count {
     color: var(--text-color);
 }
+/* Before the first render there is no data-state yet: read enabled from the
+   checkbox so disabled bands don't flash as filled chips. */
 /* Quiet: enabled, no spots in the window: tinted chip, normal ink. */
+.band-row:not([data-state]) .band-pill-name,
 .band-row[data-state="quiet"] .band-pill-name {
     background: color-mix(in srgb, var(--band) 30%, transparent);
     color: var(--text-color);
@@ -1017,6 +1062,7 @@ body[data-theme="dark"] .band-row {
 .band-row[data-state="off"] {
     color: var(--status-color);
 }
+.band-row:not([data-state]):has(.band-enable:not(:checked)) .band-pill-name,
 .band-row[data-state="off"] .band-pill-name {
     background: transparent;
     color: var(--status-color);

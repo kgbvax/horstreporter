@@ -153,27 +153,11 @@
                 </div>
             </div>
             </div>
-            <details class="options-panel border-top pt-2 mt-2">
-                <summary class="small fw-bold" style="cursor: pointer;">Options</summary>
-                <div class="options-content d-flex flex-column gap-2 mt-2 small">
-                    <!-- Toggle button grid -->
+            <div class="settings-sections border-top mt-2">
+            <details class="settings-section" name="settings">
+                <summary>Layers</summary>
+                <div class="settings-body d-flex flex-column gap-2 small">
                     <div class="options-toggles-grid">
-                        <div>
-                            <input type="checkbox" class="btn-check" id="show-dxcc-labels" autocomplete="off">
-                            <label class="btn btn-outline-primary btn-sm w-100" for="show-dxcc-labels">DXCC Labels</label>
-                        </div>
-                        <div id="auto-zoom-root"></div>
-                        <div id="surroundings-root"></div>
-                        <div id="dxcluster-root"></div>
-                        <div id="country-coloring-root"></div>
-                        <div>
-                            <input type="checkbox" class="btn-check" id="show-forecast" autocomplete="off">
-                            <label class="btn btn-outline-primary btn-sm w-100" for="show-forecast">Forecast</label>
-                        </div>
-                        <div>
-                            <input type="checkbox" class="btn-check" id="dk3jf-mode" autocomplete="off">
-                            <label class="btn btn-outline-primary btn-sm w-100" for="dk3jf-mode">DK3JF Mode</label>
-                        </div>
                         <div>
                             <input type="checkbox" class="btn-check" id="show-rbn-spots" autocomplete="off" checked>
                             <label class="btn btn-outline-primary btn-sm w-100" for="show-rbn-spots" title="Show Reverse Beacon Network CW/RTTY skimmer spots on the live map">RBN Spots</label>
@@ -182,41 +166,69 @@
                             <input type="checkbox" class="btn-check" id="show-wspr-spots" autocomplete="off" checked>
                             <label class="btn btn-outline-primary btn-sm w-100" for="show-wspr-spots" title="Show WSPR beacon spots on the live map (propagation reference)">WSPR Spots</label>
                         </div>
+                        <div id="dxcluster-root"></div>
+                        <div>
+                            <input type="checkbox" class="btn-check" id="show-dxcc-labels" autocomplete="off">
+                            <label class="btn btn-outline-primary btn-sm w-100" for="show-dxcc-labels">DXCC Labels</label>
+                        </div>
+                        <div id="country-coloring-root"></div>
+                        <div>
+                            <input type="checkbox" class="btn-check" id="show-forecast" autocomplete="off">
+                            <label class="btn btn-outline-primary btn-sm w-100" for="show-forecast">Forecast</label>
+                        </div>
                     </div>
                     <!-- DXCC density — only shown when DXCC Labels is on -->
                     <div id="dxcc-density-row" style="display: none;">
                         <label class="d-flex align-items-center justify-content-between mb-0" for="dxcc-label-density"><span>DXCC Label Density:</span> <span><span id="dxcc-label-density-val">1.0</span>x</span></label>
                         <input type="range" id="dxcc-label-density" class="form-range" min="0" max="5" step="0.1" value="1.0" />
                     </div>
+                </div>
+            </details>
+            <details class="settings-section" name="settings">
+                <summary>Display</summary>
+                <div class="settings-body d-flex flex-column gap-2 small">
+                    <div class="options-toggles-grid">
+                        <div id="auto-zoom-root"></div>
+                        <div id="surroundings-root"></div>
+                        <div>
+                            <input type="checkbox" class="btn-check" id="dk3jf-mode" autocomplete="off">
+                            <label class="btn btn-outline-primary btn-sm w-100" for="dk3jf-mode">DK3JF Mode</label>
+                        </div>
+                    </div>
                     <!-- Sliders -->
                     <div class="d-flex flex-column w-100">
                     <div id="minutes-root" class="d-flex flex-column w-100"></div>
+                    </div>
+                    <div id="snr-sliders-root" class="d-flex flex-column w-100 gap-3"></div>
+                    <div class="d-flex flex-column w-100">
+                    <div id="cluster-root" class="d-flex flex-column w-100"></div>
                     </div>
                     <div class="d-flex flex-column w-100">
                         <button type="button" id="btn-timeline" class="btn btn-outline-secondary btn-sm w-100" title="Scrub and animate past propagation (up to 24h). Uses the same QTH and filters as the live map.">
                             Time Travel
                         </button>
                     </div>
-                    <div id="snr-sliders-root" class="d-flex flex-column w-100 gap-3"></div>
-                    <div class="d-flex flex-column w-100">
-                    <div id="cluster-root" class="d-flex flex-column w-100"></div>
-                    </div>
-                    <!-- Opmode status (read-only) -->
-                    <div class="small text-muted" id="opmode-status-row">opmode status: <strong id="opmode-status">disabled</strong></div>
-                    <div class="small text-muted" id="opmode-station-row">station: <strong id="opmode-station">n/a</strong></div>
-                    <div class="small text-muted" id="opmode-heading-row">antenna: <strong id="opmode-heading">n/a</strong></div>
                     <!-- Azimuth -->
                     <div class="d-flex flex-column gap-2">
                         <label class="d-flex align-items-center justify-content-between">Azimuthal horizon (km, auto):
                             <input type="number" id="azimuth-horizon-km" class="form-control form-control-sm w-auto" value="16000" min="1000" max="20015" step="100" style="max-width: 100px;" readonly title="Derived automatically from azimuth zoom" />
                         </label>
                     </div>
+                    <!-- Opmode status (read-only) -->
+                    <div class="small text-muted" id="opmode-status-row">opmode status: <strong id="opmode-status">disabled</strong></div>
+                    <div class="small text-muted" id="opmode-station-row">station: <strong id="opmode-station">n/a</strong></div>
+                    <div class="small text-muted" id="opmode-heading-row">antenna: <strong id="opmode-heading">n/a</strong></div>
+                </div>
+            </details>
+            <details class="settings-section" name="settings" id="notifications-section">
+                <summary>Notifications</summary>
+                <div class="settings-body d-flex flex-column gap-2 small">
                     <!-- U5: Web Push settings. The push.js module wires this up;
                          it stays hidden on browsers without Web Push support. -->
-                    <div id="push-settings-root" class="d-flex flex-column gap-2 border-top pt-2">
+                    <div id="push-settings-root" class="d-flex flex-column gap-2">
                         <div class="d-flex align-items-center gap-2">
                             <input type="checkbox" id="push-enable" autocomplete="off">
-                            <label for="push-enable" class="mb-0 fw-bold">Enable push notifications</label>
+                            <label for="push-enable" class="mb-0">Enable push notifications</label>
                         </div>
                         <div id="push-ios-hint" class="push-ios-hint small text-muted" style="display:none;">
                             iOS Safari requires <strong>Add to Home Screen</strong> for Web Push.
@@ -255,6 +267,7 @@
                     </div>
                 </div>
             </details>
+            </div>
             <div class="stats-container d-flex flex-column gap-1 small text-muted border-top pt-2 mt-2">
                 <div id="stream-status">Status: Not subscribed</div>
             </div>
