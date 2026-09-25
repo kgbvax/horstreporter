@@ -247,8 +247,7 @@ function renderSummary(summaryEl, options = {}) {
     const score = Number(resp.overall_score || 0);
     const confidence = confidence01(resp.confidence);
     const condition = String(resp.condition || 'Unknown');
-    const bestBands = Array.isArray(resp.best_bands) ? resp.best_bands : [];
-    const recBands = Array.isArray(resp.recommended_bands) ? resp.recommended_bands : [];
+    const { bestBands, recBands } = enabledBestBands(resp, getEnabledBands());
 
     const top = recBands.length > 0 ? recBands : bestBands;
     const recommendation = top.length > 0
@@ -274,6 +273,24 @@ function renderSummary(summaryEl, options = {}) {
             <div class="band-lab-summary-reco"><strong>Decision:</strong> ${escapeHtml(recommendation)}</div>
         </div>
     `;
+}
+
+// Best / recommended bands restricted to the user's enabled set. The backend's
+// best_bands / recommended_bands are the top 3 of ALL bands, so filtering them
+// would drop an enabled band ranked 4th or lower; re-derive from the full,
+// score-sorted `bands` list with the same rule (top 3; green/yellow =
+// recommended). Falls back to filtering the short lists if `bands` is absent.
+export function enabledBestBands(resp, enabled) {
+    const all = Array.isArray(resp?.bands) ? resp.bands.filter((b) => b && enabled.has(b.band)) : null;
+    if (all) {
+        const top = all.slice(0, 3);
+        return {
+            bestBands: top.map((b) => b.band),
+            recBands: top.filter((b) => b.status === 'green' || b.status === 'yellow').map((b) => b.band),
+        };
+    }
+    const pick = (list) => (Array.isArray(list) ? list : []).filter((b) => enabled.has(b));
+    return { bestBands: pick(resp?.best_bands), recBands: pick(resp?.recommended_bands) };
 }
 
 function renderBandCards(cardsEl, grouped, qth, minutes) {

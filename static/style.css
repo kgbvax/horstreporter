@@ -777,7 +777,17 @@ body[data-theme="dark"] .wspr-heat-scale {
 
 /* U5: Web Push settings (options panel). The matrix is a compact
    (band × region) checkbox grid mirroring the Prop matrix layout. */
+/* Layout lives here, not in Bootstrap d-flex utilities: .d-flex is
+   display:flex !important and would defeat the [hidden] toggles in push.js. */
+.push-settings-root {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
 .push-pref-matrix {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
     padding: 4px 0;
 }
 
@@ -861,13 +871,6 @@ body[data-theme="dark"] .wspr-heat-scale {
 }
 
 @media (max-width: 900px) {
-    .band-lab-window {
-        width: min(96vw, calc(100% - 16px));
-        min-width: 320px;
-        top: 8px;
-        right: 8px;
-    }
-
     .band-lab-card-charts {
         grid-template-columns: 1fr;
     }
@@ -1348,19 +1351,6 @@ body[data-theme="dark"] .band-row {
     --bs-btn-disabled-color: var(--accent-contrast);
 }
 
-/* Neutral solid (the show-sidebar tab). */
-.btn-secondary {
-    --bs-btn-bg: var(--surface-1);
-    --bs-btn-border-color: var(--control-border);
-    --bs-btn-color: var(--text-color);
-    --bs-btn-hover-bg: var(--accent-tint);
-    --bs-btn-hover-border-color: var(--accent);
-    --bs-btn-hover-color: var(--accent-strong);
-    --bs-btn-active-bg: var(--accent-tint-strong);
-    --bs-btn-active-border-color: var(--accent);
-    --bs-btn-active-color: var(--accent-strong);
-}
-
 /* Solid primary still pops on the white map without the Bootstrap-blue weight. */
 #btn-submit { font-weight: 600; }
 
@@ -1466,23 +1456,31 @@ body[data-theme="dark"] .band-row {
     flex-wrap: wrap;
 }
 .opmode-beam-btn {
-    min-height: 34px !important;
-    background-color: var(--tooltip-bg) !important;
-    border-color: var(--control-border) !important;
-    color: var(--text-color) !important;
-    box-shadow: 0 2px 6px var(--shadow-color) !important;
+    /* Skinned through Bootstrap's --bs-btn-* variables, not !important, so the
+       reverse alarm below (and its pulse keyframes) can override it. */
+    --bs-btn-bg: var(--tooltip-bg);
+    --bs-btn-border-color: var(--control-border);
+    --bs-btn-color: var(--text-color);
+    --bs-btn-hover-bg: var(--surface-1);
+    --bs-btn-hover-border-color: var(--control-border);
+    --bs-btn-hover-color: var(--text-color);
+    --bs-btn-active-bg: var(--accent);
+    --bs-btn-active-border-color: var(--accent-strong);
+    --bs-btn-active-color: var(--accent-contrast);
+    --bs-btn-disabled-bg: var(--tooltip-bg);
+    --bs-btn-disabled-border-color: var(--control-border);
+    --bs-btn-disabled-color: var(--text-color);
+    min-height: 34px;
+    box-shadow: 0 2px 6px var(--shadow-color);
     font-weight: 600;
 }
-.opmode-beam-btn:hover {
-    background-color: var(--surface-1) !important;
-}
+/* Bootstrap's .btn:disabled comes after .btn.active at equal specificity, so a
+   disabled button (monitor-only agent, command in flight) would lose the
+   selection. Keep the current beam direction visible while disabled. */
 .opmode-beam-btn.active {
-    background-color: var(--accent) !important;
-    border-color: var(--accent-strong) !important;
-    color: var(--accent-contrast) !important;
-}
-.opmode-beam-btn:disabled {
-    opacity: 0.65;
+    --bs-btn-disabled-bg: var(--accent);
+    --bs-btn-disabled-border-color: var(--accent-strong);
+    --bs-btn-disabled-color: var(--accent-contrast);
 }
 
 .opmode-reverse-badge {
@@ -1491,9 +1489,21 @@ body[data-theme="dark"] .band-row {
 
 .opmode-beam-group .opmode-beam-btn.opmode-reverse-alarm {
     --reverse-alarm-intensity: 0;
-    color: #fff;
-    border-color: #b02a37;
-    background-color: #c0392b;
+    /* Every state goes red: resting, hover, active (the selected 180° button)
+       and disabled (monitor-only / command in flight), at full opacity. */
+    --bs-btn-bg: #c0392b;
+    --bs-btn-hover-bg: #c0392b;
+    --bs-btn-active-bg: #c0392b;
+    --bs-btn-disabled-bg: #c0392b;
+    --bs-btn-border-color: #b02a37;
+    --bs-btn-hover-border-color: #b02a37;
+    --bs-btn-active-border-color: #b02a37;
+    --bs-btn-disabled-border-color: #b02a37;
+    --bs-btn-color: #fff;
+    --bs-btn-hover-color: #fff;
+    --bs-btn-active-color: #fff;
+    --bs-btn-disabled-color: #fff;
+    --bs-btn-disabled-opacity: 1;
     /* Brightness + glow both scale with how long reverse has been active. */
     filter: brightness(calc(1 + (0.35 * var(--reverse-alarm-intensity))));
     animation: opmodeReversePulse 1.1s ease-in-out infinite;

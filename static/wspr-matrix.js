@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { WSPR_REGIONS, bandColors, getMinSnrMode } from './utils.js';
+import { WSPR_REGIONS, bandColors, getEnabledBands, getMinSnrMode } from './utils.js';
 import { makeDraggable } from './panel-drag.js';
 
 // wspr-matrix.js — the unified Prop panel: band × region propagation-
@@ -372,11 +372,17 @@ function renderMatrix() {
     const body = document.getElementById(BODY_ID);
     if (!body) return;
     const data = runtime.cache;
-    const cells = (data && Array.isArray(data.cells)) ? data.cells : [];
+    const allCells = (data && Array.isArray(data.cells)) ? data.cells : [];
+    // Rows follow the band rail's enabled set (when the rail is present).
+    const enabled = document.querySelector('.band-enable') ? getEnabledBands() : null;
+    const cells = enabled ? allCells.filter((c) => enabled.has(c.band)) : allCells;
     if (cells.length === 0) {
         runtime.lastRenderKey = '';
+        const empty = allCells.length > 0
+            ? 'No paths open on the enabled bands.'
+            : 'No paths open in the current window.';
         body.innerHTML = renderSourceChips() +
-            '<div class="text-muted small">No paths open in the current window.</div>' +
+            `<div class="text-muted small">${empty}</div>` +
             legendHtml();
         attachSourceChipHandlers(body);
         return;
