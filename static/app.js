@@ -1369,8 +1369,6 @@ function updateCurrentBandDisplay() {
             chip.setAttribute('aria-label', `Showing ${band} only. Show all bands`);
         }
     }
-    const showAll = document.getElementById('btn-show-all');
-    if (showAll) showAll.disabled = !soloed;
 }
 
 export function scheduleRender() {
@@ -1626,7 +1624,6 @@ function showAllBands() {
     setBandFocus('all');
     applyBandChange();
 }
-document.getElementById('btn-show-all')?.addEventListener('click', showAllBands);
 document.getElementById('band-solo-clear')?.addEventListener('click', showAllBands);
 
 window.__horstSurroundingsChanged = () => {
