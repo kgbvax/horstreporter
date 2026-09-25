@@ -472,8 +472,12 @@ describe('ring-served timeline playback (U3)', () => {
         const pressed = (sel) => Array.from(bar.querySelectorAll(sel))
             .filter((b) => b.getAttribute('aria-pressed') === 'true')
             .map((b) => b.textContent);
-        expect(pressed('.timeline-speed .btn')).toEqual([`${DEFAULT_SPEED}x`]);
-        expect(pressed('.timeline-presets .btn')).toEqual(['1h']);
+        expect(pressed('.timeline-speed .btn')).toEqual([`${DEFAULT_SPEED}×`]);
+        expect(pressed('.timeline-presets .btn')).toEqual(['1 h']);
+        // Unit spacing and sentence case on the bar's labels.
+        expect(Array.from(bar.querySelectorAll('.timeline-presets .btn')).map((b) => b.textContent))
+            .toEqual(['1 h', '6 h', '24 h']);
+        expect(bar.querySelector('.timeline-playpause').title).toBe('Play or pause');
         for (const b of bar.querySelectorAll('.timeline-speed .btn, .timeline-presets .btn')) {
             expect(b.classList.contains('active')).toBe(b.getAttribute('aria-pressed') === 'true');
         }

@@ -363,6 +363,7 @@ describe('push.js UI: enable flow posts subscription to backend', () => {
         // The status indicator should reflect success.
         const status = document.getElementById('push-status');
         expect(status.dataset.kind).toBe('ok');
+        expect(status.textContent).toBe('Push enabled');
     });
 });
 
@@ -419,6 +420,8 @@ describe('push.js UI: preference grid headers line up with their columns', () =>
             checked += 1;
         });
         expect(checked).toBe(13 * 11);
+        // Cell tooltips name the band and the region with a colon, not a middle dot.
+        expect(document.getElementById('push-pref-10m-CAR').title).toBe('10m: Caribbean');
     });
 
     it('reveals the preference matrix via [hidden] once push is enabled', async () => {

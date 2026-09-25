@@ -11,4 +11,4 @@
 <input type="radio" class="btn-check" id="style-grid" name="style-select" value="grid-snr" autocomplete="off" bind:group={$uiStore.mapStyle} on:change={render} />
 <label class="btn btn-outline-primary btn-sm" for="style-grid">Grid</label>
 <input type="radio" class="btn-check" id="style-area" name="style-select" value="active-area" autocomplete="off" bind:group={$uiStore.mapStyle} on:change={render} />
-<label class="btn btn-outline-primary btn-sm" for="style-area">Active Area</label>
+<label class="btn btn-outline-primary btn-sm" for="style-area">Active area</label>

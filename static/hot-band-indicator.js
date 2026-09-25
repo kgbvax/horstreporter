@@ -87,10 +87,12 @@ export function initHotBandIndicator({ getQth, getSurroundings, getCurrentBand, 
         name.textContent = rec.band;
         btn.appendChild(name);
 
+        // Band and reason are separate elements (the pill's flex gap spaces
+        // them), so the label needs no separator character.
         if (rec.reason) {
             const reason = document.createElement('span');
             reason.className = 'hot-band-reason';
-            reason.textContent = `· ${rec.reason}`;
+            reason.textContent = rec.reason;
             btn.appendChild(reason);
         }
 
@@ -101,24 +103,24 @@ export function initHotBandIndicator({ getQth, getSurroundings, getCurrentBand, 
     }
 
     function tooltipFor(r) {
-        const lines = [`${r.band} · ${r.reason || r.kind || ''}`];
+        const lines = [`${r.band}: ${r.reason || r.kind || ''}`];
         if (typeof r.spots_per_minute === 'number') {
             const live = r.spots_per_minute.toFixed(2);
             // activity_ratio is the like-for-like regional ratio; baseline_activity
             // is the whole region's rate, not comparable with your squares' rate.
             if (r.activity_level && typeof r.activity_ratio === 'number') {
-                lines.push(`rate: ${live}/min (${r.activity_ratio.toFixed(1)}× normal)`);
+                lines.push(`Rate: ${live}/min (${r.activity_ratio.toFixed(1)}× normal)`);
             } else if (typeof r.baseline_activity === 'number' && r.baseline_activity > 0) {
-                lines.push(`rate: ${live}/min (baseline ${r.baseline_activity.toFixed(2)})`);
+                lines.push(`Rate: ${live}/min (baseline ${r.baseline_activity.toFixed(2)})`);
             } else {
-                lines.push(`rate: ${live}/min`);
+                lines.push(`Rate: ${live}/min`);
             }
         }
         if (r.kind === 'dx_surge' && r.baseline_p90_distance_km) {
-            lines.push(`p90 distance: ${Math.round(r.p90_distance_km)} km vs baseline ${Math.round(r.baseline_p90_distance_km)} km`);
+            lines.push(`P90 distance: ${Math.round(r.p90_distance_km)} km vs baseline ${Math.round(r.baseline_p90_distance_km)} km`);
         }
         if (r.kind === 'rising' && typeof r.trend_delta === 'number') {
-            lines.push(`trend Δ ${r.trend_delta.toFixed(2)}`);
+            lines.push(`Trend Δ ${r.trend_delta.toFixed(2)}`);
         }
         return lines.join('\n');
     }

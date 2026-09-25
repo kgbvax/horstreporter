@@ -17,6 +17,7 @@ import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePl
 import { updateAfterglow, notifyMapMoved, hideAfterglow } from './afterglow.js';
 import { GRAYLINE_BUCKET_MS, setDataNowMs, clearDataNowOverride } from './data-now.js';
 import { sessionRing } from './session-ring.js';
+import { STREAM_STATUS_TEXT, setStreamStatus, spotCountText, liveForText, connectingText, serverErrorText, timeTravelErrorText } from './stream-status.js';
 
 // --- Azimuth Zoom State ---
 const AZIMUTH_MAX_HORIZON_KM = 20015;
@@ -1036,8 +1037,7 @@ async function runCaptureBootstrap(config) {
         params.set('snapshot_at', String(config.snapshotAt));
     }
 
-    const statusEl = document.getElementById('stream-status');
-    if (statusEl) statusEl.innerHTML = 'Status: Capture snapshot loading...';
+    setStreamStatus({ message: STREAM_STATUS_TEXT.snapshotLoading, tone: 'warn', spinner: true });
 
     const response = await fetch(`/api/capture_snapshot?${params.toString()}`);
     if (!response.ok) {
@@ -1056,9 +1056,7 @@ async function runCaptureBootstrap(config) {
     // __horstCaptureReady always contain the hulls. Resolves immediately when
     // no active-area rebuild is pending (grid-snr or cached turf).
     await whenActiveAreaRendered();
-    if (statusEl) {
-        statusEl.innerHTML = `Status: Capture snapshot ready (Spots: ${formatNumber(state.liveSpots.length)})`;
-    }
+    setStreamStatus({ title: config.qth ? `Snapshot for ${config.qth}` : 'Snapshot', message: spotCountText(state.liveSpots.length), tone: 'ok' });
     window.__horstCaptureReady = {
         ready: true,
         count: state.liveSpots.length,
@@ -1343,10 +1341,9 @@ if (captureConfig?.enabled) {
             await runCaptureBootstrap(captureConfig);
         } catch (err) {
             console.error('Snapshot mode bootstrap failed:', err);
-            const statusEl = document.getElementById('stream-status');
             const errorText = String(err?.message || err);
             window.__horstCaptureReady = { ready: false, error: errorText };
-            if (statusEl) statusEl.innerHTML = `Status: Capture snapshot failed (${errorText})`;
+            setStreamStatus({ message: `Could not load snapshot: ${errorText}`, tone: 'danger' });
         }
     }
 
@@ -1739,11 +1736,7 @@ document.getElementById('qth')?.addEventListener('keydown', (e) => {
 function showStreamError(message) {
     const statusEl = document.getElementById('stream-status');
     if (statusEl) {
-        statusEl.textContent = 'Status: ';
-        const span = document.createElement('span');
-        span.className = 'status-danger';
-        span.textContent = message;
-        statusEl.appendChild(span);
+        setStreamStatus({ message, tone: 'danger' });
     } else {
         alert(message);
     }
@@ -1762,7 +1755,7 @@ function startLiveStream(preserveData = false) {
 
     const rawQth = document.getElementById('qth')?.value.trim().toUpperCase() || '';
     if (!rawQth) {
-        alert('Please provide a Callsign or Locator.');
+        alert('Enter your locator or callsign.');
         return;
     }
 
@@ -1883,21 +1876,25 @@ function startLiveStream(preserveData = false) {
         cwMinDb,
     };
 
-    const statusEl = document.getElementById('stream-status');
-    const currentSub = `QTH: ${qth}`;
+    const liveTitle = liveForText(qth);
     let totalReceived = 0;
-    let totalBytes = 0;
     let lastStatusUpdate = 0;
-    statusEl.innerHTML = `Status: Connecting to ${currentSub}...`;
+    setStreamStatus({ message: connectingText(qth), tone: 'warn', spinner: true });
+
+    // Status line states for this connection: loading the history dump (or,
+    // on a band change, the new selection) vs receiving live spots.
+    const showLoadingStatus = (withCount) => setStreamStatus({
+        title: liveTitle,
+        message: preserveData
+            ? STREAM_STATUS_TEXT.updating
+            : (withCount ? `${STREAM_STATUS_TEXT.loading} (${formatNumber(totalReceived)})` : STREAM_STATUS_TEXT.loading),
+        tone: 'warn',
+        spinner: true,
+    });
+    const showLiveStatus = () => setStreamStatus({ title: liveTitle, message: spotCountText(totalReceived), tone: 'ok' });
 
     const btnSubmit = document.getElementById('btn-submit');
     if (btnSubmit) setSubmitMode(btnSubmit, 'stop');
-
-    function formatBytes(bytes) {
-        if (bytes < 1024) return `${bytes} B`;
-        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
-        return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-    }
 
     // On mobile, hide sidebar after submitting so the map is immediately visible
     if (window.innerWidth <= 575) {
@@ -1935,7 +1932,7 @@ function startLiveStream(preserveData = false) {
     // timeline stays active — the ring still serves every covered moment
     // (KTD-7), only uncovered windows fall through to /api/history.
     function surfaceTimelineCoverageEnded() {
-        statusEl.innerHTML = `Status: <span class="status-danger">Live data ended — timeline shows session coverage only</span>`;
+        setStreamStatus({ message: STREAM_STATUS_TEXT.ended, tone: 'danger' });
         setFaviconColor(FAVICON.error);
         if (btnSubmit) setSubmitMode(btnSubmit, 'go');
     }
@@ -1947,7 +1944,7 @@ function startLiveStream(preserveData = false) {
         // otherwise a reconnect paints the dump in chunks mid-stream. Harmless
         // on the initial connect (historyLoading is already true).
         historyLoading = true;
-        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span class="status-warn">${preserveData ? '(Updating band data...)' : '(Fetching history...)'}</span> <div class="spinner"></div>`;
+        showLoadingStatus(false);
         setFaviconColor(FAVICON.waiting); // until data arrives
     };
 
@@ -1969,26 +1966,20 @@ function startLiveStream(preserveData = false) {
             return;
         }
         state.streamedFilter = null;
-        statusEl.innerHTML = `Status: <span class="status-danger">${e.data}</span>`;
+        setStreamStatus({ message: serverErrorText(e.data), tone: 'danger' });
         setFaviconColor(FAVICON.error);
         if (btnSubmit) setSubmitMode(btnSubmit, 'go');
     });
 
     state.eventSource.addEventListener('history_end', () => {
         historyLoading = false;
-        statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span class="status-ok">Receiving data (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span>`;
+        showLiveStatus();
         lastStatusUpdate = Date.now();
         scheduleRender();
     });
 
     state.eventSource.onmessage = (e) => {
         totalReceived++;
-        // SSE text frames: count bytes for a user-facing data-consumption hint.
-        // EventSource reassembles line-terminated data; e.data.length is close
-        // enough to the wire payload for the status display.
-        if (typeof e.data === 'string') {
-            totalBytes += e.data.length;
-        }
 
         let spot;
         try {
@@ -2030,9 +2021,9 @@ function startLiveStream(preserveData = false) {
         const now = Date.now();
         if (now - lastStatusUpdate > 250) {
             if (historyLoading && !preserveData) {
-                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span class="status-warn">Fetching history (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span> <div class="spinner"></div>`;
+                showLoadingStatus(true);
             } else {
-                statusEl.innerHTML = `Status: Subscribed to ${currentSub}<br><span class="status-ok">Receiving data (Spots: ${formatNumber(totalReceived)} · ${formatBytes(totalBytes)})</span>`;
+                showLiveStatus();
             }
             lastStatusUpdate = now;
         }
@@ -2087,14 +2078,14 @@ function startLiveStream(preserveData = false) {
             }
             historyLoading = false;
             state.streamedFilter = null;
-            statusEl.innerHTML = `Status: <span class="status-danger">Connection error / Disconnected</span>`;
+            setStreamStatus({ message: STREAM_STATUS_TEXT.disconnected, tone: 'danger' });
             setFaviconColor(FAVICON.error);
             if (btnSubmit) setSubmitMode(btnSubmit, 'go');
             return;
         }
         // Transient — reconnecting. Surface it but don't tear down.
         console.warn("Stream error (reconnecting):", e);
-        statusEl.innerHTML = `Status: <span class="status-warn">Reconnecting…</span>`;
+        setStreamStatus({ title: liveTitle, message: STREAM_STATUS_TEXT.reconnecting, tone: 'warn', spinner: true });
         setFaviconColor(FAVICON.waiting);
     };
 
@@ -2180,8 +2171,7 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
         state.streamedFilter = null;
 
         setSubmitMode(btnSubmit, 'go');
-        const status = document.getElementById('stream-status');
-        if (status) status.innerHTML = 'Status: Not subscribed';
+        setStreamStatus({ message: STREAM_STATUS_TEXT.idle });
         setFaviconColor(FAVICON.idle);
         updateBandLab({ force: true });
         updateWsprMatrix();
@@ -2304,8 +2294,7 @@ async function startTimelineMode(rangeSeconds) {
     resetRenderFingerprint();
     // The submit button keeps reflecting the (still running) stream: a stop
     // click mid-timeline must remain a stop action.
-    const status = document.getElementById('stream-status');
-    if (status) status.innerHTML = 'Status: Time travel — spots from history';
+    setStreamStatus({ message: STREAM_STATUS_TEXT.timeTravel });
 
     try {
         await enterTimeline(rangeSeconds);
@@ -2314,8 +2303,7 @@ async function startTimelineMode(rangeSeconds) {
         // benign — only a real failure tears the mode down.
         if ((err?.name || '') === 'AbortError') return;
         console.warn('timeline enter failed', err);
-        const statusEl = document.getElementById('stream-status');
-        if (statusEl) statusEl.innerHTML = `Status: <span class="status-danger">Time travel failed: ${String(err?.message || err)}</span>`;
+        setStreamStatus({ message: timeTravelErrorText(err?.message || err), tone: 'danger' });
         // KTD-12: entry failure must NOT stack a second EventSource on the
         // still-open stream. The stream keeps running; the status line carries
         // the error. (With no stream running, e.g. a shared-URL restore, the

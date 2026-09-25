@@ -132,7 +132,7 @@ await page.click('.timeline-exit');
 await page.waitForTimeout(1500);
 results.barGoneAfterExit = !(await page.$('#timeline-bar'));
 const status = await page.textContent('#stream-status').catch(() => '');
-results.liveRestored = /Status/.test(status || '');
+results.liveRestored = /Live for|Loading recent spots|Connecting to live data/.test(status || '');
 results.streamReconnectAfterExit = streamRequests.length - streamCountBeforeExit;
 results.streamRequestsTotal = streamRequests.length;
 

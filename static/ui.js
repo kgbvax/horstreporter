@@ -206,22 +206,22 @@ export function attachUITooltipEvents() {
         let reportsHtml = '';
         if (topReports.length > 0) {
             reportsHtml = `<hr style="margin: 5px 0; border: 0; border-top: 1px solid var(--tooltip-border);">` +
-                `<span style="font-size: 11px;"><b>Top Reports:</b><br>` +
+                `<span style="font-size: 11px;"><b>Top reports</b><br>` +
                 topReports.map((r) => {
                     const sender = escapeHtml(r.sender || '—');
                     const receiver = escapeHtml(r.receiver || '—');
                     const band = escapeHtml(r.band || '—');
                     const snr = Number.isFinite(Number(r.snr)) ? Number(r.snr) : 0;
-                    return `${sender} / ${receiver} / ${band} / ${snr}dB`;
+                    return `${sender} / ${receiver} / ${band} / ${snr} dB`;
                 }).join('<br>') +
                 `</span>`;
         }
 
         tooltip.innerHTML = `<strong>${escapeHtml(locator)}${escapeHtml(hoverSquareAzimuthText(locator))}</strong><br>` +
-            `Min: ${min}dB<br>` +
-            `Max: ${max}dB<br>` +
-            `Avg: ${Math.round(avg)}dB<br>` +
-            `Best Band: ${bestBand}<br>` +
+            `Min: ${min} dB<br>` +
+            `Max: ${max} dB<br>` +
+            `Avg: ${Math.round(avg)} dB<br>` +
+            `Best band: ${bestBand}<br>` +
             `Spots: ${formatNumber(count)}` +
             reportsHtml;
         tooltip.style.display = 'block';

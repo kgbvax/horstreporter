@@ -113,7 +113,7 @@ describe('Band stats summary', () => {
         const badge = summary.querySelector('.band-lab-decision-badge');
         expect(badge.textContent).toBe('Fair: worth monitoring');
         expect(badge.classList.contains('is-watch')).toBe(true);
-        expect(summary.querySelector('.band-lab-confidence').textContent).toBe('confidence 72%');
+        expect(summary.querySelector('.band-lab-confidence').textContent).toBe('Confidence 72%');
         expect(summary.textContent).toContain('Score: 48.2');
         expect(summary.textContent).not.toContain('Condition');
         expect(summary.textContent).not.toContain('Decision');
@@ -143,6 +143,6 @@ describe('Band stats summary', () => {
     it('asks for a locator when none is set', () => {
         mountFixture('');
         updateBandLab({ force: true });
-        expect(document.getElementById('band-lab-summary').textContent).toBe('Enter a locator to see band conditions.');
+        expect(document.getElementById('band-lab-summary').textContent).toBe('Enter your locator to see band conditions.');
     });
 });

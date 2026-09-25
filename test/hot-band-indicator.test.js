@@ -1,12 +1,12 @@
 // hot-band-indicator.test.js — unit tests for the hot-band pill's pure color
 // helper hexToRgba (band palette → CSS rgba at the alpha ramp the pills use).
 // The module has no auto-init side effect, so importing it under vitest is
-// safe; initHotBandIndicator's DOM/poll wiring stays untested here (it runs
-// under the browser).
+// safe. The pill copy tests drive initHotBandIndicator against a mocked
+// /api/hot_bands response.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { hexToRgba } from '../static/hot-band-indicator.js';
+import { hexToRgba, initHotBandIndicator } from '../static/hot-band-indicator.js';
 
 describe('hexToRgba (hot-band variant)', () => {
     it('converts ramp endpoints', () => {
@@ -35,5 +35,57 @@ describe('hexToRgba (hot-band variant)', () => {
         expect(hexToRgba('', 0.18)).toBe('rgba(85,85,85,0.18)');
         expect(hexToRgba(null, 0.18)).toBe('rgba(85,85,85,0.18)');
         expect(hexToRgba(undefined, 0.18)).toBe('rgba(85,85,85,0.18)');
+    });
+});
+describe('initHotBandIndicator pill copy', () => {
+    const REC = {
+        band: '20m',
+        kind: 'dx_surge',
+        reason: 'DX surge',
+        priority: 'high',
+        spots_per_minute: 3.5,
+        activity_level: 'above',
+        activity_ratio: 1.8,
+        p90_distance_km: 5200,
+        baseline_p90_distance_km: 3100,
+    };
+    let ctl = null;
+
+    beforeEach(() => {
+        document.body.innerHTML = `
+            <input type="checkbox" class="band-enable" value="20m" checked>
+            <div id="hot-band-indicator" class="is-hidden"></div>
+        `;
+        globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ recommendations: [REC] }) }));
+    });
+
+    afterEach(() => {
+        ctl?.stop();
+        ctl = null;
+    });
+
+    async function renderPill() {
+        ctl = initHotBandIndicator({ getQth: () => 'JO32', getCurrentBand: () => 'all' });
+        await vi.waitFor(() => {
+            expect(document.querySelector('.hot-band-pill')).not.toBeNull();
+        });
+        return document.querySelector('.hot-band-pill');
+    }
+
+    it('renders band and reason as separate elements without a separator character', async () => {
+        const pill = await renderPill();
+        expect(pill.querySelector('.hot-band-name').textContent).toBe('20m');
+        expect(pill.querySelector('.hot-band-reason').textContent).toBe('DX surge');
+        expect(pill.textContent).not.toContain('·');
+        expect(pill.getAttribute('aria-label')).toBe('Switch to 20m: DX surge');
+    });
+
+    it('writes the tooltip in sentence case with a colon instead of a middle dot', async () => {
+        const pill = await renderPill();
+        expect(pill.title.split('\n')).toEqual([
+            '20m: DX surge',
+            'Rate: 3.50/min (1.8× normal)',
+            'P90 distance: 5200 km vs baseline 3100 km',
+        ]);
     });
 });

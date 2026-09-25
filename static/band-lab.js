@@ -178,7 +178,7 @@ export function updateBandLab(options = {}) {
     const surroundings = document.getElementById('surroundings')?.checked === true;
 
     if (!qth) {
-        summaryEl.innerHTML = '<div class="text-muted">Enter a locator to see band conditions.</div>';
+        summaryEl.innerHTML = '<div class="text-muted">Enter your locator to see band conditions.</div>';
         cardsEl.innerHTML = '';
         runtime.lastBandKey = '';
         return;
@@ -361,7 +361,7 @@ function renderSummary(summaryEl, options = {}) {
         <div class="band-lab-summary-grid">
             <div class="band-lab-decision-row">
                 <span class="band-lab-decision-badge ${decision.className}">${escapeHtml(decision.label)}</span>
-                <span class="band-lab-confidence">confidence ${confidencePct}%</span>
+                <span class="band-lab-confidence">Confidence ${confidencePct}%</span>
             </div>
             <div><strong>Score:</strong> ${Number.isFinite(score) ? score.toFixed(1) : 'n/a'}</div>
             <div class="band-lab-summary-reco">${recommendation}</div>
@@ -433,7 +433,7 @@ function renderBandCards(cardsEl, grouped, qth, minutes, dxReady = false, thresh
                         <div class="band-lab-chart-block">
                             <div class="band-lab-chart-title">Distance vs SNR</div>
                             <canvas id="band-lab-scatter-${safeBand}" width="230" height="120"></canvas>
-                            ${qthCenter ? '' : '<div class="band-lab-chart-note">The distance plot needs a grid locator such as JO32.</div>'}
+                            ${qthCenter ? '' : '<div class="band-lab-chart-note">The distance plot needs a Maidenhead locator such as JO32.</div>'}
                         </div>
                         <div class="band-lab-chart-block">
                             <div class="band-lab-chart-title">Reports over time + baseline</div>
