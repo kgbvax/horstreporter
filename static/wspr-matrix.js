@@ -245,7 +245,11 @@ function observeToggleRow(panel) {
     const host = panel.parentElement;
     if (!row || !host || typeof ResizeObserver !== 'function') return;
     runtime.toggleRowObserver?.disconnect();
-    const sync = () => host.style.setProperty('--map-toggles-bottom', `${row.offsetTop + row.offsetHeight}px`);
+    const sync = () => {
+        host.style.setProperty('--map-toggles-bottom', `${row.offsetTop + row.offsetHeight}px`);
+        // Right edge, for the centred hot-band indicator's clearance.
+        host.style.setProperty('--map-toggles-right', `${row.offsetLeft + row.offsetWidth}px`);
+    };
     runtime.toggleRowObserver = new ResizeObserver(sync);
     runtime.toggleRowObserver.observe(row);
     sync();

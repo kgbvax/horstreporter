@@ -21,6 +21,7 @@ describe('stream status copy', () => {
             idle: 'Not connected',
             loading: 'Loading recent spots',
             reconnecting: 'Connection lost, reconnecting',
+            unreachable: 'Cannot reach the server, retrying',
             disconnected: 'Disconnected. Press Go to reconnect.',
             ended: 'Live data stopped. The timeline shows this session only.',
         });

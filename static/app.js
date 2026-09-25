@@ -1937,7 +1937,9 @@ function startLiveStream(preserveData = false) {
         if (btnSubmit) setSubmitMode(btnSubmit, 'go');
     }
 
+    let everOpened = false; // per EventSource: reconnect wording only after a real connection
     state.eventSource.onopen = () => {
+        everOpened = true;
         // On auto-reconnect EventSource re-sends a history dump before live
         // frames. Reset the loading flag so that dump is also suppressed from
         // rendering (and the 5s prune is gated) until history_end fires —
@@ -2085,7 +2087,9 @@ function startLiveStream(preserveData = false) {
         }
         // Transient — reconnecting. Surface it but don't tear down.
         console.warn("Stream error (reconnecting):", e);
-        setStreamStatus({ title: liveTitle, message: STREAM_STATUS_TEXT.reconnecting, tone: 'warn', spinner: true });
+        setStreamStatus(everOpened
+            ? { title: liveTitle, message: STREAM_STATUS_TEXT.reconnecting, tone: 'warn', spinner: true }
+            : { message: STREAM_STATUS_TEXT.unreachable, tone: 'warn', spinner: true });
         setFaviconColor(FAVICON.waiting);
     };
 

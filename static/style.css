@@ -737,16 +737,36 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 14%, transparent);
 }
 
-/* Drill-down cell (aria-selected) and keyboard focus: outlines outside the
-   chip, drawn on the panel surface so they read on every heat shade (the
-   inferno surge ring is an inline inset box-shadow and stays visible). */
-.wspr-matrix-cell[aria-selected="true"] {
-    outline: 2px solid var(--accent-strong);
-    outline-offset: 1px;
+/* Drill-down cell (aria-selected) and keyboard focus. Chips touch their
+   neighbours (border-collapse), so a plain outline lands on the next chip and
+   can vanish on a similar heat shade. Draw each state as a two-tone ring
+   (colour + page-colour halo) in a pseudo-element stacked above the
+   neighbours; the two use different insets so a selected AND focused cell
+   shows both. The inferno surge ring is an inline inset box-shadow on the
+   cell itself and stays visible underneath. */
+.wspr-matrix-cell {
+    position: relative;
 }
 .wspr-matrix-cell:focus-visible {
-    outline: 2px solid var(--text-color);
-    outline-offset: 1px;
+    outline: none;
+}
+.wspr-matrix-cell[aria-selected="true"]::before,
+.wspr-matrix-cell:focus-visible::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+    z-index: 1;
+    border-radius: 4px;
+}
+.wspr-matrix-cell[aria-selected="true"]::before {
+    inset: -2px;
+    border: 2px solid var(--accent-strong);
+    box-shadow: 0 0 0 1px var(--bg-color), inset 0 0 0 1px var(--bg-color);
+}
+.wspr-matrix-cell:focus-visible::after {
+    inset: -5px;
+    border: 2px solid var(--text-color);
+    box-shadow: 0 0 0 1px var(--bg-color), inset 0 0 0 1px var(--bg-color);
 }
 
 .wspr-matrix-cell-empty {
@@ -1243,9 +1263,18 @@ body[data-theme="dark"] .band-row {
     display: flex;
     gap: 6px;
     pointer-events: none;
-    max-width: calc(100% - 320px);
+    /* Centred, so it needs the toggle row's width clear on BOTH sides
+       (wspr-matrix.js publishes the row's right edge as --map-toggles-right). */
+    max-width: calc(100% - 2 * (var(--map-toggles-right, 160px) + 8px));
     flex-wrap: wrap;
     justify-content: center;
+}
+/* Phones: not enough width beside the toggle row; sit on the line below it. */
+@media (max-width: 575px) {
+    .hot-band-indicator {
+        top: calc(var(--map-toggles-bottom, 41px) + 8px);
+        max-width: calc(100% - 24px);
+    }
 }
 
 .hot-band-indicator.is-hidden {

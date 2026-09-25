@@ -717,12 +717,23 @@ describe('app.js timeline lifecycle (U4)', () => {
             expect(statusEl().textContent).not.toMatch(/Status|QTH|kB|Subscribed/);
         });
 
-        it('says "Connection lost, reconnecting" on a transient error', async () => {
+        it('says "Connection lost, reconnecting" on a transient error after the stream was live', async () => {
             await importAppFresh();
             const es = await startStream('DL9ET');
+            es.onopen();
             es.readyState = 0; // CONNECTING: EventSource retries on its own
             es.onerror({ currentTarget: es });
+            expect(statusEl().textContent).toContain('Live for DL9ET');
             expect(toneText('warn')).toBe('Connection lost, reconnecting');
+        });
+
+        it('never claims "Live" before the first connection opened', async () => {
+            await importAppFresh();
+            const es = await startStream('DL9ET');
+            es.readyState = 0; // first connect failed at the network level; EventSource retries
+            es.onerror({ currentTarget: es });
+            expect(statusEl().textContent).not.toContain('Live for');
+            expect(toneText('warn')).toBe('Cannot reach the server, retrying');
         });
 
         it('tells the user how to recover after a fatal drop', async () => {

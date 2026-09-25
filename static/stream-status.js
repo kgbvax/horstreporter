@@ -12,6 +12,7 @@ export const STREAM_STATUS_TEXT = Object.freeze({
     loading: 'Loading recent spots',
     updating: 'Updating band selection',
     reconnecting: 'Connection lost, reconnecting',
+    unreachable: 'Cannot reach the server, retrying',
     disconnected: 'Disconnected. Press Go to reconnect.',
     ended: 'Live data stopped. The timeline shows this session only.',
     timeTravel: 'Time travel: showing past spots',
