@@ -873,6 +873,55 @@ body[data-theme="dark"] .wspr-heat-scale {
     }
 }
 
+/* Settings sections (Layers / Display / Notifications): an exclusive
+   <details name="settings"> accordion below the band rail. */
+.settings-section {
+    border-bottom: 1px solid var(--border-color);
+}
+.settings-section > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 2px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+}
+.settings-section > summary::-webkit-details-marker {
+    display: none;
+}
+.settings-section > summary::after {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg) translateY(-2px);
+    opacity: 0.6;
+    transition: transform 0.15s ease;
+}
+.settings-section[open] > summary::after {
+    transform: rotate(225deg) translateY(-2px);
+}
+.settings-section > summary:focus-visible {
+    outline: 2px solid var(--text-color, #111);
+    outline-offset: 2px;
+}
+.settings-body {
+    padding: 2px 2px 12px;
+}
+@media (prefers-reduced-motion: reduce) {
+    .settings-section > summary::after { transition: none; }
+}
+
+/* Segmented control whose options share the row equally (Min SNR). */
+.segmented-equal > .btn {
+    flex: 1 1 0;
+    padding-left: 4px;
+    padding-right: 4px;
+}
+
 /* Options toggle grid */
 .options-toggles-grid {
     display: grid;
@@ -1008,7 +1057,10 @@ body[data-theme="dark"] .band-row {
 .band-row[data-state="live"] .band-count {
     color: var(--text-color);
 }
+/* Before the first render there is no data-state yet: read enabled from the
+   checkbox so disabled bands don't flash as filled chips. */
 /* Quiet: enabled, no spots in the window: tinted chip, normal ink. */
+.band-row:not([data-state]) .band-pill-name,
 .band-row[data-state="quiet"] .band-pill-name {
     background: color-mix(in srgb, var(--band) 30%, transparent);
     color: var(--text-color);
@@ -1017,6 +1069,7 @@ body[data-theme="dark"] .band-row {
 .band-row[data-state="off"] {
     color: var(--status-color);
 }
+.band-row:not([data-state]):has(.band-enable:not(:checked)) .band-pill-name,
 .band-row[data-state="off"] .band-pill-name {
     background: transparent;
     color: var(--status-color);
@@ -1530,46 +1583,6 @@ body[data-theme="dark"] .band-row {
 }
 #opmode-status-line .opmode-sl-sep {
     opacity: 0.35;
-}
-
-/* Grid-SNR brightness legend (opacity ramp under the style selector).
-   Checkerboard behind the translucent gradient so the ramp reads as alpha. */
-#grid-snr-legend {
-    font-size: 0.78rem;
-    color: var(--status-color);
-}
-.grid-legend-body {
-    padding: 4px 2px 0;
-}
-.grid-legend-ramp {
-    position: relative;
-    height: 10px;
-    border: 1px solid var(--border-color);
-    border-radius: 2px;
-    overflow: hidden;
-    background-image:
-        linear-gradient(45deg, var(--border-color) 25%, transparent 25%, transparent 75%, var(--border-color) 75%),
-        linear-gradient(45deg, var(--border-color) 25%, transparent 25%, transparent 75%, var(--border-color) 75%);
-    background-color: var(--bg-color);
-    background-size: 6px 6px;
-    background-position: 0 0, 3px 3px;
-}
-.grid-legend-ramp::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    /* continuous ramp, same anchors as gridSnrOpacity():
-       -10 dB -> 0.15, 0 dB -> 0.45, +10 dB -> 0.60, +20 dB -> 0.75 */
-    background: linear-gradient(to right,
-        color-mix(in srgb, var(--text-color) 15%, transparent) 0%,
-        color-mix(in srgb, var(--text-color) 45%, transparent) 33.33%,
-        color-mix(in srgb, var(--text-color) 60%, transparent) 66.67%,
-        color-mix(in srgb, var(--text-color) 75%, transparent) 100%);
-}
-.grid-legend-ticks {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 2px;
 }
 
 /* --- Time Travel timeline bar -------------------------------------------- */

@@ -47,8 +47,7 @@ vi.mock('../static/azimuth-runtime.js', () => ({
 
 vi.mock('../static/ui.js', () => ({
     initUI: vi.fn(),
-    attachUITooltipEvents: vi.fn(),
-    initGridSnrLegend: vi.fn()
+    attachUITooltipEvents: vi.fn()
 }));
 
 vi.mock('../static/renderers.js', () => ({

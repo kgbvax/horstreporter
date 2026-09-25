@@ -14,7 +14,7 @@ C'est en pratique une interface alternative pour <a href="https://www.pskreporte
     * *Grid :* Regroupe les spots en carrés Maidenhead. La couleur indique la bande dominante, l'opacité la force du signal.
     * *Active Area :* Trace des polygones dynamiques englobant les spots regroupés pour montrer l'empreinte globale de propagation.
 
-* **Options :** Dépliez le panneau Options pour modifier l'âge maximal des spots, la distance de regroupement, le comportement du zoom automatique, et plus encore.
+* **Réglages :** Sous la liste des bandes, **Layers** active les calques de la carte et les sources de spots (RBN, WSPR, DX Cluster, étiquettes DXCC, couleurs des pays, prévision), **Display** règle l'âge des spots, les seuils SNR, la distance de regroupement, le zoom automatique et plus encore, et **Notifications** gère les alertes push.
 * Si vous ne voyez pas assez de données pour votre carré, activez **Adj. Squares** qui récupère aussi les données des 8 carrés voisins.
 
 ## Interaction avec la carte

@@ -11,32 +11,6 @@ export function initUI() {
     initAutoLocateCoachmark();
 }
 
-// Grid-SNR brightness legend: shows the opacity-ramp panel below the style
-// selector only while the Grid style is active.
-export function initGridSnrLegend() {
-    const panel = document.getElementById('grid-snr-legend');
-    if (!panel || panel.dataset.legendWired === 'true') return;
-    panel.dataset.legendWired = 'true';
-
-    const syncLegend = () => {
-        const style = document.querySelector('input[name="style-select"]:checked')?.value;
-        panel.hidden = style !== 'grid-snr';
-    };
-
-    // The style radios are rendered later by the Svelte control bundle, so
-    // listen via delegation instead of binding to them directly.
-    document.addEventListener('change', (e) => {
-        if (e.target && e.target.name === 'style-select') syncLegend();
-    });
-
-    // One-time cleanup: retired grading prefs (A/B highlight model +
-    // score-gate experiments, Jul 2026); drop the stale keys.
-    try { localStorage.removeItem('gridHighlightModel'); } catch (_) { /* private mode */ }
-    try { localStorage.removeItem('gridScoreGate'); } catch (_) { /* private mode */ }
-
-    syncLegend();
-}
-
 let autoLocateCoachmarkRetries = 0;
 const AUTO_LOCATE_COACHMARK_MAX_RETRIES = 200; // ~10s at 50ms
 
