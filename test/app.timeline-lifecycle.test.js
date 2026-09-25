@@ -500,6 +500,24 @@ describe('app.js timeline lifecycle (U4)', () => {
         expect(esInstances.length).toBe(exitBefore);
     });
 
+    it('restarts the stream when a threshold slider is re-created after load (Min SNR mode switch)', async () => {
+        const { state } = await importAppFresh();
+        document.getElementById('snr-cw').checked = true;
+        await startStream(); // streamed filter: cw @ -15 dB
+        expect(state.streamedFilter.cwMinDb).toBe('-15');
+        const before = esInstances.length;
+
+        // Svelte replaces the slider element on a mode switch; the old one is gone.
+        const old = document.getElementById('cw-min-db');
+        const fresh = old.cloneNode(true);
+        old.replaceWith(fresh);
+        fresh.value = '-25'; // lower = widening: needs data the server is not sending
+        fresh.dispatchEvent(new Event('change', { bubbles: true }));
+        await Promise.resolve();
+
+        expect(esInstances.length).toBe(before + 1);
+    });
+
     it('narrowing (SNR raise) mid-timeline: no stream restart, moment re-emitted', async () => {
         const { state } = await importAppFresh();
         document.getElementById('snr-cw').checked = true;
@@ -611,7 +629,7 @@ describe('app.js timeline lifecycle (U4)', () => {
         expect(state.liveSpots).toEqual([]);
         expect(state.streamedFilter).toBeNull();
         expect(document.getElementById('btn-submit').getAttribute('data-mode')).toBe('go');
-        expect(document.getElementById('stream-status').innerHTML).toContain('Not subscribed');
+        expect(document.getElementById('stream-status').textContent).toBe('Not connected');
         // No new EventSource was created (this was a stop, not a restart).
         expect(esInstances.length).toBe(1);
         // The ring survives (same qth cohort — U2 contract).
@@ -635,7 +653,8 @@ describe('app.js timeline lifecycle (U4)', () => {
         expect(state.eventSource).toBe(es);
         expect(state.liveSpots.length).toBe(1);
         // The error is surfaced in the status line.
-        expect(document.getElementById('stream-status').innerHTML).toContain('Time travel failed');
+        expect(document.getElementById('stream-status').textContent).toBe('Could not load time travel data: chunk fetch 503');
+        expect(document.querySelector('#stream-status .status-danger')).not.toBeNull();
     });
 
     it('fatal SSE drop mid-timeline: one silent restart attempt, then the ring-staleness state is surfaced', async () => {
@@ -659,8 +678,8 @@ describe('app.js timeline lifecycle (U4)', () => {
         es2.onerror({ currentTarget: es2 });
         expect(esInstances.length).toBe(2);
         expect(timelineMock.timelineActive).toBe(true);
-        expect(document.getElementById('stream-status').innerHTML).toContain('session coverage');
-        expect(document.getElementById('stream-status').innerHTML).not.toContain('Connection error');
+        expect(document.getElementById('stream-status').textContent).toBe('Live data stopped. The timeline shows this session only.');
+        expect(document.getElementById('stream-status').textContent).not.toContain('Disconnected');
         expect(document.getElementById('btn-submit').getAttribute('data-mode')).toBe('go');
         expect(state.eventSource).toBeNull();
 
@@ -687,6 +706,80 @@ describe('app.js timeline lifecycle (U4)', () => {
         for (const call of renderers.updateMapVisualization.mock.calls) {
             expect(call[0].map((s) => s.locator)).not.toContain('LIVE1');
         }
+    });
+
+    // Stream status line (#stream-status): plain user language, no "Status:"
+    // prefix, no "QTH", no byte counts; tones via .status-ok/-warn/-danger.
+    describe('stream status line copy', () => {
+        const statusEl = () => document.getElementById('stream-status');
+        const toneText = (tone) => statusEl().querySelector(`.status-${tone}`)?.textContent;
+
+        it('walks connecting → loading → live with the spot count on its own line', async () => {
+            await importAppFresh();
+            const es = await startStream('DL9ET');
+            expect(toneText('warn')).toBe('Connecting to live data for DL9ET');
+            expect(statusEl().querySelector('.spinner')).not.toBeNull();
+
+            es.onopen();
+            expect(statusEl().textContent).toContain('Live for DL9ET');
+            expect(toneText('warn')).toBe('Loading recent spots');
+            expect(statusEl().querySelector('.spinner')).not.toBeNull();
+
+            deliverFrame(es, makeSpot(0));
+            expect(toneText('warn')).toBe('Loading recent spots (1)');
+
+            fireEsEvent(es, 'history_end');
+            expect(statusEl().childNodes[0].textContent).toBe('Live for DL9ET');
+            expect(toneText('ok')).toBe('1 spot');
+            expect(statusEl().querySelector('.spinner')).toBeNull();
+            expect(statusEl().textContent).not.toMatch(/Status|QTH|kB|Subscribed/);
+        });
+
+        it('says "Connection lost, reconnecting" on a transient error after the stream was live', async () => {
+            await importAppFresh();
+            const es = await startStream('DL9ET');
+            es.onopen();
+            es.readyState = 0; // CONNECTING: EventSource retries on its own
+            es.onerror({ currentTarget: es });
+            expect(statusEl().textContent).toContain('Live for DL9ET');
+            expect(toneText('warn')).toBe('Connection lost, reconnecting');
+        });
+
+        it('never claims "Live" before the first connection opened', async () => {
+            await importAppFresh();
+            const es = await startStream('DL9ET');
+            es.readyState = 0; // first connect failed at the network level; EventSource retries
+            es.onerror({ currentTarget: es });
+            expect(statusEl().textContent).not.toContain('Live for');
+            expect(toneText('warn')).toBe('Cannot reach the server, retrying');
+        });
+
+        it('tells the user how to recover after a fatal drop', async () => {
+            await importAppFresh();
+            const es = await startStream('DL9ET');
+            es.readyState = EventSource.CLOSED;
+            es.onerror({ currentTarget: es });
+            expect(statusEl().textContent).toBe('Disconnected. Press Go to reconnect.');
+            expect(toneText('danger')).toBe('Disconnected. Press Go to reconnect.');
+        });
+
+        it('keeps the raw server error, prefixed, and never renders it as markup', async () => {
+            await importAppFresh();
+            const es = await startStream('DL9ET');
+            fireEsEvent(es, 'server_error', { data: 'Server is at capacity. <b>Please</b> try again later.' });
+            expect(toneText('danger')).toBe('Could not connect: Server is at capacity. <b>Please</b> try again later.');
+            expect(statusEl().querySelector('b')).toBeNull();
+        });
+
+        it('reports an invalid locator in the status line without a "Status:" prefix', async () => {
+            await importAppFresh();
+            document.getElementById('qth').value = 'J!';
+            document.getElementById('fetch-form')
+                .dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            await Promise.resolve();
+            expect(statusEl().textContent).toBe('"J!" is not a valid locator (e.g. JO32) or callsign.');
+            expect(esInstances.length).toBe(0);
+        });
     });
 });
 // --- Unit U5 (plan 2026-09-11-002): shared dataNow() clock + Mercator

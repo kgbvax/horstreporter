@@ -711,3 +711,200 @@ describe('azimuth grayline playhead clock (plan 2026-09-11-002 U6, KTD-8/9)', ()
         expect(getSubsolarPoint).toHaveBeenCalledTimes(1);
     });
 });
+
+describe('azimuth basemap tokens (shared with Mercator via map-tokens.js)', () => {
+    let MAP_TOKEN_FALLBACKS;
+    let clearMapTokenCache;
+
+    // Records every draw op with the fill/stroke style active at that moment.
+    function makeStyleRecordingCtx() {
+        const ops = [];
+        const ctx = {
+            ops,
+            globalAlpha: 1, strokeStyle: '', fillStyle: '', lineWidth: 1, lineCap: '', lineJoin: '', font: '',
+            textAlign: '', textBaseline: '',
+            beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, rect() {},
+            // A real 2D context restores these on restore(); the halo text
+            // relies on that to hand the graticule stroke back.
+            _stack: [],
+            save() { ctx._stack.push({ fillStyle: ctx.fillStyle, strokeStyle: ctx.strokeStyle, globalAlpha: ctx.globalAlpha, lineWidth: ctx.lineWidth, lineJoin: ctx.lineJoin }); },
+            restore() { Object.assign(ctx, ctx._stack.pop() || {}); },
+            clearRect(...args) { ops.push({ op: 'clearRect', args }); },
+            fillRect(...args) { ops.push({ op: 'fillRect', fillStyle: ctx.fillStyle, args }); },
+            arc(...args) { ops.push({ op: 'arc', args }); },
+            roundRect(...args) { ops.push({ op: 'roundRect', args }); },
+            fill() { ops.push({ op: 'fill', fillStyle: ctx.fillStyle, alpha: ctx.globalAlpha }); },
+            stroke() { ops.push({ op: 'stroke', strokeStyle: ctx.strokeStyle, alpha: ctx.globalAlpha }); },
+            fillText(text) { ops.push({ op: 'fillText', text, fillStyle: ctx.fillStyle }); },
+            strokeText(text) { ops.push({ op: 'strokeText', text, strokeStyle: ctx.strokeStyle }); },
+            measureText(text) { return { width: String(text).length * 6 }; }
+        };
+        return ctx;
+    }
+
+    beforeAll(async () => {
+        ({ MAP_TOKEN_FALLBACKS, clearMapTokenCache } = await import('../static/map-tokens.js'));
+    });
+
+    beforeEach(() => {
+        clearMapTokenCache();
+        document.body.innerHTML = '';
+        document.body.removeAttribute('style');
+        document.body.setAttribute('data-theme', 'light');
+        const s = az.__internals.state;
+        s.theme = 'light';
+        s.center = [0, 0];
+        s.zoom = 1.5;
+        s.horizonKm = 16000;
+    });
+
+    afterEach(() => {
+        clearMapTokenCache();
+        document.body.innerHTML = '';
+        document.body.removeAttribute('style');
+        document.body.removeAttribute('data-theme');
+        az.__internals.state.theme = 'light';
+        az.__internals.state.worldGeoJson = null;
+    });
+
+    it('paints the page surface around the disc and the water inside it', () => {
+        document.body.style.setProperty('--bg-color', '#fefefe');
+        document.body.style.setProperty('--map-water', '#123456');
+        const ctx = makeStyleRecordingCtx();
+        az.__internals.drawBackground(ctx, 400, 300);
+
+        const fillRect = ctx.ops.find(o => o.op === 'fillRect');
+        expect(fillRect.fillStyle).toBe('#fefefe');
+        expect(fillRect.args).toEqual([0, 0, 400, 300]);
+
+        const disc = ctx.ops.find(o => o.op === 'arc');
+        // At the default zoom/horizon the disc stops just inside the bearing
+        // scale ring (0.47 * min side minus the 12px clearance).
+        expect(disc.args.slice(0, 3)).toEqual([200, 150, (300 * 0.47) - 12]);
+        expect(ctx.ops.find(o => o.op === 'fill').fillStyle).toBe('#123456');
+    });
+
+    it('shrinks the water disc to the horizon when the horizon is short', () => {
+        az.__internals.state.zoom = 1;
+        az.__internals.state.horizonKm = 2000;
+        const ctx = makeStyleRecordingCtx();
+        az.__internals.drawBackground(ctx, 400, 400);
+        const radius = ctx.ops.find(o => o.op === 'arc').args[2];
+        expect(radius).toBeCloseTo((400 * 0.47 / Math.PI) * (2000 / 6371), 6);
+        expect(ctx.ops.find(o => o.op === 'fill').fillStyle).toBe(MAP_TOKEN_FALLBACKS.light.water);
+    });
+
+    it('re-reads the tokens when the theme changes', () => {
+        document.body.style.setProperty('--map-water', '#111111');
+        const light = makeStyleRecordingCtx();
+        az.__internals.drawBackground(light, 300, 300);
+        expect(light.ops.find(o => o.op === 'fill').fillStyle).toBe('#111111');
+
+        document.body.setAttribute('data-theme', 'dark');
+        document.body.style.setProperty('--map-water', '#222222');
+        az.setAzimuthTheme('dark');
+        const dark = makeStyleRecordingCtx();
+        az.__internals.drawBackground(dark, 300, 300);
+        expect(dark.ops.find(o => o.op === 'fill').fillStyle).toBe('#222222');
+
+        // Back to light: the light values are read again, not the stale cache.
+        document.body.setAttribute('data-theme', 'light');
+        document.body.style.setProperty('--map-water', '#333333');
+        az.setAzimuthTheme('light');
+        const again = makeStyleRecordingCtx();
+        az.__internals.drawBackground(again, 300, 300);
+        expect(again.ops.find(o => o.op === 'fill').fillStyle).toBe('#333333');
+    });
+
+    function worldFixture() {
+        return {
+            type: 'FeatureCollection',
+            features: [{
+                type: 'Feature',
+                properties: { ADM0_A3: 'DEU', ISO_A2: 'DE' },
+                geometry: { type: 'Polygon', coordinates: [[[5, 47], [15, 47], [15, 55], [5, 55], [5, 47]]] }
+            }]
+        };
+    }
+
+    function setCountryColoring(on) {
+        const toggle = document.createElement('input');
+        toggle.type = 'checkbox';
+        toggle.id = 'show-country-coloring';
+        toggle.checked = on;
+        document.body.appendChild(toggle);
+    }
+
+    it('fills land with --map-land and strokes borders with --map-border when country coloring is off', () => {
+        setCountryColoring(false);
+        az.__internals.state.center = [51, 10];
+        az.__internals.state.worldGeoJson = worldFixture();
+        const ctx = makeStyleRecordingCtx();
+        az.__internals.drawWorld(ctx, 400, 400, { countryFillMap: new Map([['DEU', '#FEE5DA']]) });
+
+        const fills = ctx.ops.filter(o => o.op === 'fill');
+        const strokes = ctx.ops.filter(o => o.op === 'stroke');
+        expect(fills.length).toBeGreaterThan(0);
+        expect(new Set(fills.map(o => o.fillStyle))).toEqual(new Set([MAP_TOKEN_FALLBACKS.light.land]));
+        expect(new Set(strokes.map(o => o.strokeStyle))).toEqual(new Set([MAP_TOKEN_FALLBACKS.light.border]));
+        expect(fills.every(o => o.alpha === 1)).toBe(true);
+    });
+
+    it('tints country fills over --map-land at the Mercator overlay opacity', () => {
+        setCountryColoring(true);
+        az.__internals.state.center = [51, 10];
+        az.__internals.state.worldGeoJson = worldFixture();
+        const ctx = makeStyleRecordingCtx();
+        az.__internals.drawWorld(ctx, 400, 400, { countryFillMap: new Map([['DEU', '#FEE5DA']]) });
+
+        // #FEE5DA at 30% over #fafaf8, as Mercator shows it over the CARTO land.
+        const fills = ctx.ops.filter(o => o.op === 'fill');
+        expect(fills.length).toBeGreaterThan(0);
+        expect(new Set(fills.map(o => o.fillStyle))).toEqual(new Set(['#fbf4ef']));
+    });
+
+    it('uses the same country palette as the Mercator overlay (utils.js)', async () => {
+        const { getCountryFillForFeature } = await import('../static/utils.js');
+        const feature = { type: 'Feature', properties: { ADM0_A3: 'ZZQ', MAPCOLOR13: 7 }, geometry: null };
+        // The fill map is cached by theme + feature count; start clean.
+        az.__internals.state.countryFillCache.clear();
+        for (const theme of ['light', 'dark']) {
+            const plan = az.createAzimuthRenderPlan({
+                featureCollection: { type: 'FeatureCollection', features: [feature] },
+                center: [0, 0],
+                theme,
+                zoomLevel: 1.5
+            });
+            expect(plan.countryFillMap.get('ZZQ')).toBe(getCountryFillForFeature(feature, theme));
+        }
+    });
+
+    it('draws bearing labels in --map-label over a --map-land halo and the ring in --map-graticule', () => {
+        document.body.style.setProperty('--map-label', '#0a0b0c');
+        document.body.style.setProperty('--map-land', '#f0f0f0');
+        document.body.style.setProperty('--map-graticule', '#445566');
+        const ctx = makeStyleRecordingCtx();
+        az.__internals.drawAzimuthIndicator(ctx, 400, 400);
+
+        const texts = ctx.ops.filter(o => o.op === 'fillText');
+        expect(texts.map(o => o.text)).toEqual(expect.arrayContaining(['N', 'E', 'S', 'W', '30°', '330°']));
+        expect(new Set(texts.map(o => o.fillStyle))).toEqual(new Set(['#0a0b0c']));
+        const halos = ctx.ops.filter(o => o.op === 'strokeText');
+        expect(halos).toHaveLength(texts.length);
+        expect(new Set(halos.map(o => o.strokeStyle))).toEqual(new Set(['#f0f0f0']));
+        expect(new Set(ctx.ops.filter(o => o.op === 'stroke').map(o => o.strokeStyle))).toEqual(new Set(['#445566']));
+    });
+
+    it('draws DXCC labels as the Mercator pill (--dxcc-label-* tokens)', () => {
+        document.body.setAttribute('data-theme', 'dark');
+        az.setAzimuthTheme('dark');
+        const ctx = makeStyleRecordingCtx();
+        az.__internals.drawDxccLabels(ctx, 400, 400, { dxccLabels: [{ prefix: 'DL', lat: 10, lng: 10 }] });
+
+        const dark = MAP_TOKEN_FALLBACKS.dark;
+        expect(ctx.ops.find(o => o.op === 'roundRect')).toBeTruthy();
+        expect(ctx.ops.find(o => o.op === 'fill').fillStyle).toBe(dark.labelBg);
+        expect(ctx.ops.find(o => o.op === 'stroke').strokeStyle).toBe(dark.labelBorder);
+        expect(ctx.ops.find(o => o.op === 'fillText')).toMatchObject({ text: 'DL', fillStyle: dark.labelText });
+    });
+});

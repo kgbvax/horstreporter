@@ -206,22 +206,22 @@ export function attachUITooltipEvents() {
         let reportsHtml = '';
         if (topReports.length > 0) {
             reportsHtml = `<hr style="margin: 5px 0; border: 0; border-top: 1px solid var(--tooltip-border);">` +
-                `<span style="font-size: 11px;"><b>Top Reports:</b><br>` +
+                `<span style="font-size: 11px;"><b>Top reports</b><br>` +
                 topReports.map((r) => {
                     const sender = escapeHtml(r.sender || '—');
                     const receiver = escapeHtml(r.receiver || '—');
                     const band = escapeHtml(r.band || '—');
                     const snr = Number.isFinite(Number(r.snr)) ? Number(r.snr) : 0;
-                    return `${sender} / ${receiver} / ${band} / ${snr}dB`;
+                    return `${sender} / ${receiver} / ${band} / ${snr} dB`;
                 }).join('<br>') +
                 `</span>`;
         }
 
         tooltip.innerHTML = `<strong>${escapeHtml(locator)}${escapeHtml(hoverSquareAzimuthText(locator))}</strong><br>` +
-            `Min: ${min}dB<br>` +
-            `Max: ${max}dB<br>` +
-            `Avg: ${Math.round(avg)}dB<br>` +
-            `Best Band: ${bestBand}<br>` +
+            `Min: ${min} dB<br>` +
+            `Max: ${max} dB<br>` +
+            `Avg: ${Math.round(avg)} dB<br>` +
+            `Best band: ${bestBand}<br>` +
             `Spots: ${formatNumber(count)}` +
             reportsHtml;
         tooltip.style.display = 'block';
@@ -340,25 +340,17 @@ export function attachUITooltipEvents() {
 function initInfoOverlay() {
     const themeToggleBtn = document.getElementById('theme-toggle');
     if (themeToggleBtn && themeToggleBtn.parentNode) {
-        const headerActions = document.createElement('div');
-        headerActions.style.display = 'flex';
-        headerActions.style.gap = '8px';
-        
+        // Same button as its header siblings (theme toggle, hide sidebar); the
+        // header's flex row already spaces them.
         const infoBtn = document.createElement('button');
+        infoBtn.type = 'button';
         infoBtn.id = 'info-toggle';
+        infoBtn.className = 'btn btn-outline-secondary btn-sm';
         infoBtn.innerHTML = icon('question-circle');
         infoBtn.title = 'Help';
-        infoBtn.style.background = 'none';
-        infoBtn.style.border = '1px solid var(--border-color)';
-        infoBtn.style.borderRadius = '5px';
-        infoBtn.style.cursor = 'pointer';
-        infoBtn.style.fontSize = '18px';
-        infoBtn.style.padding = '4px 8px';
-        infoBtn.style.lineHeight = '1';
+        infoBtn.setAttribute('aria-label', 'Help');
 
-        themeToggleBtn.parentNode.insertBefore(headerActions, themeToggleBtn);
-        headerActions.appendChild(infoBtn);
-        headerActions.appendChild(themeToggleBtn);
+        themeToggleBtn.parentNode.insertBefore(infoBtn, themeToggleBtn);
 
         const overlay = document.createElement('div');
         overlay.id = 'info-overlay';

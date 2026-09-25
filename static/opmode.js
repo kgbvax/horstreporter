@@ -14,7 +14,7 @@ const opModeState = {
     requestRender: () => {},
     station: null,
     antenna: null,
-    statusText: 'disabled',
+    statusText: 'Disabled',
     transportFailureSticky: false,
     commandInFlight: false,
     pendingTargetBearingDeg: null,
@@ -215,7 +215,7 @@ function setStatus(text, isError = false) {
 function formatStationText(station) {
     if (!station) return 'n/a';
 
-    const name = station.name || 'station';
+    const name = station.name || 'Station';
     const locator = station.locator ? ` (${station.locator})` : '';
     const lat = Number.isFinite(station.lat) ? station.lat.toFixed(4) : '?';
     const lng = Number.isFinite(station.lng) ? station.lng.toFixed(4) : '?';
@@ -431,7 +431,7 @@ async function runControlAction(actionName, fn, options = {}) {
     syncControlWidgets();
 
     try {
-        setStatus(`${actionName}...`);
+        setStatus(`${actionName}…`);
         await fn();
     } catch (err) {
         // A failed command must not leave a phantom pending-target line on the
@@ -505,7 +505,7 @@ async function refreshOpModeStatus() {
 
     syncControlWidgets();
 
-    setStatus('online (direct)');
+    setStatus('Online (direct)');
 }
 
 async function refreshStationState() {
@@ -558,8 +558,8 @@ async function refreshAntennaState() {
 // label used on the buttons (reverse shows as "180°").
 export function beamModeLabel(mode) {
     if (mode === 'reverse') return '180°';
-    if (mode === 'bidirectional') return 'bi-dir';
-    return 'forward';
+    if (mode === 'bidirectional') return 'Bi-dir';
+    return 'Forward';
 }
 
 // formatQrg renders a frequency in Hz as MHz with 3 decimals (kHz precision),
@@ -616,7 +616,7 @@ export function updateOpModeStatusLine() {
         modeTxt = `${mode} / ${live.modeRx}`;
     }
     if (useLive && live.split) {
-        modeTxt = modeTxt ? `${modeTxt} (split)` : 'split';
+        modeTxt = modeTxt ? `${modeTxt} (split)` : 'Split';
     }
 
     const antenna = opModeState.antenna;
@@ -654,7 +654,7 @@ async function pollTick() {
             await refreshAntennaState();
         } catch (retryErr) {
             const message = retryErr?.message || err?.message || 'unavailable';
-            setStatus(`error: ${message}`, true);
+            setStatus(`Error: ${message}`, true);
             if (String(message).includes('opmode inactive: app is running directly on backend')) {
                 opModeState.transportFailureSticky = true;
                 stopPolling();
@@ -697,7 +697,7 @@ function syncEnabledStateFromUi() {
         stopPolling();
         opModeState.transport = 'unknown';
         opModeState.transportFailureSticky = false;
-        setStatus('inactive (direct backend mode)');
+        setStatus('Inactive (direct backend mode)');
         opModeState.station = null;
         opModeState.antenna = null;
         opModeState.liveRig = null;
@@ -709,7 +709,7 @@ function syncEnabledStateFromUi() {
         return;
     }
 
-    setStatus('connecting...');
+    setStatus('Connecting…');
     opModeState.transport = 'unknown';
     opModeState.transportFailureSticky = false;
     startPolling();
@@ -722,7 +722,7 @@ export async function setAntennaMode(modeValue) {
 
     const mode = normalizeMode(modeValue);
 
-    await runControlAction('setting beam', async () => {
+    await runControlAction('Setting beam', async () => {
         await fetchJson(opModeEndpoint('antenna/beam'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -800,7 +800,7 @@ export async function rigTune(freqHz, mode) {
     const hz = Math.round(Number(freqHz));
     if (!Number.isFinite(hz) || hz <= 0) throw new Error('invalid frequency');
 
-    await runControlAction('tuning rig', async () => {
+    await runControlAction('Tuning rig', async () => {
         await fetchJson(opModeEndpoint('rig/tune'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -839,7 +839,7 @@ export async function operate(freqHz, mode, azimuthDeg, label = '') {
         syncAntennaOverlay();
     }
 
-    await runControlAction('tune + turn', async () => {
+    await runControlAction('Tuning and turning', async () => {
         await fetchJson(opModeEndpoint('operate'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -854,18 +854,18 @@ export async function operate(freqHz, mode, azimuthDeg, label = '') {
 export async function setBeamTargetFromMapClick({ lat, lng, label = '' } = {}) {
     const [allowed, reason] = canSendControl();
     if (!allowed) {
-        setStatus(`beam target failed: ${reason}`, true);
+        setStatus(`Beam target failed: ${reason}`, true);
         return false;
     }
 
     const targetLat = toNumber(lat);
     const targetLng = toNumber(lng);
     if (targetLat === null || targetLng === null) {
-        setStatus('beam target failed: invalid map location', true);
+        setStatus('Beam target failed: invalid map location', true);
         return false;
     }
     if (!opModeState.station) {
-        setStatus('beam target failed: station location unavailable', true);
+        setStatus('Beam target failed: station location unavailable', true);
         return false;
     }
 
@@ -878,7 +878,7 @@ export async function setBeamTargetFromMapClick({ lat, lng, label = '' } = {}) {
     if (!Number.isFinite(targetDistanceKm) || targetDistanceKm < 2) {
         clearPendingTargetPreview();
         syncAntennaOverlay();
-        setStatus('beam target failed: selected point too close to station', true);
+        setStatus('Beam target failed: selected point too close to station', true);
         return false;
     }
 
@@ -894,7 +894,7 @@ export async function setBeamTargetFromMapClick({ lat, lng, label = '' } = {}) {
     syncAntennaOverlay();
 
     try {
-        await runControlAction('setting beam target', async () => {
+        await runControlAction('Setting beam target', async () => {
             await fetchJson(opModeEndpoint('antenna/rotate'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -912,10 +912,10 @@ export async function setBeamTargetFromMapClick({ lat, lng, label = '' } = {}) {
         }, { preserveTargetPreview: true });
 
         const suffix = targetLabel ? ` (${targetLabel})` : '';
-        setStatus(`beam target set to ${Math.round(azimuthDeg)}°${suffix}`);
+        setStatus(`Beam target set to ${Math.round(azimuthDeg)}°${suffix}`);
         return true;
     } catch (err) {
-        setStatus(`beam target failed: ${err?.message || 'unknown error'}`, true);
+        setStatus(`Beam target failed: ${err?.message || 'unknown error'}`, true);
         return false;
     }
 }
@@ -930,9 +930,9 @@ export function initOpMode({ requestRender } = {}) {
             const mode = normalizeMode(btn.dataset.mode || 'forward');
             try {
                 await setAntennaMode(mode);
-                setStatus(`beam set to ${beamModeLabel(mode)}`);
+                setStatus(`Beam set to ${beamModeLabel(mode)}`);
             } catch (err) {
-                setStatus(`beam change failed: ${err?.message || 'unknown error'}`, true);
+                setStatus(`Beam change failed: ${err?.message || 'unknown error'}`, true);
             }
         });
     });

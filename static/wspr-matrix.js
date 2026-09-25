@@ -1,8 +1,10 @@
 import { state } from './state.js';
 import { WSPR_REGIONS, bandColors, getEnabledBands, getMinSnrMode } from './utils.js';
 import { makeDraggable } from './panel-drag.js';
+import { setPanelToggleState } from './panel-toggle.js';
+import { escapeHtml } from './ui-helpers.js';
 
-// wspr-matrix.js — the unified Prop panel: band × region propagation-
+// wspr-matrix.js — the unified Propagation panel: band × region propagation-
 // intelligence matrix over ALL ingest sources (WSPR, PSKReporter FT8/FT4,
 // RBN, DX cluster). Polls /api/prop_intel/v2 (the multi-source contract;
 // v1 stays frozen for the horstapp widgets). Renders per-cell activity as a
@@ -20,6 +22,13 @@ import { makeDraggable } from './panel-drag.js';
 // visibility gating, 15s cache TTL, AbortController in-flight dedup, QTH-
 // change listener. Clicking a cell drills the grid-square plot down to that
 // band × region (state.drillDownBand/Region + #drill-down-clear).
+//
+// Keyboard: the table is an ARIA grid with a roving tabindex. Exactly one data
+// cell is in the tab order (the drill-down cell, else the first data cell);
+// arrow keys move between data cells (empty cells are skipped and inert),
+// Home/End jump within the row (with Ctrl: within the grid), Enter/Space
+// toggle the drill-down like a click. Re-renders put focus back on the same
+// band × region cell when it was inside the panel.
 
 const PANEL_ID = 'wspr-matrix-window';
 const TOGGLE_ID = 'wspr-matrix-toggle';
@@ -41,11 +50,14 @@ const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12
 // Selectable sources, canonical order (matches the backend's parseSources
 // contract). Public chip label → API source name.
 const SOURCES = [
-    { key: 'wspr', label: 'WSPR' },
-    { key: 'pskr', label: 'PSKR' },
-    { key: 'rbn', label: 'RBN' },
-    { key: 'dxcluster', label: 'DXC' },
+    { key: 'wspr', label: 'WSPR', title: 'WSPR beacon reports' },
+    { key: 'pskr', label: 'PSKR', title: 'PSKReporter FT8 and FT4 reports' },
+    { key: 'rbn', label: 'RBN', title: 'Reverse Beacon Network CW and RTTY spots' },
+    { key: 'dxcluster', label: 'DXC', title: 'DX cluster spots' },
 ];
+const SOURCE_LABELS = Object.fromEntries(SOURCES.map((s) => [s.key, s.label]));
+// Per-source "open" basis (backend v2 open_basis) in the cell tooltip.
+const OPEN_BASIS_LABELS = { budget: 'link budget', snr_floor: 'SNR floor' };
 const ALL_SOURCES = SOURCES.map((s) => s.key);
 // Default selection excludes dxcluster: prod has no DX-cluster ingest wired
 // (-dxcluster-enable absent), so DXC would sit there contributing nothing.
@@ -56,8 +68,8 @@ const DEFAULT_SOURCES = ['wspr', 'pskr', 'rbn'];
 // fill + glyph). Both styles are data-colored heatmaps — identical in both
 // themes, only the numeral ink flips.
 const STYLES = [
-    { key: 'viridis', label: 'Viridis' },
-    { key: 'inferno', label: 'Inferno' },
+    { key: 'viridis', label: 'Viridis', title: 'Viridis colors, surges shown as chevrons' },
+    { key: 'inferno', label: 'Inferno', title: 'Inferno colors, surges shown as rings' },
 ];
 const ALL_STYLES = STYLES.map((s) => s.key);
 // 9-stop perceptually-uniform maps (matplotlib reference samples).
@@ -156,7 +168,10 @@ const runtime = {
     sources: [...DEFAULT_SOURCES],
     style: 'viridis',
     onLayoutChange: null,
+    toggleRowObserver: null,
 };
+
+const TOGGLE_LABELS = { show: 'Show propagation', hide: 'Hide propagation' };
 
 export function initWsprMatrix({ onLayoutChange } = {}) {
     runtime.onLayoutChange = onLayoutChange || null;
@@ -183,7 +198,11 @@ export function initWsprMatrix({ onLayoutChange } = {}) {
     const stored = localStorage.getItem(ENABLE_KEY);
     if (stored === 'true') {
         setWsprMatrixVisible(true);
+    } else {
+        setPanelToggleState(toggle, false, TOGGLE_LABELS);
     }
+
+    observeToggleRow(panel);
 
     toggle.addEventListener('click', () => {
         setWsprMatrixVisible(!runtime.enabled);
@@ -212,10 +231,35 @@ export function initWsprMatrix({ onLayoutChange } = {}) {
     document.getElementById('min-snr-group')?.addEventListener('change', (e) => {
         if (e.target?.name === 'min-snr') onMinSnrChange();
     });
-    document.getElementById('ssb-min-db')?.addEventListener('change', onMinSnrChange);
-    document.getElementById('cw-min-db')?.addEventListener('change', onMinSnrChange);
+    // Delegated: the threshold sliders are re-created on every Min SNR mode
+    // switch (Svelte), so element-bound listeners would be lost.
+    // Replace, don't stack, if init runs again.
+    if (runtime.snrThresholdListener) document.removeEventListener('change', runtime.snrThresholdListener);
+    runtime.snrThresholdListener = (e) => {
+        const id = e.target?.id;
+        if (id === 'ssb-min-db' || id === 'cw-min-db') onMinSnrChange();
+    };
+    document.addEventListener('change', runtime.snrThresholdListener);
 
     makeDraggable(panel, panel.querySelector('.wspr-matrix-window-header'), 'wsprMatrixPos');
+}
+
+// The map toggle row wraps on narrow screens (longer labels, solo and
+// drill-down chips). Publish its bottom edge on the map stack so the mobile
+// panel placement (style.css) starts below it instead of covering the chips.
+function observeToggleRow(panel) {
+    const row = document.getElementById('map-toggles');
+    const host = panel.parentElement;
+    if (!row || !host || typeof ResizeObserver !== 'function') return;
+    runtime.toggleRowObserver?.disconnect();
+    const sync = () => {
+        host.style.setProperty('--map-toggles-bottom', `${row.offsetTop + row.offsetHeight}px`);
+        // Right edge, for the centred hot-band indicator's clearance.
+        host.style.setProperty('--map-toggles-right', `${row.offsetLeft + row.offsetWidth}px`);
+    };
+    runtime.toggleRowObserver = new ResizeObserver(sync);
+    runtime.toggleRowObserver.observe(row);
+    sync();
 }
 
 function setWsprMatrixVisible(visible) {
@@ -224,7 +268,7 @@ function setWsprMatrixVisible(visible) {
     if (!panel) return;
     runtime.enabled = visible;
     panel.classList.toggle('is-hidden', !visible);
-    if (toggle) toggle.classList.toggle('is-active', visible);
+    setPanelToggleState(toggle, visible, TOGGLE_LABELS);
     localStorage.setItem(ENABLE_KEY, visible ? 'true' : 'false');
     if (runtime.onLayoutChange) runtime.onLayoutChange();
     if (visible) {
@@ -290,7 +334,7 @@ async function pollMatrix(force) {
     const qth = currentQth();
     const body = document.getElementById(BODY_ID);
     if (!qth) {
-        if (body) body.innerHTML = '<div class="text-muted small">Set a QTH to see the Prop matrix.</div>';
+        if (body) body.innerHTML = '<div class="text-muted small">Enter your locator to see propagation.</div>';
         return;
     }
 
@@ -336,7 +380,7 @@ async function pollMatrix(force) {
         if (err?.name === 'AbortError') return;
         console.warn('prop_intel v2 fetch failed:', err);
         if (body && runtime.cache == null) {
-            body.innerHTML = '<div class="text-muted small">Propagation intelligence unavailable.</div>';
+            body.innerHTML = '<div class="text-muted small">Propagation data unavailable.</div>';
         }
     } finally {
         if (runtime.abortController === controller) {
@@ -358,14 +402,57 @@ function setStyle(key) {
 function renderSourceChips() {
     const chips = SOURCES.map((s) => {
         const on = runtime.sources.includes(s.key);
-        return `<button type="button" class="wspr-src-chip${on ? ' is-on' : ''}" data-source="${s.key}" aria-pressed="${on}">${s.label}</button>`;
+        return `<button type="button" class="wspr-src-chip${on ? ' is-on' : ''}" data-source="${s.key}" aria-pressed="${on}" title="${s.title}">${s.label}</button>`;
     }).join('');
     const styleChips = STYLES.map((s) => {
         const on = runtime.style === s.key;
-        return `<button type="button" class="wspr-src-chip${on ? ' is-on' : ''}" data-style="${s.key}" aria-pressed="${on}">${s.label}</button>`;
+        return `<button type="button" class="wspr-src-chip${on ? ' is-on' : ''}" data-style="${s.key}" aria-pressed="${on}" title="${s.title}">${s.label}</button>`;
     }).join('');
-    return `<div class="wspr-src-chips" role="group" aria-label="Sources">${chips}` +
-        `<span class="wspr-chip-sep" aria-hidden="true"></span>${styleChips}</div>`;
+    return '<div class="wspr-src-chips">' +
+        `<div class="wspr-chip-group" role="group" aria-label="Sources">${chips}</div>` +
+        '<span class="wspr-chip-sep" aria-hidden="true"></span>' +
+        `<div class="wspr-chip-group" role="group" aria-label="Color scale">${styleChips}</div>` +
+        '</div>';
+}
+
+// --- Focus across re-renders ---------------------------------------------------
+// The body is rebuilt via innerHTML (poll results, chip toggles, drill-down),
+// which drops focus to <body>. Remember what had focus inside the panel and
+// put it back on the equivalent element of the new markup.
+function captureFocus(body) {
+    const el = document.activeElement;
+    if (!el || el === document.body || !body.contains(el)) return null;
+    if (el.classList.contains('wspr-matrix-cell')) {
+        return { band: el.getAttribute('data-band'), region: el.getAttribute('data-region') };
+    }
+    if (el.classList.contains('wspr-src-chip')) {
+        return { source: el.getAttribute('data-source'), style: el.getAttribute('data-style') };
+    }
+    return {};
+}
+
+function findCell(root, band, region) {
+    for (const td of root.querySelectorAll('.wspr-matrix-cell')) {
+        if (td.getAttribute('data-band') === band && td.getAttribute('data-region') === region) return td;
+    }
+    return null;
+}
+
+function restoreFocus(body, focus) {
+    if (!focus) return;
+    let target = null;
+    if (focus.band) {
+        target = findCell(body, focus.band, focus.region);
+    } else if (focus.source || focus.style) {
+        target = Array.from(body.querySelectorAll('.wspr-src-chip')).find((chip) =>
+            chip.getAttribute('data-source') === focus.source && chip.getAttribute('data-style') === focus.style) || null;
+    }
+    // The cell may be gone (band disabled, path closed): keep focus in the
+    // grid on its tab stop rather than losing it to <body>.
+    if (!target) target = body.querySelector('.wspr-matrix-cell[tabindex="0"]');
+    if (!target) return;
+    if (target.classList.contains('wspr-matrix-cell')) setRovingCell(target);
+    target.focus();
 }
 
 function renderMatrix() {
@@ -381,10 +468,12 @@ function renderMatrix() {
         const empty = allCells.length > 0
             ? 'No paths open on the enabled bands.'
             : 'No paths open in the current window.';
+        const focus = captureFocus(body);
         body.innerHTML = renderSourceChips() +
             `<div class="text-muted small">${empty}</div>` +
             legendHtml();
         attachSourceChipHandlers(body);
+        restoreFocus(body, focus);
         return;
     }
 
@@ -400,9 +489,14 @@ function renderMatrix() {
     }
     activeBands.sort((a, b) => BAND_ORDER.indexOf(a) - BAND_ORDER.indexOf(b));
 
-    // Fingerprint for skip-rebuild (theme included: a toggle re-shades chips).
+    // Fingerprint for skip-rebuild (theme included: a toggle re-shades chips;
+    // drill-down included: it sets aria-selected and the tab stop; region
+    // names included: they are in the cell names).
     const theme = document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
-    const renderKey = `${theme}|${runtime.style}|${runtime.sources.join(',')}|${activeBands
+    const regionNames = (data && data.region_names) || {};
+    const renderKey = `${theme}|${runtime.style}|${runtime.sources.join(',')}` +
+        `|${state.drillDownBand}×${state.drillDownRegion}` +
+        `|${WSPR_REGIONS.map((r) => regionNames[r] || '').join(',')}|${activeBands
         .map((b) => `${b}:${Array.from(matrix.get(b).entries()).sort().map(([r, c]) =>
             `${r}${c.spot_count}${c.ssb_open ? 'S' : ''}${c.cw_open ? 'C' : ''}${c.rising ? 'R' : ''}` +
             `${c.atypical ? `${c.atypical.z_score}~${c.atypical.confidence}` : ''}` +
@@ -415,34 +509,62 @@ function renderMatrix() {
     const maxCount = Math.max(...cells.map((c) => c.spot_count || 0), 1);
 
     let html = renderSourceChips();
-    const regionNames = (data && data.region_names) || {};
-    html += '<table class="wspr-matrix-table"><thead><tr><th></th>';
+    html += '<table class="wspr-matrix-table" role="grid" aria-label="Propagation by band and region">' +
+        '<thead><tr role="row"><th scope="col" role="columnheader"><span class="wspr-sr-only">Band</span></th>';
     for (const region of WSPR_REGIONS) {
-        html += `<th title="${regionNames[region] || region}">${region}</th>`;
+        html += `<th scope="col" role="columnheader" title="${escapeHtml(regionNames[region] || region)}">${region}</th>`;
     }
     html += '</tr></thead><tbody>';
 
     for (const band of activeBands) {
         const bandMap = matrix.get(band);
         const color = bandColors[band] || bandColors.all || '#555';
-        html += `<tr><td class="wspr-matrix-band" style="border-left: 3px solid ${color}">${band}</td>`;
+        html += `<tr role="row"><th scope="row" role="rowheader" class="wspr-matrix-band" style="border-left: 3px solid ${color}">${band}</th>`;
         for (const region of WSPR_REGIONS) {
             const cell = bandMap.get(region);
-            html += renderCell(band, region, cell, maxCount, theme);
+            html += renderCell(band, region, cell, maxCount, theme, regionNames);
         }
         html += '</tr>';
     }
     html += '</tbody></table>';
     html += legendHtml();
+
+    const focus = captureFocus(body);
     body.innerHTML = html;
 
     attachSourceChipHandlers(body);
-    attachCellClickHandler(body);
+    const table = body.querySelector('.wspr-matrix-table');
+    attachGridHandlers(table);
+    const drill = findCell(table, state.drillDownBand, state.drillDownRegion);
+    const first = table.querySelector('.wspr-matrix-cell');
+    if (drill || first) setRovingCell(drill || first);
+    restoreFocus(body, focus);
 }
 
-function renderCell(band, region, cell, maxCount, theme) {
+// "20m to Japan: 1,234 spots" (full region name from the payload's
+// region_names, code as fallback).
+function pathSummary(band, region, cell, regionNames = {}) {
+    const count = Number(cell.spot_count) || 0;
+    return `${band} to ${regionNames[region] || region}: ${count.toLocaleString('en-US')} ${count === 1 ? 'spot' : 'spots'}`;
+}
+
+// Accessible name for a data cell: path, spot count and the marks it shows
+// (top mode badge, rising arrow, surge glyph or ring).
+function cellLabel(band, region, cell, regionNames = {}) {
+    const parts = [pathSummary(band, region, cell, regionNames)];
+    if (cell.ssb_open) parts.push('SSB open');
+    else if (cell.cw_open) parts.push('CW open');
+    if (cell.rising) parts.push('rising');
+    const surge = surgeStrength(cell);
+    if (surge === 2) parts.push('strong surge');
+    else if (surge === 1) parts.push('surge');
+    return parts.join(', ');
+}
+
+function renderCell(band, region, cell, maxCount, theme, regionNames = runtime.cache?.region_names || {}) {
     if (!cell || cell.spot_count === 0) {
-        return `<td class="wspr-matrix-cell-empty" data-band="${band}" data-region="${region}" role="button" tabindex="0"></td>`;
+        // Nothing to drill into: a plain grid cell, outside the tab order.
+        return `<td role="gridcell" class="wspr-matrix-cell-empty" data-band="${band}" data-region="${region}"></td>`;
     }
     const style = runtime.style;
     const intensity = Math.min(1, cell.spot_count / maxCount);
@@ -450,33 +572,32 @@ function renderCell(band, region, cell, maxCount, theme) {
     if (cell.rising) badges += '<span class="wspr-badge wspr-badge-rising">&uarr;</span>';
     let atypicalMark = '';
     let ring = '';
+    let surgeLine = '';
     if (cell.atypical) {
         const conf = Math.round(Math.max(0, Math.min(1, Number(cell.atypical.confidence ?? 0))) * 100);
         const multi = (cell.atypical_agreement ?? 0) >= 0.5;
-        const tip = `atypical z=${cell.atypical.z_score}, confidence ${conf}%${multi ? `, ${Math.round((cell.atypical_agreement ?? 0) * 100)}% of sources agree` : ''}`;
+        surgeLine = `Surge: z=${cell.atypical.z_score}, confidence ${conf}%`;
+        const tip = `${surgeLine}${multi ? `, ${Math.round((cell.atypical_agreement ?? 0) * 100)}% of sources agree` : ''}`;
         // Heat styles speak in geometry, not badges (round-3 decision 02).
         // The v2 backend only flags surges, so glyphs only point up.
         const strong = surgeStrength(cell) === 2;
         if (style === 'inferno') {
             ring = ringShadow(strong);
-            atypicalMark = `<span class="wspr-sr-only" title="${tip}">surge</span>`;
         } else {
             atypicalMark = `<span title="${tip}">${chevronGlyph(strong, '__INK__')}</span>`;
         }
     }
-    const titleParts = [`${band} → ${region}: ${cell.spot_count} spots`];
+    const titleParts = [pathSummary(band, region, cell, regionNames)];
     if (cell.ssb_open) titleParts.push('SSB open');
     if (cell.cw_open) titleParts.push('CW open');
-    if (cell.rising) titleParts.push('rising');
-    if (cell.atypical) {
-        const conf = Math.round(Math.max(0, Math.min(1, Number(cell.atypical.confidence ?? 0))) * 100);
-        titleParts.push(`atypical z=${cell.atypical.z_score}, confidence ${conf}%`);
-    }
+    if (cell.rising) titleParts.push('Rising');
+    if (surgeLine) titleParts.push(surgeLine);
     if (Array.isArray(cell.sources) && cell.sources.length) {
         for (const s of cell.sources) {
-            let line = `${s.source}: ${s.spot_count} spots`;
+            let line = `${SOURCE_LABELS[s.source] || s.source}: ${s.spot_count} spots`;
             if (s.open) {
-                line += s.open_basis === 'presence' ? ' (presence)' : ` open (${s.open_basis}${s.unknown_power ? ', tx power unknown' : ''})`;
+                const basis = OPEN_BASIS_LABELS[s.open_basis] || s.open_basis;
+                line += s.open_basis === 'presence' ? ' (presence)' : `, open (${basis}${s.unknown_power ? ', TX power unknown' : ''})`;
             }
             if (s.atypical) line += `, z=${s.atypical.z_score}`;
             titleParts.push(line);
@@ -487,7 +608,10 @@ function renderCell(band, region, cell, maxCount, theme) {
     const ink = cellInk(bgRgb);
     atypicalMark = atypicalMark.replace('__INK__', ink);
     const styleAttr = `background: ${bg}; color: ${ink}${ring ? `; box-shadow: ${ring}` : ''}`;
-    return `<td class="wspr-matrix-cell" style="${styleAttr}" title="${titleParts.join('\n')}" data-band="${band}" data-region="${region}" role="button" tabindex="0">${cell.spot_count}${badges}${atypicalMark}</td>`;
+    const selected = state.drillDownBand === band && state.drillDownRegion === region;
+    const label = escapeHtml(cellLabel(band, region, cell, regionNames));
+    const title = escapeHtml(titleParts.join('\n'));
+    return `<td role="gridcell" class="wspr-matrix-cell" style="${styleAttr}" title="${title}" aria-label="${label}" aria-selected="${selected}" tabindex="-1" data-band="${band}" data-region="${region}">${cell.spot_count}${badges}${atypicalMark}</td>`;
 }
 
 function legendHtml() {
@@ -510,31 +634,124 @@ function attachSourceChipHandlers(body) {
     });
 }
 
-// --- Drill-down -------------------------------------------------------------
-// Clicking a matrix cell filters the grid-square plot to that band × region.
-// The cell's data attrs carry band/region; both are stashed in the shared
-// state singleton and a re-render is scheduled via the global hook exported
-// by app.js (window.__horstScheduleRender).
-function attachCellClickHandler(body) {
-    body.querySelectorAll('.wspr-matrix-cell, .wspr-matrix-cell-empty').forEach((td) => {
-        td.addEventListener('click', () => {
-            const band = td.getAttribute('data-band');
-            const region = td.getAttribute('data-region');
-            if (!band || !region) return;
-            // Toggle: clicking the already-active cell clears the drill-down.
-            if (state.drillDownBand === band && state.drillDownRegion === region) {
-                state.drillDownBand = '';
-                state.drillDownRegion = '';
-            } else {
-                state.drillDownBand = band;
-                state.drillDownRegion = region;
-            }
-            updateDrillDownButton();
-            if (typeof window.__horstScheduleRender === 'function') {
-                window.__horstScheduleRender();
-            }
-        });
+// --- Grid keyboard model ----------------------------------------------------
+// Roving tabindex over the data cells (.wspr-matrix-cell); empty cells are
+// never focusable, so every move skips them.
+function setRovingCell(td) {
+    const table = td.closest('table');
+    if (!table) return;
+    table.querySelectorAll('.wspr-matrix-cell[tabindex="0"]').forEach((c) => {
+        if (c !== td) c.setAttribute('tabindex', '-1');
     });
+    td.setAttribute('tabindex', '0');
+}
+
+function dataCells(row) {
+    return Array.from(row.querySelectorAll('.wspr-matrix-cell'));
+}
+
+// Data cell in `row` whose column is closest to `col` (ties go left).
+function closestInRow(row, col) {
+    let best = null;
+    for (const td of dataCells(row)) {
+        if (!best || Math.abs(td.cellIndex - col) < Math.abs(best.cellIndex - col)) best = td;
+    }
+    return best;
+}
+
+function cellInRowStep(td, dir) {
+    const cells = dataCells(td.parentElement);
+    return cells[cells.indexOf(td) + dir] || null;
+}
+
+// Up/Down keep the column when a later row has a data cell there; otherwise
+// they land on the closest data cell of the next row that has any.
+function cellInColumnStep(table, td, dir) {
+    const rows = Array.from(table.tBodies[0]?.rows || []);
+    const start = rows.indexOf(td.parentElement);
+    const col = td.cellIndex;
+    for (let i = start + dir; i >= 0 && i < rows.length; i += dir) {
+        const c = rows[i].cells[col];
+        if (c && c.classList.contains('wspr-matrix-cell')) return c;
+    }
+    for (let i = start + dir; i >= 0 && i < rows.length; i += dir) {
+        const c = closestInRow(rows[i], col);
+        if (c) return c;
+    }
+    return null;
+}
+
+function onGridKeydown(e) {
+    const td = e.target.closest?.('.wspr-matrix-cell');
+    const table = e.currentTarget;
+    if (!td || !table.contains(td)) return;
+    let next = null;
+    switch (e.key) {
+        case 'ArrowRight': next = cellInRowStep(td, 1); break;
+        case 'ArrowLeft': next = cellInRowStep(td, -1); break;
+        case 'ArrowDown': next = cellInColumnStep(table, td, 1); break;
+        case 'ArrowUp': next = cellInColumnStep(table, td, -1); break;
+        case 'Home': {
+            const cells = e.ctrlKey ? Array.from(table.querySelectorAll('.wspr-matrix-cell')) : dataCells(td.parentElement);
+            next = cells[0] || null;
+            break;
+        }
+        case 'End': {
+            const cells = e.ctrlKey ? Array.from(table.querySelectorAll('.wspr-matrix-cell')) : dataCells(td.parentElement);
+            next = cells[cells.length - 1] || null;
+            break;
+        }
+        case 'Enter':
+        case ' ':
+            e.preventDefault();
+            toggleDrillDown(td.getAttribute('data-band'), td.getAttribute('data-region'));
+            return;
+        default:
+            return;
+    }
+    // Arrows/Home/End never scroll the panel, even at the grid edge.
+    e.preventDefault();
+    if (next && next !== td) {
+        setRovingCell(next);
+        next.focus();
+    }
+}
+
+function attachGridHandlers(table) {
+    if (!table) return;
+    table.addEventListener('click', (e) => {
+        const td = e.target.closest?.('.wspr-matrix-cell');
+        if (!td || !table.contains(td)) return;
+        toggleDrillDown(td.getAttribute('data-band'), td.getAttribute('data-region'));
+    });
+    table.addEventListener('keydown', onGridKeydown);
+    // A clicked (or otherwise focused) cell becomes the tab stop.
+    table.addEventListener('focusin', (e) => {
+        const td = e.target.closest?.('.wspr-matrix-cell');
+        if (td) setRovingCell(td);
+    });
+}
+
+// --- Drill-down -------------------------------------------------------------
+// Activating a matrix cell (click, Enter, Space) filters the grid-square plot
+// to that band × region; activating the active cell again clears it. Both are
+// stashed in the shared state singleton and a map re-render is scheduled via
+// the global hook exported by app.js (window.__horstScheduleRender). The
+// matrix re-renders too (aria-selected and the tab stop follow the filter).
+function toggleDrillDown(band, region) {
+    if (!band || !region) return;
+    if (state.drillDownBand === band && state.drillDownRegion === region) {
+        state.drillDownBand = '';
+        state.drillDownRegion = '';
+    } else {
+        state.drillDownBand = band;
+        state.drillDownRegion = region;
+    }
+    updateDrillDownButton();
+    if (typeof window.__horstScheduleRender === 'function') {
+        window.__horstScheduleRender();
+    }
+    if (runtime.enabled && runtime.cache) renderMatrix();
 }
 
 // Show/hide the "clear filter" overlay button based on drill-down state.
@@ -557,6 +774,7 @@ export function clearDrillDown() {
     if (typeof window.__horstScheduleRender === 'function') {
         window.__horstScheduleRender();
     }
+    if (runtime.enabled && runtime.cache) renderMatrix();
 }
 
 // Test hooks.
@@ -565,6 +783,8 @@ export const __test = {
     rgbLuminance,
     topModeBadges,
     renderCell,
+    cellLabel,
+    toggleDrillDown,
     styleFill,
     rampAt,
     surgeStrength,
@@ -586,6 +806,8 @@ export const __test = {
         runtime.sources = [...DEFAULT_SOURCES];
         runtime.style = 'viridis';
         runtime.onLayoutChange = null;
+        runtime.toggleRowObserver?.disconnect();
+        runtime.toggleRowObserver = null;
     },
     invalidateCache,
     toggleSource,

@@ -53,13 +53,13 @@ A live terminator overlay shows the current sunrise/sunset boundary across the g
 
 ---
 
-## Band Stats Panel
+## Band stats panel
 
-Click the **Stats** button to open the Band Stats panel alongside the map. It gives you a deeper look at each active band without leaving the main view.
+Click the **Band stats** button to open the Band stats panel alongside the map. It gives you a deeper look at each active band without leaving the main view.
 
 ### What you see for each band
 
-**Distance vs. SNR chart** — a scatter plot of every reception report in your time window, plotted by distance (km) from your station and signal strength (dB). Dashed lines mark the CW and SSB viability thresholds. A quick glance tells you whether you're only working nearby stations or whether DX is genuinely open.
+**Distance vs. SNR chart** — a scatter plot of every reception report in your time window, plotted by distance (km) from your station and signal strength (dB). Dashed lines mark the CW and SSB thresholds you set under Display. A quick glance tells you whether you're only working nearby stations or whether DX is genuinely open.
 
 **Reports over time chart** — a bar chart showing how many reports arrived in each recent time slice, plus:
 - An orange trend line indicating whether activity is rising or falling
@@ -67,16 +67,16 @@ Click the **Stats** button to open the Band Stats panel alongside the map. It gi
 
 When the bars are clearly above the baseline, conditions are better than usual. When they're below it, it's a slow day.
 
-### Overall band assessment
+### Overall verdict
 
-At the top of the panel, each band gets a colour-coded status:
+At the top of the panel a single verdict summarises conditions, next to the score, the confidence and the best bands right now:
 
-| Colour | Meaning |
-|--------|---------|
-| **Green** | Good to excellent propagation |
-| **Yellow** | Fair — usable but not exceptional |
-| **Red** | Poor — limited openings |
-| **Grey** | Not enough data to judge |
+| Verdict | Meaning |
+|---------|---------|
+| **Good: worth turning the radio on** | Good to excellent propagation, with at least one recommended band among your enabled bands |
+| **Fair: worth monitoring** | Usable but not exceptional |
+| **Poor: low payoff now** | Limited openings |
+| **Not enough data yet** | Confidence below 40%, too little data to judge |
 
 A confidence percentage tells you how much historical data backs up the assessment. Low confidence means the system hasn't seen enough activity yet to be sure.
 
@@ -131,7 +131,7 @@ Open DXPulse and set your qth locator. Check the anomaly matrix against the cont
 Keep HorstReporter open alongside your logging software. The map updates automatically; when a new region lights up on a band you haven't tried yet, it's a cue to spin the dial.
 
 **Evaluating your antenna**
-The distance vs. SNR chart in the Band Stats panel tells you the reach of your station on each band. Compare a new antenna against your old one by watching how far the scatter plot extends on the distance axis.
+The distance vs. SNR chart in the Band stats panel tells you the reach of your station on each band. Compare a new antenna against your old one by watching how far the scatter plot extends on the distance axis.
 
 **Propagation monitoring without transmitting**
 Use a locator-based qth (your grid square) to see what's being heard by reporters in your area, regardless of whether you're transmitting.

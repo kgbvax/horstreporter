@@ -22,7 +22,7 @@
 {#if $uiStore.minSnr === 'ssb'}
   <div class="d-flex flex-column w-100">
     <label class="d-flex align-items-center justify-content-between mb-0" for="ssb-min-db">
-      <span>SSB Min dB:</span> <span><span id="ssb-min-db-val">{$uiStore.ssbMinDb}</span> dB</span>
+      <span>SSB min dB</span> <span><span id="ssb-min-db-val">{$uiStore.ssbMinDb}</span> dB</span>
     </label>
     <input type="range" id="ssb-min-db" class="form-range" min="-30" max="10" step="1"
            bind:value={$uiStore.ssbMinDb} on:input={render} />
@@ -30,7 +30,7 @@
 {:else if $uiStore.minSnr === 'cw'}
   <div class="d-flex flex-column w-100">
     <label class="d-flex align-items-center justify-content-between mb-0" for="cw-min-db">
-      <span>CW Min dB:</span> <span><span id="cw-min-db-val">{$uiStore.cwMinDb}</span> dB</span>
+      <span>CW min dB</span> <span><span id="cw-min-db-val">{$uiStore.cwMinDb}</span> dB</span>
     </label>
     <input type="range" id="cw-min-db" class="form-range" min="-30" max="10" step="1"
            bind:value={$uiStore.cwMinDb} on:input={render} />

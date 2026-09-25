@@ -57,8 +57,8 @@ describe('normalizeMode (UltraBeam vocabulary)', () => {
 describe('beamModeLabel', () => {
     it('renders operator-facing labels', () => {
         expect(beamModeLabel('reverse')).toBe('180°');
-        expect(beamModeLabel('bidirectional')).toBe('bi-dir');
-        expect(beamModeLabel('forward')).toBe('forward');
+        expect(beamModeLabel('bidirectional')).toBe('Bi-dir');
+        expect(beamModeLabel('forward')).toBe('Forward');
     });
 });
 
@@ -237,6 +237,22 @@ describe('setAntennaMode posts to the beam endpoint', () => {
         __setOpModeStateForTest({ ultrabeamCapabilities: { control: true, online: false } });
         await expect(setAntennaMode('reverse')).rejects.toThrow(/offline/);
     });
+
+    it('shows the in-flight action in the status row in sentence case', async () => {
+        document.body.innerHTML = '<strong id="opmode-status"></strong>';
+        let statusDuringCall = null;
+        globalThis.fetch = vi.fn(async () => {
+            statusDuringCall ??= document.getElementById('opmode-status').textContent;
+            return {
+                ok: true,
+                json: async () => ({ antenna: { mode: 'forward', azimuth_deg: 90, beam_online: true, azimuth_online: true } })
+            };
+        });
+
+        await setAntennaMode('forward');
+
+        expect(statusDuringCall).toBe('Setting beam…');
+    });
 });
 
 describe('overlay suppression (syncAntennaOverlay)', () => {
@@ -319,7 +335,7 @@ describe('opmode status line (Band | Mode | QRG | Antenna)', () => {
         expect(txt('opmode-sl-band')).toBe('20m');
         expect(txt('opmode-sl-mode')).toBe('USB');
         expect(txt('opmode-sl-qrg')).toBe('14.074 MHz');
-        expect(txt('opmode-sl-antenna')).toBe('245° forward');
+        expect(txt('opmode-sl-antenna')).toBe('245° Forward');
     });
 
     it('surfaces split operation with TX/RX frequencies', () => {

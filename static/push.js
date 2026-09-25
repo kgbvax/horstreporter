@@ -9,7 +9,7 @@
 // /api/push/subscription-status?endpoint=...). When the server reports
 // no record (e.g. after a server restart that lost the in-memory
 // store), the UI re-POSTs the subscription to /api/push/subscribe
-// (idempotent). A "push disabled — re-enable" indicator surfaces when
+// (idempotent). A re-enable hint (#push-reenable-hint) surfaces when
 // the server reports zero subscriptions for the current client.
 //
 // iOS Safari: Web Push requires Home Screen PWA install — a plain
@@ -239,7 +239,7 @@ function buildPrefGridRows() {
             const cb = document.createElement('input');
             cb.type = 'checkbox';
             cb.id = `push-pref-${band}-${region}`;
-            cb.title = `${band} · ${region}`;
+            cb.title = `${band}: ${PUSH_REGION_NAMES[region] || region}`;
             cb.dataset.band = band;
             cb.dataset.region = region;
             cell.appendChild(cb);
@@ -292,11 +292,11 @@ export async function initPushUI() {
     let currentSubscription = null;
 
     async function enable() {
-        setStatus('enabling…', 'busy');
+        setStatus('Enabling…', 'busy');
         try {
             const publicKey = await fetchVAPIDPublicKey();
             if (!publicKey) {
-                setStatus('push not configured on the server', 'error');
+                setStatus('Push is not configured on the server', 'error');
                 enableCheckbox.checked = false;
                 return;
             }
@@ -308,17 +308,17 @@ export async function initPushUI() {
             const prefs = readPreferences();
             await postSubscription(sub, prefs);
             if (matrixRoot) matrixRoot.hidden = false;
-            setStatus('push enabled', 'ok');
+            setStatus('Push enabled', 'ok');
             setReEnableIndicator(false);
         } catch (err) {
-            setStatus(`push enable failed: ${err.message || err}`, 'error');
+            setStatus(`Could not enable push: ${err.message || err}`, 'error');
             enableCheckbox.checked = false;
             if (matrixRoot) matrixRoot.hidden = true;
         }
     }
 
     async function disable() {
-        setStatus('disabling…', 'busy');
+        setStatus('Disabling…', 'busy');
         try {
             if (currentSubscription) {
                 await unsubscribeOnServer(currentSubscription.endpoint);
@@ -338,7 +338,7 @@ export async function initPushUI() {
             }
         } finally {
             if (matrixRoot) matrixRoot.hidden = true;
-            setStatus('push disabled', 'idle');
+            setStatus('Push disabled', 'idle');
         }
     }
 
@@ -375,17 +375,17 @@ export async function initPushUI() {
         if (!currentSubscription) return;
         try {
             await postSubscription(currentSubscription, readPreferences());
-            setStatus('preferences updated', 'ok');
+            setStatus('Preferences updated', 'ok');
         } catch (err) {
-            setStatus(`preferences update failed: ${err.message || err}`, 'error');
+            setStatus(`Could not update preferences: ${err.message || err}`, 'error');
         }
     }
 
     // Re-subscription after restart: on panel open, check whether the
     // browser's existing subscription is known server-side. When the
     // server has no record (lost the in-memory store on restart),
-    // re-POST the subscription. The "push disabled — re-enable"
-    // indicator surfaces when the server reports zero records.
+    // re-POST the subscription. The re-enable hint
+    // (#push-reenable-hint) surfaces when the server reports zero records.
     let reconcileInFlight = false;
     async function reconcileAfterRestart() {
         if (!isPushSupported()) return;
@@ -411,7 +411,7 @@ export async function initPushUI() {
                 await postSubscription(existing, prefs);
                 if (enableCheckbox) enableCheckbox.checked = true;
                 if (matrixRoot) matrixRoot.hidden = false;
-                setStatus('push re-enabled after restart', 'ok');
+                setStatus('Push re-enabled after a server restart', 'ok');
                 setReEnableIndicator(false);
             }
         } catch (_) { /* best effort */ } finally {

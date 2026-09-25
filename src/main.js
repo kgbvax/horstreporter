@@ -42,22 +42,22 @@ const snrHost = document.getElementById('snr-sliders-root');
 if (snrHost) new SnrThresholds({ target: snrHost });
 
 const minutesHost = document.getElementById('minutes-root');
-if (minutesHost) new Range({ target: minutesHost, props: { id: 'minutes', valId: 'minutes-val', label: 'Max Spot Age:', unit: 'min', key: 'minutes', min: 1, max: 60 } });
+if (minutesHost) new Range({ target: minutesHost, props: { id: 'minutes', valId: 'minutes-val', label: 'Max spot age', unit: 'min', key: 'minutes', min: 1, max: 60 } });
 
 const clusterHost = document.getElementById('cluster-root');
-if (clusterHost) new Range({ target: clusterHost, props: { id: 'cluster-distance', valId: 'cluster-dist-val', label: 'Max Cluster Dist:', unit: 'km', key: 'clusterDistance', min: 100, max: 2000, step: 50 } });
+if (clusterHost) new Range({ target: clusterHost, props: { id: 'cluster-distance', valId: 'cluster-dist-val', label: 'Max cluster dist', unit: 'km', key: 'clusterDistance', min: 100, max: 2000, step: 50 } });
 
 const autoZoomHost = document.getElementById('auto-zoom-root');
 if (autoZoomHost) new Toggle({ target: autoZoomHost, props: { id: 'auto-zoom', label: 'Auto-zoom', key: 'autoZoom' } });
 
 const surroundingsHost = document.getElementById('surroundings-root');
-if (surroundingsHost) new Toggle({ target: surroundingsHost, props: { id: 'surroundings', label: 'Adj. Squares', key: 'surroundings', render: false, hook: '__horstSurroundingsChanged' } });
+if (surroundingsHost) new Toggle({ target: surroundingsHost, props: { id: 'surroundings', label: 'Adj. squares', key: 'surroundings', render: false, hook: '__horstSurroundingsChanged' } });
 
 const countryHost = document.getElementById('country-coloring-root');
-if (countryHost) new Toggle({ target: countryHost, props: { id: 'show-country-coloring', label: 'Country Color', key: 'countryColoring', render: false, hook: '__horstCountryColoringChanged' } });
+if (countryHost) new Toggle({ target: countryHost, props: { id: 'show-country-coloring', label: 'Country colors', key: 'countryColoring', render: false, hook: '__horstCountryColoringChanged' } });
 
 const dxclusterHost = document.getElementById('dxcluster-root');
-if (dxclusterHost) new Toggle({ target: dxclusterHost, props: { id: 'show-dxcluster-spots', label: 'DX Cluster', key: 'showDxcluster' } });
+if (dxclusterHost) new Toggle({ target: dxclusterHost, props: { id: 'show-dxcluster-spots', label: 'DX cluster', key: 'showDxcluster' } });
 window.__horstSetDxcluster = (on) => uiStore.update((s) => ({ ...s, showDxcluster: !!on }));
 
 const minSnrHost = document.getElementById('min-snr-group');

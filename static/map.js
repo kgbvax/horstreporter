@@ -9,6 +9,7 @@ let currentDxccLabelLayer = null;
 import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, hexToRgb, blendOverlayColors, icon } from './utils.js';
 import { selectProminentDxccLabels } from './azimuth-runtime.js';
 import { dataNow, GRAYLINE_BUCKET_MS } from './data-now.js';
+import { COUNTRY_FILL_OPACITY, getMapTokens } from './map-tokens.js';
 import { endPerfTimer, incrementPerfCounter, startPerfTimer } from './perf.js';
 
 let worldGeoJsonData = null;
@@ -303,17 +304,9 @@ function buildMercatorGraylineDataUrl(theme, subsolarPoint) {
 
     const twilightFill = hexToRgb(theme === 'dark' ? '#9a8371' : '#b08b72');
     const nightFill = hexToRgb(theme === 'dark' ? '#01050a' : '#182534');
-    // In dark theme the base map is near-black, so night shading alone gives no
-    // visible day/night contrast — lift the sunlit side with a warm tint so
-    // "day" actually reads brighter. Light theme's bright tiles need no lift.
-    // Dark theme composes ONE monotonic warm lift (see curve below) and drops
-    // the twilight wash: stacked day + twilight used to compound into a halo
-    // at the terminator that was brighter than the day side before it, so the
-    // night→day transition read as a glow hump instead of a clean ramp.
-    const dark = theme === 'dark';
-    const dayFill = hexToRgb('#f5e9c8');
-    const maxDayOpacity = 0.26;
-    const twilightOptions = dark ? { maxNightOpacity: 0.42 } : {};
+    // Same shading as the azimuthal view in both themes (azimuth-runtime.js
+    // drawGrayline): a twilight wash plus night darkening, no day lift, so the
+    // two projections read alike in dark mode too.
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
 
@@ -321,20 +314,11 @@ function buildMercatorGraylineDataUrl(theme, subsolarPoint) {
         const lat = mercatorYToLat(y / (height - 1));
         for (let x = 0; x < width; x += 1) {
             const lng = -180 + ((x / (width - 1)) * 360);
-            const { graylineOpacity, nightOpacity, zenithAngle } = getGraylineOverlayOpacities(lat, lng, subsolarPoint, twilightOptions);
-            // Monotonic warm lift: full at the subsolar point, sqrt falloff to
-            // zero at 100° zenith — i.e. it runs THROUGH the terminator so the
-            // twilight zone only hands over to the night darkening, never
-            // stacks on a fading day lift (which is what humped before).
-            const dayOpacity = dark && zenithAngle < 100
-                ? maxDayOpacity * Math.sqrt(Math.max(0, 1 - zenithAngle / 100))
-                : 0;
-            const twilightOpacity = dark ? 0 : graylineOpacity;
-            if (twilightOpacity <= 0 && nightOpacity <= 0 && dayOpacity <= 0) continue;
+            const { graylineOpacity, nightOpacity } = getGraylineOverlayOpacities(lat, lng, subsolarPoint);
+            if (graylineOpacity <= 0 && nightOpacity <= 0) continue;
 
             let pixel = { r: 0, g: 0, b: 0, a: 0 };
-            pixel = blendOverlayColors(pixel, dayFill, dayOpacity);
-            pixel = blendOverlayColors(pixel, twilightFill, twilightOpacity);
+            pixel = blendOverlayColors(pixel, twilightFill, graylineOpacity);
             pixel = blendOverlayColors(pixel, nightFill, nightOpacity);
 
             const offset = (y * width * 4) + (x * 4);
@@ -375,16 +359,20 @@ export async function syncMercatorCountryLayer(options = {}) {
     if (revision !== countrySyncRevision) {
         return;
     }
+    // Border + fill opacity are the shared basemap tokens (map-tokens.js), so
+    // the azimuthal canvas draws the same country look.
+    const borderColor = getMapTokens(theme).border;
+    const fillOpacity = COUNTRY_FILL_OPACITY[theme];
     currentCountryLayer = L.geoJSON(geoJson, {
         pane: 'country-fill-pane',
         renderer: getCountryCanvasRenderer(),
         interactive: false,
         style: (feature) => ({
-            color: theme === 'dark' ? '#2a3845' : '#58636d',
+            color: borderColor,
             weight: 0.7,
-            opacity: theme === 'dark' ? 0.7 : 0.5,
+            opacity: 1,
             fillColor: getCountryFillForFeature(feature, theme),
-            fillOpacity: theme === 'dark' ? 0.42 : 0.30
+            fillOpacity
         })
     }).addTo(map);
     currentCountryLayerTheme = theme;
@@ -467,14 +455,12 @@ function currentProjection() {
     return document.querySelector('input[name="projection-select"]:checked')?.value || 'mercator';
 }
 
-function buildDxccLabelIcon(label, theme) {
-    const textColor = theme === 'dark' ? '#f3f6fb' : '#263745';
-    const bgColor = theme === 'dark' ? 'rgba(18, 28, 38, 0.84)' : 'rgba(255, 255, 255, 0.84)';
-    const borderColor = theme === 'dark' ? 'rgba(216, 226, 236, 0.28)' : 'rgba(70, 86, 98, 0.30)';
-
+// Colors come from the --dxcc-label-* tokens via .dxcc-entity-label
+// (style.css), which also style the azimuth canvas labels.
+function buildDxccLabelIcon(label) {
     return L.divIcon({
         className: 'dxcc-entity-marker',
-        html: `<span class="dxcc-entity-label" style="color:${textColor};background:${bgColor};border-color:${borderColor};">${label.prefix}</span>`,
+        html: `<span class="dxcc-entity-label">${label.prefix}</span>`,
         iconSize: [0, 0],
         iconAnchor: [0, 0]
     });
@@ -551,7 +537,7 @@ export async function syncMercatorDxccLabelLayer(options = {}) {
             pane: 'dxcc-label-pane',
             interactive: false,
             keyboard: false,
-            icon: buildDxccLabelIcon(label, theme)
+            icon: buildDxccLabelIcon(label)
         }).addTo(currentDxccLabelLayer);
     });
     incrementPerfCounter('mercator.dxcc.labels_added', labels.length);

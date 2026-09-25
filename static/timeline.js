@@ -34,9 +34,9 @@ export const SCRUB_SNAP_SECONDS = 5 * 60;
 
 // Range presets (seconds).
 export const RANGE_PRESETS = [
-    { label: '1h', seconds: 60 * 60 },
-    { label: '6h', seconds: 6 * 60 * 60 },
-    { label: '24h', seconds: 24 * 60 * 60 },
+    { label: '1 h', seconds: 60 * 60 },
+    { label: '6 h', seconds: 6 * 60 * 60 },
+    { label: '24 h', seconds: 24 * 60 * 60 },
 ];
 
 // Bundle LRU: keep the last N fetched chunks (keyed by exact [t0,t1] window +
@@ -713,7 +713,7 @@ function ensureBar() {
     barEl.innerHTML = `
         <div class="timeline-row timeline-row-main">
             <button type="button" class="btn btn-outline-secondary btn-sm timeline-btn timeline-exit" title="Exit time travel (back to live)">Live</button>
-            <button type="button" class="btn btn-outline-secondary btn-sm timeline-btn timeline-playpause" title="Play / pause">
+            <button type="button" class="btn btn-outline-secondary btn-sm timeline-btn timeline-playpause" title="Play or pause">
                 <svg class="icon timeline-icon-play" data-glyph="fa-play" viewBox="0 0 384 512" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M73 39Q49 25 25 38Q1 52 0 80V432Q1 460 25 474Q49 487 73 473L361 297Q383 283 384 256Q383 230 361 215L73 39Z"/></svg>
                 <svg class="icon timeline-icon-pause" data-glyph="fa-pause" viewBox="0 0 320 512" width="1em" height="1em" fill="currentColor" aria-hidden="true" style="display:none"><path d="M48 32Q35 32 35 45V467Q35 480 48 480H112Q125 480 125 467V45Q125 32 112 32H48ZM208 32Q195 32 195 45V467Q195 480 208 480H272Q285 480 285 467V45Q285 32 272 32H208Z"/></svg>
             </button>
@@ -724,7 +724,7 @@ function ensureBar() {
         </div>
         <div class="timeline-row timeline-row-presets">
             <div class="timeline-presets btn-group btn-group-sm" role="group"></div>
-            <div class="timeline-hint">Spots shown = 15 min trailing window. Scrub snaps to 5 min.</div>
+            <div class="timeline-hint">Shows the 15 min before the playhead. Scrubbing snaps to 5 min.</div>
         </div>
     `;
     document.body.appendChild(barEl);
@@ -740,7 +740,7 @@ function ensureBar() {
     });
     barEl.querySelector('.timeline-loop').addEventListener('click', (e) => {
         setLoop(!controller.loop);
-        e.currentTarget.classList.toggle('active', controller.loop);
+        setPressed(e.currentTarget, controller.loop);
     });
 
     const scrub = barEl.querySelector('.timeline-scrub');
@@ -757,7 +757,7 @@ function ensureBar() {
         b.type = 'button';
         b.className = 'btn btn-outline-secondary btn-sm';
         b.dataset.speed = String(s);
-        b.textContent = `${s}x`;
+        b.textContent = `${s}×`;
         b.addEventListener('click', () => { setSpeed(s); if (!controller.playing) play(s); });
         speedGroup.appendChild(b);
     });
@@ -794,18 +794,25 @@ function renderBar(s) {
     const frac = s.t1 > s.t0 ? (s.playhead - s.t0) / (s.t1 - s.t0) : 1;
     const scrub = bar.querySelector('.timeline-scrub');
     if (document.activeElement !== scrub) scrub.value = String(Math.round(frac * 1000));
-    bar.querySelector('.timeline-clock').textContent = s.loading ? 'loading…' : fmtClock(s.playhead);
+    bar.querySelector('.timeline-clock').textContent = s.loading ? 'Loading…' : fmtClock(s.playhead);
     const pp = bar.querySelector('.timeline-playpause');
     bar.querySelector('.timeline-icon-play').style.display = s.playing ? 'none' : '';
     bar.querySelector('.timeline-icon-pause').style.display = s.playing ? '' : 'none';
     bar.querySelectorAll('.timeline-speed .btn').forEach((b) => {
-        b.classList.toggle('active', Number(b.dataset.speed) === s.speed);
+        setPressed(b, Number(b.dataset.speed) === s.speed);
     });
     bar.querySelectorAll('.timeline-presets .btn').forEach((b) => {
         const secs = Number(b.dataset.seconds);
-        b.classList.toggle('active', Math.abs((s.t1 - s.t0) - secs) < 2);
+        setPressed(b, Math.abs((s.t1 - s.t0) - secs) < 2);
     });
-    bar.querySelector('.timeline-loop').classList.toggle('active', s.loop);
+    setPressed(bar.querySelector('.timeline-loop'), s.loop);
+}
+
+// Selected speed / range / loop: Bootstrap .active (the unified tint look in
+// style.css) plus aria-pressed, so the state is not conveyed by color alone.
+function setPressed(btn, on) {
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
 }
 
 // --- URL state (shareable past views) ------------------------------------

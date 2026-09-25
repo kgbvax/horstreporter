@@ -1,37 +1,3 @@
-#azimuth-zoom-controls {
-    user-select: none;
-    pointer-events: auto;
-}
-#azimuth-zoom-controls button {
-    min-width: 2.2em;
-    font-size: 1.3em;
-    font-weight: 600;
-    border-radius: 0.5em;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-}
-
-#azimuth-zoom-controls #azimuth-zoom-out.azimuth-zoom-hint {
-    /* Opaque surface: the canvas under it (light-mode ocean) would drop the
-       warn tone below 4.5:1. */
-    background-color: var(--tooltip-bg);
-    border-color: var(--status-warn);
-    color: var(--status-warn);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--status-warn) 22%, transparent),
-                0 2px 10px color-mix(in srgb, var(--status-warn) 32%, transparent);
-    animation: azimuthZoomHintPulse 1.2s ease-in-out infinite;
-}
-
-@keyframes azimuthZoomHintPulse {
-    0%, 100% {
-        box-shadow: 0 0 0 2px color-mix(in srgb, var(--status-warn) 16%, transparent),
-                    0 2px 10px color-mix(in srgb, var(--status-warn) 26%, transparent);
-    }
-    50% {
-        box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-warn) 34%, transparent),
-                    0 4px 14px color-mix(in srgb, var(--status-warn) 40%, transparent);
-    }
-}
-
 /* Inline SVG icons (replace Font Awesome). 1em box on the text baseline,
    matching FA's svg-inline--fa; color inherits via fill="currentColor". */
 .icon {
@@ -77,13 +43,24 @@ body {
     --danger-fill-rgb: 198, 40, 40;
 
     /* Brand accent (teal-green) + shared control tokens. Deliberately distinct
-       from the band palette's green (#008000) so band colors keep their meaning. */
+       from the band palette's green (#008000) so band colors keep their meaning.
+       --accent is for borders, rings and marks (3.3:1 on white). Text uses
+       --accent-strong: 6.4:1 on the page, 5.6:1 on --accent-tint and 5.0:1 on
+       --accent-tint-strong (the selected-toggle look). Solid fills that carry
+       --accent-contrast text use --accent-fill (white on it: 6.4:1; hover
+       --accent-fill-strong: 8.4:1). White on --accent itself is only 3.3:1. */
     --accent: #1f9e8f;
     --accent-rgb: 31, 158, 143;
-    --accent-strong: #17887a;
+    --accent-strong: #116b61;
     --accent-contrast: #ffffff;
+    --accent-fill: #116b61;
+    --accent-fill-strong: #0d5750;
     --accent-tint: color-mix(in srgb, var(--accent) 12%, var(--bg-color));
     --accent-tint-strong: color-mix(in srgb, var(--accent) 22%, var(--bg-color));
+    /* Raised surfaces: --surface-0 for cards inside panels (same step in both
+       themes), --surface-1 for headers, badges and hover fills (lifted a
+       step further in dark mode below). */
+    --surface-0: color-mix(in srgb, var(--bg-color) 95%, var(--text-color) 5%);
     --surface-1: color-mix(in srgb, var(--bg-color) 92%, var(--text-color) 8%);
     /* Resting border for interactive controls + card outlines. Deliberately
        stronger than --border-color (structural hairlines) so buttons read as
@@ -119,16 +96,26 @@ body[data-theme="dark"] {
     --dxcc-label-border: rgba(216, 226, 236, 0.28);
     --dxcc-label-shadow: rgba(0, 0, 0, 0.28);
 
+    /* Basemap tokens (see the light block): CARTO dark_all water/land. */
+    --map-water: #262626;
+    --map-land: #090909;
+    --map-border: rgba(140, 150, 160, 0.4);
+    --map-graticule: #d8dde2;
+    --map-label: #e1e5e9;
+
     /* Lifted status tones for the dark surface (fills stay as in light). */
     --status-ok: #5fe0cd;
     --status-warn: #f5c451;
     --status-danger: #ff8a80;
 
-    /* Brighter accent for legibility on the dark surface. */
+    /* Brighter accent for legibility on the dark surface. --accent-strong on
+       --accent-tint-strong: 4.7:1; dark ink on the fills: 7.8:1 and higher. */
     --accent: #34c4b0;
     --accent-rgb: 52, 196, 176;
     --accent-strong: #4dd3c0;
     --accent-contrast: #08201d;
+    --accent-fill: var(--accent);
+    --accent-fill-strong: var(--accent-strong);
     --accent-tint: color-mix(in srgb, var(--accent) 18%, var(--bg-color));
     --accent-tint-strong: color-mix(in srgb, var(--accent) 28%, var(--bg-color));
     --surface-1: color-mix(in srgb, var(--bg-color) 88%, var(--text-color) 12%);
@@ -148,6 +135,20 @@ body {
     --dxcc-label-text: #263745;
     --dxcc-label-border: rgba(70, 86, 98, 0.30);
     --dxcc-label-shadow: rgba(0, 0, 0, 0.18);
+
+    /* Basemap tokens, shared by both projections. Water and land are sampled
+       from the CARTO tiles Mercator shows (light_all here, dark_all below);
+       the azimuthal canvas paints the same water/land/borders/graticule/labels
+       from these (map-tokens.js reads them; keep its fallbacks in sync), and
+       Mercator's country overlay strokes --map-border. Plain colors only:
+       canvas can't resolve var() or color-mix(). --map-label is >= 4.5:1 on
+       water (9.1:1), land (12.3:1), the page (12.8:1) and night-shaded water
+       (4.6:1); dark theme: 11.9, 15.7, 12.2 and 13.7:1. */
+    --map-water: #d4dadc;
+    --map-land: #fafaf8;
+    --map-border: rgba(88, 99, 109, 0.5);
+    --map-graticule: #2b333b;
+    --map-label: #2b333b;
 }
 
 /* Layout */
@@ -178,20 +179,84 @@ body {
     cursor: default !important;
 }
 
-/* Dark mode: vendor leaflet.css hardcodes #fff on .leaflet-bar (zoom +/−) and
-   the attribution control, leaving white controls floating on the dark map. */
-body[data-theme="dark"] .leaflet-bar a,
-body[data-theme="dark"] .leaflet-bar a:hover,
-body[data-theme="dark"] .leaflet-bar a.leaflet-disabled {
-    background-color: var(--surface-1);
+/* Tile gaps and tiles still loading show the basemap water, not Leaflet's
+   grey, so the Mercator map matches the azimuthal disc from the first paint. */
+#map.leaflet-container {
+    background-color: var(--map-water);
+}
+
+/* Map zoom controls: Leaflet's +/- bar (Mercator) and #azimuth-zoom-controls
+   (azimuthal) are one control. A stacked pair of 30px squares on the shared
+   control tokens, 10px in from the right edge; the azimuth pair also clears
+   the height of Leaflet's attribution line (0.75rem at line-height 1.4) so
+   it sits exactly where the Mercator one does. Replaces vendor leaflet.css's
+   hardcoded white bar, which also floated white on the dark map. */
+#azimuth-zoom-controls {
+    position: absolute;
+    right: 10px;
+    bottom: calc(10px + 0.75rem * 1.4);
+    z-index: 1001;
+    user-select: none;
+    pointer-events: auto;
+}
+.leaflet-container .leaflet-bar.leaflet-control-zoom,
+#azimuth-zoom-controls {
+    border: 1px solid var(--control-border);
+    border-radius: var(--btn-radius-sm);
+    background-color: var(--bg-color);
+    box-shadow: 0 2px 8px var(--shadow-color);
+    overflow: hidden;
+}
+.leaflet-container .leaflet-control-zoom a,
+#azimuth-zoom-controls button {
+    display: block;
+    width: 30px;
+    height: 30px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-bottom: 1px solid var(--border-color);
+    border-radius: 0;
+    background-color: var(--bg-color);
     color: var(--text-color);
-    border-color: var(--border-color);
+    font: 600 18px/30px sans-serif;
+    text-align: center;
+    text-indent: 0;
+    cursor: pointer;
 }
-body[data-theme="dark"] .leaflet-bar a:hover {
+.leaflet-container .leaflet-control-zoom a:last-child,
+#azimuth-zoom-controls button:last-child {
+    border-bottom: 0;
+}
+.leaflet-container .leaflet-control-zoom a:hover,
+.leaflet-container .leaflet-control-zoom a:focus-visible,
+#azimuth-zoom-controls button:hover:not(:disabled) {
     background-color: var(--accent-tint);
+    color: var(--accent-strong);
 }
+.leaflet-container .leaflet-control-zoom a.leaflet-disabled,
+#azimuth-zoom-controls button:disabled {
+    background-color: var(--bg-color);
+    color: var(--status-color);
+    cursor: default;
+}
+
+/* Zoom-out hint: grid squares lie outside the azimuth view. Warn ink on the
+   opaque control surface (>= 6:1 at the pulse peak in both themes). */
+#azimuth-zoom-controls #azimuth-zoom-out.azimuth-zoom-hint {
+    color: var(--status-warn);
+    box-shadow: inset 0 0 0 2px var(--status-warn);
+    animation: azimuthZoomHintPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes azimuthZoomHintPulse {
+    0%, 100% { background-color: var(--bg-color); }
+    50% { background-color: color-mix(in srgb, var(--status-warn) 14%, var(--bg-color)); }
+}
+
+/* Dark mode: vendor leaflet.css hardcodes a white attribution control. */
 body[data-theme="dark"] .leaflet-control-attribution {
-    background-color: rgba(33, 37, 41, 0.7);
+    background-color: color-mix(in srgb, var(--bg-color) 70%, transparent);
     color: var(--status-color);
 }
 body[data-theme="dark"] .leaflet-control-attribution a {
@@ -248,14 +313,6 @@ body[data-theme="dark"] {
 .status-warn { color: var(--status-warn); }
 .status-danger { color: var(--status-danger); }
 
-#server-stats {
-    margin-top: 0;
-    font-size: 12px;
-    color: var(--status-color);
-    border-top: none;
-    padding-top: 0;
-}
-
 #tooltip {
     display: none;
     position: absolute;
@@ -287,8 +344,7 @@ body[data-theme="dark"] {
 }
 
 /* Info Overlay */
-#info-overlay,
-#dx-info-overlay {
+#info-overlay {
     display: none;
     position: fixed;
     top: 0;
@@ -301,8 +357,7 @@ body[data-theme="dark"] {
     justify-content: center;
 }
 
-#info-overlay .info-content,
-#dx-info-overlay .info-content {
+#info-overlay .info-content {
     position: relative;
     width: min(92vw, 1200px);
     height: min(90vh, 1000px);
@@ -314,8 +369,7 @@ body[data-theme="dark"] {
     flex-direction: column;
 }
 
-#info-overlay iframe,
-#dx-info-overlay iframe {
+#info-overlay iframe {
     flex-grow: 1;
     width: 100%;
     border: none;
@@ -323,12 +377,11 @@ body[data-theme="dark"] {
     background: var(--bg-color);
 }
 
-#close-info,
-#close-dx-info {
+#close-info {
     position: absolute;
     top: -15px;
     right: -15px;
-    background: color-mix(in srgb, var(--bg-color) 92%, var(--text-color) 8%);
+    background: var(--surface-1);
     color: var(--text-color);
     border: 2px solid var(--border-color);
     border-radius: 50%;
@@ -582,7 +635,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     border-left: 5px solid #888;
     border-radius: 10px;
     padding: 8px;
-    background: color-mix(in srgb, var(--bg-color) 95%, var(--text-color) 5%);
+    background: var(--surface-0);
 }
 
 .band-lab-card-head {
@@ -603,7 +656,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     opacity: 0.82;
 }
 
-/* Propagation Intel matrix panel (formerly "WSPR matrix"; ids/keys kept for
+/* Propagation matrix panel (formerly "WSPR matrix"; ids/keys kept for
    users' saved position+enablement) — floating overlay card docked over the
    map (top-right). */
 .wspr-matrix-window {
@@ -666,7 +719,9 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     border-bottom: 1px solid var(--border-color);
 }
 
-.wspr-matrix-band {
+/* Row header (<th scope="row">): full ink, not the muted column-header tone. */
+.wspr-matrix-table .wspr-matrix-band {
+    color: var(--text-color);
     font-weight: 600;
     text-align: left;
     padding-left: 6px;
@@ -676,27 +731,60 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     /* Ink comes inline per chip (white/black at the ramp crossover). */
     font-weight: 600;
     border-radius: 3px;
+    cursor: pointer;
     /* Faint ring keeps low-activity chips defined against the panel; the ramp
        itself always carries AA-safe numerals. */
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 14%, transparent);
+}
+
+/* Drill-down cell (aria-selected) and keyboard focus. Chips touch their
+   neighbours (border-collapse), so a plain outline lands on the next chip and
+   can vanish on a similar heat shade. Draw each state as a two-tone ring
+   (colour + page-colour halo) in a pseudo-element stacked above the
+   neighbours; the two use different insets so a selected AND focused cell
+   shows both. The inferno surge ring is an inline inset box-shadow on the
+   cell itself and stays visible underneath. */
+.wspr-matrix-cell {
+    position: relative;
+}
+.wspr-matrix-cell:focus-visible {
+    outline: none;
+}
+.wspr-matrix-cell[aria-selected="true"]::before,
+.wspr-matrix-cell:focus-visible::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+    z-index: 1;
+    border-radius: 4px;
+}
+.wspr-matrix-cell[aria-selected="true"]::before {
+    inset: -2px;
+    border: 2px solid var(--accent-strong);
+    box-shadow: 0 0 0 1px var(--bg-color), inset 0 0 0 1px var(--bg-color);
+}
+.wspr-matrix-cell:focus-visible::after {
+    inset: -5px;
+    border: 2px solid var(--text-color);
+    box-shadow: 0 0 0 1px var(--bg-color), inset 0 0 0 1px var(--bg-color);
 }
 
 .wspr-matrix-cell-empty {
     color: transparent;
 }
 
-/* Dark theme: the solid teal chips meet the dark panel at only ~1.1-1.3:1 at
-   the low-activity end, so the light-theme 14% inset ring is too faint to mark
-   the chip boundary; 45% keeps the ring >=3:1 against every chip (WCAG 1.4.11)
-   without touching the light theme, where chips already sit >=5:1 on the panel. */
+/* Dark theme: the heat chips' dark low-activity end (viridis purple, inferno
+   near-black) barely separates from the dark panel, so the 14% ring above is
+   too faint to mark the chip boundary; 45% keeps it >=3:1 against those dark
+   chips (WCAG 1.4.11; brighter chips stand off the panel on their own)
+   without touching the light theme. */
 body[data-theme="dark"] .wspr-matrix-cell {
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 45%, transparent);
 }
 
-/* WSPR matrix flag badges. Badges sit ON the teal heat chips, so each needs
-   (a) >=4.5:1 text-vs-own-bg (dark ink on the light backgrounds — white only
-   survives on #dc3545/#6f42c1) and (b) a silhouette distinct from the chip
-   (hairline light ring; the purple from-here is ~1.1:1 against bright chips). */
+/* WSPR matrix flag badges. Badges sit ON the heat chips, so each needs
+   (a) >=4.5:1 text-vs-own-bg (dark ink on the light badge fills) and (b) a
+   silhouette distinct from the chip (hairline light ring). */
 .wspr-badge {
     display: inline-block;
     font-size: 0.65rem;
@@ -721,9 +809,6 @@ body[data-theme="dark"] .wspr-matrix-cell {
     vertical-align: middle;
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 20%, transparent);
 }
-body[data-theme="dark"] .wspr-heat-scale {
-    background: linear-gradient(90deg, #0d4753, #7fdcea);
-}
 /* Draggable overlay cards: the header is the drag handle (grab), the close
    button stays a pointer, and the whole card suppresses text selection while
    being dragged so the matrix cells don't highlight. */
@@ -740,12 +825,20 @@ body[data-theme="dark"] .wspr-heat-scale {
     cursor: grabbing;
 }
 
-/* Source chips row (WSPR / PSKR / RBN / DXC multi-select). */
+/* Chip row: source multi-select (WSPR / PSKR / RBN / DXC) and the color
+   scale pair (Viridis / Inferno), each its own labelled group. */
 .wspr-src-chips {
     display: flex;
+    flex-wrap: wrap;
     gap: 4px;
     margin-bottom: 6px;
 }
+.wspr-chip-group {
+    display: flex;
+    gap: 4px;
+}
+/* Off: muted ink (--status-color, >= 4.5:1). On: the unified selected look
+   (accent tint + accent text, see "Unified control system"). */
 .wspr-src-chip {
     font-size: 0.66rem;
     font-weight: 700;
@@ -753,16 +846,22 @@ body[data-theme="dark"] .wspr-heat-scale {
     border-radius: 3px;
     border: 1px solid var(--control-border);
     background: transparent;
-    color: color-mix(in srgb, var(--text-color) 55%, transparent);
+    color: var(--status-color);
     cursor: pointer;
 }
-.wspr-src-chip.is-on {
-    background: #17a2b8;
-    color: #fff;
-    border-color: transparent;
+.wspr-src-chip:hover {
+    background: var(--accent-tint);
+    border-color: var(--accent);
+    color: var(--accent-strong);
 }
-/* Separator between the source chips and the look chips (Aqua/Viridis/
-   Inferno) on the same row. */
+.wspr-src-chip.is-on,
+.wspr-src-chip.is-on:hover {
+    background: var(--accent-tint-strong);
+    border-color: var(--accent);
+    color: var(--accent-strong);
+}
+/* Separator between the source chips and the color scale chips on the same
+   row. */
 .wspr-chip-sep {
     align-self: center;
     width: 1px;
@@ -799,7 +898,7 @@ body[data-theme="dark"] .wspr-heat-scale {
 }
 
 /* U5: Web Push settings (options panel). The matrix is a compact
-   (band × region) checkbox grid mirroring the Prop matrix layout. */
+   (band × region) checkbox grid mirroring the Propagation matrix layout. */
 /* Layout lives here, not in Bootstrap d-flex utilities: .d-flex is
    display:flex !important and would defeat the [hidden] toggles in push.js. */
 .push-settings-root {
@@ -872,7 +971,7 @@ body[data-theme="dark"] .wspr-heat-scale {
     border: 1px solid var(--control-border);
     border-radius: 8px;
     padding: 6px;
-    background: color-mix(in srgb, var(--bg-color) 96%, var(--text-color) 4%);
+    background: var(--surface-0);
 }
 
 .band-lab-chart-title {
@@ -997,11 +1096,13 @@ body[data-theme="dark"] .wspr-heat-scale {
     /* Floating matrix overlay card: near-full-width so it doesn't cover the
        whole map. #controls is z1200 here, so opening the sidebar still covers
        the card (z1100 < z1200). !important wins over inline left/top set by
-       the drag helper so the placement is reliable. */
+       the drag helper so the placement is reliable. It starts below the map
+       toggle row, which can wrap to a second line here (wspr-matrix.js
+       publishes the row's bottom edge as --map-toggles-bottom). */
     .wspr-matrix-window {
         left: 8px !important;
         right: 8px !important;
-        top: 64px !important;
+        top: max(64px, calc(var(--map-toggles-bottom, 0px) + 8px)) !important;
         width: auto !important;
         max-width: none;
         max-height: 38vh;
@@ -1162,9 +1263,18 @@ body[data-theme="dark"] .band-row {
     display: flex;
     gap: 6px;
     pointer-events: none;
-    max-width: calc(100% - 320px);
+    /* Centred, so it needs the toggle row's width clear on BOTH sides
+       (wspr-matrix.js publishes the row's right edge as --map-toggles-right). */
+    max-width: calc(100% - 2 * (var(--map-toggles-right, 160px) + 8px));
     flex-wrap: wrap;
     justify-content: center;
+}
+/* Phones: not enough width beside the toggle row; sit on the line below it. */
+@media (max-width: 575px) {
+    .hot-band-indicator {
+        top: calc(var(--map-toggles-bottom, 41px) + 8px);
+        max-width: calc(100% - 24px);
+    }
 }
 
 .hot-band-indicator.is-hidden {
@@ -1325,7 +1435,7 @@ body[data-theme="dark"] .band-row {
     padding: 8px 10px;
     font-weight: 700;
     border-bottom: 1px solid var(--border-color);
-    background: color-mix(in srgb, var(--bg-color) 92%, var(--text-color) 8%);
+    background: var(--surface-1);
 }
 
 .hk-panel-head-actions { display: inline-flex; align-items: center; gap: 6px; }
@@ -1363,7 +1473,11 @@ body[data-theme="dark"] .band-row {
    Resting  → neutral: ink text, hairline border, no fill.
    Hover    → faint accent tint preview.
    Active / checked (toggles, selected segment) → soft accent tint + accent text.
-   Primary  → solid accent (the one "go" action). */
+     The same look carries every other "on" state: the map panel toggles
+     (.panel-toggle.is-active), the Propagation chips (.wspr-src-chip.is-on),
+     timeline speed / range / loop (.btn.active) and the Chase Queue pills.
+   Primary  → solid accent fill (the one "go" action). The operator beam
+     buttons are the only other solid "on" state. */
 
 .btn {
     --bs-btn-border-radius: var(--btn-radius);
@@ -1396,19 +1510,21 @@ body[data-theme="dark"] .band-row {
    --bs-btn-active-* vars above). Weight is deliberately left unchanged across
    states so selecting a button never reflows its width. */
 
-/* The single solid call-to-action (Go). */
+/* The single solid call-to-action (Go). The only other solid "on" state is
+   the operator beam direction (.opmode-beam-btn.active); every other toggle,
+   pill and chip uses the tint look above. */
 .btn-primary {
-    --bs-btn-bg: var(--accent);
-    --bs-btn-border-color: var(--accent);
+    --bs-btn-bg: var(--accent-fill);
+    --bs-btn-border-color: var(--accent-fill);
     --bs-btn-color: var(--accent-contrast);
-    --bs-btn-hover-bg: var(--accent-strong);
-    --bs-btn-hover-border-color: var(--accent-strong);
+    --bs-btn-hover-bg: var(--accent-fill-strong);
+    --bs-btn-hover-border-color: var(--accent-fill-strong);
     --bs-btn-hover-color: var(--accent-contrast);
-    --bs-btn-active-bg: var(--accent-strong);
-    --bs-btn-active-border-color: var(--accent-strong);
+    --bs-btn-active-bg: var(--accent-fill-strong);
+    --bs-btn-active-border-color: var(--accent-fill-strong);
     --bs-btn-active-color: var(--accent-contrast);
-    --bs-btn-disabled-bg: var(--accent);
-    --bs-btn-disabled-border-color: var(--accent);
+    --bs-btn-disabled-bg: var(--accent-fill);
+    --bs-btn-disabled-border-color: var(--accent-fill);
     --bs-btn-disabled-color: var(--accent-contrast);
 }
 
@@ -1450,10 +1566,11 @@ body[data-theme="dark"] .band-row {
     box-shadow: 0 0 0 0.2rem rgba(var(--accent-rgb), 0.25);
 }
 
-/* Floating panel-toggle buttons (Chase Queue, Band Stats) share one pill look
-   and one behaviour: they sit at the edge their panel pops from, and hide while
-   it's open (the panel has its own close). Stats is translucent so it reads as
-   secondary and lets the map show through. */
+/* Floating panel-toggle pills share one look. The map toggles (Band stats,
+   Propagation) stay visible while their panel is open and show the tint "on"
+   look (.is-active, aria-pressed="true", panel-toggle.js); the Chase Queue
+   toggle sits at the edge its panel pops from and hides while it is open.
+   Translucent pills let the map show through. */
 .panel-toggle {
     font: 600 13px sans-serif;
     border: 1px solid var(--control-border);
@@ -1480,35 +1597,42 @@ body[data-theme="dark"] .band-row {
 }
 
 /* Top-left toggle row for the floating overlay cards. A flex container gives
-   even spacing regardless of each pill's actual width (the old fixed left:
-   12/72/132/192px offsets produced uneven gaps). The WSPR / Prop toggles stay
-   visible as on/off state pills instead of hiding when their card opens, so
-   the cards no longer need a close button. */
+   even spacing regardless of each pill's actual width. It wraps inside the
+   map instead of running off the right edge on narrow screens. */
 .map-toggles {
     position: absolute;
     top: 12px;
     left: 12px;
     z-index: 1000;
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     align-items: center;
+    max-width: calc(100% - 24px);
 }
-/* Active state for the stateful overlay toggles — mirrors .opmode-beam-btn.active
-   so a filled accent pill reads as "this card is open" in both themes. Placed
-   after the :hover rules so it wins the equal-specificity tie. */
-/* Solo chip: band color + text set inline by updateCurrentBandDisplay. */
-.band-solo-clear,
-.band-solo-clear:hover {
-    filter: none;
+/* Phones: tighter pills so the sidebar button, Band stats, Propagation and the
+   solo chip share one 375px row; the drill-down chip wraps below. */
+@media (max-width: 575px) {
+    .map-toggles {
+        gap: 6px;
+    }
+    .map-toggles .panel-toggle {
+        padding: 6px 9px;
+    }
 }
+/* Solo chip: its band color is set inline (updateCurrentBandDisplay), which
+   overrides the .panel-toggle hover tint, so hover lifts the fill instead. */
 .band-solo-clear:hover {
     filter: brightness(1.08);
 }
+/* On state for the map toggles: the unified selected look (accent tint +
+   accent text), opaque so the text keeps >= 4.5:1 over any map tile. Placed
+   after the :hover rules so it wins the equal-specificity tie. */
 .panel-toggle.is-active,
 .panel-toggle.is-active:hover {
-    background: var(--accent);
-    border-color: var(--accent-strong);
-    color: var(--accent-contrast);
+    background: var(--accent-tint-strong);
+    border-color: var(--accent);
+    color: var(--accent-strong);
 }
 
 
@@ -1530,8 +1654,10 @@ body[data-theme="dark"] .band-row {
     --bs-btn-hover-bg: var(--surface-1);
     --bs-btn-hover-border-color: var(--control-border);
     --bs-btn-hover-color: var(--text-color);
-    --bs-btn-active-bg: var(--accent);
-    --bs-btn-active-border-color: var(--accent-strong);
+    /* Deliberately solid (the one exception besides Go): the beam direction
+       must read at a glance while operating. */
+    --bs-btn-active-bg: var(--accent-fill);
+    --bs-btn-active-border-color: var(--accent-fill-strong);
     --bs-btn-active-color: var(--accent-contrast);
     --bs-btn-disabled-bg: var(--tooltip-bg);
     --bs-btn-disabled-border-color: var(--control-border);
@@ -1544,8 +1670,8 @@ body[data-theme="dark"] .band-row {
    disabled button (monitor-only agent, command in flight) would lose the
    selection. Keep the current beam direction visible while disabled. */
 .opmode-beam-btn.active {
-    --bs-btn-disabled-bg: var(--accent);
-    --bs-btn-disabled-border-color: var(--accent-strong);
+    --bs-btn-disabled-bg: var(--accent-fill);
+    --bs-btn-disabled-border-color: var(--accent-fill-strong);
     --bs-btn-disabled-color: var(--accent-contrast);
 }
 
@@ -1717,11 +1843,6 @@ body[data-theme="dark"] .band-row {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-.timeline-speed .btn.active {
-    background-color: var(--accent);
-    border-color: var(--accent);
-    color: var(--bg-color);
 }
 /* Afterglow overlay canvas sits above tiles, below markers. */
 .afterglow-canvas {

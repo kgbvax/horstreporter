@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { bandActivityLabel, bandHeadText, dxNeedsRefresh } from '../static/band-lab.js';
 
-describe('bandActivityLabel (Band Stats card label)', () => {
+describe('bandActivityLabel (Band stats card label)', () => {
     it('reads a low-volume band far above its own normal as above normal', () => {
         // The old label demoted such a band for carrying under 15% of the
         // busiest band's reports; the new one never compares bands.
@@ -25,9 +25,9 @@ describe('bandActivityLabel (Band Stats card label)', () => {
 
     it('appends the reach qualifier only when reach is off normal', () => {
         expect(bandActivityLabel({ activity_level: 'above', activity_ratio: 2, reach_level: 'longer' }))
-            .toBe('above normal 2.00× · longer reach');
+            .toBe('above normal 2.00×, longer reach');
         expect(bandActivityLabel({ activity_level: 'normal', activity_ratio: 1, reach_level: 'shorter' }))
-            .toBe('normal 1.00× · shorter reach');
+            .toBe('normal 1.00×, shorter reach');
         expect(bandActivityLabel({ activity_level: 'normal', activity_ratio: 1, reach_level: 'typical' }))
             .toBe('normal 1.00×');
     });
@@ -44,10 +44,10 @@ describe('bandHeadText', () => {
         expect(bandHeadText('10m', undefined, false)).toBe('10m');
     });
     it('marks a band missing from a loaded dx response as not scored', () => {
-        expect(bandHeadText('10m', undefined, true)).toBe('10m - not scored');
+        expect(bandHeadText('10m', undefined, true)).toBe('10m: not scored');
     });
-    it('prefixes the band to the label', () => {
-        expect(bandHeadText('10m', { activity_level: 'above', activity_ratio: 3 }, true)).toBe('10m - above normal 3.00×');
+    it('prefixes the band to the label with a colon separator', () => {
+        expect(bandHeadText('10m', { activity_level: 'above', activity_ratio: 3 }, true)).toBe('10m: above normal 3.00×');
     });
 });
 

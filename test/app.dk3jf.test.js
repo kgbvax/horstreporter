@@ -295,7 +295,8 @@ describe('app.js DK3JF mode behavior', () => {
         const submitBtn = document.getElementById('btn-submit');
         expect(submitBtn.dataset.mode).toBe('stop');
         expect(submitBtn.innerHTML).toContain('fa-stop');
-        expect(document.getElementById('stream-status').innerHTML).toContain('Connecting to QTH: W1AW');
+        expect(document.getElementById('stream-status').textContent).toContain('Connecting to live data for W1AW');
+        expect(document.getElementById('stream-status').textContent).not.toContain('QTH');
     });
 
     // Chase Queue opt-in: dxcluster.js is no longer a static module script in

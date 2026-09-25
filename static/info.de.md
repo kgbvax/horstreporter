@@ -12,10 +12,10 @@ Es ist im Grunde ein alternatives Frontend für <a href="https://www.pskreporter
 * **Projektion:** Wechsle zwischen *Mercator* (die gewohnte flache Weltkarte) und *Azimuthal* (eine großkreisbezogene Ansicht zentriert auf deinen Standort — praktisch zum Ablesen von Antennenrichtungen und Entfernungen).
 * **Stile:** Wähle, wie die Daten dargestellt werden:
     * *Grid:* Fasst Spots in Maidenhead-Feldern zusammen. Die Farbe zeigt das dominierende Band, die Deckkraft die Signalstärke.
-    * *Active Area:* Zeichnet dynamische Polygone um geclusterte Spots, um den gesamten Ausbreitungs-„Fußabdruck" zu zeigen.
+    * *Active area:* Zeichnet dynamische Polygone um geclusterte Spots, um den gesamten Ausbreitungs-„Fußabdruck" zu zeigen.
 
 * **Einstellungen:** Unter der Bandliste schaltet **Layers** Kartenebenen und Spot-Quellen (RBN, WSPR, DX-Cluster, DXCC-Labels, Länderfarben, Prognose), **Display** regelt Spot-Alter, SNR-Schwellen, Cluster-Abstand, Auto-Zoom und mehr, und **Notifications** verwaltet Push-Benachrichtigungen.
-* Wenn für dein Feld zu wenig Daten erscheinen, aktiviere **Adj. Squares** — damit werden auch die 8 umliegenden Felder einbezogen.
+* Wenn für dein Feld zu wenig Daten erscheinen, aktiviere **Adj. squares** — damit werden auch die 8 umliegenden Felder einbezogen.
 
 ## Karte bedienen
 * Fahre mit der Maus über eingefärbte Kartenelemente, um detaillierte Statistiken (Min/Max/Durchschnitts-SNR) und die besten Meldungen für diesen Bereich zu sehen.

@@ -1,6 +1,7 @@
-import { bandColors, getCountryColoringEnabled, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, gridSnrOpacity, topQuartileMean, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
+import { bandColors, getCountryColoringEnabled, getCountryFillForFeature, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, gridSnrOpacity, topQuartileMean, locatorToBounds, getGridResolution, greatCirclePoints, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
 import { radialLine, strokeCircle } from './canvas-draw.js';
 import { dataNow, GRAYLINE_BUCKET_MS } from './data-now.js';
+import { clearMapTokenCache, COUNTRY_FILL_OPACITY, getMapTokens, mixHexColors } from './map-tokens.js';
 
 const EARTH_RADIUS_KM = 6371;
 const ANTIPODE_KM = Math.PI * EARTH_RADIUS_KM;
@@ -25,15 +26,6 @@ const WORLD_LAYER_DRAG_REUSE_MS = 200;
 const AZIMUTH_DENSITY_PRESENCE = 1.5; // outer "activity" boundary; lone-spot gate
 const AZIMUTH_DENSITY_MID = 4;       // moderate cluster
 const AZIMUTH_DENSITY_CORE = 10;     // dense core
-
-const PALETTE_LIGHT = [
-    '#FBEFF0', '#FBD3D1', '#FEE5DA', '#FFE2B7', '#FFFBD4', '#E8EDAD', '#E4F0DB',
-    '#C3E6E5', '#E1F3FC', '#BFD3ED', '#E0DEEF', '#DFCBE3', '#E3D9C6', '#FFFFFF'
-];
-const PALETTE_DARK = [
-    '#4c383c', '#5a3c3b', '#5b4b44', '#615640', '#5a5a3c', '#4b5637', '#3f5441',
-    '#355453', '#375360', '#334967', '#45425f', '#55445d', '#544d43', '#2f343a'
-];
 
 const DXCC_PREFIX_BY_ISO_A2 = {
     US: 'K', CA: 'VE', RU: 'UA', CN: 'BY', IN: 'VU', AU: 'VK', BR: 'PY', AR: 'LU', ZA: 'ZS', CL: 'CE',
@@ -179,7 +171,17 @@ export function setAzimuthDragging(dragging) {
 }
 
 export function setAzimuthTheme(theme) {
-    state.theme = theme === 'dark' ? 'dark' : 'light';
+    const next = theme === 'dark' ? 'dark' : 'light';
+    // Basemap colors come from the --map-* tokens (map-tokens.js), cached per
+    // theme; re-read them from the stylesheet whenever the theme changes.
+    if (next !== state.theme) clearMapTokenCache();
+    state.theme = next;
+}
+
+// The basemap tokens (water, land, borders, graticule, labels, page surface)
+// for the current theme.
+function mapTokens() {
+    return getMapTokens(state.theme);
 }
 
 export function setAzimuthCenter(center) {
@@ -470,27 +472,6 @@ function roughFeatureAreaScore(feature) {
     return Math.log10(dLat * dLng + 1);
 }
 
-function countryFillForKey(key, theme) {
-    const palette = theme === 'dark' ? PALETTE_DARK : PALETTE_LIGHT;
-    let hash = 0;
-    const text = String(key || 'UNKNOWN');
-    for (let i = 0; i < text.length; i++) {
-        hash = ((hash << 5) - hash) + text.charCodeAt(i);
-        hash |= 0;
-    }
-    return palette[Math.abs(hash) % palette.length];
-}
-
-function countryFillForFeature(feature, theme) {
-    const p = feature?.properties || {};
-    const rawIndex = Number(p.MAPCOLOR13 ?? p.mapcolor13 ?? p.MAPCOLOR9 ?? p.mapcolor9);
-    if (Number.isFinite(rawIndex) && rawIndex > 0) {
-        const palette = theme === 'dark' ? PALETTE_DARK : PALETTE_LIGHT;
-        return palette[(Math.floor(rawIndex) - 1) % palette.length];
-    }
-    return countryFillForKey(featureKey(feature), theme);
-}
-
 function collectGridSquares(visibleSpots, resolution) {
     // Single pass over the filter-passing spots. The old two-pass version
     // first created entries for ALL spots (including filtered-out ones) and
@@ -631,7 +612,9 @@ export function createAzimuthRenderPlan({ featureCollection, center, spots = [],
     const countryFillCacheKey = `${theme}:${featureCollection?.features?.length || 0}`;
     let countryFillMap = state.countryFillCache.get(countryFillCacheKey);
     if (!countryFillMap) {
-        countryFillMap = new Map((featureCollection?.features || []).map(f => [featureKey(f), countryFillForFeature(f, theme)]));
+        // Same palette + feature-key hash as Mercator's country overlay (utils.js),
+        // so a country gets one color in both projections.
+        countryFillMap = new Map((featureCollection?.features || []).map(f => [featureKey(f), getCountryFillForFeature(f, theme)]));
         state.countryFillCache.set(countryFillCacheKey, countryFillMap);
         if (state.countryFillCache.size > 6) {
             const firstKey = state.countryFillCache.keys().next().value;
@@ -697,27 +680,60 @@ function projectToCanvas(lat, lng, width, height, options = {}) {
     return { x: width / 2 + p.x * scale, y: height / 2 - p.y * scale };
 }
 
+// horizonDiscRadius is the canvas radius of the visible map disc: the horizon
+// distance at the current zoom, kept inside the bearing scale ring.
+function horizonDiscRadius(width, height) {
+    const radiusBase = Math.min(width, height) * 0.47;
+    const scale = (radiusBase * state.zoom) / Math.PI;
+    const horizonAngular = Math.min(MAX_VISIBLE_C, state.horizonKm / EARTH_RADIUS_KM);
+    const rawClipRadius = scale * horizonAngular;
+    const maxInsideScaleRadius = Math.max(1, radiusBase - AZIMUTH_SCALE_CLEARANCE_PX);
+    return Math.max(1, Math.min(rawClipRadius, maxInsideScaleRadius));
+}
+
+// drawBackground paints the page surface around the disc and the water inside
+// it (--bg-color / --map-water), so the canvas reads like the Mercator tiles.
 function drawBackground(ctx, width, height) {
+    const tokens = mapTokens();
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = state.theme === 'dark' ? '#13212c' : '#87D1EC';
+    ctx.fillStyle = tokens.surface;
     ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = tokens.water;
+    ctx.beginPath();
+    ctx.arc(width / 2, height / 2, horizonDiscRadius(width, height), 0, Math.PI * 2);
+    ctx.fill();
+}
+
+// Opaque country fills: the palette color at the Mercator overlay opacity over
+// --map-land (what Mercator shows over the CARTO land), memoized per color.
+const blendedCountryFillCache = new Map();
+function blendedCountryFill(land, fill, opacity) {
+    const key = `${land}|${fill}|${opacity}`;
+    let out = blendedCountryFillCache.get(key);
+    if (!out) {
+        out = mixHexColors(land, fill, opacity);
+        blendedCountryFillCache.set(key, out);
+    }
+    return out;
 }
 
 function drawWorld(ctx, width, height, plan) {
     if (!state.worldGeoJson?.features?.length) return;
     const countryColoringEnabled = getCountryColoringEnabled();
     const featureFill = plan.countryFillMap || new Map();
-    const fallbackLandFill = state.theme === 'dark' ? '#8a94a1' : '#e6ebf1';
+    const tokens = mapTokens();
+    const fillOpacity = COUNTRY_FILL_OPACITY[state.theme] ?? COUNTRY_FILL_OPACITY.light;
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = tokens.border;
+    // Same hairline weight as Mercator's country overlay.
+    ctx.lineWidth = 0.7;
     for (const feature of state.worldGeoJson.features) {
         const key = featureKey(feature);
         const fill = featureFill.get(key);
         if (!fill) continue;
         const geom = feature.geometry;
         if (!geom) continue;
-        ctx.fillStyle = countryColoringEnabled ? fill : fallbackLandFill;
-        ctx.globalAlpha = state.theme === 'dark' ? 0.52 : 0.64;
-        ctx.strokeStyle = state.theme === 'dark' ? '#263340' : '#30353a';
-        ctx.lineWidth = 0.5;
+        ctx.fillStyle = countryColoringEnabled ? blendedCountryFill(tokens.land, fill, fillOpacity) : tokens.land;
 
         const drawRing = (ring) => {
             const discontinuityPx = Math.max(24, Math.min(width, height) * 0.34);
@@ -891,14 +907,29 @@ function drawWorldCached(ctx, width, height, plan) {
     ctx.drawImage(layerCanvas, 0, 0, width, height);
 }
 
+// fillMapLabel draws map text in --map-label over a --map-land halo (the CARTO
+// label treatment), so it keeps its contrast over spots, land and the night
+// shading, not just over bare water.
+function fillMapLabel(ctx, text, x, y, tokens) {
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = tokens.land;
+    if (typeof ctx.strokeText === 'function') ctx.strokeText(text, x, y);
+    ctx.fillStyle = tokens.label;
+    ctx.fillText(text, x, y);
+    ctx.restore();
+}
+
 function drawAzimuthLabels(ctx, width, height, plan) {
-    ctx.fillStyle = state.theme === 'dark' ? '#d7e4ee' : '#304252';
+    const tokens = mapTokens();
     ctx.font = '400 10px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const label of plan.azimuthLabels) {
         const p = projectToCanvas(label.lat, label.lng, width, height, { applyZoom: false });
-        if (p) ctx.fillText(label.label, p.x, p.y);
+        if (p) fillMapLabel(ctx, label.label, p.x, p.y, tokens);
     }
 }
 
@@ -1058,8 +1089,8 @@ function drawGrayline(ctx, width, height, dataNowMs) {
 }
 
 // Test seam (same pattern as timeline.js/session-ring.js): the grayline cache
-// key machinery without going through the full scene render.
-export const __internals = { state, drawGrayline };
+// key machinery and the basemap draw steps without the full scene render.
+export const __internals = { state, drawGrayline, drawBackground, drawWorld, drawAzimuthIndicator, drawDxccLabels };
 
 // bearingFromCenter returns the initial great-circle bearing (0–360°, 0 = N) from
 // the station center to a point.
@@ -1116,7 +1147,8 @@ export function drawTrendHalo(ctx, width, height, filteredSpots) {
     if (rimRadius <= 0) return;
 
     const sectorRad = (2 * Math.PI) / SECTORS;
-    const neutralColor = state.theme === 'dark' ? '#c9a98f' : '#7d5d46';
+    // Sectors with no single rising band fall back to the neutral map ink.
+    const neutralColor = mapTokens().graticule;
     ctx.save();
     ctx.lineCap = 'butt';
     ctx.lineWidth = 5;
@@ -1160,16 +1192,19 @@ function drawAzimuthIndicator(ctx, width, height) {
     const labelRadius = Math.max(0, outerRadius - 19);
     const spokeRadius = Math.max(0, outerRadius - 0.5);
 
-    const ringColor = state.theme === 'dark' ? 'rgba(220,230,240,0.52)' : 'rgba(30,42,55,0.52)';
-    const tickColor = state.theme === 'dark' ? 'rgba(220,230,240,0.72)' : 'rgba(23,35,46,0.72)';
-    const minorTickColor = state.theme === 'dark' ? 'rgba(220,230,240,0.34)' : 'rgba(23,35,46,0.34)';
-    const spokeColor = state.theme === 'dark' ? 'rgba(220,230,240,0.38)' : 'rgba(30,42,55,0.38)';
-    const textColor = state.theme === 'dark' ? 'rgba(235,243,250,0.88)' : 'rgba(20,32,44,0.88)';
+    // Graticule lines are --map-graticule at graded strengths; the bearing
+    // labels are --map-label on a halo (fillMapLabel).
+    const tokens = mapTokens();
+    const RING_ALPHA = 0.52;
+    const TICK_ALPHA = 0.72;
+    const MINOR_TICK_ALPHA = 0.34;
+    const SPOKE_ALPHA = 0.38;
 
     ctx.save();
+    ctx.strokeStyle = tokens.graticule;
 
     // Circular scale ring.
-    ctx.strokeStyle = ringColor;
+    ctx.globalAlpha = RING_ALPHA;
     strokeCircle(ctx, centerX, centerY, outerRadius, 1.0);
 
     // NS6T-style helper spokes: draw full spokes every 10° and
@@ -1177,29 +1212,25 @@ function drawAzimuthIndicator(ctx, width, height) {
     for (let bearing = 0; bearing < 360; bearing += 10) {
         const isCardinal = bearing === 0 || bearing === 90 || bearing === 180 || bearing === 270;
         const isMajor = bearing % 30 === 0;
-        ctx.strokeStyle = spokeColor;
-        ctx.globalAlpha = isCardinal ? 0.42 : isMajor ? 0.26 : 0.16;
+        ctx.globalAlpha = SPOKE_ALPHA * (isCardinal ? 0.42 : isMajor ? 0.26 : 0.16);
         radialLine(ctx, centerX, centerY, 0, spokeRadius, bearing, isCardinal ? 1.0 : isMajor ? 0.6 : 0.45);
     }
 
     // 2° minor subdivisions (skip 10° and 30° positions).
-    ctx.globalAlpha = 1;
-    ctx.strokeStyle = minorTickColor;
+    ctx.globalAlpha = MINOR_TICK_ALPHA;
     for (let bearing = 0; bearing < 360; bearing += 2) {
         if (bearing % 10 === 0) continue;
         radialLine(ctx, centerX, centerY, minorTickInner, outerRadius, bearing, 0.6);
     }
 
     // 10° medium subdivisions (skip major 30° positions).
-    ctx.strokeStyle = tickColor;
+    ctx.globalAlpha = TICK_ALPHA;
     for (let bearing = 0; bearing < 360; bearing += 10) {
         if (bearing % 30 === 0) continue;
         radialLine(ctx, centerX, centerY, mediumTickInner, outerRadius, bearing, 0.95);
     }
 
     // 30° major ticks + labels.
-    ctx.strokeStyle = tickColor;
-    ctx.fillStyle = textColor;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
@@ -1209,6 +1240,7 @@ function drawAzimuthIndicator(ctx, width, height) {
         const sinA = Math.sin(angle);
         const cardinal = bearing === 0 ? 'N' : bearing === 90 ? 'E' : bearing === 180 ? 'S' : bearing === 270 ? 'W' : '';
 
+        ctx.globalAlpha = TICK_ALPHA;
         radialLine(ctx, centerX, centerY, majorTickInner, outerRadius, bearing, cardinal ? 2.0 : 1.4);
 
         const lx = centerX + (labelRadius * cosA);
@@ -1216,10 +1248,10 @@ function drawAzimuthIndicator(ctx, width, height) {
 
         if (cardinal) {
             ctx.font = '700 11px Verdana, Arial, sans-serif';
-            ctx.fillText(cardinal, lx, ly);
+            fillMapLabel(ctx, cardinal, lx, ly, tokens);
         } else {
             ctx.font = '500 9px Verdana, Arial, sans-serif';
-            ctx.fillText(`${bearing}°`, lx, ly);
+            fillMapLabel(ctx, `${bearing}°`, lx, ly, tokens);
         }
     }
 
@@ -1232,7 +1264,10 @@ function drawDxccLabels(ctx, width, height, plan) {
     const occupied = [];
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const textColor = state.theme === 'dark' ? '#f5e6b2' : '#4a3218';
+    // Same pill as Mercator's .dxcc-entity-label (--dxcc-label-* tokens):
+    // text >= 8:1 on the 84% opaque fill over any map color, both themes.
+    const tokens = mapTokens();
+    ctx.lineWidth = 1;
 
     for (const label of plan.dxccLabels) {
         const p = projectToCanvas(label.lat, label.lng, width, height);
@@ -1240,10 +1275,10 @@ function drawDxccLabels(ctx, width, height, plan) {
 
         const radial = Math.hypot(p.x - centerX, p.y - centerY) / Math.max(1, Math.min(width, height) * 0.47 * state.zoom);
         const fontSize = Math.max(8, Math.min(11.5, 10.8 + (state.zoom - 1.2) * 1.1 - radial * 2.1));
-        ctx.font = `400 ${fontSize.toFixed(1)}px Verdana, Arial, sans-serif`;
+        ctx.font = `700 ${fontSize.toFixed(1)}px sans-serif`;
 
-        const labelW = ctx.measureText(label.prefix).width + 4;
-        const labelH = fontSize + 2;
+        const labelW = ctx.measureText(label.prefix).width + 8;
+        const labelH = fontSize + 3;
         const box = {
             x0: p.x - labelW / 2,
             y0: p.y - labelH / 2,
@@ -1255,17 +1290,19 @@ function drawDxccLabels(ctx, width, height, plan) {
         if (collides) continue;
         occupied.push(box);
 
-        ctx.fillStyle = state.theme === 'dark' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.72)';
         ctx.beginPath();
         if (typeof ctx.roundRect === 'function') {
-            ctx.roundRect(box.x0 - 1, box.y0 - 0.5, labelW + 2, labelH + 1, 3);
+            ctx.roundRect(box.x0, box.y0, labelW, labelH, labelH / 2);
         } else {
             // Fallback for browsers that don't implement roundRect on CanvasRenderingContext2D.
-            ctx.rect(box.x0 - 1, box.y0 - 0.5, labelW + 2, labelH + 1);
+            ctx.rect(box.x0, box.y0, labelW, labelH);
         }
+        ctx.fillStyle = tokens.labelBg;
         ctx.fill();
+        ctx.strokeStyle = tokens.labelBorder;
+        ctx.stroke();
 
-        ctx.fillStyle = textColor;
+        ctx.fillStyle = tokens.labelText;
         ctx.fillText(label.prefix, p.x, p.y);
     }
 }
@@ -1866,16 +1903,9 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, render
 }
 
 function withHorizonClip(ctx, width, height, drawFn) {
-    const radiusBase = Math.min(width, height) * 0.47;
-    const scale = (radiusBase * state.zoom) / Math.PI;
-    const horizonAngular = Math.min(MAX_VISIBLE_C, state.horizonKm / EARTH_RADIUS_KM);
-    const rawClipRadius = scale * horizonAngular;
-    const maxInsideScaleRadius = Math.max(1, radiusBase - AZIMUTH_SCALE_CLEARANCE_PX);
-    const clipRadius = Math.max(1, Math.min(rawClipRadius, maxInsideScaleRadius));
-
     ctx.save();
     ctx.beginPath();
-    ctx.arc(width / 2, height / 2, clipRadius, 0, Math.PI * 2);
+    ctx.arc(width / 2, height / 2, horizonDiscRadius(width, height), 0, Math.PI * 2);
     ctx.clip();
     drawFn();
     ctx.restore();

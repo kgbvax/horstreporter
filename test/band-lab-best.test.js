@@ -16,7 +16,7 @@ const resp = {
     recommended_bands: ['10m', '12m', '15m'],
 };
 
-describe('enabledBestBands (Band Stats "Best now")', () => {
+describe('enabledBestBands (Band stats "Best now")', () => {
     it('re-derives from the full list so enabled bands below the global top 3 are kept', () => {
         const { bestBands, recBands } = enabledBestBands(resp, new Set(['20m', '40m', '80m']));
         expect(bestBands).toEqual(['20m', '40m', '80m']);
