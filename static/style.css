@@ -915,6 +915,13 @@ body[data-theme="dark"] .wspr-heat-scale {
     .settings-section > summary::after { transition: none; }
 }
 
+/* Segmented control whose options share the row equally (Min SNR). */
+.segmented-equal > .btn {
+    flex: 1 1 0;
+    padding-left: 4px;
+    padding-right: 4px;
+}
+
 /* Options toggle grid */
 .options-toggles-grid {
     display: grid;

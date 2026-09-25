@@ -31,9 +31,8 @@
                 <button type="button" id="btn-geo" class="btn btn-outline-secondary" title="Use current location"><svg class="icon" data-glyph="fa-map-marker-alt" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M216 499Q243 466 282 410Q321 355 352 296Q382 237 384 192Q382 110 328 56Q274 2 192 0Q110 2 56 56Q2 110 0 192Q2 237 32 296Q63 355 102 410Q141 466 168 499Q178 511 192 511Q206 511 216 499ZM192 128Q228 129 247 160Q265 192 247 224Q228 255 192 256Q156 255 137 224Q119 192 137 160Q156 129 192 128Z"/></svg></button>
                 <button type="submit" id="btn-submit" class="btn btn-primary not-streaming" data-mode="go" title="Go" aria-label="Go"><svg class="icon" data-glyph="fa-play" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M73 39Q49 25 25 38Q1 52 0 80V432Q1 460 25 474Q49 487 73 473L361 297Q383 283 384 256Q383 230 361 215L73 39Z"/></svg></button>
             </div>
-            <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap" title="Sets the minimum Signal-to-Noise (SNR) level used to display spots.">
-                <label class="form-label mb-0" title="Sets the minimum Signal-to-Noise (SNR) level used to display spots.">Min SNR:</label>
-                <div class="btn-group w-100" role="group" id="min-snr-group" title="Sets the minimum Signal-to-Noise (SNR) level used to display spots."></div>
+            <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
+                <div class="btn-group w-100 segmented-equal" role="group" id="min-snr-group" aria-label="Minimum signal: which spots to show"></div>
             </div>
             <div class="inline-input-group d-flex align-items-center gap-2 text-nowrap">
                 <div class="btn-group w-100" role="group" id="projection-group"></div>
