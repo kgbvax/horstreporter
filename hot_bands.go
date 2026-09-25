@@ -24,14 +24,18 @@ const (
 )
 
 type hotBandRecommendation struct {
-	Band                string  `json:"band"`
-	Kind                string  `json:"kind"`     // "surprise" | "dx_surge" | "rising"
-	Priority            string  `json:"priority"` // "high" | "normal"
-	Reason              string  `json:"reason"`
-	RankScore           float64 `json:"rank_score"`
-	SpotsPerMinute      float64 `json:"spots_per_minute"`
-	BaselineActivity    float64 `json:"baseline_activity"`
-	ActivityRatio       float64 `json:"activity_ratio"`
+	Band             string  `json:"band"`
+	Kind             string  `json:"kind"`     // "surprise" | "dx_surge" | "rising"
+	Priority         string  `json:"priority"` // "high" | "normal"
+	Reason           string  `json:"reason"`
+	RankScore        float64 `json:"rank_score"`
+	SpotsPerMinute   float64 `json:"spots_per_minute"`
+	BaselineActivity float64 `json:"baseline_activity"`
+	ActivityRatio    float64 `json:"activity_ratio"`
+	// ActivityLevel is set only when ActivityRatio is Evaluate's like-for-like
+	// regional ratio ("above"|"normal"|"below"); empty when the ratio is the
+	// fallback your-squares-vs-baseline estimate, which isn't "× normal".
+	ActivityLevel       string  `json:"activity_level,omitempty"`
 	SustainedBins       int     `json:"sustained_bins"`
 	P90DistanceKm       float64 `json:"p90_distance_km"`
 	BaselineP90Distance float64 `json:"baseline_p90_distance_km,omitempty"`
@@ -92,7 +96,14 @@ func (e *DxBaselineEngine) HotBands(qth string, surroundings bool, minutes int, 
 			continue
 		}
 
+		// Prefer Evaluate's like-for-like regional ratio; your-squares rate
+		// over the whole-cluster baseline is only the no-cluster fallback.
 		ratio := activityRatio(b.SpotsPerMinute, b.BaselineActivity)
+		ratioLevel := ""
+		if activityLevelHasRatio(b.ActivityLevel) {
+			ratio = b.ActivityRatio
+			ratioLevel = b.ActivityLevel
+		}
 		sustained := sustainedRecentBins(b.Sparkline, hotBandsSparklineFloor)
 		if sustained < hotBandsMinSustainedBins {
 			continue
@@ -125,6 +136,7 @@ func (e *DxBaselineEngine) HotBands(qth string, surroundings bool, minutes int, 
 				SpotsPerMinute:      b.SpotsPerMinute,
 				BaselineActivity:    b.BaselineActivity,
 				ActivityRatio:       round2(ratio),
+				ActivityLevel:       ratioLevel,
 				SustainedBins:       sustained,
 				P90DistanceKm:       b.P90DistanceKm,
 				BaselineP90Distance: round1(baseP90),
@@ -146,6 +158,7 @@ func (e *DxBaselineEngine) HotBands(qth string, surroundings bool, minutes int, 
 				SpotsPerMinute:      b.SpotsPerMinute,
 				BaselineActivity:    b.BaselineActivity,
 				ActivityRatio:       round2(ratio),
+				ActivityLevel:       ratioLevel,
 				SustainedBins:       sustained,
 				P90DistanceKm:       b.P90DistanceKm,
 				BaselineP90Distance: round1(baseP90),
@@ -167,6 +180,7 @@ func (e *DxBaselineEngine) HotBands(qth string, surroundings bool, minutes int, 
 				SpotsPerMinute:      b.SpotsPerMinute,
 				BaselineActivity:    b.BaselineActivity,
 				ActivityRatio:       round2(ratio),
+				ActivityLevel:       ratioLevel,
 				SustainedBins:       sustained,
 				P90DistanceKm:       b.P90DistanceKm,
 				BaselineP90Distance: round1(baseP90),

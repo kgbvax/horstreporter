@@ -1770,22 +1770,6 @@ func TestQuantilesFromPairsSkipsCorrupt(t *testing.T) {
 	}
 }
 
-func TestActivityScoreNormImplausibleBaseline(t *testing.T) {
-	// Sane baseline → relative normalisation.
-	if got := activityScoreNorm(3, 6); got != 0.25 {
-		t.Fatalf("activityScoreNorm(3, 6) = %f, want 0.25", got)
-	}
-	// Missing, negative-wrapped, and overflowed baselines (corrupt
-	// dx_baseline_cluster rows) all fall back to absolute-rate normalisation —
-	// the old code pinned positive-corrupt slots to 0 activity credit and
-	// let negative-corrupt slots inflate it via the <=0 branch.
-	for _, base := range []float64{0, -3.3e15, 1.9e15, 1e6 + 1} {
-		if got := activityScoreNorm(3, base); got != clamp01(3.0/2.0) {
-			t.Fatalf("activityScoreNorm(3, %g) = %f, want clamp01(1.5) = 1", base, got)
-		}
-	}
-}
-
 // TestMaskDSN pins the credential redaction used by the DX Postgres startup
 // log lines. maskDSN parses URL-style DSNs and swaps the password for "***";
 // anything it cannot parse as a URL with userinfo passes through unchanged.

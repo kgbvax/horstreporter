@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"unsafe"
@@ -190,30 +191,78 @@ type dxBandCondition struct {
 	// of the ≤60-min in-memory live stream. Absent on backends/depots that
 	// can't supply it; the frontend falls back to live-spot counts.
 	ActivityByBin []float64 `json:"activity_by_bin,omitempty"`
+	// Band-vs-its-own-normal assessment (the Band Stats card label). Computed
+	// like-for-like against the grid-cluster baseline: the live side counts
+	// spots with an end in the operator's cluster exactly as the baseline
+	// write path does (per end, all SNR, conditions modes, no dedup), over the
+	// live-history span, against the time-weighted per-slot cluster baseline
+	// for that same span. See activityLevel* for the classification.
+	ActivityRatio    float64 `json:"activity_ratio"`
+	ActivityLevel    string  `json:"activity_level"`
+	RegionalSpots    int     `json:"regional_spots"`
+	RegionalExpected float64 `json:"regional_expected"`
+	// BaselineLocalScale converts the (regional) baseline_activity_by_slot
+	// series into the units of activity_by_bin (your squares, ≥ cw_min_db, all
+	// sources): the band's local/regional report ratio over the same live
+	// span. The chart multiplies the baseline line by it, so bars-vs-line over
+	// the recent window shows the same ratio the label reports. 0 = unknown.
+	BaselineLocalScale float64 `json:"baseline_local_scale"`
+	// Reach: live p90 path length vs the cluster baseline's p90 for the
+	// current slot, both on the same distance-tier interpolation and the same
+	// SNR floor. ReachLevel is "longer" | "typical" | "shorter", or "" when
+	// either side lacks support.
+	BaselineP90DistanceKm float64 `json:"baseline_p90_distance_km,omitempty"`
+	ReachRatio            float64 `json:"reach_ratio,omitempty"`
+	ReachLevel            string  `json:"reach_level,omitempty"`
 }
 
+// Band-vs-normal classification. Thresholds are symmetric in log space
+// (×1.5 up, ÷1.5 ≈ 0.67 down). The sample guard uses max(observed, expected): a band
+// expected to carry 100 regional spots that shows 5 is significantly below
+// normal even though 5 is a small count, while 3 observed vs 2 expected says
+// nothing.
+const (
+	activityLevelAbove      = "above"
+	activityLevelNormal     = "normal"
+	activityLevelBelow      = "below"
+	activityLevelLowSample  = "low_sample"
+	activityLevelNoBaseline = "no_baseline"
+
+	activityLevelUpRatio    = 1.5
+	activityLevelDownRatio  = 0.67
+	activityLevelMinSample  = 20.0
+	activityLevelMinSupport = 100.0 // raw baseline counts behind the compared slots
+	reachLevelRatio         = 1.3
+	reachMinLiveSpots       = 20
+	reachMinBaselineSupport = 100
+)
+
 type dxConditionsResponse struct {
-	QTH              string            `json:"qth"`
-	Surroundings     bool              `json:"surroundings"`
-	WindowMinutes    int               `json:"window_minutes"`
-	CwMinDb          int               `json:"cw_min_db"`
-	CurrentSlotOfDay int               `json:"current_slot_of_day"`
-	GeneratedAt      int64             `json:"generated_at"`
-	OperatorCluster  string            `json:"qth_cluster,omitempty"`
-	BaselineBuckets  int               `json:"baseline_buckets"`
-	BaselineEventCnt int               `json:"baseline_event_count"`
-	BaselineHistoryM int               `json:"baseline_history_minutes"`
-	OverallScore     float64           `json:"overall_score"`
-	Confidence       float64           `json:"confidence"`
-	Status           string            `json:"status"`
-	Condition        string            `json:"condition"`
-	BestBands        []string          `json:"best_bands"`
-	RecommendedBands []string          `json:"recommended_bands"`
-	WorstBands       []string          `json:"worst_bands"`
-	AvoidBands       []string          `json:"avoid_bands"`
-	Trend            string            `json:"trend"`
-	TrendDelta       float64           `json:"trend_delta"`
-	Bands            []dxBandCondition `json:"bands"`
+	QTH              string `json:"qth"`
+	Surroundings     bool   `json:"surroundings"`
+	WindowMinutes    int    `json:"window_minutes"`
+	CwMinDb          int    `json:"cw_min_db"`
+	CurrentSlotOfDay int    `json:"current_slot_of_day"`
+	GeneratedAt      int64  `json:"generated_at"`
+	OperatorCluster  string `json:"qth_cluster,omitempty"`
+	BaselineBuckets  int    `json:"baseline_buckets"`
+	BaselineEventCnt int    `json:"baseline_event_count"`
+	BaselineHistoryM int    `json:"baseline_history_minutes"`
+	// ClusterBaselineHistoryM is the span the cluster baseline actually covers
+	// (BaselineHistoryM × cluster coverage) — the divisor for cluster-sourced
+	// rates. Differs from BaselineHistoryM when the cluster table was rebuilt.
+	ClusterBaselineHistoryM int               `json:"cluster_baseline_history_minutes"`
+	OverallScore            float64           `json:"overall_score"`
+	Confidence              float64           `json:"confidence"`
+	Status                  string            `json:"status"`
+	Condition               string            `json:"condition"`
+	BestBands               []string          `json:"best_bands"`
+	RecommendedBands        []string          `json:"recommended_bands"`
+	WorstBands              []string          `json:"worst_bands"`
+	AvoidBands              []string          `json:"avoid_bands"`
+	Trend                   string            `json:"trend"`
+	TrendDelta              float64           `json:"trend_delta"`
+	Bands                   []dxBandCondition `json:"bands"`
 }
 
 type bandAccumulator struct {
@@ -300,6 +349,8 @@ func (e *DxBaselineEngine) EnablePostgres(dsn string) error {
 		if err := st.ensureDxBaselineCluster(context.Background()); err != nil {
 			logInfo("DX regional baseline backfill failed: %v", err)
 		}
+		// Cluster coverage is only meaningful on the finished table.
+		st.markClusterCoverageReady(time.Now().Unix())
 	}()
 	// Best-effort: record when baseline accumulation began so the per-minute
 	// normaliser has a real span. Non-fatal if it can't be determined yet.
@@ -866,6 +917,22 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 		}
 	}
 
+	// Cluster-sourced rates are normalised by the span the cluster table
+	// actually covers, not the global span (see clusterCoverageFromTotals).
+	coverage := 1.0
+	if st == nil {
+		coverage = clusterCoverageFromTotals(sumBucketCounts(clusterBuckets), sumBucketCounts(globalBuckets))
+	} else if c, ok := st.clusterCoverage(now); ok {
+		coverage = c
+	}
+	resp.ClusterBaselineHistoryM = int(math.Round(float64(resp.BaselineHistoryM) * coverage))
+	historyFor := func(usedCluster bool) int {
+		if usedCluster {
+			return resp.ClusterBaselineHistoryM
+		}
+		return resp.BaselineHistoryM
+	}
+
 	// activityByBinMap is the Postgres-backed, server-side-aggregated spots/min
 	// time series per band for the chart bars AND the trend/sparkline. Built
 	// once for all bands via one bounded GROUP BY query so a high-volume
@@ -902,13 +969,43 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 	// including the common "genuinely quiet grid" case that returns before the
 	// loop and would never consume the ~ring-size copy.
 
-	cutoff := now - int64(minutes*60)
+	// The live side comes from hub.history, which holds at most
+	// liveHistoryRetentionMinutes (and nothing from before a restart it
+	// couldn't backfill), so live windows start no earlier than that and live
+	// rates divide by the span actually covered — dividing a ≤60-min count by
+	// a 120-min window halved every rate.
+	liveStart := now - int64(liveRateWindowMinutes(minutes))*60
+	if since := liveHistoryCompleteSince.Load(); since > liveStart && since < now {
+		liveStart = since
+	}
+	liveSegs := liveSegments(liveStart, now)
+	liveSpanSec := int64(0)
+	for _, seg := range liveSegs {
+		liveSpanSec += seg[1] - seg[0]
+	}
+	liveSpanMin := math.Max(1, float64(liveSpanSec)/60.0)
 	bandAcc := make(map[string]*bandAccumulator)
 	dedupSeen := make(map[string]struct{})
 
+	// Inputs for the band-vs-normal ratio (dxBandCondition.ActivityRatio):
+	// regionalCount mirrors the cluster baseline's write rule; localCount
+	// mirrors the activity_by_bin chart bars (qth-matched, ≥ cwMinDb, every
+	// source) so the chart's baseline line can be scaled into bar units.
+	regionalCount := make(map[string]int)
+	localCount := make(map[string]int)
+	clusterX, clusterY, clusterOK := locatorSquareXY(operatorCluster)
+
 	for _, m := range history {
-		if m.T < cutoff || m.T > now {
+		if m.T < liveStart || m.T > now {
 			continue
+		}
+		conditionsMode := !isNonConditionsMode(m.MD)
+		if clusterOK && conditionsMode && feedsClusterBaseline(m) {
+			if n := clusterEndCount(m, clusterX, clusterY); n > 0 {
+				if band := normalizeBand(m.B); band != "" {
+					regionalCount[band] += n
+				}
+			}
 		}
 		ev, matched := extractMatchedBandEvent(m, qthSet)
 		if !matched {
@@ -921,13 +1018,16 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 		if !bandInScope(ev.band) {
 			continue
 		}
+		if ev.snr >= cwMinDb {
+			localCount[ev.band]++
+		}
 		// Keep the FT8-calibrated conditions accumulator (spots_per_min, classifyMode,
 		// avgSnr, distances) pure from RBN CW/RTTY, whose dB is on a different SNR scale
 		// than PSKReporter FT8 SNR (docs/horstprop.md). FT8/FT4 (PSKReporter), "" (legacy)
 		// and "DXCLUSTER" (a source marker, not a mode — RP=0, already counted today) stay
 		// in; real non-FT8 modes (CW, RTTY, PSK*, SSB, … only produced by RBN) are skipped.
 		// RBN spots still reach the live stream (broadcastMsg) and the activity chart.
-		if isNonConditionsMode(m.MD) {
+		if !conditionsMode {
 			continue
 		}
 		if ev.snr < cwMinDb {
@@ -1004,21 +1104,33 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 		q25, q75, quantileOK := 0.0, 0.0, false
 		var baselineActivityBySlot []float64
 		var baselineSlotUsedByCluster []bool
+		// Per-slot cluster pairs (nil when a slot has no cluster baseline),
+		// for the reach comparison.
+		var clusterPairsForSlot func(slot int) []baselinePair
 		if st == nil {
-			baselineActivity, _ = baselineActivityForBand(aggGlobalBuckets, aggClusterBuckets, operatorCluster, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM)
+			baselineActivity, _ = baselineActivityForBand(aggGlobalBuckets, aggClusterBuckets, operatorCluster, band, resp.CurrentSlotOfDay, resp.BaselineHistoryM, resp.ClusterBaselineHistoryM)
 			baselineSupport = baselineSupportForBand(aggGlobalBuckets, aggClusterBuckets, operatorCluster, band, resp.CurrentSlotOfDay)
 			q25, q75, clusterBaselineUsed, quantileOK = baselineScoreQuantilesForBand(aggGlobalBuckets, aggClusterBuckets, operatorCluster, band, resp.CurrentSlotOfDay)
-			baselineActivityBySlot, baselineSlotUsedByCluster = baselineActivityForBandAllSlots(aggGlobalBuckets, aggClusterBuckets, operatorCluster, band, resp.BaselineHistoryM)
+			baselineActivityBySlot, baselineSlotUsedByCluster = baselineActivityForBandAllSlots(aggGlobalBuckets, aggClusterBuckets, operatorCluster, band, resp.BaselineHistoryM, resp.ClusterBaselineHistoryM)
+			clusterPairsForSlot = func(slot int) []baselinePair {
+				return clusterPairsFromBuckets(aggClusterBuckets, operatorCluster, band, slot)
+			}
 		} else {
 			// Derive all four baseline values from the single all-bands/all-slots
 			// index fetched above (2 PG round-trips total) instead of ~100
 			// per-band round-trips. On fetch failure all indexes are nil and
 			// every value stays zero/unused, matching the old per-band err guards.
 			pairs, usedCluster := pairsForBandSlot(baselinePairsCluster, baselinePairsGlobal, band, resp.CurrentSlotOfDay)
-			baselineActivity = normalizeBaselineToSpotsPerMinute(float64(sumPairs(pairs)), resp.BaselineHistoryM)
+			baselineActivity = normalizeBaselineToSpotsPerMinute(float64(sumPairs(pairs)), historyFor(usedCluster))
 			clusterBaselineUsed = usedCluster
 			baselineSupport = sumPairs(pairs)
 			q25, q75, quantileOK = quantilesFromPairs(pairs)
+			clusterPairsForSlot = func(slot int) []baselinePair {
+				if ps, uc := pairsForBandSlot(baselinePairsCluster, nil, band, slot); uc {
+					return ps
+				}
+				return nil
+			}
 			// Length-48 per-slot series, built only when the fetch succeeded
 			// (nil global index ⇒ fetch failed ⇒ leave nil, as the old call did
 			// on its own error).
@@ -1027,12 +1139,41 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 				usedSlot := make([]bool, SlotsOfDay)
 				for slot := 0; slot < SlotsOfDay; slot++ {
 					ps, uc := pairsForBandSlot(baselinePairsCluster, baselinePairsGlobal, band, slot)
-					rates[slot] = normalizeBaselineToSpotsPerMinute(float64(sumPairs(ps)), resp.BaselineHistoryM)
+					rates[slot] = normalizeBaselineToSpotsPerMinute(float64(sumPairs(ps)), historyFor(uc))
 					usedSlot[slot] = uc
 				}
 				baselineActivityBySlot = rates
 				baselineSlotUsedByCluster = usedSlot
 			}
+		}
+
+		// Band vs its own normal, like-for-like over the live span.
+		regionalSpots := regionalCount[band]
+		regionalExpected, expectedOK := 0.0, len(liveSegs) > 0
+		for _, seg := range liveSegs {
+			n, ok := expectedClusterCount(baselineActivityBySlot, baselineSlotUsedByCluster, seg[0], seg[1])
+			regionalExpected += n
+			expectedOK = expectedOK && ok
+		}
+		activityLevel := activityLevelNoBaseline
+		activityRatio := 0.0
+		if expectedOK && regionalExpected > 0 &&
+			baselineCountForRate(regionalExpected/liveSpanMin, resp.ClusterBaselineHistoryM) >= activityLevelMinSupport {
+			activityRatio = float64(regionalSpots) / regionalExpected
+			activityLevel = classifyActivityLevel(float64(regionalSpots), regionalExpected)
+		}
+		baselineLocalScale := 0.0
+		if regionalSpots > 0 {
+			baselineLocalScale = float64(localCount[band]) / float64(regionalSpots)
+		}
+
+		// Reach: same tier interpolation, SNR floor and span on both sides.
+		baselineP90, reachSupport, reachOK := reachBaselineP90(clusterPairsForSlot, baselineActivityBySlot, liveStart, now, cwMinDb)
+		reachRatio := 0.0
+		reachLevel := ""
+		if reachOK && acc.total >= reachMinLiveSpots && reachSupport >= reachMinBaselineSupport && baselineP90 > 0 {
+			reachRatio = tieredP90(acc.distancesKm) / baselineP90
+			reachLevel = classifyReachLevel(reachRatio)
 		}
 
 		// Prefer the Postgres aggregate; fall back to in-memory binning from
@@ -1061,7 +1202,7 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 		if acc.total > 0 {
 			repeatRatio = clamp01(float64(acc.total-uniqueCount) / float64(acc.total))
 		}
-		spotsPerMin := float64(acc.total) / math.Max(1, float64(minutes))
+		spotsPerMin := float64(acc.total) / liveSpanMin
 		avgDistance := 0.0
 		if acc.total > 0 {
 			avgDistance = acc.totalDistance / float64(acc.total)
@@ -1076,7 +1217,15 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 		medianSnr := percentileInt(acc.snrs, 0.5)
 		p90Snr := percentileInt(acc.snrs, 0.9)
 
-		activityNorm := activityScoreNorm(spotsPerMin, baselineActivity)
+		// Activity term from the like-for-like regional ratio (1× normal =
+		// 0.5, saturating at 2×). Without a trustworthy ratio (no cluster
+		// baseline, or too few spots either side) it stays neutral rather
+		// than falling back to your 1 or 9 squares against the 36-square
+		// cluster's rate, which would put those bands on a different scale.
+		activityNorm := 0.5
+		if activityLevelHasRatio(activityLevel) {
+			activityNorm = clamp01(activityRatio / 2.0)
+		}
 		distanceNorm := clamp01((p90Distance/7000.0)*0.7 + dxRatio*0.3)
 		snrNorm := clamp01((p90Snr + 20.0) / 30.0)
 		rawScore := (0.45*distanceNorm + 0.35*activityNorm + 0.20*snrNorm) * 100.0
@@ -1131,6 +1280,14 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 			TrendDelta:                trendDelta,
 			Sparkline:                 historicalBandSeries,
 			ActivityByBin:             roundFloats2(activityByBin),
+			ActivityRatio:             round2(activityRatio),
+			ActivityLevel:             activityLevel,
+			RegionalSpots:             regionalSpots,
+			RegionalExpected:          round1(regionalExpected),
+			BaselineLocalScale:        round4(baselineLocalScale),
+			BaselineP90DistanceKm:     round1(baselineP90),
+			ReachRatio:                round2(reachRatio),
+			ReachLevel:                reachLevel,
 		})
 
 		weight := float64(acc.total)
@@ -1201,24 +1358,6 @@ func roundFloats2(v []float64) []float64 {
 		out[i] = round2(x)
 	}
 	return out
-}
-
-// maxPlausibleBaselineSpotsPerMin bounds an honest baseline activity rate (the
-// cluster/global network aggregate per band+slot; observed prod values run
-// 100–1000/min). Rates far above this are corrupt baselines (see
-// maxPlausibleBaselineCount in dx_postgres.go — the historic mergePendingBack
-// double-merge left prod counts around ±1e15) and are treated as missing so
-// they can't pin activityNorm to 0 (positive corruption) or inflate it via
-// the no-baseline fallback (negative corruption).
-const maxPlausibleBaselineSpotsPerMin = 1e6
-
-func activityScoreNorm(spotsPerMin, baselineActivity float64) float64 {
-	// Missing OR implausible baseline → absolute-rate normalisation.
-	if baselineActivity <= 0 || baselineActivity > maxPlausibleBaselineSpotsPerMin {
-		return clamp01(spotsPerMin / 2.0)
-	}
-	ratio := spotsPerMin / math.Max(0.05, baselineActivity)
-	return clamp01(ratio / 2.0)
 }
 
 func classifyBandStatus(score, q25, q75 float64, quantileOK bool, spots int) string {
@@ -1692,7 +1831,10 @@ func computeTrend(series []float64) (string, float64) {
 // baselineActivityForBand returns the expected spots/minute for a band at
 // the given slot, using a two-tier fallback: grid-cluster → global. The
 // returned bool marks whether the cluster baseline was used (false = global).
-func baselineActivityForBand(global, clusterBuckets map[string]*baselineBucket, operatorCluster string, band string, hour int, historyMinutes int) (float64, bool) {
+// clusterHistoryMinutes is the span the cluster table covers (see
+// dxConditionsResponse.ClusterBaselineHistoryM); cluster totals normalise by
+// it, global totals by historyMinutes.
+func baselineActivityForBand(global, clusterBuckets map[string]*baselineBucket, operatorCluster string, band string, hour int, historyMinutes, clusterHistoryMinutes int) (float64, bool) {
 	if operatorCluster != "" {
 		total := 0.0
 		for d := 0; d <= 4; d++ {
@@ -1703,7 +1845,7 @@ func baselineActivityForBand(global, clusterBuckets map[string]*baselineBucket, 
 			}
 		}
 		if total > 0 {
-			return normalizeBaselineToSpotsPerMinute(total, historyMinutes), true
+			return normalizeBaselineToSpotsPerMinute(total, clusterHistoryMinutes), true
 		}
 	}
 
@@ -1729,7 +1871,7 @@ func baselineActivityForBand(global, clusterBuckets map[string]*baselineBucket, 
 // Per-slot fallback is independent: a slot with a non-zero cluster count
 // uses the cluster baseline; a slot with no cluster rows falls back to global
 // for that slot only.
-func baselineActivityForBandAllSlots(global, clusterBuckets map[string]*baselineBucket, operatorCluster string, band string, historyMinutes int) ([]float64, []bool) {
+func baselineActivityForBandAllSlots(global, clusterBuckets map[string]*baselineBucket, operatorCluster string, band string, historyMinutes, clusterHistoryMinutes int) ([]float64, []bool) {
 	rates := make([]float64, SlotsOfDay)
 	usedCluster := make([]bool, SlotsOfDay)
 	for slot := 0; slot < SlotsOfDay; slot++ {
@@ -1743,7 +1885,7 @@ func baselineActivityForBandAllSlots(global, clusterBuckets map[string]*baseline
 				}
 			}
 			if clusterTotal > 0 {
-				rates[slot] = normalizeBaselineToSpotsPerMinute(clusterTotal, historyMinutes)
+				rates[slot] = normalizeBaselineToSpotsPerMinute(clusterTotal, clusterHistoryMinutes)
 				usedCluster[slot] = true
 				continue
 			}
@@ -1761,6 +1903,255 @@ func baselineActivityForBandAllSlots(global, clusterBuckets map[string]*baseline
 		}
 	}
 	return rates, usedCluster
+}
+
+// liveHistoryCompleteSince is the earliest time hub.history is known to hold
+// every ingested spot: process start, or the start of the startup backfill
+// window when that succeeded (main.go). Without it, the first hour after a
+// restart that couldn't backfill would compare a partial live count against
+// a full-span expectation and read every band low. 0 = no constraint.
+var liveHistoryCompleteSince atomic.Int64
+
+// liveHistoryGapStart/End bound the hole a restart leaves in hub.history when
+// the startup backfill did land: from the newest backfilled spot to the moment
+// ingest resumed (downtime, the old process's unflushed tail, startup work).
+// Live counts over a window containing it are compared against an
+// expectation that skips the same interval. 0/0 = no gap.
+var liveHistoryGapStart, liveHistoryGapEnd atomic.Int64
+
+// liveSegments splits [start, end) around the recorded history gap: one or
+// two intervals over which hub.history is complete.
+func liveSegments(start, end int64) [][2]int64 {
+	gs, ge := liveHistoryGapStart.Load(), liveHistoryGapEnd.Load()
+	if ge <= gs || ge <= start || gs >= end {
+		return [][2]int64{{start, end}}
+	}
+	segs := make([][2]int64, 0, 2)
+	if gs > start {
+		segs = append(segs, [2]int64{start, gs})
+	}
+	if ge < end {
+		segs = append(segs, [2]int64{ge, end})
+	}
+	return segs
+}
+
+// feedsClusterBaseline reports whether m is one of the spots Observe writes
+// into the cluster baseline (PSKReporter FT8/FT4 and DX-cluster). RBN and
+// WSPR share hub.history but never reach Observe — excluded by source, not
+// just by mode, since an RBN digital feed can carry FT8.
+func feedsClusterBaseline(m MQTTMessage) bool {
+	return m.Source != "rbn" && m.Source != "wspr"
+}
+
+// liveRateWindowMinutes is the span a live rate can cover: the requested
+// window, capped at the in-memory history retention that Evaluate's history
+// argument is drawn from.
+func liveRateWindowMinutes(minutes int) int {
+	if minutes < 1 {
+		minutes = 1
+	}
+	if liveHistoryRetentionMinutes > 0 && minutes > liveHistoryRetentionMinutes {
+		return liveHistoryRetentionMinutes
+	}
+	return minutes
+}
+
+// clusterEndCount returns how many ends of m (0–2) lie in the cluster
+// anchored at grid coordinates (ax, ay). Mirrors Observe's cluster write:
+// both locators must be present, and each end in the cluster counts once, so
+// a path with both ends inside counts twice — exactly as the baseline does.
+func clusterEndCount(m MQTTMessage, ax, ay int) int {
+	sl := strings.TrimSpace(m.SL)
+	rl := strings.TrimSpace(m.RL)
+	if sl == "" || rl == "" {
+		return 0
+	}
+	n := 0
+	if locatorInCluster(strings.ToUpper(sl), ax, ay) {
+		n++
+	}
+	if locatorInCluster(strings.ToUpper(rl), ax, ay) {
+		n++
+	}
+	return n
+}
+
+func sumBucketCounts(buckets map[string]*baselineBucket) float64 {
+	total := 0.0
+	for _, b := range buckets {
+		if b != nil && b.Count > 0 {
+			total += float64(b.Count)
+		}
+	}
+	return total
+}
+
+// clusterPairsFromBuckets is the in-memory counterpart of the cluster pairs the
+// store path reads: one pair per non-empty (distance, snr) tier bucket.
+func clusterPairsFromBuckets(clusterBuckets map[string]*baselineBucket, operatorCluster, band string, slot int) []baselinePair {
+	if operatorCluster == "" {
+		return nil
+	}
+	var pairs []baselinePair
+	for d := 0; d <= 4; d++ {
+		for s := 0; s <= 3; s++ {
+			if b := clusterBuckets[baselineClusterKey(operatorCluster, band, slot, d, s)]; b != nil && b.Count > 0 {
+				pairs = append(pairs, baselinePair{DistanceTier: d, SnrTier: s, Count: b.Count})
+			}
+		}
+	}
+	return pairs
+}
+
+// expectedClusterCount integrates the per-slot baseline rate (spots/min) over
+// [start, end), splitting at 30-min UTC slot boundaries, so a window that
+// straddles slots is compared against each slot's own normal rather than the
+// current slot's. ok=false unless every overlapped slot has a cluster
+// baseline: a global fallback is a different population and can't be compared
+// with the regional live count.
+func expectedClusterCount(ratesBySlot []float64, usedCluster []bool, start, end int64) (float64, bool) {
+	if len(ratesBySlot) != SlotsOfDay || len(usedCluster) != SlotsOfDay || end <= start {
+		return 0, false
+	}
+	total := 0.0
+	for t := start; t < end; {
+		segEnd := slotSegmentEnd(t, end)
+		slot := utcSlotOfDay(t)
+		if !usedCluster[slot] {
+			return 0, false
+		}
+		total += ratesBySlot[slot] * float64(segEnd-t) / 60.0
+		t = segEnd
+	}
+	return total, true
+}
+
+// baselineCountForRate inverts normalizeBaselineToSpotsPerMinute: the raw
+// per-slot bucket count behind a baseline rate.
+func baselineCountForRate(rate float64, historyMinutes int) float64 {
+	historyDays := float64(historyMinutes) / float64(24*60)
+	if historyDays < 1 {
+		historyDays = 1
+	}
+	return rate * historyDays * 30.0
+}
+
+func classifyActivityLevel(observed, expected float64) string {
+	if expected <= 0 {
+		return activityLevelNoBaseline
+	}
+	if math.Max(observed, expected) < activityLevelMinSample {
+		return activityLevelLowSample
+	}
+	// Classify on the ratio as published (2 decimals), so the level and the
+	// number shown next to it never disagree at a threshold.
+	ratio := round2(observed / expected)
+	switch {
+	case ratio >= activityLevelUpRatio:
+		return activityLevelAbove
+	case ratio <= activityLevelDownRatio:
+		return activityLevelBelow
+	}
+	return activityLevelNormal
+}
+
+// activityLevelHasRatio reports whether a level rests on enough evidence for
+// its ratio to drive anything (score, hot bands); low_sample and no_baseline
+// don't.
+func activityLevelHasRatio(level string) bool {
+	return level == activityLevelAbove || level == activityLevelNormal || level == activityLevelBelow
+}
+
+func classifyReachLevel(ratio float64) string {
+	switch {
+	case ratio >= reachLevelRatio:
+		return "longer"
+	case ratio <= 1/reachLevelRatio:
+		return "shorter"
+	}
+	return "typical"
+}
+
+// snrTierMaxDb is the highest SNR (dB) a report in the given snrTierFromDb
+// tier can carry.
+func snrTierMaxDb(tier int) int {
+	switch tier {
+	case 0:
+		return -16
+	case 1:
+		return -9
+	case 2:
+		return -2
+	}
+	return math.MaxInt32
+}
+
+// reachBaselineP90 is the cluster baseline's p90 path length (tier-
+// interpolated) over the live span [start, end): each overlapped slot's
+// distance distribution weighted by the spots it is expected to contribute
+// (rate × overlap), so a live hour straddling three slots — e.g. across the
+// grey line — isn't judged against the current slot alone. Only tiers that
+// can hold reports at or above cwMinDb count: the live side drops weaker
+// reports, and weak reports skew long-haul, so an unfiltered baseline would
+// read every band as "shorter". Exact for the default -15 dB floor (tier 0 is
+// ≤ -16 dB); coarser floors keep the whole straddling tier. ok=false when any
+// overlapped slot lacks cluster pairs; support is the raw count behind it.
+func reachBaselineP90(pairsForSlot func(slot int) []baselinePair, ratesBySlot []float64, start, end int64, cwMinDb int) (p90 float64, support int64, ok bool) {
+	if len(ratesBySlot) != SlotsOfDay || end <= start {
+		return 0, 0, false
+	}
+	var mix [5]float64
+	for t := start; t < end; {
+		segEnd := slotSegmentEnd(t, end)
+		slot := utcSlotOfDay(t)
+		var tiers [5]int64
+		var slotTotal, slotAll int64
+		for _, p := range pairsForSlot(slot) {
+			if p.DistanceTier < 0 || p.DistanceTier > 4 || !plausibleBaselinePair(p) {
+				continue
+			}
+			slotAll += p.Count
+			if snrTierMaxDb(p.SnrTier) < cwMinDb {
+				continue
+			}
+			tiers[p.DistanceTier] += p.Count
+			slotTotal += p.Count
+		}
+		if slotTotal == 0 {
+			return 0, 0, false
+		}
+		// The slot's expected spots above the floor: its all-SNR rate × the
+		// share of its reports that clear the floor.
+		weight := ratesBySlot[slot] * float64(segEnd-t) / 60.0 * float64(slotTotal) / float64(slotAll)
+		for d := range tiers {
+			mix[d] += weight * float64(tiers[d]) / float64(slotTotal)
+		}
+		support += slotTotal
+		t = segEnd
+	}
+	return p90FromTierWeights(mix), support, true
+}
+
+// slotSegmentEnd returns the end of the 30-min UTC slot containing t, capped
+// at end.
+func slotSegmentEnd(t, end int64) int64 {
+	const slotSec = 1800
+	segEnd := t - ((t%slotSec)+slotSec)%slotSec + slotSec
+	if segEnd > end {
+		return end
+	}
+	return segEnd
+}
+
+// tieredP90 is the live p90 path length on the same tier interpolation the
+// baseline uses, so the two sides of the reach ratio are comparable.
+func tieredP90(distancesKm []float64) float64 {
+	var tiers [5]int64
+	for _, d := range distancesKm {
+		tiers[distanceTierFromKm(d)]++
+	}
+	return p90FromTierCounts(tiers)
 }
 
 // normalizeBaselineToSpotsPerMinute converts a raw cumulative bucket count
@@ -1848,23 +2239,35 @@ func baselineP90DistanceForBand(global, clusterBuckets map[string]*baselineBucke
 }
 
 func p90FromTierCounts(tierCounts [5]int64) float64 {
-	var total int64
-	for _, c := range tierCounts {
-		total += c
+	var weights [5]float64
+	for d, c := range tierCounts {
+		weights[d] = float64(c)
 	}
-	if total == 0 {
+	return p90FromTierWeights(weights)
+}
+
+// p90FromTierWeights is p90FromTierCounts over non-integer tier weights (a
+// mixture of per-slot distributions).
+func p90FromTierWeights(tierWeights [5]float64) float64 {
+	total := 0.0
+	for _, w := range tierWeights {
+		if w > 0 {
+			total += w
+		}
+	}
+	if total <= 0 {
 		return 0
 	}
-	q90 := 0.9 * float64(total)
-	cum := int64(0)
+	q90 := 0.9 * total
+	cum := 0.0
 	for d := 0; d < 5; d++ {
-		c := tierCounts[d]
+		c := tierWeights[d]
 		if c <= 0 {
 			continue
 		}
-		if float64(cum+c) >= q90 {
+		if cum+c >= q90 {
 			lo, hi := distanceTierBounds(d)
-			frac := (q90 - float64(cum)) / float64(c)
+			frac := (q90 - cum) / c
 			if frac < 0 {
 				frac = 0
 			}
@@ -1878,7 +2281,7 @@ func p90FromTierCounts(tierCounts [5]int64) float64 {
 	// Numerically: cumulative reached 1.0 without crossing 0.9 — last
 	// non-empty tier owns p90. Return its upper bound.
 	for d := 4; d >= 0; d-- {
-		if tierCounts[d] > 0 {
+		if tierWeights[d] > 0 {
 			_, hi := distanceTierBounds(d)
 			return hi
 		}
@@ -2098,6 +2501,7 @@ func bearingDegrees(lat1, lon1, lat2, lon2 float64) float64 {
 
 func round1(v float64) float64 { return math.Round(v*10) / 10 }
 func round2(v float64) float64 { return math.Round(v*100) / 100 }
+func round4(v float64) float64 { return math.Round(v*10000) / 10000 }
 
 func average(v []float64) float64 {
 	if len(v) == 0 {

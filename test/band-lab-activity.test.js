@@ -231,3 +231,22 @@ describe('utcSlotOfDayFromMs (extra variants)', () => {
         expect(utcSlotOfDayFromMs(D(0, 0))).toBe(0);
     });
 });
+
+describe('computeActivityChartData baseline scaling', () => {
+    const bySlot = new Array(48).fill(10);
+
+    it('scales the regional baseline line into bar units by baseline_local_scale', () => {
+        const data = computeActivityChartData([], { baseline_activity_by_slot: bySlot, baseline_local_scale: 0.25 }, 15, 0);
+        expect(data.baselineRatesPerBin.every((r) => r === 2.5)).toBe(true);
+    });
+
+    it('draws no line when the backend has no regional reports to scale by', () => {
+        const data = computeActivityChartData([], { baseline_activity_by_slot: bySlot, baseline_local_scale: 0 }, 15, 0);
+        expect(data.baselineRatesPerBin.every((r) => r === 0)).toBe(true);
+    });
+
+    it('keeps the unscaled line for backends without the field', () => {
+        const data = computeActivityChartData([], { baseline_activity_by_slot: bySlot }, 15, 0);
+        expect(data.baselineRatesPerBin.every((r) => r === 10)).toBe(true);
+    });
+});

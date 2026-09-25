@@ -54,6 +54,20 @@ type dxPostgresStore struct {
 	baselineStatsBkt  int
 	baselineStatsEv   int
 	baselineStatsHist int
+
+	// clusterCoverage memoizes the cluster table's coverage relative to the
+	// global table (see clusterCoverage). Two full-table SUMs, so it refreshes
+	// hourly in the background rather than per request.
+	clusterCoverageMu         sync.Mutex
+	clusterCoverageAt         int64
+	clusterCoverageTriedAt    int64
+	clusterCoverageVal        float64
+	clusterCoverageRefreshing bool
+	// clusterCoverageReady gates the first computation until the startup
+	// cluster backfill (ensureDxBaselineCluster) has finished: a coverage
+	// taken from a half-backfilled table would be cached for an hour and
+	// overstate every cluster rate once the backfill completes.
+	clusterCoverageReady atomic.Bool
 }
 
 type baselineDelta struct {
@@ -718,9 +732,13 @@ func (s *dxPostgresStore) ensureDxBaselineCluster(ctx context.Context) error {
 
 	logInfo("DX grid-cluster baseline backfill starting from existing raw spots")
 
+	// Only the sources Observe feeds the baseline (PSKReporter FT8/FT4 and
+	// DX-cluster); RBN and WSPR rows share dx_raw_spots but never reach the
+	// live cluster baseline, so replaying them here would inflate it.
 	rows, err := s.pool.Query(ctx, `
 		SELECT spot_time, band, sender_locator, receiver_locator, signal_report_db
 		FROM dx_raw_spots
+		WHERE source_type IN ('mqtt', 'dxcluster')
 		ORDER BY spot_time ASC
 	`)
 	if err != nil {
@@ -757,12 +775,16 @@ func (s *dxPostgresStore) ensureDxBaselineCluster(ctx context.Context) error {
 
 	processed := int64(0)
 	skipped := int64(0)
+	firstSpotAt := int64(0)
 	for rows.Next() {
 		var ts int64
 		var band, senderLoc, receiverLoc string
 		var snr int
 		if err := rows.Scan(&ts, &band, &senderLoc, &receiverLoc, &snr); err != nil {
 			return err
+		}
+		if firstSpotAt == 0 {
+			firstSpotAt = ts // rows arrive in spot_time order
 		}
 		// Recompute the bucket dimensions the in-memory Observe derives:
 		// normalizeBand, utcSlotOfDay, distanceTierForLocators, snrTierFromDb,
@@ -801,6 +823,18 @@ func (s *dxPostgresStore) ensureDxBaselineCluster(ctx context.Context) error {
 	}
 	if err := flush(); err != nil {
 		return err
+	}
+
+	// The rebuilt table covers only the raw-spot retention, not the global
+	// baseline's span; record where it starts so cluster rates are
+	// normalised by their own span (see computeClusterCoverage).
+	if firstSpotAt > 0 {
+		if _, err := s.pool.Exec(ctx,
+			`INSERT INTO dx_meta (k, v) VALUES ('cluster_baseline_first_observed_at', $1)
+			 ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+			fmt.Sprintf("%d", firstSpotAt)); err != nil {
+			return err
+		}
 	}
 
 	logInfo("DX grid-cluster baseline backfill finished (%d raw spots processed, %d skipped)", processed, skipped)
@@ -1265,7 +1299,10 @@ func sumPairs(pairs []baselinePair) int64 {
 // (pairs, clusterUsed). A nil/empty cluster index yields global + false.
 func pairsForBandSlot(clusterIdx, globalIdx map[bandSlotKey][]baselinePair, band string, slot int) ([]baselinePair, bool) {
 	if clusterIdx != nil {
-		if pairs, ok := clusterIdx[bandSlotKey{Band: band, Slot: slot}]; ok && len(pairs) > 0 {
+		// Require a plausible total, not just rows: all-corrupt cluster rows
+		// sum to 0 and must fall back to global like the in-memory path
+		// (clusterTotal > 0) rather than read as a real cluster rate of 0.
+		if pairs, ok := clusterIdx[bandSlotKey{Band: band, Slot: slot}]; ok && sumPairs(pairs) > 0 {
 			return pairs, true
 		}
 	}
@@ -1613,6 +1650,125 @@ func (s *dxPostgresStore) baselineStats(now int64) (int, int, int, error) {
 	s.baselineStatsHist = hm
 	s.baselineStatsMu.Unlock()
 	return b, ev, hm, nil
+}
+
+// clusterCoverageTTL is how long a computed cluster coverage stays fresh. The
+// ratio drifts on the scale of days (it only moves while the tables' spans
+// differ), so hourly is plenty. clusterCoverageRetry spaces out retries after
+// a failed computation so a struggling Postgres doesn't get the two scans
+// back to back on every request.
+const (
+	clusterCoverageTTL   int64 = 3600
+	clusterCoverageRetry int64 = 300
+)
+
+// clusterCoverage returns how much of the global baseline's history the
+// cluster table actually holds, as a fraction in (0, 1]; ok=false until the
+// first background computation lands. Stale values are served while a single
+// background refresh runs, so no request waits on the computation.
+func (s *dxPostgresStore) clusterCoverage(now int64) (float64, bool) {
+	if !s.clusterCoverageReady.Load() {
+		return 0, false
+	}
+	s.clusterCoverageMu.Lock()
+	defer s.clusterCoverageMu.Unlock()
+	fresh := s.clusterCoverageAt != 0 && now-s.clusterCoverageAt < clusterCoverageTTL
+	retryDue := s.clusterCoverageTriedAt == 0 || now-s.clusterCoverageTriedAt >= clusterCoverageRetry
+	if !fresh && retryDue && !s.clusterCoverageRefreshing {
+		s.clusterCoverageRefreshing = true
+		s.clusterCoverageTriedAt = now
+		go s.refreshClusterCoverage(now)
+	}
+	if s.clusterCoverageAt == 0 {
+		return 0, false
+	}
+	return s.clusterCoverageVal, true
+}
+
+// markClusterCoverageReady is called once the startup cluster backfill has
+// finished (or was skipped); it drops any cached value and computes afresh.
+func (s *dxPostgresStore) markClusterCoverageReady(now int64) {
+	s.clusterCoverageMu.Lock()
+	s.clusterCoverageAt = 0
+	s.clusterCoverageTriedAt = 0
+	s.clusterCoverageMu.Unlock()
+	s.clusterCoverageReady.Store(true)
+	s.clusterCoverage(now)
+}
+
+func (s *dxPostgresStore) refreshClusterCoverage(now int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c, err := s.computeClusterCoverage(ctx, now)
+
+	s.clusterCoverageMu.Lock()
+	defer s.clusterCoverageMu.Unlock()
+	s.clusterCoverageRefreshing = false
+	if err != nil {
+		logDebug("dx cluster coverage refresh failed (keeping previous value): %v", err)
+		return
+	}
+	s.clusterCoverageAt = now
+	s.clusterCoverageVal = c
+}
+
+// computeClusterCoverage prefers the recorded spans: the cluster table's own
+// start (cluster_baseline_first_observed_at, written by the backfill that
+// rebuilds it) over the global start. Without that key (tables that were
+// rebuilt before it existed) it falls back to the volume estimate.
+func (s *dxPostgresStore) computeClusterCoverage(ctx context.Context, now int64) (float64, error) {
+	var globalFirst, clusterFirst *int64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT
+			(SELECT v::bigint FROM dx_meta WHERE k = 'baseline_first_observed_at'),
+			(SELECT v::bigint FROM dx_meta WHERE k = 'cluster_baseline_first_observed_at')
+	`).Scan(&globalFirst, &clusterFirst); err != nil {
+		return 0, err
+	}
+	if globalFirst != nil && clusterFirst != nil {
+		return clusterCoverageFromSpans(*globalFirst, *clusterFirst, now), nil
+	}
+	var clusterSum, globalSum float64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE((SELECT SUM(count)::float8 FROM dx_baseline_cluster WHERE count > 0 AND count <= $1), 0),
+			COALESCE((SELECT SUM(count)::float8 FROM dx_baseline_global WHERE count > 0 AND count <= $1), 0)
+	`, maxPlausibleBaselineCount).Scan(&clusterSum, &globalSum); err != nil {
+		return 0, err
+	}
+	return clusterCoverageFromTotals(clusterSum, globalSum), nil
+}
+
+// clusterCoverageFromSpans is the cluster table's span over the global one,
+// clamped to (0, 1].
+func clusterCoverageFromSpans(globalFirst, clusterFirst, now int64) float64 {
+	globalSpan := now - globalFirst
+	clusterSpan := now - clusterFirst
+	if globalSpan <= 0 || clusterSpan <= 0 || clusterSpan >= globalSpan {
+		return 1
+	}
+	return float64(clusterSpan) / float64(globalSpan)
+}
+
+// clusterCoverageFromTotals estimates the cluster table's history span as a
+// fraction of the global table's. Every observed spot adds 1 to the global
+// table and 1 per end with a valid locator (so ≈2) to the cluster table, so
+// over the same span Σcluster ≈ 2·Σglobal. A smaller ratio means the cluster
+// table holds less history than baseline_first_observed_at implies — e.g. the
+// Sep 3 2026 TRUNCATE + backfill from ~3 days of raw spots — and normalising
+// its counts by the global span would understate every cluster rate. The
+// estimate is volume-weighted (a busier recent span reads slightly long);
+// that bias is far smaller than the multi-× error it corrects. Clamped to
+// (0, 1]: the cluster table can't legitimately be older than the global one.
+func clusterCoverageFromTotals(clusterSum, globalSum float64) float64 {
+	if globalSum <= 0 || clusterSum <= 0 {
+		return 1
+	}
+	c := clusterSum / (2 * globalSum)
+	if c > 1 {
+		return 1
+	}
+	return c
 }
 
 func (s *dxPostgresStore) baselineStatsUncached(now int64) (int, int, int, error) {

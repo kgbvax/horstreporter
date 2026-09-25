@@ -11,8 +11,8 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 	"os"
-	"regexp"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"runtime/debug"
 	"sort"
@@ -288,6 +288,8 @@ func main() {
 	pushVAPIDSubscriberFlag := flag.String("push-vapid-subscriber", "", "mailto: URL in the VAPID JWT (identifies the sending server to the push service). Defaults to mailto:horstreporter@example.com.")
 	pushTrustedProxyCIDRFlag := flag.String("push-trusted-proxy-cidr", "", "Comma-separated CIDR ranges of trusted TLS-terminating proxies whose X-Forwarded-For header is honored for push rate-limiting (e.g. \"10.0.0.0/8,172.16.0.0/12\"). When unset, X-Forwarded-For is NOT trusted and the client IP is taken from RemoteAddr — this prevents spoofed-XFF rate-limit bypass. Only applies when -push-enable is set.")
 	flag.Parse()
+	// hub.history starts empty; the startup backfill (if any) moves this back.
+	liveHistoryCompleteSince.Store(time.Now().Unix())
 
 	// Package-level mirror for non-main packages (history.go archive load
 	// mirrors the live stream's includeDXCluster semantics).
@@ -388,6 +390,10 @@ func main() {
 	// resolver is always available (embedded cty.dat); QRZ is wired later when
 	// credentials are present (shared with DX-cluster/RBN ingest).
 	dxBaseline.SetResolvers(nil, loadCtyResolver(strings.TrimSpace(*ctyPath)))
+	// Set by the startup spot-cache backfill below; recorded as the live
+	// history's gap/completeness when ingest starts.
+	var backfilledThrough int64
+	backfillLanded := false
 	if err := dxBaseline.EnablePostgres(dxPostgresDSNResolved); err != nil {
 		if *dxPostgresFailFast {
 			logFatal("DX postgres init failed (dsn=%s, fail-fast=true): %v", maskDSN(dxPostgresDSNResolved), err)
@@ -458,6 +464,11 @@ func main() {
 			}
 			merged = append(merged, cached...)
 			totalLoaded += len(cached)
+			for i := range cached {
+				if cached[i].T > backfilledThrough {
+					backfilledThrough = cached[i].T
+				}
+			}
 		}
 		if backfillErr != nil {
 			logInfo("Startup spot-cache backfill failed after %d spots (last %d minutes, include_dxcluster=%v): %v", totalLoaded, backfillMinutes, includeDXCluster, backfillErr)
@@ -465,6 +476,8 @@ func main() {
 			hub.Lock()
 			hub.history = merged
 			hub.Unlock()
+			liveHistoryCompleteSince.Store(windowStart)
+			backfillLanded = true
 			logInfo("Startup spot-cache backfill loaded %d spots from dx_raw_spots (last %d minutes, include_dxcluster=%v)", totalLoaded, backfillMinutes, includeDXCluster)
 		} else {
 			logInfo("Startup spot-cache backfill found no spots in dx_raw_spots for the last %d minutes (include_dxcluster=%v)", backfillMinutes, includeDXCluster)
@@ -498,6 +511,18 @@ func main() {
 		}()
 	}
 
+	// hub.history now holds the backfilled window (if any) and nothing from
+	// its newest spot until ingest starts here: the old process's unflushed
+	// tail, the restart downtime and the startup work above. Record that gap
+	// so the band-vs-normal ratio doesn't count it as quiet air; without a
+	// backfill, history is complete only from now on.
+	ingestStart := time.Now().Unix()
+	if backfillLanded && backfilledThrough > 0 {
+		liveHistoryGapStart.Store(backfilledThrough)
+		liveHistoryGapEnd.Store(ingestStart)
+	} else {
+		liveHistoryCompleteSince.Store(ingestStart)
+	}
 	go startMQTT()
 
 	// QRZ callsign->locator enrichment + cty.dat DXCC resolver are shared by the optional

@@ -361,7 +361,7 @@ func TestHotBandsEmptyBaselineStableEmpty(t *testing.T) {
 // involved.
 //
 // Seeded shape, at slot = utcSlotOfDay(now):
-//   - global 15m baseline: 1600 events in SNR tier 0 + 400 in tier 1
+//   - JN68 cluster 15m baseline: 1600 events in SNR tier 0 + 400 in tier 1
 //     (distance tier 3) → baselineActivity ≈ 1.09 spots/min over a 61-day span
 //   - event ring: 8/14/18 spots in the last three 75s bins of a 15-min window
 //     → normalized sparkline 44.44/77.78/100 (sustained ≥ 2, trend "rising")
@@ -372,8 +372,13 @@ func TestHotBandsRisingRecFromSeededBaseline(t *testing.T) {
 
 	e := newDxBaselineEngine("")
 	e.mu.Lock()
-	e.buckets[baselineKey("15m", slot, 3, 0)] = &baselineBucket{Band: "15m", SlotOfDay: slot, DistanceTier: 3, SnrTier: 0, Count: 1600}
-	e.buckets[baselineKey("15m", slot, 3, 1)] = &baselineBucket{Band: "15m", SlotOfDay: slot, DistanceTier: 3, SnrTier: 1, Count: 400}
+	// JO62's grid-cluster baseline, in the current slot and the one before
+	// it (a 15-min window can straddle the boundary), so the regional
+	// activity ratio is available the way it is in production.
+	for _, sl := range []int{slot, (slot + SlotsOfDay - 1) % SlotsOfDay} {
+		e.clusterBuckets[baselineClusterKey("JN68", "15m", sl, 3, 0)] = &baselineBucket{Band: "15m", SlotOfDay: sl, DistanceTier: 3, SnrTier: 0, Count: 1600}
+		e.clusterBuckets[baselineClusterKey("JN68", "15m", sl, 3, 1)] = &baselineBucket{Band: "15m", SlotOfDay: sl, DistanceTier: 3, SnrTier: 1, Count: 400}
+	}
 	events := make([]dxObservedEvent, 0, 40)
 	for i := 0; i < 8; i++ {
 		events = append(events, dxObservedEvent{T: now - 200, B: "15m", SC: fmt.Sprintf("DK%dAB", i), RC: fmt.Sprintf("W%dXY", i), SL: "JO62QM", RL: "FN31AA", RP: -10})
@@ -437,8 +442,13 @@ func TestHotBandsHandlerSeededBaseline(t *testing.T) {
 
 	e := newDxBaselineEngine("")
 	e.mu.Lock()
-	e.buckets[baselineKey("15m", slot, 3, 0)] = &baselineBucket{Band: "15m", SlotOfDay: slot, DistanceTier: 3, SnrTier: 0, Count: 1600}
-	e.buckets[baselineKey("15m", slot, 3, 1)] = &baselineBucket{Band: "15m", SlotOfDay: slot, DistanceTier: 3, SnrTier: 1, Count: 400}
+	// JO62's grid-cluster baseline, in the current slot and the one before
+	// it (a 15-min window can straddle the boundary), so the regional
+	// activity ratio is available the way it is in production.
+	for _, sl := range []int{slot, (slot + SlotsOfDay - 1) % SlotsOfDay} {
+		e.clusterBuckets[baselineClusterKey("JN68", "15m", sl, 3, 0)] = &baselineBucket{Band: "15m", SlotOfDay: sl, DistanceTier: 3, SnrTier: 0, Count: 1600}
+		e.clusterBuckets[baselineClusterKey("JN68", "15m", sl, 3, 1)] = &baselineBucket{Band: "15m", SlotOfDay: sl, DistanceTier: 3, SnrTier: 1, Count: 400}
+	}
 	events := make([]dxObservedEvent, 0, 40)
 	for i := 0; i < 8; i++ {
 		events = append(events, dxObservedEvent{T: now - 200, B: "15m", SC: fmt.Sprintf("DK%dAB", i), RC: fmt.Sprintf("W%dXY", i), SL: "JO62QM", RL: "FN31AA", RP: -10})

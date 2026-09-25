@@ -222,6 +222,14 @@ func locatorClusterAnchor(locator string) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	ax, ay := clusterAnchorXY(x, y)
+	return squareXYToLocator(ax, ay), true
+}
+
+// clusterAnchorXY maps a square's grid coordinates to its cluster anchor's
+// coordinates. Split out of locatorClusterAnchor so hot loops can test cluster
+// membership by comparing coordinates without building an anchor string.
+func clusterAnchorXY(x, y int) (int, int) {
 	ax := (x / gridClusterSide) * gridClusterSide
 	ay := (y / gridClusterSide) * gridClusterSide
 	// Clamp to the valid grid — squares near 180 fold into the last cluster.
@@ -231,7 +239,19 @@ func locatorClusterAnchor(locator string) (string, bool) {
 	if ay > 180-gridClusterSide {
 		ay = 180 - gridClusterSide
 	}
-	return squareXYToLocator(ax, ay), true
+	return ax, ay
+}
+
+// locatorInCluster reports whether locator falls in the cluster anchored at
+// grid coordinates (ax, ay) — the same membership rule the baseline write path
+// applies via locatorClusterAnchor, without allocating.
+func locatorInCluster(locator string, ax, ay int) bool {
+	x, y, ok := locatorSquareXY(locator)
+	if !ok {
+		return false
+	}
+	cx, cy := clusterAnchorXY(x, y)
+	return cx == ax && cy == ay
 }
 
 // getSurroundingSquares returns the qth square and its 8 neighbours.

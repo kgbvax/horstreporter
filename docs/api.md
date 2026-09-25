@@ -103,7 +103,35 @@ per band with ~38 fields — activity (`current_links`, `unique_links`,
 (`baseline_activity`, `cluster_baseline_used`, ``,
 `baseline_activity_by_slot`, `baseline_slot_used_by_cluster`,
 ``), `dominant_direction`, `azimuth_sectors`,
-`region_counts`, trend + `sparkline`, `activity_by_bin`.
+`region_counts`, trend + `sparkline`, `activity_by_bin`; band vs its own
+normal (`activity_ratio`, `activity_level` =
+`above`|`normal`|`below`|`low_sample`|`no_baseline`, `regional_spots`,
+`regional_expected`, `baseline_local_scale`) and reach
+(`baseline_p90_distance_km`, `reach_ratio`, `reach_level` =
+`longer`|`typical`|`shorter`, omitted when unsupported).
+
+`activity_ratio` compares like with like: spots with an end in the operator's
+6×6-square cluster, counted the way the cluster baseline is written (per end,
+all SNR, FT8/FT4/DX-cluster only, no dedup), over the live-history span (≤ 60
+min), against the per-slot cluster baseline integrated over that same span.
+`above` ≥ 1.5×, `below` ≤ 0.67× (on the 2-decimal ratio); `low_sample` when both observed and expected
+are under 20; `no_baseline` when a compared slot has no cluster baseline or
+fewer than 100 raw counts. With `above`/`normal`/`below` it also drives the
+score's activity term (ratio/2, else a neutral 0.5) and `/api/hot_bands`
+ratios. The live span starts no earlier than the in-memory history is complete
+(process start, or the startup backfill window). `baseline_local_scale` (local/regional
+reports, same span) converts `baseline_activity_by_slot` into
+`activity_by_bin` units for charting.
+
+Cluster-sourced baseline rates divide by `cluster_baseline_history_minutes`
+(top level): `baseline_history_minutes` × the cluster table's coverage,
+refreshed hourly — from `dx_meta` `cluster_baseline_first_observed_at` (written
+when the cluster backfill rebuilds the table) when present, else estimated as
+Σcluster / 2·Σglobal — so a rebuilt cluster table isn't normalised by the
+global table's longer span. `spots_per_minute` divides by the live span:
+min(`minutes`, live-history retention), shortened after a restart to the part
+of it the in-memory history actually covers (the gap between the newest
+backfilled spot and ingest resuming is skipped on both sides of the ratio).
 
 Baseline tier selection is per-band and per-slot: a band/slot with
 qth-specific history uses it (`cluster_baseline_used: true`); otherwise it
@@ -122,8 +150,10 @@ max 180), `cw_min_db`, `current_band`.
 
 Response: `{…, recommendations: [{band, kind ("surprise"|"dx_surge"|"rising"),
 priority ("high"|"normal"), reason, rank_score, spots_per_minute,
-baseline_activity, activity_ratio, sustained_bins, p90_distance_km,
+baseline_activity, activity_ratio, activity_level?, sustained_bins, p90_distance_km,
 baseline_p90_distance_km?, distance_ratio?, trend, trend_delta, status}]}`.
+`activity_level` is present only when `activity_ratio` is the like-for-like
+regional ratio from `/api/dx_conditions` (then it reads as "× normal").
 
 ### `GET /api/prop_intel` — propagation intelligence nowcast (v1, frozen)
 
