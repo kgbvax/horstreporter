@@ -13,9 +13,10 @@ export default defineConfig({
     },
     coverage: {
       // Scope the floor to the hand-written frontend sources only.
-      // Text report only: coverage/ holds the tracked Go HTML coverage report,
-      // so vitest must not write any coverage files into the tree.
-      reporters: ['text'],
+      // Text report only: vitest must not write coverage files into the tree.
+      // (The key is `reporter`; a misspelled `reporters` was silently ignored
+      // and vitest fell back to its html/clover/json defaults in coverage/.)
+      reporter: ['text'],
       include: ['static/**'],
       exclude: [
         'static/vendor/**',
