@@ -461,6 +461,32 @@ describe('ring-served timeline playback (U3)', () => {
         expect(fetchMock).not.toHaveBeenCalled(); // still zero-fetch after re-entry
     });
 
+    it('bar toggles expose the selected speed, range and loop via aria-pressed', async () => {
+        const archive = seedRing(NOW_SEC - H, NOW_SEC);
+        giveStreamFilter();
+        installFetch(archive);
+        ctl().loop = false;
+
+        await enterTimeline(H);
+        const bar = document.getElementById('timeline-bar');
+        const pressed = (sel) => Array.from(bar.querySelectorAll(sel))
+            .filter((b) => b.getAttribute('aria-pressed') === 'true')
+            .map((b) => b.textContent);
+        expect(pressed('.timeline-speed .btn')).toEqual([`${DEFAULT_SPEED}x`]);
+        expect(pressed('.timeline-presets .btn')).toEqual(['1h']);
+        for (const b of bar.querySelectorAll('.timeline-speed .btn, .timeline-presets .btn')) {
+            expect(b.classList.contains('active')).toBe(b.getAttribute('aria-pressed') === 'true');
+        }
+
+        const loop = bar.querySelector('.timeline-loop');
+        expect(loop.getAttribute('aria-pressed')).toBe('false');
+        loop.click();
+        expect(loop.getAttribute('aria-pressed')).toBe('true');
+        expect(loop.classList.contains('active')).toBe(true);
+        loop.click();
+        expect(loop.getAttribute('aria-pressed')).toBe('false');
+    });
+
     it('prefetching the next chunk during playback resolves from the ring with zero fetches', async () => {
         const archive = seedRing(NOW_SEC - 2 * H, NOW_SEC);
         giveStreamFilter();

@@ -1,6 +1,7 @@
 import { state } from './state.js';
 import { bandColors, formatNumber, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds, haversineKm, hexToRgba } from './utils.js';
 import { dashedLine, fillCircle } from './canvas-draw.js';
+import { setPanelToggleState } from './panel-toggle.js';
 
 const ENABLE_KEY = 'bandLabEnabled';
 const UPDATE_THROTTLE_MS = 300;
@@ -150,11 +151,9 @@ function onSnrControlChange(event) {
 function setBandStatsVisible(windowEl, toggleButton, visible) {
     windowEl.classList.toggle('is-hidden', !visible);
     runtime.onLayoutChange?.();
-    if (!toggleButton) return;
-    // Mirror the Chase Queue toggle: the button hides while the panel is open
-    // (the panel carries its own close), and reappears when it closes.
-    toggleButton.style.display = visible ? 'none' : '';
-    toggleButton.setAttribute('aria-pressed', visible ? 'true' : 'false');
+    // Same on/off pill as the Propagation toggle: it stays visible while the
+    // panel is open (the panel's own close button does the same thing).
+    setPanelToggleState(toggleButton, visible, { show: 'Show band stats', hide: 'Hide band stats' });
 }
 
 export function updateBandLab(options = {}) {

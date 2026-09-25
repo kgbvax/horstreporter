@@ -226,7 +226,7 @@ function setupDom() {
         <button id="drill-down-clear" style="display: none;"></button>
         <div id="${PANEL_ID}" class="wspr-matrix-window is-hidden">
             <div class="wspr-matrix-window-header">
-                <span>Propagation Intel</span>
+                <span id="wspr-matrix-title">Propagation from your location</span>
             </div>
             <div id="${BODY_ID}"></div>
         </div>
@@ -250,7 +250,7 @@ function makeCell({ band = '20m', region = 'EU', spot_count = 12, ssb_open = tru
     return cell;
 }
 
-describe('wspr-matrix (Prop) panel', () => {
+describe('wspr-matrix (Propagation) panel', () => {
     let store;
     let originalFetch;
 
@@ -284,16 +284,66 @@ describe('wspr-matrix (Prop) panel', () => {
         expect(panel.classList.contains('is-hidden')).toBe(true);
         expect(store.getItem(ENABLE_KEY)).toBe(null);
 
+        expect(toggle.getAttribute('aria-pressed')).toBe('false');
+        expect(toggle.title).toBe('Show propagation');
+
         toggle.click();
         await new Promise((r) => setTimeout(r, 0));
         expect(panel.classList.contains('is-hidden')).toBe(false);
         expect(store.getItem(ENABLE_KEY)).toBe('true');
         expect(toggle.classList.contains('is-active')).toBe(true);
+        expect(toggle.getAttribute('aria-pressed')).toBe('true');
+        expect(toggle.title).toBe('Hide propagation');
+        // The toggle stays visible while the panel is open.
+        expect(toggle.style.display).toBe('');
 
         toggle.click();
         expect(panel.classList.contains('is-hidden')).toBe(true);
         expect(store.getItem(ENABLE_KEY)).toBe('false');
         expect(toggle.classList.contains('is-active')).toBe(false);
+        expect(toggle.getAttribute('aria-pressed')).toBe('false');
+        expect(toggle.title).toBe('Show propagation');
+    });
+
+    it('a stored open state restores the pressed toggle', () => {
+        mockFetch({ cells: [] });
+        store.setItem(ENABLE_KEY, 'true');
+        initWsprMatrix();
+        const toggle = document.getElementById(TOGGLE_ID);
+        expect(toggle.getAttribute('aria-pressed')).toBe('true');
+        expect(toggle.title).toBe('Hide propagation');
+    });
+
+    it('asks for a locator when none is set', async () => {
+        mockFetch({ cells: [] });
+        document.getElementById('qth').value = '';
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(document.getElementById(BODY_ID).textContent).toBe('Enter your locator to see propagation.');
+        expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('says the data is unavailable when the first fetch fails', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        mockFetch({}, false);
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(document.getElementById(BODY_ID).textContent).toBe('Propagation data unavailable.');
+    });
+
+    it('labels the source and color scale chips as separate groups', async () => {
+        mockFetch({ cells: [] });
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+        const groups = Array.from(document.querySelectorAll('.wspr-src-chips [role="group"]'));
+        expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['Sources', 'Color scale']);
+        expect(groups[0].querySelectorAll('[data-source]').length).toBe(4);
+        expect(groups[1].querySelectorAll('[data-style]').length).toBe(2);
+        expect(groups[0].querySelector('[data-source="rbn"]').getAttribute('aria-pressed')).toBe('true');
+        expect(groups[0].querySelector('[data-source="dxcluster"]').getAttribute('aria-pressed')).toBe('false');
     });
 
     it('opening starts polling; closing aborts in-flight requests', async () => {
@@ -480,11 +530,15 @@ describe('wspr-matrix (Prop) panel', () => {
         expect(calls[2]).toContain('cw_min_db=-10');
     });
 
-    it('renders an empty cell as a clickable drill-down target', () => {
-        const html = renderCell('20m', 'AF', null, 12, 'light');
-        expect(html).toContain('class="wspr-matrix-cell-empty"');
-        expect(html).toContain('data-band="20m"');
-        expect(html).toContain('data-region="AF"');
+    it('renders empty cells as inert grid cells (no button role, no tab stop)', () => {
+        for (const cell of [null, makeCell({ band: '20m', region: 'AF', spot_count: 0 })]) {
+            const html = renderCell('20m', 'AF', cell, 12, 'light');
+            expect(html).toContain('class="wspr-matrix-cell-empty"');
+            expect(html).toContain('role="gridcell"');
+            expect(html).not.toContain('role="button"');
+            expect(html).not.toContain('tabindex');
+            expect(html).not.toContain('aria-label');
+        }
     });
 
     it('per-source breakdown lands in the cell tooltip', () => {
@@ -496,9 +550,8 @@ describe('wspr-matrix (Prop) panel', () => {
                 { source: 'rbn', spot_count: 4, open: true, open_basis: 'snr_floor', atypical: { z_score: 3.3 } },
             ],
         }), 30, 'light');
-        expect(html).toContain('wspr: 30 spots');
-        expect(html).toContain('rbn: 4 spots');
-        expect(html).toContain('z=3.3');
+        expect(html).toContain('WSPR: 30 spots, open (link budget)');
+        expect(html).toContain('RBN: 4 spots, open (SNR floor), z=3.3');
     });
 
     it('omits rows for bands disabled in the band rail', async () => {
@@ -544,9 +597,13 @@ describe('wspr-matrix (Prop) panel', () => {
         const clearBtn = document.getElementById('drill-down-clear');
         expect(clearBtn.style.display).toBe('');
         expect(window.__horstScheduleRender).toHaveBeenCalled();
+        // The matrix re-rendered with the cell marked as the active drill-down.
+        const active = document.querySelector('.wspr-matrix-cell');
+        expect(active.getAttribute('aria-selected')).toBe('true');
 
         // Toggle off by clicking the same cell again.
-        cell.click();
+        active.click();
+        expect(document.querySelector('.wspr-matrix-cell').getAttribute('aria-selected')).toBe('false');
         expect(state.drillDownBand).toBe('');
         expect(state.drillDownRegion).toBe('');
         expect(clearBtn.style.display).toBe('none');
@@ -561,5 +618,347 @@ describe('wspr-matrix (Prop) panel', () => {
         expect(state.drillDownRegion).toBe('');
         expect(window.__horstScheduleRender).toHaveBeenCalled();
         expect(document.getElementById('drill-down-clear').style.display).toBe('none');
+    });
+});
+
+// ---- Keyboard grid (roving tabindex, arrow keys, activation, names) --------
+describe('wspr-matrix keyboard grid', () => {
+    const { cellLabel } = __test;
+    const REGION_NAMES = {
+        EU: 'Europe', NA: 'North America', SA: 'South America', AF: 'Africa', AS: 'Asia',
+        JA: 'Japan', OC: 'Oceania', VK: 'Australia', KH6: 'Hawaii', CAR: 'Caribbean', AN: 'Antarctica',
+    };
+    // Sparse on purpose (columns EU NA SA AF AS JA ...):
+    //   20m: EU NA .. .. .. JA
+    //   15m: EU .. .. .. AS ..
+    //   10m: .. NA .. .. .. ..
+    const payload = (overrides = {}) => ({
+        region_names: REGION_NAMES,
+        cells: [
+            makeCell({ band: '20m', region: 'EU', spot_count: 12 }),
+            makeCell({ band: '20m', region: 'NA', spot_count: 5, ssb_open: false, cw_open: true }),
+            makeCell({ band: '20m', region: 'JA', spot_count: 1234, rising: true, ...overrides.ja }),
+            makeCell({ band: '15m', region: 'EU', spot_count: 4 }),
+            makeCell({ band: '15m', region: 'AS', spot_count: 2 }),
+            makeCell({ band: '10m', region: 'NA', spot_count: 7 }),
+        ].filter(Boolean),
+    });
+    let originalFetch;
+
+    const cellAt = (band, region) =>
+        document.querySelector(`.wspr-matrix-cell[data-band="${band}"][data-region="${region}"]`);
+    const at = (el) => `${el.getAttribute('data-band')}/${el.getAttribute('data-region')}`;
+    const tabStops = () => Array.from(document.querySelectorAll('#wspr-matrix-body [tabindex="0"]'));
+    const press = (key, opts = {}) => {
+        const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...opts });
+        document.activeElement.dispatchEvent(ev);
+        return ev;
+    };
+
+    async function openWith(data) {
+        mockFetch(data);
+        initWsprMatrix();
+        document.getElementById(TOGGLE_ID).click();
+        await new Promise((r) => setTimeout(r, 0));
+    }
+
+    beforeEach(() => {
+        originalFetch = global.fetch;
+        installLocalStorageMock();
+        setupDom();
+        reset();
+        state.drillDownBand = '';
+        state.drillDownRegion = '';
+        window.__horstScheduleRender = vi.fn();
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    });
+
+    afterEach(() => {
+        reset();
+        state.drillDownBand = '';
+        state.drillDownRegion = '';
+        delete window.__horstScheduleRender;
+        global.fetch = originalFetch;
+        vi.restoreAllMocks();
+    });
+
+    it('renders an ARIA grid with row and column headers', async () => {
+        await openWith(payload());
+        const table = document.querySelector('.wspr-matrix-table');
+        expect(table.getAttribute('role')).toBe('grid');
+        expect(table.getAttribute('aria-label')).toBe('Propagation by band and region');
+        expect(table.querySelectorAll('thead th[role="columnheader"]').length).toBe(12);
+        const rowHeaders = Array.from(table.querySelectorAll('tbody th[role="rowheader"]'));
+        expect(rowHeaders.map((th) => th.textContent)).toEqual(['20m', '15m', '10m']);
+        expect(table.querySelector('thead th[title="Japan"]').textContent).toBe('JA');
+        expect(table.querySelectorAll('tbody td[role="gridcell"]').length).toBe(3 * 11);
+    });
+
+    it('has exactly one tab stop: the first data cell; empty cells are inert', async () => {
+        await openWith(payload());
+        expect(tabStops().map(at)).toEqual(['20m/EU']);
+        const dataCells = document.querySelectorAll('.wspr-matrix-cell');
+        expect(dataCells.length).toBe(6);
+        for (const td of dataCells) {
+            if (td !== cellAt('20m', 'EU')) expect(td.getAttribute('tabindex')).toBe('-1');
+        }
+        for (const td of document.querySelectorAll('.wspr-matrix-cell-empty')) {
+            expect(td.hasAttribute('tabindex')).toBe(false);
+            expect(td.getAttribute('role')).toBe('gridcell');
+            td.click();
+        }
+        expect(state.drillDownBand).toBe('');
+        expect(window.__horstScheduleRender).not.toHaveBeenCalled();
+    });
+
+    it('makes the active drill-down cell the tab stop', async () => {
+        state.drillDownBand = '15m';
+        state.drillDownRegion = 'AS';
+        await openWith(payload());
+        expect(tabStops().map(at)).toEqual(['15m/AS']);
+        expect(cellAt('15m', 'AS').getAttribute('aria-selected')).toBe('true');
+        expect(cellAt('20m', 'EU').getAttribute('aria-selected')).toBe('false');
+    });
+
+    it('names each data cell after its path, count and marks', async () => {
+        await openWith(payload());
+        expect(cellAt('20m', 'JA').getAttribute('aria-label')).toBe('20m to Japan: 1,234 spots, SSB open, rising');
+        expect(cellAt('20m', 'NA').getAttribute('aria-label')).toBe('20m to North America: 5 spots, CW open');
+        expect(cellAt('20m', 'JA').title.split('\n')[0]).toBe('20m to Japan: 1,234 spots');
+    });
+
+    it('cellLabel: singular count, top mode only, surge strength, code fallback', () => {
+        expect(cellLabel('10m', 'CAR', makeCell({ spot_count: 1, ssb_open: false, cw_open: false })))
+            .toBe('10m to CAR: 1 spot');
+        expect(cellLabel('10m', 'CAR', makeCell({ ssb_open: true, cw_open: true }), REGION_NAMES))
+            .toBe('10m to Caribbean: 12 spots, SSB open');
+        expect(cellLabel('10m', 'CAR', makeCell({ atypical: { z_score: 2.4 } }), REGION_NAMES))
+            .toBe('10m to Caribbean: 12 spots, SSB open, surge');
+        expect(cellLabel('10m', 'CAR', makeCell({ rising: true, atypical: { z_score: 4.1 } }), REGION_NAMES))
+            .toBe('10m to Caribbean: 12 spots, SSB open, rising, strong surge');
+    });
+
+    it('escapes server-supplied region names in names and titles', () => {
+        const html = renderCell('20m', 'EU', makeCell(), 12, 'light', { EU: 'Europe "<b>"' });
+        expect(html).toContain('aria-label="20m to Europe &quot;&lt;b&gt;&quot;: 12 spots, SSB open"');
+        expect(html).not.toContain('<b>');
+    });
+
+    it('arrow keys move between data cells, skipping empty ones, and move the tab stop', async () => {
+        await openWith(payload());
+        cellAt('20m', 'EU').focus();
+
+        press('ArrowRight');
+        expect(at(document.activeElement)).toBe('20m/NA');
+        press('ArrowRight'); // skips SA, AF, AS
+        expect(at(document.activeElement)).toBe('20m/JA');
+        const edge = press('ArrowRight'); // last data cell in the row: stays
+        expect(at(document.activeElement)).toBe('20m/JA');
+        expect(edge.defaultPrevented).toBe(true);
+        expect(tabStops().map(at)).toEqual(['20m/JA']);
+
+        press('ArrowLeft');
+        expect(at(document.activeElement)).toBe('20m/NA');
+
+        // Down keeps the column where a later row has a data cell there
+        // (15m has no NA, 10m does).
+        press('ArrowDown');
+        expect(at(document.activeElement)).toBe('10m/NA');
+        press('ArrowUp');
+        expect(at(document.activeElement)).toBe('20m/NA');
+        expect(tabStops().map(at)).toEqual(['20m/NA']);
+    });
+
+    it('up/down fall back to the closest data cell of the next row with data', async () => {
+        await openWith(payload());
+        cellAt('20m', 'JA').focus();
+        press('ArrowDown'); // no JA below: closest in 15m is AS
+        expect(at(document.activeElement)).toBe('15m/AS');
+        press('ArrowDown'); // no AS below: 10m has only NA
+        expect(at(document.activeElement)).toBe('10m/NA');
+        press('ArrowDown'); // last row: stays
+        expect(at(document.activeElement)).toBe('10m/NA');
+        cellAt('15m', 'EU').focus();
+        press('ArrowUp');
+        expect(at(document.activeElement)).toBe('20m/EU');
+        press('ArrowUp'); // first row: stays
+        expect(at(document.activeElement)).toBe('20m/EU');
+    });
+
+    it('Home/End jump within the row, Ctrl+Home/End within the grid', async () => {
+        await openWith(payload());
+        cellAt('20m', 'NA').focus();
+        press('End');
+        expect(at(document.activeElement)).toBe('20m/JA');
+        press('Home');
+        expect(at(document.activeElement)).toBe('20m/EU');
+        press('End', { ctrlKey: true });
+        expect(at(document.activeElement)).toBe('10m/NA');
+        press('Home', { ctrlKey: true });
+        expect(at(document.activeElement)).toBe('20m/EU');
+    });
+
+    it('ignores other keys', async () => {
+        await openWith(payload());
+        cellAt('20m', 'EU').focus();
+        const ev = press('a');
+        expect(ev.defaultPrevented).toBe(false);
+        expect(at(document.activeElement)).toBe('20m/EU');
+    });
+
+    it('Enter and Space toggle the drill-down and keep focus on the cell', async () => {
+        await openWith(payload());
+        cellAt('20m', 'EU').focus();
+        press('ArrowRight');
+        press('ArrowRight');
+
+        const enter = press('Enter');
+        expect(enter.defaultPrevented).toBe(true);
+        expect(state.drillDownBand).toBe('20m');
+        expect(state.drillDownRegion).toBe('JA');
+        expect(window.__horstScheduleRender).toHaveBeenCalledTimes(1);
+        expect(document.getElementById('drill-down-clear').style.display).toBe('');
+        // Re-rendered: new element, same path, selected, focused, tab stop.
+        expect(at(document.activeElement)).toBe('20m/JA');
+        expect(document.activeElement.getAttribute('aria-selected')).toBe('true');
+        expect(tabStops().map(at)).toEqual(['20m/JA']);
+
+        const space = press(' ');
+        expect(space.defaultPrevented).toBe(true);
+        expect(state.drillDownBand).toBe('');
+        expect(state.drillDownRegion).toBe('');
+        expect(at(document.activeElement)).toBe('20m/JA');
+        expect(document.activeElement.getAttribute('aria-selected')).toBe('false');
+        expect(document.getElementById('drill-down-clear').style.display).toBe('none');
+    });
+
+    it('clearing the filter from the map chip deselects the matrix cell', async () => {
+        await openWith(payload());
+        cellAt('15m', 'EU').click();
+        expect(cellAt('15m', 'EU').getAttribute('aria-selected')).toBe('true');
+        clearDrillDown();
+        expect(cellAt('15m', 'EU').getAttribute('aria-selected')).toBe('false');
+        expect(tabStops().map(at)).toEqual(['20m/EU']);
+    });
+
+    it('a periodic re-render puts focus back on the same band/region cell', async () => {
+        await openWith(payload());
+        cellAt('15m', 'AS').focus();
+        const before = document.activeElement;
+
+        // Next poll: counts changed, so the markup is rebuilt.
+        mockFetch(payload({ ja: { spot_count: 1300 } }));
+        runtime.lastFetchedAt = 0;
+        const { updateWsprMatrix } = await import('../static/wspr-matrix.js');
+        await updateWsprMatrix();
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(cellAt('20m', 'JA').getAttribute('aria-label')).toContain('1,300 spots');
+        expect(document.activeElement).not.toBe(before);
+        expect(at(document.activeElement)).toBe('15m/AS');
+        expect(tabStops().map(at)).toEqual(['15m/AS']);
+    });
+
+    it('falls back to the grid tab stop when the focused cell is gone', async () => {
+        await openWith(payload());
+        cellAt('15m', 'AS').focus();
+
+        const next = payload();
+        next.cells = next.cells.filter((c) => !(c.band === '15m' && c.region === 'AS'));
+        mockFetch(next);
+        runtime.lastFetchedAt = 0;
+        const { updateWsprMatrix } = await import('../static/wspr-matrix.js');
+        await updateWsprMatrix();
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(cellAt('15m', 'AS')).toBeNull();
+        expect(at(document.activeElement)).toBe('20m/EU');
+        expect(tabStops().map(at)).toEqual(['20m/EU']);
+    });
+
+    it('does not take focus when it was outside the matrix', async () => {
+        await openWith(payload());
+        const qth = document.getElementById('qth');
+        qth.focus();
+        mockFetch(payload({ ja: { spot_count: 1300 } }));
+        runtime.lastFetchedAt = 0;
+        const { updateWsprMatrix } = await import('../static/wspr-matrix.js');
+        await updateWsprMatrix();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(cellAt('20m', 'JA').getAttribute('aria-label')).toContain('1,300 spots');
+        expect(document.activeElement).toBe(qth);
+    });
+
+    it('keeps focus on a source chip across the re-fetch it triggers', async () => {
+        await openWith(payload());
+        const chip = document.querySelector('.wspr-src-chip[data-source="rbn"]');
+        chip.focus();
+        chip.click();
+        await new Promise((r) => setTimeout(r, 0));
+        const now = document.activeElement;
+        expect(now).not.toBe(chip);
+        expect(now.getAttribute('data-source')).toBe('rbn');
+        expect(now.getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('keeps focus on a color scale chip when the look changes', async () => {
+        await openWith(payload());
+        const chip = document.querySelector('.wspr-src-chip[data-style="inferno"]');
+        chip.focus();
+        chip.click();
+        expect(runtime.style).toBe('inferno');
+        expect(document.activeElement.getAttribute('data-style')).toBe('inferno');
+        expect(document.activeElement.getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('skips the rebuild when nothing changed, rebuilds when the drill-down did', async () => {
+        await openWith(payload());
+        const first = cellAt('20m', 'EU');
+        const { updateWsprMatrix } = await import('../static/wspr-matrix.js');
+        await updateWsprMatrix(); // cache hit, same key: DOM untouched
+        expect(cellAt('20m', 'EU')).toBe(first);
+        state.drillDownBand = '20m';
+        state.drillDownRegion = 'EU';
+        await updateWsprMatrix();
+        expect(cellAt('20m', 'EU')).not.toBe(first);
+        expect(cellAt('20m', 'EU').getAttribute('aria-selected')).toBe('true');
+    });
+});
+
+describe('wspr-matrix toggle row placement', () => {
+    afterEach(() => {
+        reset();
+        delete globalThis.ResizeObserver;
+    });
+
+    it('publishes the toggle row bottom edge for the mobile panel placement', () => {
+        installLocalStorageMock();
+        document.body.innerHTML = `
+            <div id="map-stack">
+                <div id="map-toggles"><button id="${TOGGLE_ID}"></button></div>
+                <div id="${PANEL_ID}" class="wspr-matrix-window is-hidden">
+                    <div class="wspr-matrix-window-header"></div>
+                    <div id="${BODY_ID}"></div>
+                </div>
+            </div>`;
+        const observed = [];
+        let callback = null;
+        globalThis.ResizeObserver = class {
+            constructor(cb) { callback = cb; }
+            observe(el) { observed.push(el); }
+            disconnect() {}
+        };
+        const row = document.getElementById('map-toggles');
+        Object.defineProperty(row, 'offsetTop', { configurable: true, value: 12 });
+        Object.defineProperty(row, 'offsetHeight', { configurable: true, value: 31 });
+        initWsprMatrix();
+        const stack = document.getElementById('map-stack');
+        expect(observed).toEqual([row]);
+        expect(stack.style.getPropertyValue('--map-toggles-bottom')).toBe('43px');
+
+        // The row wraps to a second line.
+        Object.defineProperty(row, 'offsetHeight', { configurable: true, value: 68 });
+        callback();
+        expect(stack.style.getPropertyValue('--map-toggles-bottom')).toBe('80px');
     });
 });

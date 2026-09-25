@@ -740,7 +740,7 @@ function ensureBar() {
     });
     barEl.querySelector('.timeline-loop').addEventListener('click', (e) => {
         setLoop(!controller.loop);
-        e.currentTarget.classList.toggle('active', controller.loop);
+        setPressed(e.currentTarget, controller.loop);
     });
 
     const scrub = barEl.querySelector('.timeline-scrub');
@@ -799,13 +799,20 @@ function renderBar(s) {
     bar.querySelector('.timeline-icon-play').style.display = s.playing ? 'none' : '';
     bar.querySelector('.timeline-icon-pause').style.display = s.playing ? '' : 'none';
     bar.querySelectorAll('.timeline-speed .btn').forEach((b) => {
-        b.classList.toggle('active', Number(b.dataset.speed) === s.speed);
+        setPressed(b, Number(b.dataset.speed) === s.speed);
     });
     bar.querySelectorAll('.timeline-presets .btn').forEach((b) => {
         const secs = Number(b.dataset.seconds);
-        b.classList.toggle('active', Math.abs((s.t1 - s.t0) - secs) < 2);
+        setPressed(b, Math.abs((s.t1 - s.t0) - secs) < 2);
     });
-    bar.querySelector('.timeline-loop').classList.toggle('active', s.loop);
+    setPressed(bar.querySelector('.timeline-loop'), s.loop);
+}
+
+// Selected speed / range / loop: Bootstrap .active (the unified tint look in
+// style.css) plus aria-pressed, so the state is not conveyed by color alone.
+function setPressed(btn, on) {
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
 }
 
 // --- URL state (shareable past views) ------------------------------------

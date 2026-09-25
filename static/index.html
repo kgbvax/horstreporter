@@ -315,8 +315,8 @@
         <div id="map" class="w-100 h-100"></div>
         <div id="map-toggles" class="map-toggles">
             <button id="show-sidebar" type="button" class="panel-toggle is-translucent" title="Show controls" aria-label="Show controls" style="display: none;"><svg class="icon" data-glyph="fa-chevron-right" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M311 233Q320 243 320 256Q320 269 311 279L119 471Q109 480 96 480Q83 480 73 471Q64 461 64 448Q64 435 73 425L243 256L73 87Q64 77 64 64Q64 51 73 41Q83 32 96 32Q109 32 119 41L311 233Z"/></svg></button>
-            <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show band stats">Band stats</button>
-            <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show Propagation Intelligence Matrix">Prop</button>
+            <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show band stats" aria-pressed="false">Band stats</button>
+            <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show propagation" aria-pressed="false">Propagation</button>
             <button id="band-solo-clear" type="button" class="panel-toggle band-solo-clear" title="Show all enabled bands" style="display: none;"><span class="band-solo-name"></span> <span aria-hidden="true">&times;</span></button>
             <button id="drill-down-clear" type="button" class="panel-toggle is-translucent" title="Clear grid-square filter" style="display: none;"></button>
         </div>
@@ -379,11 +379,11 @@
                 </label>
             </div>
         </div>
-        <!-- Propagation Intel: floating overlay card docked over the map.
+        <!-- Propagation: floating overlay card docked over the map.
              Child of #map-stack so it floats above #map / #azimuth-canvas. -->
-        <div id="wspr-matrix-window" class="wspr-matrix-window is-hidden">
+        <div id="wspr-matrix-window" class="wspr-matrix-window is-hidden" role="region" aria-labelledby="wspr-matrix-title">
             <div class="wspr-matrix-window-header">
-                <span>Propagation Intel · from here</span>
+                <span id="wspr-matrix-title">Propagation from your location</span>
             </div>
             <div id="wspr-matrix-body" class="wspr-matrix-body"></div>
         </div>

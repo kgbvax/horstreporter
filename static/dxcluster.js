@@ -90,7 +90,8 @@ function injectStyles() {
   .cq-mode { all:unset; cursor:pointer; box-sizing:border-box; font:700 10px/1 sans-serif; letter-spacing:.03em;
     text-transform:uppercase; color:var(--status-color); padding:4px 7px; border-radius:3px; border:1px solid var(--control-border); }
   .cq-mode:hover { color:var(--accent-strong); border-color:var(--accent); }
-  .cq-mode.act { background:var(--accent); color:var(--cq-cc); border-color:var(--accent); }
+  /* On states (mode pills, sorted column) use the unified tint look (style.css). */
+  .cq-mode.act { background:var(--accent-tint-strong); color:var(--accent-strong); border-color:var(--accent); }
   #cq-close { border:0; background:transparent; color:var(--status-color); font-size:17px; line-height:1; cursor:pointer; padding:0 2px; }
   #cq-close:hover { color:var(--text-color); }
   .cq-status { font:600 11px sans-serif; color:var(--cq-watch); padding:4px 12px 0; }
@@ -113,7 +114,7 @@ function injectStyles() {
   .cq-fh1 button.lft, .cq-fh2 button.lft { text-align:left; }
   .cq-fh1 button.starh { padding:3px 2px; }
   .cq-fh1 button:hover, .cq-fh2 button:hover { color:var(--accent-strong); }
-  .cq-fh1 button.act, .cq-fh2 button.act { background:var(--accent); color:var(--cq-cc); }
+  .cq-fh1 button.act, .cq-fh2 button.act { background:var(--accent-tint-strong); color:var(--accent-strong); }
   .cq-ar { display:inline-block; width:10px; text-align:center; font-size:9px; }
 
   .cq-body { flex:1 1 auto; overflow-y:auto; padding:0; }
@@ -139,7 +140,7 @@ function injectStyles() {
   .cq-star .s-on { fill:var(--cq-atno); } .cq-star .s-off { fill:none; stroke:color-mix(in srgb,var(--text-color) 32%,transparent); stroke-width:1.1; }
   .cq-fbadge { justify-self:start; box-sizing:border-box; font:800 10px/1 sans-serif; text-transform:uppercase; letter-spacing:.03em; padding:3px 6px; border-radius:3px; }
   .cq-fbadge.atno { color:#1c1400; background:var(--cq-atno); }
-  .cq-fbadge.band, .cq-fbadge.mode { color:var(--cq-cc); background:var(--accent); }
+  .cq-fbadge.band, .cq-fbadge.mode { color:var(--cq-cc); background:var(--accent-fill); }
   .cq-fbadge.was { color:var(--cq-cc); background:var(--cq-was); }
   .cq-fbadge.pota { color:var(--cq-cc); background:var(--cq-pota); }
   .cq-fbadge.worked { color:var(--status-color); background:color-mix(in srgb,var(--status-color) 26%,var(--bg-color)); }
@@ -343,7 +344,7 @@ const SORTS = {
 
 // fHead builds the two-tier sortable column header. The arrow slot is always
 // present (glyph only on the active column) so the columns never reflow when the
-// sort changes; the active header is a solid fill, click it again to flip ▲/▼.
+// sort changes; the active header takes the accent tint, click it again to flip ▲/▼.
 function fHead() {
   const H = (k, label, lft) => {
     const act = sortKey === k;
@@ -487,7 +488,7 @@ function renderRow(s) {
 // their clicks. Toggling is client-side (re-filters cached spots, no refetch).
 function renderModeFilter() {
   modesEl.innerHTML = MODE_CATS.map(([k, label]) =>
-    `<button data-m="${k}" class="cq-mode${enabledModes.has(k) ? ' act' : ''}" title="Show ${label} spots">${label}</button>`).join('');
+    `<button data-m="${k}" class="cq-mode${enabledModes.has(k) ? ' act' : ''}" aria-pressed="${enabledModes.has(k)}" title="Show ${label} spots">${label}</button>`).join('');
   modesEl.querySelectorAll('button[data-m]').forEach((b) => b.addEventListener('click', () => {
     const m = b.dataset.m;
     if (enabledModes.has(m)) enabledModes.delete(m); else enabledModes.add(m);
