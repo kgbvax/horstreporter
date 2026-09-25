@@ -7,7 +7,6 @@ export const state = {
     qth: '',
     eventSource: null,
     renderInterval: null,
-    cycleInterval: null,
     renderPending: false,
     dxClusterHoverActive: false,
     lastMercatorInteractionAt: 0,

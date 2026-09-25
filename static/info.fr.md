@@ -14,7 +14,6 @@ C'est en pratique une interface alternative pour <a href="https://www.pskreporte
     * *Grid :* Regroupe les spots en carrés Maidenhead. La couleur indique la bande dominante, l'opacité la force du signal.
     * *Active Area :* Trace des polygones dynamiques englobant les spots regroupés pour montrer l'empreinte globale de propagation.
 
-* **Cycleur de bandes :** Cliquez sur l'icône de lecture sous la liste des bandes pour parcourir automatiquement les bandes actuellement ouvertes.
 * **Options :** Dépliez le panneau Options pour modifier l'âge maximal des spots, la distance de regroupement, le comportement du zoom automatique, et plus encore.
 * Si vous ne voyez pas assez de données pour votre carré, activez **Adj. Squares** qui récupère aussi les données des 8 carrés voisins.
 

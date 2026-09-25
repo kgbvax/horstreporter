@@ -35,10 +35,8 @@ const HORST_KEVIN_ENABLED = false;
 
 // --- Band selector (pills) ---------------------------------------------------
 // Band order matches the panel layout. Focus = solo band ('all' = no solo),
-// stored on #band-container[data-focus-band]; enabled = checkbox set; cycling =
-// state.cycleInterval. These three are independent (see redesign spec).
-const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
-const BAND_CYCLE_DEFAULT_MS = 1600;
+// stored on #band-container[data-focus-band]; enabled = checkbox set. The two
+// are independent (see redesign spec).
 
 function setBandFocus(band) {
     const c = document.getElementById('band-container');
@@ -54,7 +52,7 @@ function refreshBandPills() {
     try { updateBandLabels(getRenderableMapSpots(state.liveSpots)); } catch (_) { /* pre-init */ }
 }
 
-// Shared side effects for any focus/enable/cycle change (mirrors the old
+// Shared side effects for any focus/enable change (mirrors the old
 // band-container change handler).
 function applyBandChange() {
     localStorage.setItem('selectedBand', getSelectedBand());
@@ -130,43 +128,9 @@ function restartStreamIfSubscribed() {
     startLiveStream(true);
 }
 
-function stopBandCycle() {
-    if (state.cycleInterval) {
-        clearInterval(state.cycleInterval);
-        state.cycleInterval = null;
-    }
-    const btn = document.getElementById('btn-cycle');
-    if (btn) {
-        btn.innerHTML = `${icon('play')} Cycle`;
-        btn.title = 'Cycle enabled bands';
-        btn.classList.remove('active');
-    }
-}
-
-function startBandCycle() {
-    const btn = document.getElementById('btn-cycle');
-    if (btn) {
-        btn.innerHTML = `${icon('pause')} Cycle`;
-        btn.title = 'Stop cycling';
-        btn.classList.add('active');
-    }
-    const slider = parseInt(document.getElementById('cycle-time')?.value || '', 10);
-    const ms = Number.isFinite(slider) && slider > 0 ? slider * 1000 : BAND_CYCLE_DEFAULT_MS;
-    state.cycleInterval = setInterval(() => {
-        const order = BAND_ORDER.filter(b => getEnabledBands().has(b));
-        if (!order.length) return;
-        const cur = getSelectedBand();
-        const idx = order.indexOf(cur);
-        const next = order[(idx + 1) % order.length];
-        setBandFocus(next);
-        applyBandChange();
-    }, ms);
-}
-
 // Focus a band programmatically (hot-band indicator / horst-kevin onBandSwitch).
 function switchToBand(band) {
     if (!getEnabledBands().has(band)) return;
-    stopBandCycle();
     setBandFocus(band);
     applyBandChange();
 }
@@ -1387,15 +1351,26 @@ if (captureConfig?.enabled) {
     maybeAutoStartSavedQth();
 })();
 
+// Solo chip on the map (#band-solo-clear): shown only while one band is
+// soloed, in that band's color; clicking it shows all enabled bands again.
+// "All bands" needs no chip: the band rail already shows the enabled set.
 function updateCurrentBandDisplay() {
     const band = getSelectedBand();
-    const display = document.getElementById('current-band-display');
-    if (display) {
-        display.textContent = band === 'all' ? 'All Bands' : band;
-        const color = bandColors[band] || bandColors['all'];
-        display.style.backgroundColor = color;
-        display.style.color = pillTextColor(color);
+    const soloed = band !== 'all' && getEnabledBands().has(band);
+    const chip = document.getElementById('band-solo-clear');
+    if (chip) {
+        chip.style.display = soloed ? '' : 'none';
+        if (soloed) {
+            const color = bandColors[band] || bandColors['all'];
+            chip.querySelector('.band-solo-name').textContent = `${band} only`;
+            chip.style.backgroundColor = color;
+            chip.style.borderColor = color;
+            chip.style.color = pillTextColor(color);
+            chip.setAttribute('aria-label', `Showing ${band} only. Show all bands`);
+        }
     }
+    const showAll = document.getElementById('btn-show-all');
+    if (showAll) showAll.disabled = !soloed;
 }
 
 export function scheduleRender() {
@@ -1432,7 +1407,7 @@ export function scheduleRender() {
             // Timeline gate (plan 2026-09-11-002 U4, KTD-10): while the timeline
             // is active the live array is never painted over the moment, no
             // matter which caller fired this render (SSE frame, age-prune tick,
-            // theme/projection toggle, band pill, auto-band cycle). Instead the
+            // theme/projection toggle, band pill). Instead the
             // retained moment is re-rendered with the current styles.
             if (isTimelineActive()) {
                 renderTimelineMomentFrame();
@@ -1537,21 +1512,6 @@ document.getElementById('qth')?.addEventListener('input', () => {
     state.qth = document.getElementById('qth')?.value?.trim()?.toUpperCase() || '';
     syncProjectionCenterToActiveQth();
 });
-document.getElementById('cycle-time')?.addEventListener('input', (e) => {
-    const val = document.getElementById('cycle-time-val');
-    if (val) val.textContent = e.target.value;
-    localStorage.setItem('cycleTime', e.target.value);
-});
-
-document.getElementById('cycle-time')?.addEventListener('change', (e) => {
-    if (state.cycleInterval) {
-        // Restart cycle to pick up the new time
-        const btn = document.getElementById('btn-cycle');
-        btn?.click();
-        btn?.click();
-    }
-});
-
 document.getElementById('azimuth-horizon-km')?.addEventListener('change', (e) => {
     // Keep backward compatibility: if edited manually, convert horizon request into zoom.
     updateAzimuthHorizonKm(e.target.value);
@@ -1631,11 +1591,7 @@ document.getElementById('show-wspr-spots')?.addEventListener('change', (e) => {
 function activateBandPill(pill) {
     const band = pill?.dataset?.band;
     if (!band) return;
-    if (state.cycleInterval) {
-        // Clicking any pill while cycling stops the cycle and focuses that band.
-        stopBandCycle();
-        setBandFocus(band);
-    } else if (getSelectedBand() === band) {
+    if (getSelectedBand() === band) {
         setBandFocus('all'); // release focus -> show all enabled
     } else {
         setBandFocus(band);
@@ -1666,11 +1622,12 @@ bandContainerEl?.addEventListener('change', (e) => {
     restartStreamIfSubscribed();
 });
 
-document.getElementById('btn-show-all')?.addEventListener('click', () => {
-    stopBandCycle();
+function showAllBands() {
     setBandFocus('all');
     applyBandChange();
-});
+}
+document.getElementById('btn-show-all')?.addEventListener('click', showAllBands);
+document.getElementById('band-solo-clear')?.addEventListener('click', showAllBands);
 
 window.__horstSurroundingsChanged = () => {
     // KTD-13 keys the ring on qth AND surroundings: when the surroundings
@@ -1755,11 +1712,6 @@ document.getElementById('btn-geo')?.addEventListener('click', () => {
         },
         { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
     );
-});
-
-document.getElementById('btn-cycle')?.addEventListener('click', () => {
-    if (state.cycleInterval) stopBandCycle();
-    else startBandCycle();
 });
 
 document.getElementById('qth')?.addEventListener('keydown', (e) => {

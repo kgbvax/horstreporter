@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>horstreporter - HF Propagation Maps</title>
     <link rel="stylesheet" href="vendor/css/leaflet.css" />
     <link rel="stylesheet" href="vendor/css/bootstrap.min.css">
@@ -9,14 +10,12 @@
          vendored Font Awesome 6 Free solid font (CC BY 4.0). -->
     <link id="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='8' fill='%236c757d'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="style.css" />
-    <link rel="preload" as="image" href="hk.jpg" fetchpriority="high">
 </head>
 <body class="d-flex vh-100 overflow-hidden m-0 position-relative">
     <button id="show-sidebar" class="btn btn-secondary shadow-sm position-absolute" style="top: 15px; left: 0; z-index: 1000; display: none; border-radius: 0 4px 4px 0;" title="Show controls">
         <svg class="icon" data-glyph="fa-chevron-right" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M311 233Q320 243 320 256Q320 269 311 279L119 471Q109 480 96 480Q83 480 73 471Q64 461 64 448Q64 435 73 425L243 256L73 87Q64 77 64 64Q64 51 73 41Q83 32 96 32Q109 32 119 41L311 233Z"/></svg>
     </button>
     <div id="top-right-controls" class="d-flex align-items-center gap-2" style="position: absolute; top: 15px; right: 15px; z-index: 1000;">
-        <div id="current-band-display" class="h4 m-0 p-2 rounded" style="background-color: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); box-shadow: 0 2px 4px var(--shadow-color); transition: background-color 0.3s, color 0.3s; pointer-events: none;">All Bands</div>
     </div>
     <div id="controls" class="d-flex flex-column p-3 border-end overflow-auto z-1 position-relative" style="max-width: 320px; width: 100%; transition: margin-left 0.3s, background-color 0.3s, border-color 0.3s;">
         <div class="controls-header d-flex justify-content-between align-items-center mb-3">
@@ -54,98 +53,102 @@
             </div>
             <div class="form-sections d-flex flex-column gap-2">
             <div id="band-container" class="w-100 bg-transparent mb-2" style="font-size: 0.9rem;" data-focus-band="">
-                <div class="row g-2 mb-2">
-                    <div class="col-6">
-                        <button type="button" id="btn-show-all" class="btn btn-outline-secondary btn-sm w-100" title="Show all enabled bands">Show all</button>
+                <button type="button" id="btn-show-all" class="btn btn-outline-secondary btn-sm w-100 mb-2" title="Show all enabled bands" disabled>Show all bands</button>
+                <!-- Band rail: one row per band in frequency order; the name chip is the
+                     band-color key. Checkbox =
+                     enable; row click = solo. Count + sparkline are filled by
+                     updateBandLabels (renderers.js). -->
+                <div class="band-rail" role="group" aria-label="Bands">
+                    <div class="band-wrapper band-pill band-row" data-band="160m" style="--band: #8B0000" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                        <input type="checkbox" class="form-check-input band-enable" value="160m" title="Enable / disable band">
+                        <span class="band-pill-name">160m</span>
+                        <span class="band-count"></span>
+                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
                     </div>
-                    <div class="col-6">
-                        <button type="button" id="btn-cycle" class="btn btn-outline-primary btn-sm w-100" title="Cycle enabled bands"><svg class="icon" data-glyph="fa-play" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M73 39Q49 25 25 38Q1 52 0 80V432Q1 460 25 474Q49 487 73 473L361 297Q383 283 384 256Q383 230 361 215L73 39Z"/></svg> Cycle</button>
+                    <div class="band-wrapper band-pill band-row" data-band="80m" style="--band: #800080" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                        <input type="checkbox" class="form-check-input band-enable" value="80m" checked title="Enable / disable band">
+                        <span class="band-pill-name">80m</span>
+                        <span class="band-count"></span>
+                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
                     </div>
-                </div>
-                <div class="row g-2">
-                    <!-- Column 1 -->
-                    <div class="col-6 d-flex flex-column gap-2">
-                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="160m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="160m" title="Enable / disable band">
-                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">160m</span>
-                            <span class="band-nodata-tag small me-1" hidden>no data</span>
-                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
-                        </div>
-                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="80m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="80m" checked title="Enable / disable band">
-                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">80m</span>
-                            <span class="band-nodata-tag small me-1" hidden>no data</span>
-                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
-                        </div>
-                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="60m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="60m" title="Enable / disable band">
-                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">60m</span>
-                            <span class="band-nodata-tag small me-1" hidden>no data</span>
-                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
-                        </div>
-                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="40m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="40m" checked title="Enable / disable band">
-                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">40m</span>
-                            <span class="band-nodata-tag small me-1" hidden>no data</span>
-                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
-                        </div>
-                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="30m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="30m" title="Enable / disable band">
-                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">30m</span>
-                            <span class="band-nodata-tag small me-1" hidden>no data</span>
-                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
-                        </div>
-                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="20m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="20m" checked title="Enable / disable band">
-                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">20m</span>
-                            <span class="band-nodata-tag small me-1" hidden>no data</span>
-                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
-                        </div>
+                    <div class="band-wrapper band-pill band-row" data-band="60m" style="--band: #4B0082" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                        <input type="checkbox" class="form-check-input band-enable" value="60m" title="Enable / disable band">
+                        <span class="band-pill-name">60m</span>
+                        <span class="band-count"></span>
+                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
                     </div>
-                    <!-- Column 2 -->
-                    <div class="col-6 d-flex flex-column gap-2">
-                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="17m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="17m" checked title="Enable / disable band">
-                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">17m</span>
-                            <span class="band-nodata-tag small me-1" hidden>no data</span>
-                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
-                        </div>
-                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="15m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="15m" checked title="Enable / disable band">
-                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">15m</span>
-                            <span class="band-nodata-tag small me-1" hidden>no data</span>
-                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
-                        </div>
-                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="12m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="12m" checked title="Enable / disable band">
-                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">12m</span>
-                            <span class="band-nodata-tag small me-1" hidden>no data</span>
-                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
-                        </div>
-                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="10m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="10m" checked title="Enable / disable band">
-                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">10m</span>
-                            <span class="band-nodata-tag small me-1" hidden>no data</span>
-                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
-                        </div>
-                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="6m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="6m" checked title="Enable / disable band">
-                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">6m</span>
-                            <span class="band-nodata-tag small me-1" hidden>no data</span>
-                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
-                        </div>
-                        <div class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="4m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="4m" title="Enable / disable band">
-                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">4m</span>
-                            <span class="band-nodata-tag small me-1" hidden>no data</span>
-                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
-                        </div>
-                        <div id="band-wrapper-2m" class="band-wrapper band-pill d-flex align-items-center rounded p-1" data-band="2m" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
-                            <input type="checkbox" class="form-check-input band-enable position-relative z-2 me-1" value="2m" title="Enable / disable band">
-                            <span class="band-pill-name flex-grow-1 ms-1" style="white-space:nowrap;">2m</span>
-                            <span class="band-nodata-tag small me-1" hidden>no data</span>
-                            <span class="band-focus-icon me-2" aria-hidden="true">&#9678;</span>
-                        </div>
+                    <div class="band-wrapper band-pill band-row" data-band="40m" style="--band: #0000FF" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                        <input type="checkbox" class="form-check-input band-enable" value="40m" checked title="Enable / disable band">
+                        <span class="band-pill-name">40m</span>
+                        <span class="band-count"></span>
+                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    </div>
+                    <div class="band-wrapper band-pill band-row" data-band="30m" style="--band: #03b1b1" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                        <input type="checkbox" class="form-check-input band-enable" value="30m" title="Enable / disable band">
+                        <span class="band-pill-name">30m</span>
+                        <span class="band-count"></span>
+                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    </div>
+                    <div class="band-wrapper band-pill band-row" data-band="20m" style="--band: #008000" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                        <input type="checkbox" class="form-check-input band-enable" value="20m" checked title="Enable / disable band">
+                        <span class="band-pill-name">20m</span>
+                        <span class="band-count"></span>
+                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    </div>
+                    <div class="band-wrapper band-pill band-row" data-band="17m" style="--band: #808000" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                        <input type="checkbox" class="form-check-input band-enable" value="17m" checked title="Enable / disable band">
+                        <span class="band-pill-name">17m</span>
+                        <span class="band-count"></span>
+                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    </div>
+                    <div class="band-wrapper band-pill band-row" data-band="15m" style="--band: #FFA500" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                        <input type="checkbox" class="form-check-input band-enable" value="15m" checked title="Enable / disable band">
+                        <span class="band-pill-name">15m</span>
+                        <span class="band-count"></span>
+                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    </div>
+                    <div class="band-wrapper band-pill band-row" data-band="12m" style="--band: #00FFFF" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                        <input type="checkbox" class="form-check-input band-enable" value="12m" checked title="Enable / disable band">
+                        <span class="band-pill-name">12m</span>
+                        <span class="band-count"></span>
+                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    </div>
+                    <div class="band-wrapper band-pill band-row" data-band="10m" style="--band: #FF0000" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                        <input type="checkbox" class="form-check-input band-enable" value="10m" checked title="Enable / disable band">
+                        <span class="band-pill-name">10m</span>
+                        <span class="band-count"></span>
+                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    </div>
+                    <div class="band-wrapper band-pill band-row" data-band="6m" style="--band: #FF00FF" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                        <input type="checkbox" class="form-check-input band-enable" value="6m" checked title="Enable / disable band">
+                        <span class="band-pill-name">6m</span>
+                        <span class="band-count"></span>
+                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    </div>
+                    <div class="band-wrapper band-pill band-row" data-band="4m" style="--band: #FF1493" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                        <input type="checkbox" class="form-check-input band-enable" value="4m" title="Enable / disable band">
+                        <span class="band-pill-name">4m</span>
+                        <span class="band-count"></span>
+                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
+                    </div>
+                    <div id="band-wrapper-2m" class="band-wrapper band-pill band-row" data-band="2m" style="--band: #008080" role="button" tabindex="0" aria-pressed="false" title="Click to show only this band">
+                        <input type="checkbox" class="form-check-input band-enable" value="2m" title="Enable / disable band">
+                        <span class="band-pill-name">2m</span>
+                        <span class="band-count"></span>
+                        <svg class="band-spark" viewBox="0 0 60 16" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
+                        <span class="band-focus-icon" aria-hidden="true">&#9678;</span>
                     </div>
                 </div>
             </div>
@@ -195,10 +198,6 @@
                         </button>
                     </div>
                     <div id="snr-sliders-root" class="d-flex flex-column w-100 gap-3"></div>
-                    <div class="d-flex flex-column w-100">
-                        <label class="d-flex align-items-center justify-content-between mb-0" for="cycle-time"><span>Band Cycle Time:</span> <span><span id="cycle-time-val">3</span> sec</span></label>
-                        <input type="range" id="cycle-time" class="form-range" min="1" max="60" step="1" value="3" />
-                    </div>
                     <div class="d-flex flex-column w-100">
                     <div id="cluster-root" class="d-flex flex-column w-100"></div>
                     </div>
@@ -291,6 +290,7 @@
         <div id="map-toggles" class="map-toggles">
             <button id="band-stats-toggle" type="button" class="panel-toggle is-translucent" title="Show Band Stats">Stats</button>
             <button id="wspr-matrix-toggle" type="button" class="panel-toggle is-translucent" title="Show Propagation Intelligence Matrix">Prop</button>
+            <button id="band-solo-clear" type="button" class="panel-toggle band-solo-clear" title="Show all enabled bands" style="display: none;"><span class="band-solo-name"></span> <span aria-hidden="true">&times;</span></button>
             <button id="drill-down-clear" type="button" class="panel-toggle is-translucent" title="Clear grid-square filter" style="display: none;"></button>
         </div>
         <canvas id="azimuth-canvas" class="position-absolute top-0 start-0 w-100 h-100"></canvas>

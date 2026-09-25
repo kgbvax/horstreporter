@@ -68,7 +68,6 @@ vi.mock('../static/state.js', () => ({
     state: {
         liveSpots: [],
         renderPending: false,
-        cycleInterval: null,
         eventSource: null,
         renderInterval: null,
         heatLayer: null,
