@@ -104,7 +104,7 @@ export function initMap(initialCenter, initialZoom) {
         if (container) {
             container.textContent = msg;
             container.style.padding = '1em';
-            container.style.color = '#c00';
+            container.style.color = 'var(--status-danger)';
         }
         throw new Error(msg);
     }

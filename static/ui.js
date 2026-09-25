@@ -283,7 +283,7 @@ export function attachUITooltipEvents() {
         } catch (err) {
             if (err?.name === 'AbortError') return;
             if (seq !== hoverRequestSeq || requestKey !== activeHoverKey) return;
-            tooltip.innerHTML = `<strong>${escapeHtml(params.locator)}</strong><br><span style="color: #c00;">Hover details unavailable</span>`;
+            tooltip.innerHTML = `<strong>${escapeHtml(params.locator)}</strong><br><span class="status-danger">Hover details unavailable</span>`;
             tooltip.style.display = 'block';
         } finally {
             if (hoverController?.signal?.aborted) {
