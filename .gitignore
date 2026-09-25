@@ -72,3 +72,8 @@ dx_baseline.json
 
 # Vite leaves a compiled config copy behind when a build is interrupted
 vite.config.js.timestamp-*
+
+# Runtime climatology state written by the server when Postgres is not
+# configured (-prop-baseline-file / -wspr-climatology-file); not source.
+prop_baseline.json
+wspr_climatology.json
