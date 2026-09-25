@@ -1677,13 +1677,21 @@ document.getElementById('show-dxcc-labels')?.addEventListener('change', (e) => {
 });
 
 // Restart the live stream when SNR filters change so the server-side filter can
-// take effect. The min-snr radios and threshold sliders are created by the
-// Svelte bundle, so attach listeners after DOM mount.
+// take effect. The Svelte bundle renders only the active mode's threshold
+// slider and re-creates it on every mode switch, so listen on the document
+// (delegated) instead of binding to slider elements that may not exist yet or
+// get replaced.
 document.getElementById('min-snr-group')?.addEventListener('change', (e) => {
     if (e.target?.name === 'min-snr') restartStreamIfSubscribed();
 });
-document.getElementById('ssb-min-db')?.addEventListener('change', restartStreamIfSubscribed);
-document.getElementById('cw-min-db')?.addEventListener('change', restartStreamIfSubscribed);
+// Replace, don't stack: a re-evaluated module (tests, dev reload) must not
+// leave its previous document-level handler behind.
+if (window.__horstSnrThresholdChange) document.removeEventListener('change', window.__horstSnrThresholdChange);
+window.__horstSnrThresholdChange = (e) => {
+    const id = e.target?.id;
+    if (id === 'ssb-min-db' || id === 'cw-min-db') restartStreamIfSubscribed();
+};
+document.addEventListener('change', window.__horstSnrThresholdChange);
 
 document.getElementById('btn-geo')?.addEventListener('click', () => {
     if (!navigator.geolocation) {

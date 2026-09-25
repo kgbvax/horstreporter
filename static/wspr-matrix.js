@@ -231,8 +231,15 @@ export function initWsprMatrix({ onLayoutChange } = {}) {
     document.getElementById('min-snr-group')?.addEventListener('change', (e) => {
         if (e.target?.name === 'min-snr') onMinSnrChange();
     });
-    document.getElementById('ssb-min-db')?.addEventListener('change', onMinSnrChange);
-    document.getElementById('cw-min-db')?.addEventListener('change', onMinSnrChange);
+    // Delegated: the threshold sliders are re-created on every Min SNR mode
+    // switch (Svelte), so element-bound listeners would be lost.
+    // Replace, don't stack, if init runs again.
+    if (runtime.snrThresholdListener) document.removeEventListener('change', runtime.snrThresholdListener);
+    runtime.snrThresholdListener = (e) => {
+        const id = e.target?.id;
+        if (id === 'ssb-min-db' || id === 'cw-min-db') onMinSnrChange();
+    };
+    document.addEventListener('change', runtime.snrThresholdListener);
 
     makeDraggable(panel, panel.querySelector('.wspr-matrix-window-header'), 'wsprMatrixPos');
 }

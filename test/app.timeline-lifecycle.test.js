@@ -500,6 +500,24 @@ describe('app.js timeline lifecycle (U4)', () => {
         expect(esInstances.length).toBe(exitBefore);
     });
 
+    it('restarts the stream when a threshold slider is re-created after load (Min SNR mode switch)', async () => {
+        const { state } = await importAppFresh();
+        document.getElementById('snr-cw').checked = true;
+        await startStream(); // streamed filter: cw @ -15 dB
+        expect(state.streamedFilter.cwMinDb).toBe('-15');
+        const before = esInstances.length;
+
+        // Svelte replaces the slider element on a mode switch; the old one is gone.
+        const old = document.getElementById('cw-min-db');
+        const fresh = old.cloneNode(true);
+        old.replaceWith(fresh);
+        fresh.value = '-25'; // lower = widening: needs data the server is not sending
+        fresh.dispatchEvent(new Event('change', { bubbles: true }));
+        await Promise.resolve();
+
+        expect(esInstances.length).toBe(before + 1);
+    });
+
     it('narrowing (SNR raise) mid-timeline: no stream restart, moment re-emitted', async () => {
         const { state } = await importAppFresh();
         document.getElementById('snr-cw').checked = true;

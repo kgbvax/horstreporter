@@ -524,7 +524,8 @@ describe('wspr-matrix (Propagation) panel', () => {
 
         const cwInput = document.getElementById('cw-min-db');
         cwInput.value = '-10';
-        cwInput.dispatchEvent(new Event('change'));
+        // Native input 'change' events bubble; the listener is delegated.
+        cwInput.dispatchEvent(new Event('change', { bubbles: true }));
         await new Promise((r) => setTimeout(r, 0));
         expect(calls.length).toBe(3);
         expect(calls[2]).toContain('cw_min_db=-10');
