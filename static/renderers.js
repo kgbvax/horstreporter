@@ -472,7 +472,7 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
     const activity = bandActivity(spots, ctx);
     // One shared scale so a 2-spot band doesn't look as busy as a 200-spot one.
     let sparkPeak = 1;
-    for (const a of activity.values()) for (const v of a.bins) if (v > sparkPeak) sparkPeak = v;
+    for (const a of activity.values()) for (const v of a.line) if (v > sparkPeak) sparkPeak = v;
 
     document.querySelectorAll('.band-pill').forEach(pill => {
         const band = pill.dataset.band;
@@ -495,7 +495,7 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
         const count = pill.querySelector('.band-count');
         if (count) count.textContent = enabled ? (act?.count ? String(act.count) : '\u2013') : '';
         const line = pill.querySelector('.band-spark polyline');
-        if (line) line.setAttribute('points', enabled && act ? sparkPoints(act.bins, sparkPeak) : '');
+        if (line) line.setAttribute('points', enabled && act ? sparkPoints(act.line, sparkPeak) : '');
 
         pill.setAttribute('aria-pressed', isFocused ? 'true' : 'false');
     });
@@ -506,11 +506,14 @@ const SPARK_BINS = 15;
 // Per-band spot count + a SPARK_BINS histogram over the max-spot-age window,
 // anchored on the newest spot so it also works for a timeline moment.
 // Applies the SNR floor but not focus.
-function bandActivity(spots, ctx) {
+export function bandActivity(spots, ctx) {
     const out = new Map();
     if (!Array.isArray(spots) || spots.length === 0) return out;
     let tMax = -Infinity;
-    for (const s of spots) if (s.t > tMax) tMax = s.t;
+    for (const s of spots) {
+        const t = spotEpochSeconds(s);
+        if (t > tMax) tMax = t;
+    }
     const span = 60 * (Number(document.getElementById('minutes')?.value) || 15);
     const t0 = tMax - span;
     for (const s of spots) {
@@ -519,10 +522,31 @@ function bandActivity(spots, ctx) {
         let a = out.get(s.band);
         if (!a) { a = { count: 0, bins: new Array(SPARK_BINS).fill(0) }; out.set(s.band, a); }
         a.count += 1;
-        const i = Math.min(SPARK_BINS - 1, Math.max(0, Math.floor(((s.t - t0) / span) * SPARK_BINS)));
+        const i = Math.min(SPARK_BINS - 1, Math.max(0, Math.floor(((spotEpochSeconds(s) - t0) / span) * SPARK_BINS)));
         a.bins[i] += 1;
     }
+    // Reporters upload in ~2-minute batches, so raw 1-minute bins zig-zag
+    // (58 8 50 0 ...). The drawn line is a centred 3-bin moving average.
+    for (const a of out.values()) {
+        a.line = a.bins.map((_, i) => {
+            const lo = Math.max(0, i - 1);
+            const hi = Math.min(a.bins.length - 1, i + 1);
+            let sum = 0;
+            for (let j = lo; j <= hi; j += 1) sum += a.bins[j];
+            return sum / (hi - lo + 1);
+        });
+    }
     return out;
+}
+
+// Spot time in epoch seconds. Timeline spots carry an absolute `t`; live
+// stream spots only carry their server age at receipt (__recvAge) and the
+// client clock at receipt (__recvMs), see app.js.
+function spotEpochSeconds(s) {
+    if (Number.isFinite(s.t)) return s.t;
+    const age = s.__recvAge ?? s.ageSeconds ?? 0;
+    const recvMs = Number.isFinite(s.__recvMs) ? s.__recvMs : Date.now();
+    return recvMs / 1000 - age;
 }
 
 // Polyline points for a 60x16 viewBox. Square-root scale against the busiest
