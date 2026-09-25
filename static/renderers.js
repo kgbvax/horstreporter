@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, hexToRgba, pillTextColor, regionForLocatorCached } from './utils.js';
+import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, regionForLocatorCached } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTimer } from './perf.js';
 
 // Rendered-state fingerprint for the grid-snr heat layer. Unlike the old
@@ -373,10 +373,12 @@ export function updateMapVisualization(spots, maxMinutes) {
             }
             incrementPerfCounter('mercator.render.style.grid_snr', 1);
             renderGridSquares(gridState.squareData, filterCtx);
-            const bandLabelTimer = startPerfTimer();
-            updateBandLabels(spots, filterCtx, gridState.activeBands);
-            endPerfTimer('mercator.band_labels.total_ms', bandLabelTimer);
         }
+        // Every frame, not just on a grid change: the band rail's counts and
+        // sparklines move even when no square's appearance does.
+        const bandLabelTimer = startPerfTimer();
+        updateBandLabels(spots, filterCtx, gridState.activeBands);
+        endPerfTimer('mercator.band_labels.total_ms', bandLabelTimer);
     }
 
     // DX cluster markers: persistent layer, rebuilt only when the cluster
@@ -467,57 +469,65 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
     // "show all enabled" (focus is ignored until set again).
     const effectiveFocus = (focus !== 'all' && enabledBands.has(focus)) ? focus : 'all';
     const soloing = effectiveFocus !== 'all';
+    const activity = bandActivity(spots, ctx);
+    // One shared scale so a 2-spot band doesn't look as busy as a 200-spot one.
+    let sparkPeak = 1;
+    for (const a of activity.values()) for (const v of a.bins) if (v > sparkPeak) sparkPeak = v;
 
     document.querySelectorAll('.band-pill').forEach(pill => {
         const band = pill.dataset.band;
         if (!band) return;
-        const color = bandColors[band] || '#6c757d';
         const enabled = enabledBands.has(band);
-        const hasData = bands.has(band);
+        const act = activity.get(band);
+        // Counts ignore focus, so a band dimmed by solo still reports its
+        // activity; fall back to the render's band set when no spots were given.
+        const hasData = act ? act.count > 0 : bands.has(band);
         const isFocused = enabled && band === effectiveFocus;
         const shown = enabled && (effectiveFocus === 'all' || isFocused);
 
-        const icon = pill.querySelector('.band-focus-icon');
-        const nodata = pill.querySelector('.band-nodata-tag');
+        pill.style.setProperty('--band', bandColors[band] || '#6c757d');
+        pill.dataset.state = !enabled ? 'off' : (hasData ? 'live' : 'quiet');
+        pill.classList.toggle('is-focused', isFocused);
+        pill.classList.toggle('is-dimmed', soloing && !shown);
 
-        if (!enabled) {
-            // Disabled: muted surface + status text, adapts per theme.
-            pill.style.backgroundColor = 'var(--surface-1)';
-            pill.style.color = 'var(--status-color)';
-            pill.style.borderColor = 'transparent';
-            pill.style.boxShadow = 'none';
-            pill.style.opacity = '1';
-            pill.style.filter = 'none';
-            if (nodata) nodata.hidden = true;
-            if (icon) icon.style.opacity = '0.2';
-        } else if (hasData) {
-            // Active: full band color, contrast-aware text.
-            pill.style.backgroundColor = color;
-            pill.style.color = pillTextColor(color);
-            pill.style.filter = 'none';
-            if (nodata) nodata.hidden = true;
-            if (icon) icon.style.opacity = isFocused ? '1' : '0.4';
-            pill.style.borderColor = 'transparent';
-            pill.style.boxShadow = 'none';
-            pill.style.opacity = (soloing && !shown) ? '0.5' : '1';
-        } else {
-            // Enabled but no data: muted band color + band-color border + tag.
-            // While soloing, a non-focused band's spots are filtered out of the
-            // render, so `hasData` is false even when the band actually has data.
-            // Suppress the misleading "no data" tag for those dimmed bands; only
-            // show it for the band that's actually being rendered (focused, or all).
-            pill.style.backgroundColor = hexToRgba(color, 0.18);
-            pill.style.color = 'var(--text-color, #212529)';
-            pill.style.filter = 'none';
-            if (nodata) nodata.hidden = soloing && !shown;
-            if (icon) icon.style.opacity = isFocused ? '1' : '0.4';
-            pill.style.borderColor = color;
-            pill.style.boxShadow = 'none';
-            pill.style.opacity = (soloing && !shown) ? '0.5' : '1';
-        }
+        const count = pill.querySelector('.band-count');
+        if (count) count.textContent = enabled ? (act?.count ? String(act.count) : '\u2013') : '';
+        const line = pill.querySelector('.band-spark polyline');
+        if (line) line.setAttribute('points', enabled && act ? sparkPoints(act.bins, sparkPeak) : '');
 
         pill.setAttribute('aria-pressed', isFocused ? 'true' : 'false');
     });
+}
+
+const SPARK_BINS = 15;
+
+// Per-band spot count + a SPARK_BINS histogram over the max-spot-age window,
+// anchored on the newest spot so it also works for a timeline moment.
+// Applies the SNR floor but not focus.
+function bandActivity(spots, ctx) {
+    const out = new Map();
+    if (!Array.isArray(spots) || spots.length === 0) return out;
+    let tMax = -Infinity;
+    for (const s of spots) if (s.t > tMax) tMax = s.t;
+    const span = 60 * (Number(document.getElementById('minutes')?.value) || 15);
+    const t0 = tMax - span;
+    for (const s of spots) {
+        if (ctx.minSnrMode === 'ssb' && s.snr < ctx.ssbMinDb) continue;
+        if (ctx.minSnrMode === 'cw' && s.snr < ctx.cwMinDb) continue;
+        let a = out.get(s.band);
+        if (!a) { a = { count: 0, bins: new Array(SPARK_BINS).fill(0) }; out.set(s.band, a); }
+        a.count += 1;
+        const i = Math.min(SPARK_BINS - 1, Math.max(0, Math.floor(((s.t - t0) / span) * SPARK_BINS)));
+        a.bins[i] += 1;
+    }
+    return out;
+}
+
+// Polyline points for a 60x16 viewBox. Square-root scale against the busiest
+// bin across all bands keeps quiet bands visible without exaggerating them.
+function sparkPoints(bins, peak) {
+    const step = 60 / (bins.length - 1);
+    return bins.map((v, i) => `${(i * step).toFixed(1)},${(15 - Math.sqrt(v / peak) * 14).toFixed(1)}`).join(' ');
 }
 
 // Aggregate filtered spots into grid squares. O(n) but cheap; the expensive

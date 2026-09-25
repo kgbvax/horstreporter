@@ -888,7 +888,8 @@ body[data-theme="dark"] .wspr-heat-scale {
         z-index: 1200 !important;
     }
 
-    .band-wrapper {
+    /* Out-specifies the base .band-row rule, which comes later in the file. */
+    .band-rail .band-row {
         min-height: 44px;
     }
 
@@ -931,41 +932,104 @@ body[data-theme="dark"] .wspr-heat-scale {
     }
 }
 
-/* Band selector pills: appearance is set per-render by updateBandLabels
-   (background/text/border/opacity/focus-icon); these are the static bits. */
-.band-pill {
+/* Band rail: one row per band. updateBandLabels sets --band (canonical band
+   color), data-state (off | live | quiet), .is-focused and .is-dimmed; the
+   band color lives in the swatch and sparkline, never as a full-row fill. */
+.band-rail {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    font-variant-numeric: tabular-nums;
+}
+.band-row {
+    /* Light mode: darken slightly so cyan/orange/yellow-green hold up on white. */
+    --band-ink: color-mix(in srgb, var(--band, #6c757d) 82%, #000);
+    display: grid;
+    grid-template-columns: auto 4px 2.6rem 2.4rem 1fr auto;
+    align-items: center;
+    column-gap: 8px;
+    min-height: 28px;
+    padding: 0 6px;
+    border-radius: 4px;
+    color: var(--text-color);
     cursor: pointer;
-    border: 2px solid transparent;
     user-select: none;
-    transition: opacity 0.12s ease, box-shadow 0.12s ease, background-color 0.12s ease;
+    transition: opacity 0.12s ease, background-color 0.12s ease;
 }
-.band-pill:focus-visible {
+/* Dark mode: lift the darker band hues (160m, 40m, 20m...) off the slate. */
+body[data-theme="dark"] .band-row {
+    --band-ink: color-mix(in srgb, var(--band, #6c757d) 62%, #fff);
+}
+.band-row:hover {
+    background: var(--surface-1);
+}
+.band-row:focus-visible {
     outline: 2px solid var(--text-color, #111);
-    outline-offset: 1px;
+    outline-offset: -2px;
 }
-/* The band name must never truncate; the "no data" tag gives way first. */
-.band-pill .band-pill-name {
-    flex-shrink: 0;
+.band-row .band-enable {
+    margin: 0;
+    width: 14px;
+    height: 14px;
 }
-.band-pill .band-focus-icon {
-    font-size: 0.95rem;
-    line-height: 1;
-    opacity: 0.4;
-    flex-shrink: 0;
+.band-swatch {
+    width: 4px;
+    height: 18px;
+    border-radius: 2px;
+    background: var(--band-ink);
 }
-.band-pill .band-nodata-tag {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    background: rgba(0, 0, 0, 0.22);
-    border-radius: 0.25rem;
-    padding: 0 0.2rem;
+.band-pill-name {
     white-space: nowrap;
 }
+.band-count {
+    text-align: right;
+    font-size: 0.8rem;
+    color: var(--status-color);
+}
+.band-spark {
+    width: 100%;
+    height: 16px;
+    overflow: visible;
+}
+.band-spark polyline {
+    fill: none;
+    stroke: var(--band-ink);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}
+.band-focus-icon {
+    font-size: 0.95rem;
+    line-height: 1;
+    opacity: 0.3;
+}
 
-/* Dark mode: a near-black chip vanishes on muted dark pills; use a light chip. */
-body[data-theme="dark"] .band-pill .band-nodata-tag {
-    background: rgba(255, 255, 255, 0.16);
+.band-row[data-state="live"] .band-count {
+    color: var(--text-color);
+}
+.band-row[data-state="quiet"] .band-swatch {
+    opacity: 0.35;
+}
+.band-row[data-state="off"] {
+    color: var(--status-color);
+}
+.band-row[data-state="off"] .band-swatch {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--band-ink);
+    opacity: 0.5;
+}
+.band-row[data-state="off"] .band-focus-icon {
+    opacity: 0.15;
+}
+.band-row.is-focused {
+    background: color-mix(in srgb, var(--band-ink) 16%, transparent);
+    font-weight: 600;
+}
+.band-row.is-focused .band-focus-icon {
+    opacity: 1;
+}
+.band-row.is-dimmed {
+    opacity: 0.45;
 }
 
 .hot-band-indicator {
