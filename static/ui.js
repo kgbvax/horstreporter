@@ -340,25 +340,17 @@ export function attachUITooltipEvents() {
 function initInfoOverlay() {
     const themeToggleBtn = document.getElementById('theme-toggle');
     if (themeToggleBtn && themeToggleBtn.parentNode) {
-        const headerActions = document.createElement('div');
-        headerActions.style.display = 'flex';
-        headerActions.style.gap = '8px';
-        
+        // Same button as its header siblings (theme toggle, hide sidebar); the
+        // header's flex row already spaces them.
         const infoBtn = document.createElement('button');
+        infoBtn.type = 'button';
         infoBtn.id = 'info-toggle';
+        infoBtn.className = 'btn btn-outline-secondary btn-sm';
         infoBtn.innerHTML = icon('question-circle');
         infoBtn.title = 'Help';
-        infoBtn.style.background = 'none';
-        infoBtn.style.border = '1px solid var(--border-color)';
-        infoBtn.style.borderRadius = '5px';
-        infoBtn.style.cursor = 'pointer';
-        infoBtn.style.fontSize = '18px';
-        infoBtn.style.padding = '4px 8px';
-        infoBtn.style.lineHeight = '1';
+        infoBtn.setAttribute('aria-label', 'Help');
 
-        themeToggleBtn.parentNode.insertBefore(headerActions, themeToggleBtn);
-        headerActions.appendChild(infoBtn);
-        headerActions.appendChild(themeToggleBtn);
+        themeToggleBtn.parentNode.insertBefore(infoBtn, themeToggleBtn);
 
         const overlay = document.createElement('div');
         overlay.id = 'info-overlay';

@@ -230,7 +230,10 @@ describe('map.js mercator country layer', () => {
         expect(style.fillColor).toBe('#000000'); // from the getCountryFillForFeature mock
         expect(style.weight).toBe(0.7);
         expect(style.fillOpacity).toBe(0.3); // light theme
-        expect(style.color).toBe('#58636d'); // light-theme stroke
+        // Stroke is the shared --map-border token (jsdom has no stylesheet, so
+        // map-tokens.js serves its light fallback), drawn at full opacity.
+        expect(style.color).toBe('rgba(88, 99, 109, 0.5)');
+        expect(style.opacity).toBe(1);
 
         expect(globalThis.L.geoJSON.mock.results[0].value.addTo).toHaveBeenCalledWith(mockMap);
     });
@@ -384,8 +387,8 @@ describe('map.js dxcc label layer gating and markers', () => {
         expect(opts.interactive).toBe(false);
         expect(opts.keyboard).toBe(false);
         expect(opts.icon.html).toContain('DL');
-        // Light theme colors.
-        expect(opts.icon.html).toContain('#263745');
+        // Colors come from the --dxcc-label-* tokens via the class, not inline.
+        expect(opts.icon.html).toBe('<span class="dxcc-entity-label">DL</span>');
         expect(mockLayerGroup.addTo).toHaveBeenCalledWith(mockMap);
     });
 

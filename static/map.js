@@ -9,6 +9,7 @@ let currentDxccLabelLayer = null;
 import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, hexToRgb, blendOverlayColors, icon } from './utils.js';
 import { selectProminentDxccLabels } from './azimuth-runtime.js';
 import { dataNow, GRAYLINE_BUCKET_MS } from './data-now.js';
+import { COUNTRY_FILL_OPACITY, getMapTokens } from './map-tokens.js';
 import { endPerfTimer, incrementPerfCounter, startPerfTimer } from './perf.js';
 
 let worldGeoJsonData = null;
@@ -375,16 +376,20 @@ export async function syncMercatorCountryLayer(options = {}) {
     if (revision !== countrySyncRevision) {
         return;
     }
+    // Border + fill opacity are the shared basemap tokens (map-tokens.js), so
+    // the azimuthal canvas draws the same country look.
+    const borderColor = getMapTokens(theme).border;
+    const fillOpacity = COUNTRY_FILL_OPACITY[theme];
     currentCountryLayer = L.geoJSON(geoJson, {
         pane: 'country-fill-pane',
         renderer: getCountryCanvasRenderer(),
         interactive: false,
         style: (feature) => ({
-            color: theme === 'dark' ? '#2a3845' : '#58636d',
+            color: borderColor,
             weight: 0.7,
-            opacity: theme === 'dark' ? 0.7 : 0.5,
+            opacity: 1,
             fillColor: getCountryFillForFeature(feature, theme),
-            fillOpacity: theme === 'dark' ? 0.42 : 0.30
+            fillOpacity
         })
     }).addTo(map);
     currentCountryLayerTheme = theme;
@@ -467,14 +472,12 @@ function currentProjection() {
     return document.querySelector('input[name="projection-select"]:checked')?.value || 'mercator';
 }
 
-function buildDxccLabelIcon(label, theme) {
-    const textColor = theme === 'dark' ? '#f3f6fb' : '#263745';
-    const bgColor = theme === 'dark' ? 'rgba(18, 28, 38, 0.84)' : 'rgba(255, 255, 255, 0.84)';
-    const borderColor = theme === 'dark' ? 'rgba(216, 226, 236, 0.28)' : 'rgba(70, 86, 98, 0.30)';
-
+// Colors come from the --dxcc-label-* tokens via .dxcc-entity-label
+// (style.css), which also style the azimuth canvas labels.
+function buildDxccLabelIcon(label) {
     return L.divIcon({
         className: 'dxcc-entity-marker',
-        html: `<span class="dxcc-entity-label" style="color:${textColor};background:${bgColor};border-color:${borderColor};">${label.prefix}</span>`,
+        html: `<span class="dxcc-entity-label">${label.prefix}</span>`,
         iconSize: [0, 0],
         iconAnchor: [0, 0]
     });
@@ -551,7 +554,7 @@ export async function syncMercatorDxccLabelLayer(options = {}) {
             pane: 'dxcc-label-pane',
             interactive: false,
             keyboard: false,
-            icon: buildDxccLabelIcon(label, theme)
+            icon: buildDxccLabelIcon(label)
         }).addTo(currentDxccLabelLayer);
     });
     incrementPerfCounter('mercator.dxcc.labels_added', labels.length);
