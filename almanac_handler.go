@@ -5,13 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
 
 // almanac_handler.go serves GET /api/almanac (plan U2) and owns the two-part
-// cache (KTD9), keyed by the centre grid4 (a 6-char locator, and a callsign
+// cache (KTD9), keyed by the centre grid4 plus the SNR tier (KTD13; the
+// any-SNR entry is keyed by the bare grid4 — a 6-char locator, and a callsign
 // resolving into the same square, share one entry):
 //
 //   - typical part (n/m lanes + radius): 6 h, or until the fold watermark
@@ -74,7 +78,7 @@ func newAlmanacService(st almanacReadStore, resolve func(string) (almanacArea, e
 // the fold driver (in memory) so a fold invalidates the typical cache.
 // wsprAreas are the parsed -almanac-wspr-backfill-areas (drill-down WSPR gate).
 func startAlmanacService(st *dxPostgresStore, resolve func(string) (almanacArea, error), wsprAreas []string) *almanacService {
-	s := newAlmanacService(&pgAlmanacReadStore{pool: st.pool}, resolve, func() int64 {
+	s := newAlmanacService(&pgAlmanacReadStore{pool: st.pool, snrColumns: st.snrColumns.Load}, resolve, func() int64 {
 		if f := st.AlmanacFolder(); f != nil {
 			return f.health().WatermarkDay
 		}
@@ -178,17 +182,27 @@ func (s *almanacService) fresh(e *almanacCacheEntry, now time.Time, win almanacW
 	return snap, true, todayOK
 }
 
-// get returns the lanes and today overlay for grid4, reading Postgres only
-// when the cache can't serve it.
-func (s *almanacService) get(grid4 string) (almanacSnapshot, error) {
+// almanacCacheKey is the cache key of (grid4, SNR tier): the bare grid4 for
+// any SNR (tier -1), so the widget summary (warm) keeps finding it.
+func almanacCacheKey(grid4 string, tier int) string {
+	if tier < 0 {
+		return grid4
+	}
+	return grid4 + "|snr" + strconv.Itoa(almanacSNRTierFloors[tier])
+}
+
+// get returns the lanes and today overlay for grid4 at SNR tier (-1 = any
+// SNR), reading Postgres only when the cache can't serve it.
+func (s *almanacService) get(grid4 string, tier int) (almanacSnapshot, error) {
 	if s == nil || s.store == nil {
 		return almanacSnapshot{}, errAlmanacUnavailable
 	}
 	now := s.now()
 	win := almanacWindowFor(now.Unix())
+	key := almanacCacheKey(grid4, tier)
 
 	s.mu.Lock()
-	e := s.entry(grid4, false)
+	e := s.entry(key, false)
 	snap, typOK, todayOK := s.fresh(e, now, win)
 	if typOK && todayOK {
 		s.mu.Unlock()
@@ -205,7 +219,7 @@ func (s *almanacService) get(grid4 string) (almanacSnapshot, error) {
 
 	// Re-check: a request queued ahead of us may have filled the entry.
 	s.mu.Lock()
-	e = s.entry(grid4, true)
+	e = s.entry(key, true)
 	snap, typOK, todayOK = s.fresh(e, now, win)
 	if typOK && todayOK {
 		s.mu.Unlock()
@@ -225,15 +239,15 @@ func (s *almanacService) get(grid4 string) (almanacSnapshot, error) {
 	// the negative cache.
 	ctx, cancel := context.WithTimeout(context.Background(), s.queryTimeout)
 	defer cancel()
-	acc, err := readAlmanacAccum(ctx, s.store, grid4, win, typOK)
+	acc, err := readAlmanacAccum(ctx, s.store, grid4, win, typOK, tier)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e = s.entry(grid4, true)
+	e = s.entry(key, true)
 	if typOK {
 		// Overlay refresh only; on failure keep serving the old overlay.
 		if err != nil {
-			logInfo("almanac %s: today overlay read failed: %v", grid4, err)
+			logInfo("almanac %s: today overlay read failed: %v", key, err)
 			e.todayErrAt = now
 		} else {
 			e.today = acc.today(radius)
@@ -242,7 +256,7 @@ func (s *almanacService) get(grid4 string) (almanacSnapshot, error) {
 		return e.snapshot(), nil
 	}
 	if err != nil {
-		logInfo("almanac %s: read failed: %v", grid4, err)
+		logInfo("almanac %s: read failed: %v", key, err)
 		e.errAt = now
 		return almanacSnapshot{}, errAlmanacUnavailable
 	}
@@ -266,7 +280,7 @@ func (s *almanacService) typicalRadius(grid4 string) (int, error) {
 		return radius, nil
 	}
 	s.mu.Unlock()
-	snap, err := s.get(grid4)
+	snap, err := s.get(grid4, -1)
 	if err != nil {
 		return 0, err
 	}
@@ -289,7 +303,7 @@ func (s *almanacService) warm(area almanacArea) (*almanacResponse, bool) {
 	}
 	snap := e.snapshot()
 	s.mu.Unlock()
-	return buildAlmanacResponse(area.Grid4, area, snap, now), true
+	return buildAlmanacResponse(area.Grid4, area, snap, now, nil), true
 }
 
 // ---------------------------------------------------------------------------
@@ -318,30 +332,72 @@ type almanacLaneJSON struct {
 	N         [almanacSlotsPerDay]uint8 `json:"n"`
 	M         [almanacSlotsPerDay]uint8 `json:"m"`
 	OpenToday bool                      `json:"open_today"`
+	// Share (SNR floor only, KTD13): per slot the pooled share of spots at
+	// or above the floor, null where the slot has no SNR data.
+	Share []*float64 `json:"share,omitempty"`
+}
+
+// almanacShareJSON decodes a lane's coded shares (nil array when none).
+func almanacShareJSON(codes *[almanacSlotsPerDay]uint16) []*float64 {
+	out := make([]*float64, almanacSlotsPerDay)
+	for i, c := range codes {
+		if v, ok := almanacShareValue(c); ok {
+			out[i] = &v
+		}
+	}
+	return out
+}
+
+// almanacSNRInfo is the SNR part of both Almanac responses (KTD13).
+type almanacSNRInfo struct {
+	// MinSNR is the requested floor (dB), SNRTier the applied tier floor;
+	// both null for any SNR.
+	MinSNR  *int `json:"min_snr"`
+	SNRTier *int `json:"snr_tier"`
+	// SNRAvailable: SNR data is being collected (the columns exist and the
+	// collection start is recorded); SNRSince is that start (UTC day).
+	SNRAvailable bool    `json:"snr_available"`
+	SNRSince     *string `json:"snr_since"`
+}
+
+func newAlmanacSNRInfo(minSNR *int, tier int, since int64, hasSince bool) almanacSNRInfo {
+	info := almanacSNRInfo{SNRAvailable: hasSince}
+	if minSNR != nil && tier >= 0 {
+		v, t := *minSNR, almanacSNRTierFloors[tier]
+		info.MinSNR, info.SNRTier = &v, &t
+	}
+	if hasSince {
+		d := almanacDayString(since)
+		info.SNRSince = &d
+	}
+	return info
 }
 
 // almanacResponse is the /api/almanac body (documented in docs/api.md).
 type almanacResponse struct {
-	QTH          string               `json:"qth"`
-	Area         almanacAreaInfo      `json:"area"`
-	Window       almanacWindowInfo    `json:"window"`
-	SlotMinutes  int                  `json:"slot_minutes"`
-	MMin         int                  `json:"m_min"`
-	K            int                  `json:"k"`
-	UsuallyShare float64              `json:"usually_share"`
-	WatermarkDay int64                `json:"watermark_day"`
-	NowSlot      int                  `json:"now_slot"`
-	GeneratedAt  int64                `json:"generated_at"`
-	TodayAsOf    int64                `json:"today_as_of"`
-	Lanes        []almanacLaneJSON    `json:"lanes"`
-	Agenda       []almanacAgendaEntry `json:"agenda"`
+	QTH          string            `json:"qth"`
+	Area         almanacAreaInfo   `json:"area"`
+	Window       almanacWindowInfo `json:"window"`
+	SlotMinutes  int               `json:"slot_minutes"`
+	MMin         int               `json:"m_min"`
+	K            int               `json:"k"`
+	UsuallyShare float64           `json:"usually_share"`
+	WatermarkDay int64             `json:"watermark_day"`
+	NowSlot      int               `json:"now_slot"`
+	GeneratedAt  int64             `json:"generated_at"`
+	TodayAsOf    int64             `json:"today_as_of"`
+	almanacSNRInfo
+	Lanes  []almanacLaneJSON    `json:"lanes"`
+	Agenda []almanacAgendaEntry `json:"agenda"`
 }
 
 func almanacDayString(day int64) string {
 	return time.Unix(day*86400, 0).UTC().Format("2006-01-02")
 }
 
-func buildAlmanacResponse(qth string, area almanacArea, snap almanacSnapshot, now time.Time) *almanacResponse {
+// buildAlmanacResponse renders snap; minSNR is the requested SNR floor (nil
+// = any SNR; the applied tier is the snapshot's).
+func buildAlmanacResponse(qth string, area almanacArea, snap almanacSnapshot, now time.Time, minSNR *int) *almanacResponse {
 	typ := snap.typical
 	u := now.UTC()
 	nowMin := u.Hour()*60 + u.Minute()
@@ -362,42 +418,92 @@ func buildAlmanacResponse(qth string, area almanacArea, snap almanacSnapshot, no
 			StartDayIndex: typ.Window.Start,
 			EndDayIndex:   typ.Window.End,
 		},
-		SlotMinutes:  almanacSlotMinutes,
-		MMin:         almanacMinActiveDays30,
-		K:            almanacOpenMinSpotsPSKR,
-		UsuallyShare: almanacUsuallyShare,
-		WatermarkDay: typ.Watermark,
-		NowSlot:      nowSlot,
-		GeneratedAt:  snap.typicalAt.Unix(),
-		Lanes:        make([]almanacLaneJSON, 0, len(typ.Lanes)),
-		Agenda:       almanacAgenda(typ, snap.today, nowMin),
+		SlotMinutes:    almanacSlotMinutes,
+		MMin:           almanacMinActiveDays30,
+		K:              almanacOpenMinSpotsPSKR,
+		UsuallyShare:   almanacUsuallyShare,
+		WatermarkDay:   typ.Watermark,
+		NowSlot:        nowSlot,
+		GeneratedAt:    snap.typicalAt.Unix(),
+		almanacSNRInfo: newAlmanacSNRInfo(minSNR, typ.Tier, typ.SNRSince, typ.HasSNRSince),
+		Lanes:          make([]almanacLaneJSON, 0, len(typ.Lanes)),
+		Agenda:         almanacAgenda(typ, snap.today, nowMin),
 	}
 	if !snap.todayAt.IsZero() {
 		resp.TodayAsOf = snap.todayAt.Unix()
 	}
 	for _, l := range typ.Lanes {
-		resp.Lanes = append(resp.Lanes, almanacLaneJSON{
+		lj := almanacLaneJSON{
 			Band: l.Band, Region: l.Region, N: l.N, M: l.M,
 			OpenToday: snap.today.openNow(l.Band, l.Region, nowSlot),
-		})
+		}
+		if typ.Tier >= 0 {
+			lj.Share = almanacShareJSON(&l.Share)
+		}
+		resp.Lanes = append(resp.Lanes, lj)
 	}
 	return resp
 }
 
-// ServeHTTP: GET /api/almanac?qth=<locator|callsign>.
-// 400 missing/invalid qth, 404 unresolvable callsign, 503 when the data is
-// unavailable (no Postgres, timeout, negative cache).
+// ServeHTTP: GET /api/almanac?qth=<locator|callsign>[&min_snr=<dB>].
+// 400 missing/invalid qth or min_snr, 404 unresolvable callsign, 503 when the
+// data is unavailable (no Postgres, timeout, negative cache).
 func (s *almanacService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	qth, area, ok := s.resolveRequest(w, r, nil)
+	var minSNR *int
+	tier := -1
+	qth, area, ok := s.resolveRequest(w, r, func() (err error) {
+		minSNR, tier, err = almanacParseMinSNR(r)
+		return err
+	})
 	if !ok {
 		return
 	}
-	snap, err := s.get(area.Grid4)
+	snap, err := s.get(area.Grid4, tier)
 	if err != nil {
 		writeAlmanacUnavailable(w, err)
 		return
 	}
-	writeAlmanacJSON(w, buildAlmanacResponse(qth, area, snap, s.now()))
+	writeAlmanacJSON(w, buildAlmanacResponse(qth, area, snap, s.now(), minSNR))
+}
+
+// SNR floor parameter (KTD13).
+const (
+	almanacMinSNRLowest  = -40
+	almanacMinSNRHighest = 30
+)
+
+// almanacSNRTierFor snaps a floor (dB) to the nearest almanacSNRTierFloors
+// index; a tie goes to the stricter (higher) tier.
+func almanacSNRTierFor(db int) int {
+	best := 0
+	for i, f := range almanacSNRTierFloors {
+		d, bd := db-f, db-almanacSNRTierFloors[best]
+		if d < 0 {
+			d = -d
+		}
+		if bd < 0 {
+			bd = -bd
+		}
+		if d <= bd {
+			best = i
+		}
+	}
+	return best
+}
+
+// almanacParseMinSNR reads the optional min_snr parameter: absent/empty =
+// any SNR (nil, -1); otherwise an integer in [−40, +30] dB snapped to its
+// tier. Anything else is an error (400).
+func almanacParseMinSNR(r *http.Request) (*int, int, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("min_snr"))
+	if raw == "" {
+		return nil, -1, nil
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v < almanacMinSNRLowest || v > almanacMinSNRHighest {
+		return nil, -1, fmt.Errorf("min_snr must be an integer from %d to %d (dB)", almanacMinSNRLowest, almanacMinSNRHighest)
+	}
+	return &v, almanacSNRTierFor(v), nil
 }
 
 // resolveRequest is the shared /api/almanac* request prelude: GET/HEAD only

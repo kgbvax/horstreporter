@@ -211,7 +211,7 @@ func (s *wsprFakeStore) commitMonth(ctx context.Context, m *almanacWSPRMonth) er
 		}
 	}
 	for k, v := range m.Counts {
-		s.counts[wsprFakeSeasonKey{k.Grid4, k.Band, k.Region, m.YearMonth, almanacSeasonLayerWSPR}] = almanacSparseEncode(v)
+		s.counts[wsprFakeSeasonKey{k.Grid4, k.Band, k.Region, m.YearMonth, almanacSeasonLayerWSPR}] = almanacSparseEncode(v, m.Hist[k])
 	}
 	for k, v := range m.Activity {
 		s.activity[wsprFakeActivityKey{k.Grid, k.Band, m.YearMonth, almanacSeasonLayerWSPR}] = v
@@ -310,7 +310,7 @@ func wsprFill(v byte) []byte {
 	for i := range dense {
 		dense[i] = v
 	}
-	return almanacSparseEncode(&dense)
+	return almanacSparseEncode(&dense, nil)
 }
 
 // wsprAugRows is a fixed per-day data set for August 2026 used by several

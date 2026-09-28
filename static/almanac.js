@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { WSPR_REGIONS, bandColors, regionForLocator } from './utils.js';
+import { WSPR_REGIONS, bandColors, getMinSnrMode, regionForLocator } from './utils.js';
 import { makeDraggable } from './panel-drag.js';
 import { setPanelToggleState } from './panel-toggle.js';
 import { escapeHtml } from './ui-helpers.js';
@@ -21,6 +21,12 @@ import { escapeHtml } from './ui-helpers.js';
 // change listener, AbortController, plus a request token so a late response
 // for an old QTH can never overwrite the current one.
 //
+// SNR floor (plan KTD13): the page's Min SNR control picks the floor — CW /
+// SSB send their slider value as min_snr (none sends nothing = any SNR); the
+// server snaps it to the nearest 5 dB tier (−20 … 0) and reports the applied
+// tier, the SNR collection start and, per slot, the share of spots at or
+// above the floor. A mode switch or slider move refetches (debounced).
+//
 // Clicking a lane (or Enter/Space on the focused lane) calls openDrilldown
 // (U8): the seasonal month × hour view for that band and region replaces the
 // agenda and lanes inside the panel (GET /api/almanac/season). One row per
@@ -36,6 +42,7 @@ const POS_KEY = 'almanacPos';
 const TICK_MS = 60_000;         // now-line refresh
 const REFETCH_TICKS = 5;        // re-fetch every 5 ticks (server caches 60 s / 120 s)
 const AGENDA_CAP = 6;
+const SNR_DEBOUNCE_MS = 400;    // slider input → refetch
 const SLOTS = 48;
 const DEFAULT_SLOT_MINUTES = 30;
 
@@ -54,6 +61,9 @@ const runtime = {
     error: null,        // { kind: 'invalid' | 'notfound' | 'unavailable', qth }
     refreshFailed: false, // last quiet refresh failed; cache shown as-is
     lastQth: '',
+    lastMinSnr: null,   // min_snr of the last fetch (null = any SNR)
+    snrTimer: null,     // debounce timer of a Min SNR change
+    snrListener: null,  // delegated document listener (replaced on re-init)
     agendaExpanded: false,
     // Open seasonal drill-down: { band, region, qth, loading, data, error }.
     drilldown: null,
@@ -85,6 +95,19 @@ export function initAlmanac({ onLayoutChange } = {}) {
     };
     document.getElementById('qth')?.addEventListener('change', onQthMaybeChanged);
     document.getElementById('fetch-form')?.addEventListener('submit', onQthMaybeChanged);
+
+    // Min SNR mode radios and threshold sliders (both re-created by Svelte,
+    // so the listener is delegated). Replace, don't stack, on re-init.
+    if (runtime.snrListener) {
+        document.removeEventListener('change', runtime.snrListener);
+        document.removeEventListener('input', runtime.snrListener);
+    }
+    runtime.snrListener = (e) => {
+        const t = e.target;
+        if (t?.name === 'min-snr' || t?.id === 'cw-min-db' || t?.id === 'ssb-min-db') scheduleSnrRefetch();
+    };
+    document.addEventListener('change', runtime.snrListener);
+    document.addEventListener('input', runtime.snrListener);
 
     makeDraggable(panel, panel.querySelector('.almanac-window-header'), POS_KEY);
 }
@@ -122,6 +145,10 @@ function stopTimer() {
         runtime.abortController.abort();
         runtime.abortController = null;
     }
+    if (runtime.snrTimer) {
+        clearTimeout(runtime.snrTimer);
+        runtime.snrTimer = null;
+    }
     // Any response still in flight is now stale.
     runtime.token += 1;
     runtime.loading = false;
@@ -133,6 +160,36 @@ function stopTimer() {
     } else {
         closeDrilldownState();
     }
+}
+
+// The page's current SNR floor in dB (null = any SNR): the slider value of
+// the active Min SNR mode.
+export function currentMinSnr() {
+    const mode = getMinSnrMode();
+    const id = mode === 'cw' ? 'cw-min-db' : mode === 'ssb' ? 'ssb-min-db' : null;
+    if (!id) return null;
+    const fallback = mode === 'cw' ? '-15' : '0';
+    const v = Number.parseInt(document.getElementById(id)?.value ?? fallback, 10);
+    return Number.isFinite(v) ? v : null;
+}
+
+// Debounced refetch after a Min SNR mode / slider change.
+function scheduleSnrRefetch() {
+    if (!runtime.enabled) return;
+    if (runtime.snrTimer) clearTimeout(runtime.snrTimer);
+    runtime.snrTimer = setTimeout(() => {
+        runtime.snrTimer = null;
+        if (!runtime.enabled) return;
+        const cur = currentMinSnr();
+        if (cur !== runtime.lastMinSnr) fetchAlmanac();
+        const dd = runtime.drilldown;
+        // Same band × region, new floor.
+        if (dd && dd.minSnr !== cur) openDrilldown(dd.band, dd.region);
+    }, SNR_DEBOUNCE_MS);
+}
+
+function minSnrParam(v) {
+    return v === null || v === undefined ? '' : `&min_snr=${encodeURIComponent(v)}`;
 }
 
 function currentQth() {
@@ -157,11 +214,14 @@ async function fetchAlmanac({ quiet = false } = {}) {
         return;
     }
 
+    const minSnr = currentMinSnr();
     const qthChanged = qth !== runtime.lastQth;
+    const snrChanged = minSnr !== runtime.lastMinSnr;
     // A background refresh of the same area with data on screen: a failure
     // keeps that data (and any open drill-down) instead of wiping it.
-    const keepStale = quiet && !qthChanged && !!runtime.cache;
+    const keepStale = quiet && !qthChanged && !snrChanged && !!runtime.cache;
     runtime.lastQth = qth;
+    runtime.lastMinSnr = minSnr;
     runtime.loading = true;
     if (qthChanged) {
         runtime.agendaExpanded = false;
@@ -175,13 +235,13 @@ async function fetchAlmanac({ quiet = false } = {}) {
     }
     // A background refresh of the same QTH keeps the lanes steady; anything
     // else dims them (or shows "Loading" on a first load).
-    if (!quiet || qthChanged) showLoading();
+    if (!quiet || qthChanged || snrChanged) showLoading();
 
     const controller = new AbortController();
     runtime.abortController = controller;
     let outcome;
     try {
-        const resp = await fetch(`/api/almanac?qth=${encodeURIComponent(qth)}`, { signal: controller.signal });
+        const resp = await fetch(`/api/almanac?qth=${encodeURIComponent(qth)}${minSnrParam(minSnr)}`, { signal: controller.signal });
         if (token !== runtime.token) return;
         if (resp.ok) {
             outcome = { payload: await resp.json() };
@@ -254,12 +314,42 @@ function slotRangeLabel(start, len, slotMinutes = DEFAULT_SLOT_MINUTES) {
     return `${a}–${hhmm((start + len) * slotMinutes)} UTC`;
 }
 
+// "−10 dB" (typographic minus).
+function dbLabel(v) {
+    const n = Number(v);
+    return `${n < 0 ? '\u2212' : ''}${Math.abs(n)} dB`;
+}
+
+// "64% of spots ≥ −10 dB" (share 0..1 at the applied tier).
+function shareLabel(share, tier) {
+    return `${Math.round(Number(share) * 100)}% of spots \u2265 ${dbLabel(tier)}`;
+}
+
 // Accessible name and title of one slot (or run of equal slots).
 // `where` is "20m to NA" (lanes) or "20m to NA, Dec 2025" (drill-down).
-function slotLabel(where, start, len, n, m, mMin, slotMinutes) {
+// With an SNR floor, `share` (0..1 or null) and `tier` add the SNR share.
+function slotLabel(where, start, len, n, m, mMin, slotMinutes, share = null, tier = null) {
     const at = `${where}, ${slotRangeLabel(start, len, slotMinutes)}`;
     if (m < mMin) return `${at}: not enough data (${m} ${m === 1 ? 'day' : 'days'})`;
-    return `${at}: opened ${n} of ${m} days`;
+    const snr = share !== null && share !== undefined && tier !== null && tier !== undefined
+        ? ` \u00b7 ${shareLabel(share, tier)}` : '';
+    return `${at}: opened ${n} of ${m} days${snr}`;
+}
+
+// Header line for the SNR floor: "FT8/FT4 openings — any SNR" or
+// "— spots ≥ −10 dB (slider −12 → −10 dB tier)", plus the SNR start.
+function snrHeaderText(data) {
+    const tier = data?.snr_tier;
+    if (tier === null || tier === undefined) return 'FT8/FT4 openings \u2014 any SNR';
+    let text = `FT8/FT4 openings \u2014 spots \u2265 ${dbLabel(tier)}`;
+    const req = data.min_snr;
+    if (req !== null && req !== undefined && Number(req) !== Number(tier)) {
+        text += ` (slider ${dbLabel(req).replace(' dB', '')} \u2192 ${dbLabel(tier)} tier)`;
+    }
+    text += data.snr_available && data.snr_since
+        ? `; SNR data since ${data.snr_since}`
+        : '; no SNR data collected yet';
+    return text;
 }
 
 function startsInLabel(min) {
@@ -401,7 +491,8 @@ function headerHtml(data) {
         : '';
     const sq = `${squares} ${squares === 1 ? 'square' : 'squares'}`;
     return `<div class="almanac-area small"><span class="almanac-area-main"><strong>${escapeHtml(grid4)}</strong>, radius ${radius} (${sq})</span>` +
-        ` <span class="text-muted">last ${days} days, times UTC</span>${approx}</div>`;
+        ` <span class="text-muted">last ${days} days, times UTC</span>${approx}` +
+        `<div class="almanac-snr text-muted">${escapeHtml(snrHeaderText(data))}</div></div>`;
 }
 
 function agendaHtml(data) {
@@ -414,7 +505,7 @@ function agendaHtml(data) {
     }
     const shown = runtime.agendaExpanded ? all : all.slice(0, AGENDA_CAP);
     html += '<ul class="almanac-agenda-list">';
-    for (const e of shown) html += agendaRowHtml(e, slotMinutes);
+    for (const e of shown) html += agendaRowHtml(e, slotMinutes, data.snr_tier);
     html += '</ul>';
     if (all.length > AGENDA_CAP) {
         const label = runtime.agendaExpanded ? 'Show fewer' : `Show all (${all.length})`;
@@ -423,7 +514,7 @@ function agendaHtml(data) {
     return `${html}</section>`;
 }
 
-function agendaRowHtml(e, slotMinutes) {
+function agendaRowHtml(e, slotMinutes, tier = null) {
     const color = bandColor(e.band);
     const band = escapeHtml(e.band);
     const region = escapeHtml(e.region);
@@ -436,7 +527,9 @@ function agendaRowHtml(e, slotMinutes) {
     return `<li class="almanac-agenda-row" data-status="${escapeHtml(e.status)}" data-band="${band}" data-region="${region}">` +
         `<span class="almanac-agenda-what"><span class="almanac-band-dot" style="background: ${color}" aria-hidden="true"></span>` +
         `<strong>${band}</strong> to ${region}: usually <span class="almanac-agenda-time">${time}</span> ` +
-        `<span class="text-muted">(${e.peak_n}/${e.peak_m} days)</span></span>` +
+        `<span class="text-muted">(${e.peak_n}/${e.peak_m} days` +
+        `${e.peak_share !== null && e.peak_share !== undefined && tier !== null && tier !== undefined
+            ? ` \u00b7 ${escapeHtml(shareLabel(e.peak_share, tier))}` : ''})</span></span>` +
         `<span class="almanac-agenda-meta">${when}${today}${local}</span></li>`;
 }
 
@@ -467,7 +560,7 @@ function lanesHtml(data, lanes) {
             '<div class="almanac-tracks">';
         for (const band of bands) {
             const lane = byKey.get(`${band}|${region}`) || { band, region, n: new Array(SLOTS).fill(0), m: bandM.get(band) || [] };
-            html += laneHtml(lane, mMin, slotMinutes);
+            html += laneHtml(lane, mMin, slotMinutes, data.snr_tier);
         }
         html += `<div class="almanac-now-layer" aria-hidden="true"><div class="almanac-now" style="left: ${left}"></div></div>`;
         html += '</div></div>';
@@ -485,20 +578,25 @@ function bandColor(band) {
     return bandColors[band] || bandColors.all || '#6c757d';
 }
 
-// 48 slots → runs of equal (n, m): opacity from n/m in the band colour,
-// neutral hatch when m < m_min, empty track when closed. `where` prefixes
-// each run's title/aria-label (e.g. "20m to NA" or "20m to NA, Dec 2025").
-function runsHtml(nIn, mIn, mMin, slotMinutes, color, where) {
+// 48 slots → runs of equal (n, m, share): opacity from n/m in the band
+// colour, neutral hatch when m < m_min, empty track when closed. `where`
+// prefixes each run's title/aria-label (e.g. "20m to NA" or "20m to NA, Dec
+// 2025"); with an SNR floor (`tier`) the label carries the slot's share.
+function runsHtml(nIn, mIn, mMin, slotMinutes, color, where, shareIn = null, tier = null) {
     const n = Array.isArray(nIn) ? nIn : [];
     const m = Array.isArray(mIn) ? mIn : [];
+    const sh = Array.isArray(shareIn) ? shareIn : [];
+    const shareAt = (i) => (sh[i] === null || sh[i] === undefined ? null : Number(sh[i]));
     let runs = '';
     let s = 0;
     while (s < SLOTS) {
         const ms = Number(m[s]) || 0;
         const ns = Number(n[s]) || 0;
+        const ss = shareAt(s);
         let len = 1;
-        while (s + len < SLOTS && (Number(m[s + len]) || 0) === ms && (Number(n[s + len]) || 0) === ns) len += 1;
-        const label = escapeHtml(slotLabel(where, s, len, ns, ms, mMin, slotMinutes));
+        while (s + len < SLOTS && (Number(m[s + len]) || 0) === ms && (Number(n[s + len]) || 0) === ns &&
+            shareAt(s + len) === ss) len += 1;
+        const label = escapeHtml(slotLabel(where, s, len, ns, ms, mMin, slotMinutes, ss, tier));
         const common = `title="${label}" aria-label="${label}" role="img" data-slot="${s}"`;
         if (ms < mMin) {
             runs += `<span class="almanac-run is-unknown" style="flex-grow: ${len}" ${common}></span>`;
@@ -513,10 +611,10 @@ function runsHtml(nIn, mIn, mMin, slotMinutes, color, where) {
     return runs;
 }
 
-function laneHtml(lane, mMin, slotMinutes) {
+function laneHtml(lane, mMin, slotMinutes, tier = null) {
     const { band, region } = lane;
     const color = bandColor(band);
-    const runs = runsHtml(lane.n, lane.m, mMin, slotMinutes, color, `${band} to ${region}`);
+    const runs = runsHtml(lane.n, lane.m, mMin, slotMinutes, color, `${band} to ${region}`, lane.share, tier);
     const b = escapeHtml(band);
     const r = escapeHtml(region);
     return `<div class="almanac-lane" role="button" tabindex="-1" data-band="${b}" data-region="${r}" aria-label="${b} to ${r}: open the seasonal view">` +
@@ -589,7 +687,7 @@ function monthsHtml(dd) {
         }
         const layer = LAYER_LABELS[mo.layer] || String(mo.layer || '').toUpperCase();
         const when = `${name} ${mo.year}`;
-        const runs = runsHtml(mo.n, mo.m, mMin, slotMinutes, color, `${dd.band} to ${dd.region}, ${when}`);
+        const runs = runsHtml(mo.n, mo.m, mMin, slotMinutes, color, `${dd.band} to ${dd.region}, ${when}`, mo.share, data.snr_tier);
         html += `<div class="${cls}" data-month="${i + 1}" data-layer="${escapeHtml(mo.layer || '')}"${cur}>` +
             `<span class="almanac-month-label">${escapeHtml(`${when} · ${layer}`)}</span>` +
             `<span class="almanac-month-track">${runs}</span></div>`;
@@ -612,7 +710,7 @@ function updateNowLines() {
 export function openDrilldown(band, region) {
     if (!band || !region || !runtime.lastQth) return;
     closeDrilldownState();
-    runtime.drilldown = { band, region, qth: runtime.lastQth, loading: true, data: null, error: null };
+    runtime.drilldown = { band, region, qth: runtime.lastQth, minSnr: runtime.lastMinSnr, loading: true, data: null, error: null };
     render();
     bodyEl()?.querySelector('.almanac-drill-back')?.focus();
     fetchSeason();
@@ -652,7 +750,7 @@ async function fetchSeason() {
     const controller = new AbortController();
     runtime.drillAbort = controller;
     const url = `/api/almanac/season?qth=${encodeURIComponent(dd.qth)}` +
-        `&band=${encodeURIComponent(dd.band)}&region=${encodeURIComponent(dd.region)}`;
+        `&band=${encodeURIComponent(dd.band)}&region=${encodeURIComponent(dd.region)}${minSnrParam(dd.minSnr)}`;
     let outcome;
     try {
         const resp = await fetch(url, { signal: controller.signal });
@@ -783,6 +881,8 @@ export const __test = {
     runtime,
     openDrilldown,
     slotLabel,
+    snrHeaderText,
+    currentMinSnr,
     slotRangeLabel,
     startsInLabel,
     orderRegions,
@@ -798,6 +898,7 @@ export const __test = {
         runtime.refreshFailed = false;
         runtime.loading = false;
         runtime.lastQth = '';
+        runtime.lastMinSnr = null;
         runtime.agendaExpanded = false;
         closeDrilldownState();
         runtime.onLayoutChange = null;
@@ -806,4 +907,5 @@ export const __test = {
     TOGGLE_ID,
     BODY_ID,
     ENABLE_KEY,
+    SNR_DEBOUNCE_MS,
 };

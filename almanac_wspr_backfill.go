@@ -172,11 +172,19 @@ func almanacWSPRRegion(grid4 string) string {
 
 const almanacWSPRSlotExpr = "intDiv(toUnixTimestamp(time) % 86400, 1800)"
 
+// almanacWSPRSNRBinsExpr is the per-group SNR histogram (KTD13) in the
+// almanacSNRHist bins: [<−20], [−20,−15), [−15,−10), [−10,−5), [−5,0), [≥0].
+const almanacWSPRSNRBinsExpr = "[toUInt32(countIf(snr < -20)), toUInt32(countIf(snr >= -20 AND snr < -15)), " +
+	"toUInt32(countIf(snr >= -15 AND snr < -10)), toUInt32(countIf(snr >= -10 AND snr < -5)), " +
+	"toUInt32(countIf(snr >= -5 AND snr < 0)), toUInt32(countIf(snr >= 0))] AS h"
+
 // almanacWSPRRingSQL aggregates one window of spots touching the ring by
-// (slot, band, rx4, tx4); orientations are emitted in Go.
+// (slot, band, rx4, tx4), with the SNR histogram; orientations are emitted
+// in Go.
 func almanacWSPRRingSQL(ringList string, from, to int64) string {
 	return "SELECT " + almanacWSPRSlotExpr + " AS slot, band, " +
-		"substring(upper(rx_loc),1,4) AS rx4, substring(upper(tx_loc),1,4) AS tx4, toUInt32(count()) AS c " +
+		"substring(upper(rx_loc),1,4) AS rx4, substring(upper(tx_loc),1,4) AS tx4, toUInt32(count()) AS c, " +
+		almanacWSPRSNRBinsExpr + " " +
 		"FROM wspr.rx " +
 		fmt.Sprintf("WHERE time >= toDateTime(%d) AND time < toDateTime(%d) ", from, to) +
 		"AND band IN (" + almanacWSPRBandCodes + ") " +
@@ -210,13 +218,23 @@ func (n *almanacWSPRInt) UnmarshalJSON(b []byte) error {
 }
 
 // almanacWSPRAggRow is one JSONEachRow line of either query (the global query
-// leaves band/rx4/tx4 empty).
+// leaves band/rx4/tx4/h empty). H is the SNR histogram (almanacSNRHist bins).
 type almanacWSPRAggRow struct {
-	Slot almanacWSPRInt `json:"slot"`
-	Band almanacWSPRInt `json:"band"`
-	Rx4  string         `json:"rx4"`
-	Tx4  string         `json:"tx4"`
-	C    almanacWSPRInt `json:"c"`
+	Slot almanacWSPRInt   `json:"slot"`
+	Band almanacWSPRInt   `json:"band"`
+	Rx4  string           `json:"rx4"`
+	Tx4  string           `json:"tx4"`
+	C    almanacWSPRInt   `json:"c"`
+	H    []almanacWSPRInt `json:"h"`
+}
+
+// hist is the row's SNR histogram (saturating; all-zero when absent).
+func (r *almanacWSPRAggRow) hist() almanacSNRHist {
+	var h almanacSNRHist
+	for b := 0; b < almanacSNRBins && b < len(r.H); b++ {
+		satAdd8(&h[b], int64(r.H[b]))
+	}
+	return h
 }
 
 // almanacWSPRQueryError is a failed request. Code is the ClickHouse
@@ -319,8 +337,10 @@ type almanacWSPRMonth struct {
 	LastDay   int64
 	// Ring is the area's r=2 grid4 set: the DELETE scope of the commit.
 	Ring []string
-	// Counts is the dense month grid per key, sparse-encoded on commit.
+	// Counts is the dense month grid per key, sparse-encoded on commit; Hist
+	// the matching SNR histograms (KTD13; absent key = no SNR data).
 	Counts   map[almanacSegKey]*[almanacSeasonCountsLen]byte
+	Hist     map[almanacSegKey]*[almanacSeasonCountsLen]almanacSNRHist
 	Activity map[almanacGridBand]uint32
 	// IngestTotals is nil when this month's WSPR ingest totals were already
 	// committed (by another area); otherwise it replaces the month's totals.
@@ -340,6 +360,7 @@ func newAlmanacWSPRMonth(area string, ring []string, ym int, withIngest bool) *a
 		LastDay:       last,
 		Ring:          ring,
 		Counts:        make(map[almanacSegKey]*[almanacSeasonCountsLen]byte, 256),
+		Hist:          make(map[almanacSegKey]*[almanacSeasonCountsLen]almanacSNRHist, 256),
 		Activity:      make(map[almanacGridBand]uint32, 64),
 		DoneKey:       almanacWSPRMonthDoneKey(area, ym),
 		IngestDoneKey: almanacWSPRIngestDoneKey(ym),
@@ -368,13 +389,14 @@ func (m *almanacWSPRMonth) addRing(day int64, r almanacWSPRAggRow) {
 	}
 	rx4 := strings.ToUpper(strings.TrimSpace(r.Rx4))
 	tx4 := strings.ToUpper(strings.TrimSpace(r.Tx4))
-	m.emit(day, slot, band, rx4, tx4, int64(r.C))
+	h := r.hist()
+	m.emit(day, slot, band, rx4, tx4, int64(r.C), &h)
 	if tx4 != rx4 {
-		m.emit(day, slot, band, tx4, rx4, int64(r.C))
+		m.emit(day, slot, band, tx4, rx4, int64(r.C), &h)
 	}
 }
 
-func (m *almanacWSPRMonth) emit(day int64, slot int, band, near4, far4 string, c int64) {
+func (m *almanacWSPRMonth) emit(day int64, slot int, band, near4, far4 string, c int64, h *almanacSNRHist) {
 	if !m.ringSet[near4] {
 		return
 	}
@@ -390,6 +412,14 @@ func (m *almanacWSPRMonth) emit(day int64, slot int, band, near4, far4 string, c
 		m.Counts[k] = counts
 	}
 	satAdd8(&counts[almanacSegmentOffset(dom)+slot], c)
+	if h.total() > 0 {
+		hist := m.Hist[k]
+		if hist == nil {
+			hist = new([almanacSeasonCountsLen]almanacSNRHist)
+			m.Hist[k] = hist
+		}
+		hist[almanacSegmentOffset(dom)+slot].add(h)
+	}
 	m.Activity[almanacGridBand{Grid: near4, Band: band}] |= 1 << uint(dom-1)
 }
 
@@ -702,7 +732,7 @@ func (p *pgAlmanacWSPRBackfillStore) commitMonth(ctx context.Context, m *almanac
 	if len(m.Counts) > 0 {
 		rows := make([][]any, 0, len(m.Counts))
 		for k, c := range m.Counts {
-			rows = append(rows, []any{k.Grid4, k.Band, k.Region, int32(m.YearMonth), almanacSeasonLayerWSPR, almanacSparseEncode(c)})
+			rows = append(rows, []any{k.Grid4, k.Band, k.Region, int32(m.YearMonth), almanacSeasonLayerWSPR, almanacSparseEncode(c, m.Hist[k])})
 		}
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"almanac_season_counts"},
 			[]string{"grid4", "band", "region", "year_month", "layer", "counts"}, pgx.CopyFromRows(rows)); err != nil {

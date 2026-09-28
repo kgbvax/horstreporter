@@ -69,7 +69,7 @@ func TestMergePendingBackMergesOnce(t *testing.T) {
 	// int64 wrap — the corrupted dx_baseline_cluster rows seen on prod.
 	s := &dxPostgresStore{
 		pendingGlobal:  make(map[baselineGlobalKey]baselineDelta),
-		pendingRegion:  make(map[dxPulseRegionBaselineDailyKey]int64),
+		pendingRegion:  make(map[dxPulseRegionBaselineDailyKey]regionDelta),
 		pendingCluster: make(map[clusterBaselineKey]baselineDelta),
 	}
 	gk := baselineGlobalKey{Band: "40m", SlotOfDay: 39}
@@ -78,7 +78,7 @@ func TestMergePendingBackMergesOnce(t *testing.T) {
 
 	s.mergePendingBack(
 		map[baselineGlobalKey]baselineDelta{gk: {Count: 3}},
-		map[dxPulseRegionBaselineDailyKey]int64{rk: 5},
+		map[dxPulseRegionBaselineDailyKey]regionDelta{rk: {Count: 5, SNR: 4, GE: [almanacSNRTiers]int64{4, 3, 2, 1, 1}}},
 		map[clusterBaselineKey]baselineDelta{ck: {Count: 7}},
 	)
 	if got := s.pendingCluster[ck].Count; got != 7 {
@@ -87,8 +87,8 @@ func TestMergePendingBackMergesOnce(t *testing.T) {
 	if got := s.pendingGlobal[gk].Count; got != 3 {
 		t.Fatalf("global delta = %d, want 3", got)
 	}
-	if got := s.pendingRegion[rk]; got != 5 {
-		t.Fatalf("region delta = %d, want 5", got)
+	if got := s.pendingRegion[rk]; got != (regionDelta{Count: 5, SNR: 4, GE: [almanacSNRTiers]int64{4, 3, 2, 1, 1}}) {
+		t.Fatalf("region delta = %+v, want count 5 with its SNR counters", got)
 	}
 	if s.pendingCount != 3 {
 		t.Fatalf("pendingCount = %d, want 3 (one per requeued entry)", s.pendingCount)
@@ -97,11 +97,15 @@ func TestMergePendingBackMergesOnce(t *testing.T) {
 	// A second failed flush requeues the same deltas again (once).
 	s.mergePendingBack(
 		map[baselineGlobalKey]baselineDelta{gk: {Count: 3}},
-		map[dxPulseRegionBaselineDailyKey]int64{rk: 5},
+		map[dxPulseRegionBaselineDailyKey]regionDelta{rk: {Count: 5, SNR: 4, GE: [almanacSNRTiers]int64{4, 3, 2, 1, 1}}},
 		map[clusterBaselineKey]baselineDelta{ck: {Count: 7}},
 	)
 	if got := s.pendingCluster[ck].Count; got != 14 {
 		t.Fatalf("cluster delta after two requeues = %d, want 14", got)
+	}
+	// Region deltas merge by summing every counter (count, snr, tiers).
+	if got := s.pendingRegion[rk]; got != (regionDelta{Count: 10, SNR: 8, GE: [almanacSNRTiers]int64{8, 6, 4, 2, 2}}) {
+		t.Fatalf("region delta after two requeues = %+v", got)
 	}
 }
 

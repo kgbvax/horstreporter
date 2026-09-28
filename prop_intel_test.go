@@ -588,7 +588,7 @@ func TestPropIntelSummaryAlmanacWarm(t *testing.T) {
 	setHubHistory(t, []MQTTMessage{makeWSPRSpot(now-60, "20m", "JO62", "JO31", 5, 43)})
 	f := populatedAggWorld()
 	svc, _, _ := newTestAlmanacService(f)
-	if _, err := svc.get("JO32"); err != nil {
+	if _, err := svc.get("JO32", -1); err != nil {
 		t.Fatalf("warm-up get: %v", err)
 	}
 	withAlmanacSvc(t, svc)
@@ -676,7 +676,7 @@ func TestPropIntelSummaryAlmanacCachedCallsign(t *testing.T) {
 	setHubHistory(t, []MQTTMessage{makeWSPRSpot(now-60, "20m", "JO62", "JO31", 5, 43)})
 	f := populatedAggWorld()
 	svc, _, _ := newTestAlmanacService(f)
-	if _, err := svc.get("JO32"); err != nil {
+	if _, err := svc.get("JO32", -1); err != nil {
 		t.Fatalf("warm-up get: %v", err)
 	}
 	withAlmanacSvc(t, svc)
@@ -741,7 +741,7 @@ func TestPropIntelSummaryAlmanacDataPoor(t *testing.T) {
 	for name, mk := range cases {
 		t.Run(name, func(t *testing.T) {
 			svc, _, _ := newTestAlmanacService(mk())
-			if _, err := svc.get("JO32"); err != nil {
+			if _, err := svc.get("JO32", -1); err != nil {
 				t.Fatalf("warm-up get: %v", err)
 			}
 			area, ok := almanacSummaryArea("JO32")

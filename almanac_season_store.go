@@ -48,10 +48,11 @@ const (
 func almanacSeasonSchemaStmts() []string {
 	return []string{
 		// Seasonal record: one row per (grid4, band, far-end region, month,
-		// layer). counts is the sparse encoding of the 31×48 day-major uint8
-		// month grid (almanac_sparse.go: version byte + uvarint gap / count
-		// pairs, ≈2 B per non-zero cell). Rows stay well under the ~2 KB TOAST
-		// threshold, so Postgres never compresses them: the encoding itself
+		// layer). counts is the sparse encoding of the 31×48 day-major month
+		// grid (almanac_sparse.go: version byte + per non-zero cell a uvarint
+		// gap, the count and — v2, KTD13 — an SNR histogram; ≈3–6 B per
+		// cell). Rows stay mostly under the ~2 KB TOAST threshold, so
+		// Postgres rarely compresses them: the encoding itself
 		// is the compression. fillfactor leaves room for the daily fold
 		// rewrites to stay HOT.
 		// LOGGED on purpose — never UNLOGGED.
@@ -138,9 +139,17 @@ const almanacIngestSlotFlushSQL = `
 const (
 	almanacFoldLockWatermarkSQL = `SELECT v FROM dx_meta WHERE k = $1 FOR UPDATE`
 
-	// Streams one day via idx_dx_region_baseline_daily_day_index.
+	// Streams one day via idx_dx_region_baseline_daily_day_index. The SNR
+	// counters read as 0 for days before the SNR collection start (KTD13);
+	// almanacFoldStreamSNRSQL reads them from then on.
 	almanacFoldStreamSQL = `
-		SELECT target_grid4, band, region, slot_of_day, spot_count
+		SELECT target_grid4, band, region, slot_of_day, spot_count,
+			0::bigint, 0::bigint, 0::bigint, 0::bigint, 0::bigint, 0::bigint
+		FROM dx_region_baseline_daily
+		WHERE day_index = $1`
+	almanacFoldStreamSNRSQL = `
+		SELECT target_grid4, band, region, slot_of_day, spot_count,
+			snr_spots::bigint, snr_ge_m20::bigint, snr_ge_m15::bigint, snr_ge_m10::bigint, snr_ge_m5::bigint, snr_ge_0::bigint
 		FROM dx_region_baseline_daily
 		WHERE day_index = $1`
 
@@ -245,6 +254,26 @@ func readAlmanacWatermark(ctx context.Context, q interface {
 	return w, true, nil
 }
 
+// readAlmanacSNRSince reads the SNR collection start (almanacSNRSinceKey);
+// ok is false while it is not recorded (SNR columns missing).
+func readAlmanacSNRSince(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}) (int64, bool, error) {
+	var v string
+	err := q.QueryRow(ctx, `SELECT v FROM dx_meta WHERE k = $1`, almanacSNRSinceKey).Scan(&v)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	d, perr := strconv.ParseInt(v, 10, 64)
+	if perr != nil {
+		return 0, false, fmt.Errorf("almanac SNR start %q: %w", v, perr)
+	}
+	return d, true, nil
+}
+
 func (p *pgAlmanacFoldStore) ensureWatermark(ctx context.Context, today int64) (int64, error) {
 	if w, ok, err := readAlmanacWatermark(ctx, p.pool, false); err != nil || ok {
 		return w, err
@@ -305,14 +334,23 @@ func (p *pgAlmanacFoldStore) foldDay(ctx context.Context, day int64) (int64, err
 		return w, nil
 	}
 
+	since, hasSince, err := readAlmanacSNRSince(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	stream := almanacFoldStreamSQL
+	if almanacFoldUsesSNR(day, since, hasSince) {
+		stream = almanacFoldStreamSNRSQL
+	}
 	fold := newAlmanacDayFold(day)
-	rows, err := tx.Query(ctx, almanacFoldStreamSQL, day)
+	rows, err := tx.Query(ctx, stream, day)
 	if err != nil {
 		return 0, err
 	}
 	for rows.Next() {
 		var r almanacDailyRow
-		if err := rows.Scan(&r.Grid4, &r.Band, &r.Region, &r.Slot, &r.Count); err != nil {
+		if err := rows.Scan(&r.Grid4, &r.Band, &r.Region, &r.Slot, &r.Count,
+			&r.SNR, &r.GE[0], &r.GE[1], &r.GE[2], &r.GE[3], &r.GE[4]); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -424,7 +462,7 @@ func foldSeasonRows(ctx context.Context, tx pgx.Tx, fold *almanacDayFold) error 
 			if !ok {
 				continue // cannot happen: the cursor joins the day's keys
 			}
-			enc, derr := almanacSparseReplaceDay(old, fold.DayOfMonth, seg)
+			enc, derr := almanacSparseReplaceDay(old, fold.DayOfMonth, seg, fold.Hist[k])
 			if derr != nil {
 				almanacSparseMalformed("almanac fold", k.Grid4, k.Band, k.Region, fold.YearMonth, derr)
 			}
@@ -454,7 +492,7 @@ func foldSeasonRows(ctx context.Context, tx pgx.Tx, fold *almanacDayFold) error 
 			if !ok {
 				return nil, nil
 			}
-			enc, _ := almanacSparseReplaceDay(nil, fold.DayOfMonth, seg)
+			enc, _ := almanacSparseReplaceDay(nil, fold.DayOfMonth, seg, fold.Hist[k])
 			return []any{k.Grid4, k.Band, k.Region, enc}, nil
 		}))
 	stop()

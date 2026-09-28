@@ -387,15 +387,21 @@ transaction (each day counted once).
 
 Params: `qth` (or `callsign` / `locator`, see Conventions). A 6/8-char
 locator is truncated to its grid4; a callsign resolves via QRZ, falling back
-to the DXCC centroid (`area.approximate: true`).
+to the DXCC centroid (`area.approximate: true`). Optional `min_snr` (integer
+dB, −40…+30): an SNR floor, snapped to the nearest of the 5 dB tiers
+−20/−15/−10/−5/0 dB (a tie goes to the higher tier); absent = any SNR
+(exactly the behaviour without the parameter). The web UI sends the Min SNR
+slider value of the active CW/SSB mode.
 
-Status: `400` missing or invalid qth · `404` callsign that cannot be located ·
+Status: `400` missing or invalid qth, or `min_snr` not an integer in
+−40…+30 · `404` callsign that cannot be located ·
 `503` no Postgres, read over the 4 s budget, or a failed read in the last
 30 s (negative cache; `Retry-After: 30`).
 
-Caching (keyed by the centre grid4, LRU of 256): the typical part (lanes,
-radius) is kept 6 h, or until the fold watermark changes or the UTC day rolls;
-the today overlay (`open_today`) is re-read after 120 s. Served with
+Caching (keyed by the centre grid4 plus the applied SNR tier — not the raw
+`min_snr` — LRU of 256): the typical part (lanes, radius) is kept 6 h, or
+until the fold watermark changes or the UTC day rolls; the today overlay
+(`open_today`) is re-read after 120 s. Served with
 `Cache-Control: max-age=60`.
 
 Response:
@@ -409,15 +415,18 @@ Response:
   "slot_minutes": 30, "m_min": 10, "k": 2, "usually_share": 0.5,
   "watermark_day": 20738, "now_slot": 25,
   "generated_at": 1792067400, "today_as_of": 1792067400,
+  "min_snr": -12, "snr_tier": -10,
+  "snr_available": true, "snr_since": "2026-09-29",
   "lanes": [
     {"band": "20m", "region": "NA", "n": [0, 0, …48], "m": [30, 30, …48],
-     "open_today": false}
+     "open_today": false, "share": [null, 0.64, …48]}
   ],
   "agenda": [
     {"band": "20m", "region": "NA", "start_slot": 26, "len_slots": 10,
      "start": "13:00", "end": "18:00", "crosses_midnight": false,
      "all_day": false, "status": "upcoming", "starts_in_min": 30,
-     "peak_slot": 27, "peak_n": 24, "peak_m": 30, "open_today": false}
+     "peak_slot": 27, "peak_n": 24, "peak_m": 30, "open_today": false,
+     "peak_share": 0.64}
   ]
 }
 ```
@@ -445,6 +454,22 @@ Response:
   within the same squares (from the unfolded daily tail).
 - `watermark_day`: fold watermark (UTC day index) the lanes were read at;
   `-1` when the fold has never run.
+- SNR floor (`min_snr` given; KTD13 of the Almanac plan): `min_snr` echoes
+  the request, `snr_tier` is the applied tier floor (both `null` without a
+  floor). A day is open in a slot when ≥ `k` of its spots reached the floor
+  (spots with a real SNR only: PSKReporter; DX-cluster spots have none, so a
+  cluster-only cell is not open). Days before `snr_since` have no SNR data
+  and are left out of both `n` and `m` (unknown, never closed); `m` still
+  uses the all-spot alive/active rules otherwise. `share[s]` is the pooled
+  share of spots ≥ the floor among the SNR-carrying spots over the slot's
+  `m` days (`null` when there were none); absent without a floor.
+  `agenda[].peak_share` is that share at the peak slot. The agenda and
+  `open_today` apply the floor too.
+- `snr_available` / `snr_since`: SNR data is being collected (the SNR
+  columns exist) and the first UTC day it covers (the day after the deploy
+  that added them). `snr_available: false` → every floor reads unknown.
+- The widget summary (`/api/prop_intel/summary` `almanac`) always uses any
+  SNR.
 
 ### `GET /api/almanac/season` — Almanac seasonal drill-down (month × hour)
 
@@ -464,9 +489,10 @@ unfolded days without counting any day twice. Lookback: the current month
 and the 59 before it.
 
 Params: `qth` (as `/api/almanac`), `band` (`160m`…`10m`, case-insensitive),
-`region` (one of the 11 region codes, case-insensitive).
+`region` (one of the 11 region codes, case-insensitive), optional `min_snr`
+(as `/api/almanac`).
 
-Status: `400` missing or invalid qth, band or region · `404` callsign that
+Status: `400` missing or invalid qth, band, region or `min_snr` · `404` callsign that
 cannot be located · `503` no Postgres, read over the 4 s budget, or a
 failed read in the last 30 s (`Retry-After: 30`).
 
@@ -475,7 +501,7 @@ Radius: the same as the landing view. The server takes `area.radius` from the
 cached) and reads the squares within that radius, so lanes and drill-down
 always describe the same area.
 
-Caching (keyed by centre grid4 + band + region, LRU of 256): 6 h, or until
+Caching (keyed by centre grid4 + SNR tier + band + region, LRU of 256): 6 h, or until
 the fold watermark changes, the UTC day rolls or the landing radius changes.
 Served with `Cache-Control: max-age=60`.
 
@@ -508,6 +534,10 @@ Response:
 - `days`: the month's days with at least one alive, active slot (the
   `m_min` test). Individual slots with `m[s] < m_min` are "not enough data".
 - `through_day`: the last day included (yesterday; today is partial).
+- SNR floor: the response carries `min_snr`, `snr_tier`, `snr_available`,
+  `snr_since` as `/api/almanac`, and each `ok` month a `share[48]`. With a
+  floor only the `pskr` layer is used (no WSPR fallback) and days before
+  `snr_since` are left out, so earlier months read `not_collected`.
 
 ### `GET /api/push/vapid-public-key` — Web Push public key
 
@@ -659,6 +689,27 @@ When Postgres is configured, a `postgres` block carries persistence health:
     URL.
 - `-almanac-wspr-backfill-years` (default 3): how many years of complete months
   to backfill, never earlier than 2008-03.
+
+#### Almanac SNR data (no flag)
+
+- `dx_region_baseline_daily` carries six SNR counters next to `spot_count`
+  (INTEGER NOT NULL DEFAULT 0): `snr_spots` (spots with a real SNR —
+  PSKReporter; DX-cluster spots are counted in `spot_count` only) and the
+  cumulative `snr_ge_m20`, `snr_ge_m15`, `snr_ge_m10`, `snr_ge_m5`,
+  `snr_ge_0` (spots with SNR ≥ −20 … ≥ 0 dB). Written by the live ingest
+  only; the raw-spot rebuild leaves them 0.
+- Startup adds them when missing: one `ALTER TABLE … ADD COLUMN IF NOT
+  EXISTS` for all six (metadata-only, constant default) under
+  `lock_timeout = 5s`, skipped when `information_schema` already lists them.
+  A failure is logged at ERROR and is not fatal: the process runs without SNR
+  data (flush writes `spot_count` only, `snr_available: false`) and retries at
+  the next start.
+- dx_meta `almanac_snr_since_day`: the first UTC day index with complete SNR
+  counters (the day after the columns were first confirmed); written once.
+- The seasonal record (`almanac_season_counts.counts`) stores, from that day
+  on, a 6-bin SNR histogram per cell (sparse encoding v2, see
+  `almanac_sparse.go`); the WSPR backfill writes the same bins from
+  wspr.live's `snr`.
 
 ## Removed features
 

@@ -40,17 +40,24 @@ type aggIngestKey struct {
 }
 
 type fakeAggStore struct {
-	mu        sync.Mutex
-	wm        int64
-	hasWM     bool
-	season    map[aggSeasonKey][]byte
-	daily     map[aggDailyKey]int64
-	ingest    map[aggIngestKey]int64
-	lost      map[int64]bool
-	err       error
-	block     bool // wait for ctx.Done (timeout simulation)
-	txCalls   int
-	tailCalls int
+	mu     sync.Mutex
+	wm     int64
+	hasWM  bool
+	season map[aggSeasonKey][]byte
+	daily  map[aggDailyKey]int64
+	// SNR data (KTD13): seasonHist parallels season (dense histograms),
+	// dailySNR the daily rows' SNR counters; snrSince is the collection
+	// start (hasSNRSince false = not collected).
+	seasonHist  map[aggSeasonKey][]almanacSNRHist
+	dailySNR    map[aggDailyKey]regionDelta
+	snrSince    int64
+	hasSNRSince bool
+	ingest      map[aggIngestKey]int64
+	lost        map[int64]bool
+	err         error
+	block       bool // wait for ctx.Done (timeout simulation)
+	txCalls     int
+	tailCalls   int
 	// seasonLayers records every layer the reader asked for.
 	seasonLayers   []string
 	afterWatermark func(f *fakeAggStore)
@@ -62,8 +69,11 @@ func newFakeAggStore(wm int64) *fakeAggStore {
 		hasWM:  true,
 		season: map[aggSeasonKey][]byte{},
 		daily:  map[aggDailyKey]int64{},
-		ingest: map[aggIngestKey]int64{},
-		lost:   map[int64]bool{},
+
+		seasonHist: map[aggSeasonKey][]almanacSNRHist{},
+		dailySNR:   map[aggDailyKey]regionDelta{},
+		ingest:     map[aggIngestKey]int64{},
+		lost:       map[int64]bool{},
 	}
 }
 
@@ -84,6 +94,37 @@ func (f *fakeAggStore) addSeason(grid, band, region, layer string, day int64, sl
 	c[i] = byte(v)
 }
 
+// addSNR adds n spots with a real SNR of snr dB (KTD13) where they live,
+// like add: the seasonal histogram for folded days, the daily SNR counters
+// later.
+func (f *fakeAggStore) addSNR(grid, band, region string, day int64, slot int, n int64, snr int) {
+	var d regionDelta
+	for i := int64(0); i < n; i++ {
+		d.observeSpot(snr, true)
+	}
+	if f.hasWM && day <= f.wm {
+		f.addSeason(grid, band, region, almanacSeasonLayerPSKR, day, slot, n)
+		ym, dom := almanacYearMonthDOM(day)
+		k := aggSeasonKey{grid, band, region, ym, almanacSeasonLayerPSKR}
+		h := f.seasonHist[k]
+		if h == nil {
+			h = make([]almanacSNRHist, almanacSeasonCountsLen)
+			f.seasonHist[k] = h
+		}
+		add := almanacSNRHistFromCounts(d.SNR, d.GE)
+		h[almanacSegmentOffset(dom)+slot].add(&add)
+		return
+	}
+	dk := aggDailyKey{grid, band, region, day, slot}
+	f.daily[dk] += n
+	e := f.dailySNR[dk]
+	e.SNR += d.SNR
+	for i := range e.GE {
+		e.GE[i] += d.GE[i]
+	}
+	f.dailySNR[dk] = e
+}
+
 // add puts PSKR spots where they live: folded days in the seasonal record,
 // later days in the daily table.
 func (f *fakeAggStore) add(grid, band, region string, day int64, slot int, n int64) {
@@ -100,6 +141,17 @@ func (f *fakeAggStore) foldDay(day int64) {
 	for k, v := range f.daily {
 		if k.Day == day {
 			f.addSeason(k.Grid, k.Band, k.Region, almanacSeasonLayerPSKR, k.Day, k.Slot, v)
+			if d, ok := f.dailySNR[k]; ok && almanacFoldUsesSNR(day, f.snrSince, f.hasSNRSince) {
+				ym, dom := almanacYearMonthDOM(day)
+				sk := aggSeasonKey{k.Grid, k.Band, k.Region, ym, almanacSeasonLayerPSKR}
+				h := f.seasonHist[sk]
+				if h == nil {
+					h = make([]almanacSNRHist, almanacSeasonCountsLen)
+					f.seasonHist[sk] = h
+				}
+				add := almanacSNRHistFromCounts(d.SNR, d.GE)
+				h[almanacSegmentOffset(dom)+k.Slot].add(&add)
+			}
 		}
 	}
 	f.wm = day
@@ -140,6 +192,10 @@ func (t *fakeAggTx) watermark(context.Context) (int64, bool, error) {
 	return w, ok, nil
 }
 
+func (t *fakeAggTx) snrSince(context.Context) (int64, bool, error) {
+	return t.f.snrSince, t.f.hasSNRSince, nil
+}
+
 func aggContains(xs []string, x string) bool {
 	for _, v := range xs {
 		if v == x {
@@ -161,14 +217,18 @@ func (t *fakeAggTx) seasonCounts(_ context.Context, grids, bands []string, month
 			okMonth = okMonth || m == k.YM
 		}
 		if okMonth {
-			fn(k.Grid, k.Band, k.Region, k.YM, almanacSparseEncode((*[almanacSeasonCountsLen]byte)(c)))
+			var hist *[almanacSeasonCountsLen]almanacSNRHist
+			if h := t.f.seasonHist[k]; h != nil {
+				hist = (*[almanacSeasonCountsLen]almanacSNRHist)(h)
+			}
+			fn(k.Grid, k.Band, k.Region, k.YM, almanacSparseEncode((*[almanacSeasonCountsLen]byte)(c), hist))
 		}
 	}
 	return nil
 }
 
-func (t *fakeAggTx) tailCounts(_ context.Context, grids []string, rings []int32, bands []string, afterDay, fromDay, toDay int64,
-	fn func(ring int, band, region string, day int64, slot int, count int64)) error {
+func (t *fakeAggTx) tailCounts(_ context.Context, grids []string, rings []int32, bands []string, afterDay, fromDay, toDay int64, tier int,
+	fn func(ring int, band, region string, day int64, slot int, count, snr, ge int64)) error {
 	t.f.tailCalls++
 	type k struct {
 		ring         int
@@ -176,19 +236,27 @@ func (t *fakeAggTx) tailCounts(_ context.Context, grids []string, rings []int32,
 		day          int64
 		slot         int
 	}
-	sum := map[k]int64{}
+	sum := map[k][3]int64{}
 	for dk, v := range t.f.daily {
 		if dk.Day <= afterDay || dk.Day < fromDay || dk.Day > toDay || !aggContains(bands, dk.Band) {
 			continue
 		}
 		for i, g := range grids {
 			if g == dk.Grid {
-				sum[k{int(rings[i]), dk.Band, dk.Region, dk.Day, dk.Slot}] += v
+				kk := k{int(rings[i]), dk.Band, dk.Region, dk.Day, dk.Slot}
+				e := sum[kk]
+				e[0] += v
+				if tier >= 0 {
+					d := t.f.dailySNR[dk]
+					e[1] += d.SNR
+					e[2] += d.GE[tier]
+				}
+				sum[kk] = e
 			}
 		}
 	}
 	for kk, v := range sum {
-		fn(kk.ring, kk.band, kk.region, kk.day, kk.slot, v)
+		fn(kk.ring, kk.band, kk.region, kk.day, kk.slot, v[0], v[1], v[2])
 	}
 	return nil
 }
@@ -279,7 +347,7 @@ func slotRange(from, to int) []int {
 func computeAgg(t testing.TB, f *fakeAggStore, centre string) *almanacTypical {
 	t.Helper()
 	win := almanacWindowFor(aggTestNow.Unix())
-	acc, err := readAlmanacAccum(context.Background(), f, centre, win, false)
+	acc, err := readAlmanacAccum(context.Background(), f, centre, win, false, -1)
 	if err != nil {
 		t.Fatalf("readAlmanacAccum: %v", err)
 	}
@@ -693,7 +761,7 @@ func TestAlmanacHeapUnder20MB(t *testing.T) {
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	acc, err := readAlmanacAccum(context.Background(), st, "JO32", win, false)
+	acc, err := readAlmanacAccum(context.Background(), st, "JO32", win, false, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -718,17 +786,44 @@ type preTailRow struct {
 type precomputedAggStore struct {
 	f    *fakeAggStore
 	tail []preTailRow
+	// enc holds the season rows already sparse-encoded, so the fake's
+	// encoding stays outside allocation measurements.
+	enc map[aggSeasonKey][]byte
 }
 
 func newPrecomputedAggStore(f *fakeAggStore, centre string, win almanacWindow) *precomputedAggStore {
 	p := &precomputedAggStore{f: f}
 	grids, rings := almanacRingSquares(centre)
-	(&fakeAggTx{f: f}).tailCounts(context.Background(), grids, rings, almanacInScopeBands, f.wm, win.Start, win.Today,
-		func(ring int, band, region string, day int64, slot int, count int64) {
+	(&fakeAggTx{f: f}).tailCounts(context.Background(), grids, rings, almanacInScopeBands, f.wm, win.Start, win.Today, -1,
+		func(ring int, band, region string, day int64, slot int, count, _, _ int64) {
 			p.tail = append(p.tail, preTailRow{ring, band, region, day, slot, count})
 		})
 	sort.Slice(p.tail, func(i, j int) bool { return p.tail[i].day < p.tail[j].day })
+	p.enc = make(map[aggSeasonKey][]byte, len(f.season))
+	for k, c := range f.season {
+		var hist *[almanacSeasonCountsLen]almanacSNRHist
+		if h := f.seasonHist[k]; h != nil {
+			hist = (*[almanacSeasonCountsLen]almanacSNRHist)(h)
+		}
+		p.enc[k] = almanacSparseEncode((*[almanacSeasonCountsLen]byte)(c), hist)
+	}
 	return p
+}
+
+func (t *precomputedAggTx) seasonCounts(_ context.Context, grids, bands []string, months []int, layer string,
+	fn func(grid, band, region string, ym int, counts []byte)) error {
+	for k, enc := range t.p.enc {
+		if k.Layer != layer || !aggContains(grids, k.Grid) || !aggContains(bands, k.Band) {
+			continue
+		}
+		for _, m := range months {
+			if m == k.YM {
+				fn(k.Grid, k.Band, k.Region, k.YM, enc)
+				break
+			}
+		}
+	}
+	return nil
 }
 
 func (p *precomputedAggStore) withReadTx(ctx context.Context, fn func(almanacReadTx) error) error {
@@ -740,11 +835,11 @@ type precomputedAggTx struct {
 	p *precomputedAggStore
 }
 
-func (t *precomputedAggTx) tailCounts(_ context.Context, _ []string, _ []int32, _ []string, afterDay, fromDay, toDay int64,
-	fn func(ring int, band, region string, day int64, slot int, count int64)) error {
+func (t *precomputedAggTx) tailCounts(_ context.Context, _ []string, _ []int32, _ []string, afterDay, fromDay, toDay int64, _ int,
+	fn func(ring int, band, region string, day int64, slot int, count, snr, ge int64)) error {
 	for _, r := range t.p.tail {
 		if r.day > afterDay && r.day >= fromDay && r.day <= toDay {
-			fn(r.ring, r.band, r.region, r.day, r.slot, r.count)
+			fn(r.ring, r.band, r.region, r.day, r.slot, r.count, 0, 0)
 		}
 	}
 	return nil
@@ -757,7 +852,7 @@ func BenchmarkAlmanacComputeR2(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		acc, err := readAlmanacAccum(context.Background(), st, "JO32", win, false)
+		acc, err := readAlmanacAccum(context.Background(), st, "JO32", win, false, -1)
 		if err != nil {
 			b.Fatal(err)
 		}

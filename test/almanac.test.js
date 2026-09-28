@@ -819,3 +819,135 @@ describe('almanac seasonal drill-down (U8)', () => {
         expect(body().querySelector('.almanac-drill')).toBeNull();
     });
 });
+
+// SNR floor (plan KTD13): the page's Min SNR control drives min_snr.
+describe('almanac SNR floor (KTD13)', () => {
+    let originalFetch;
+
+    function addSnrControls(mode = 'none', cw = '-15', ssb = '0') {
+        const group = document.createElement('div');
+        group.id = 'min-snr-group';
+        group.innerHTML = ['none', 'cw', 'ssb'].map((v) =>
+            `<input type="radio" name="min-snr" value="${v}" id="snr-${v}"${v === mode ? ' checked' : ''} />`).join('') +
+            `<input type="range" id="cw-min-db" min="-30" max="10" value="${cw}" />` +
+            `<input type="range" id="ssb-min-db" min="-30" max="10" value="${ssb}" />`;
+        document.body.appendChild(group);
+    }
+
+    function snrPayload() {
+        const p = makePayload({
+            bands: ['20m'],
+            patch(l) {
+                if (l.region === 'NA') {
+                    l.m = new Array(48).fill(26);
+                    l.n = new Array(48).fill(0);
+                    l.n[30] = 18;
+                    l.share = new Array(48).fill(null);
+                    l.share[30] = 0.64;
+                }
+            },
+            agenda: [{ ...agendaEntry({ status: 'ongoing', peak_n: 18, peak_m: 26 }), peak_share: 0.64 }],
+        });
+        return { ...p, min_snr: -12, snr_tier: -10, snr_available: true, snr_since: '2026-09-29' };
+    }
+
+    beforeEach(() => {
+        originalFetch = global.fetch;
+        installLocalStorageMock();
+        setupDom();
+        reset();
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    });
+
+    afterEach(() => {
+        reset();
+        global.fetch = originalFetch;
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    it('sends the active mode\'s slider value as min_snr (none sends nothing)', async () => {
+        addSnrControls('cw', '-12');
+        mockFetchOnce(makePayload());
+        await openPanel();
+        expect(global.fetch.mock.calls[0][0]).toBe('/api/almanac?qth=JO32&min_snr=-12');
+        reset();
+        document.getElementById('min-snr-group').remove();
+        addSnrControls('ssb', '0', '3');
+        mockFetchOnce(makePayload());
+        await openPanel();
+        expect(global.fetch.mock.calls[0][0]).toBe('/api/almanac?qth=JO32&min_snr=3');
+        expect(__test.currentMinSnr()).toBe(3);
+        document.getElementById('snr-none').checked = true;
+        expect(__test.currentMinSnr()).toBeNull();
+    });
+
+    it('refetches on a mode switch and, debounced, on slider input', async () => {
+        addSnrControls('none');
+        mockFetchOnce(makePayload());
+        await openPanel();
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+        vi.useFakeTimers();
+
+        const cw = document.getElementById('snr-cw');
+        cw.checked = true;
+        cw.dispatchEvent(new Event('change', { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(__test.SNR_DEBOUNCE_MS - 1);
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(global.fetch).toHaveBeenCalledTimes(2);
+        expect(global.fetch.mock.calls[1][0]).toBe('/api/almanac?qth=JO32&min_snr=-15');
+
+        const slider = document.getElementById('cw-min-db');
+        for (const v of ['-14', '-13', '-9']) {
+            slider.value = v;
+            slider.dispatchEvent(new Event('input', { bubbles: true }));
+            await vi.advanceTimersByTimeAsync(100);
+        }
+        expect(global.fetch).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(__test.SNR_DEBOUNCE_MS);
+        expect(global.fetch).toHaveBeenCalledTimes(3);
+        expect(global.fetch.mock.calls[2][0]).toBe('/api/almanac?qth=JO32&min_snr=-9');
+
+        // An unchanged value does not refetch.
+        slider.dispatchEvent(new Event('change', { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(__test.SNR_DEBOUNCE_MS);
+        expect(global.fetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('labels the header, slot titles and agenda with the tier and share', async () => {
+        addSnrControls('cw', '-12');
+        mockFetchOnce(snrPayload());
+        await openPanel();
+        const header = body().querySelector('.almanac-snr').textContent;
+        expect(header).toBe('FT8/FT4 openings — spots ≥ −10 dB (slider −12 → −10 dB tier); SNR data since 2026-09-29');
+        const run = body().querySelector('.almanac-lane[data-band="20m"][data-region="NA"] [data-slot="30"]');
+        expect(run.getAttribute('title')).toBe('20m to NA, 15:00 UTC: opened 18 of 26 days · 64% of spots ≥ −10 dB');
+        expect(body().querySelector('.almanac-agenda-row').textContent).toContain('(18/26 days · 64% of spots ≥ −10 dB)');
+    });
+
+    it('any SNR: plain header and slot titles; no SNR data yet is said so', () => {
+        expect(__test.snrHeaderText(makePayload())).toBe('FT8/FT4 openings — any SNR');
+        expect(__test.snrHeaderText({ min_snr: -10, snr_tier: -10, snr_available: false, snr_since: null }))
+            .toBe('FT8/FT4 openings — spots ≥ −10 dB; no SNR data collected yet');
+        expect(__test.slotLabel('20m to NA', 30, 1, 18, 26, 10, 30)).toBe('20m to NA, 15:00 UTC: opened 18 of 26 days');
+    });
+
+    it('the drill-down passes min_snr and refetches on a floor change', async () => {
+        addSnrControls('ssb', '0', '-4');
+        routeFetch({ landing: snrPayload() });
+        await openPanel();
+        openDrilldown('20m', 'NA');
+        await flush();
+        const urls = () => global.fetch.mock.calls.map((c) => c[0]);
+        expect(urls()).toContain('/api/almanac/season?qth=JO32&band=20m&region=NA&min_snr=-4');
+        vi.useFakeTimers();
+        const slider = document.getElementById('ssb-min-db');
+        slider.value = '-20';
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(__test.SNR_DEBOUNCE_MS);
+        expect(urls()).toContain('/api/almanac?qth=JO32&min_snr=-20');
+        expect(urls()).toContain('/api/almanac/season?qth=JO32&band=20m&region=NA&min_snr=-20');
+        expect(runtime.drilldown?.band).toBe('20m');
+    });
+});

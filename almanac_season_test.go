@@ -50,7 +50,7 @@ func (f *fakeAggStore) wsprDays(grid, band, region string, from, to int64, slot 
 func readSeason(t *testing.T, f *fakeAggStore, radius int, band, region string) *almanacSeason {
 	t.Helper()
 	s, err := readAlmanacSeason(context.Background(), f, "JO32", radius, band, region, aggTestNow,
-		almanacWSPRCoverage([]string{"JO32"}))
+		almanacWSPRCoverage([]string{"JO32"}), -1)
 	if err != nil {
 		t.Fatalf("readAlmanacSeason: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestAlmanacSeasonEmptyMonthNotCollected(t *testing.T) {
 	if nov.Year != 0 || nov.Layer != "" || nov.Days != 0 {
 		t.Fatalf("nov = %+v, want not collected", nov)
 	}
-	body, _ := json.Marshal(almanacSeasonMonthToJSON(nov))
+	body, _ := json.Marshal(almanacSeasonMonthToJSON(nov, false))
 	var row map[string]any
 	_ = json.Unmarshal(body, &row)
 	if row["status"] != "not_collected" || row["year"] != nil || row["layer"] != nil || row["n"] != nil || row["m"] != nil {
@@ -376,7 +376,7 @@ func TestAlmanacSeasonWSPRGatedByConfiguredAreas(t *testing.T) {
 	cov := almanacWSPRCoverage([]string{"JO32"})
 	read := func(centre string, cov map[string]bool) *almanacSeason {
 		t.Helper()
-		s, err := readAlmanacSeason(context.Background(), f, centre, almanacMaxWidenRadius, "20m", "NA", aggTestNow, cov)
+		s, err := readAlmanacSeason(context.Background(), f, centre, almanacMaxWidenRadius, "20m", "NA", aggTestNow, cov, -1)
 		if err != nil {
 			t.Fatalf("readAlmanacSeason(%s): %v", centre, err)
 		}

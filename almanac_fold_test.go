@@ -77,6 +77,10 @@ type fakeAlmanacFoldStore struct {
 	state   fakeAlmanacState
 	failDay int64 // foldDay(failDay) fails after writing the segments
 	calls   []int64
+	// SNR collection start (almanacSNRSinceKey); days before it are streamed
+	// with zero SNR counters, like almanacFoldStreamSQL.
+	snrSince    int64
+	hasSNRSince bool
 }
 
 func newFakeAlmanacFoldStore() *fakeAlmanacFoldStore {
@@ -120,12 +124,16 @@ func (f *fakeAlmanacFoldStore) foldDay(_ context.Context, day int64) (int64, err
 	}
 	tx := f.state.clone()
 	fold := newAlmanacDayFold(day)
+	withSNR := almanacFoldUsesSNR(day, f.snrSince, f.hasSNRSince)
 	for _, r := range f.daily[day] {
+		if !withSNR {
+			r.SNR, r.GE = 0, [almanacSNRTiers]int64{}
+		}
 		fold.add(r)
 	}
 	for k, seg := range fold.Segments {
 		sk := fakeSeasonKey{k.Grid4, k.Band, k.Region, fold.YearMonth}
-		row, _ := almanacSparseReplaceDay(tx.counts[sk], fold.DayOfMonth, seg)
+		row, _ := almanacSparseReplaceDay(tx.counts[sk], fold.DayOfMonth, seg, fold.Hist[k])
 		tx.counts[sk] = row
 	}
 	if day == f.failDay {
@@ -423,7 +431,7 @@ func TestAlmanacFoldOverwritesDaySegmentKeepsOtherDays(t *testing.T) {
 	pre[0], pre[almanacSeasonCountsLen-1] = 3, 4
 	pre[almanacSegmentOffset(dom2)+5] = 99 // stale: must be replaced, not added to
 	pre[almanacSegmentOffset(dom2)+47] = 7 // stale: absent from the new segment → zero
-	st.state.counts[key] = almanacSparseEncode(&pre)
+	st.state.counts[key] = almanacSparseEncode(&pre, nil)
 
 	st.daily[d1] = []almanacDailyRow{dailyRow("JO32", "20m", "NA", 10, 2)}
 	st.daily[d2] = []almanacDailyRow{dailyRow("JO32", "20m", "NA", 5, 6), dailyRow("JO32", "20m", "NA", 6, 1)}
@@ -446,7 +454,7 @@ func TestAlmanacFoldOverwritesDaySegmentKeepsOtherDays(t *testing.T) {
 		t.FailNow()
 	}
 	// The stored bytes are exactly the canonical encoding.
-	if !bytes.Equal(st.state.counts[key], almanacSparseEncode(&want)) {
+	if !bytes.Equal(st.state.counts[key], almanacSparseEncode(&want, nil)) {
 		t.Fatalf("stored row is not the canonical encoding")
 	}
 }
@@ -768,7 +776,7 @@ func TestAlmanacDiskProbe(t *testing.T) {
 func newObserveTestStore() *dxPostgresStore {
 	return &dxPostgresStore{
 		pendingGlobal:  make(map[baselineGlobalKey]baselineDelta),
-		pendingRegion:  make(map[dxPulseRegionBaselineDailyKey]int64),
+		pendingRegion:  make(map[dxPulseRegionBaselineDailyKey]regionDelta),
 		pendingCluster: make(map[clusterBaselineKey]baselineDelta),
 		flushCh:        make(chan struct{}, 1),
 	}
@@ -831,12 +839,12 @@ func TestPendingRegionMinDayIncludesInflight(t *testing.T) {
 	if _, ok := s.pendingRegionMinDay(); ok {
 		t.Fatalf("empty store reports a pending day")
 	}
-	s.pendingRegion[dxPulseRegionBaselineDailyKey{TargetGrid4: "JO32", DayIndex: 20000}] = 1
-	s.pendingRegion[dxPulseRegionBaselineDailyKey{TargetGrid4: "JO33", DayIndex: 19999}] = 1
+	s.pendingRegion[dxPulseRegionBaselineDailyKey{TargetGrid4: "JO32", DayIndex: 20000}] = regionDelta{Count: 1}
+	s.pendingRegion[dxPulseRegionBaselineDailyKey{TargetGrid4: "JO33", DayIndex: 19999}] = regionDelta{Count: 1}
 	if d, ok := s.pendingRegionMinDay(); !ok || d != 19999 {
 		t.Fatalf("min pending = %d, %v", d, ok)
 	}
-	s.setInflightRegion(map[dxPulseRegionBaselineDailyKey]int64{{DayIndex: 19990}: 3})
+	s.setInflightRegion(map[dxPulseRegionBaselineDailyKey]regionDelta{{DayIndex: 19990}: {Count: 3}})
 	if d, _ := s.pendingRegionMinDay(); d != 19990 {
 		t.Fatalf("in-flight flush batch must count as pending: %d", d)
 	}
@@ -847,10 +855,10 @@ func TestPendingRegionMinDayIncludesInflight(t *testing.T) {
 }
 
 func TestAlmanacIngestSlotTotalsFromRegion(t *testing.T) {
-	region := map[dxPulseRegionBaselineDailyKey]int64{
-		{TargetGrid4: "JO32", Band: "20m", SlotOfDay: 36, Region: "NA", DayIndex: 100}: 3,
-		{TargetGrid4: "FN31", Band: "20m", SlotOfDay: 36, Region: "EU", DayIndex: 100}: 3,
-		{TargetGrid4: "JO32", Band: "40m", SlotOfDay: 2, Region: "EU", DayIndex: 101}:  4,
+	region := map[dxPulseRegionBaselineDailyKey]regionDelta{
+		{TargetGrid4: "JO32", Band: "20m", SlotOfDay: 36, Region: "NA", DayIndex: 100}: {Count: 3, SNR: 1},
+		{TargetGrid4: "FN31", Band: "20m", SlotOfDay: 36, Region: "EU", DayIndex: 100}: {Count: 3},
+		{TargetGrid4: "JO32", Band: "40m", SlotOfDay: 2, Region: "EU", DayIndex: 101}:  {Count: 4, SNR: 4},
 	}
 	got := almanacIngestSlotTotalsFromRegion(region)
 	if len(got) != 2 || got[almanacIngestSlotKey{100, 36}] != 6 || got[almanacIngestSlotKey{101, 2}] != 4 {
@@ -859,9 +867,9 @@ func TestAlmanacIngestSlotTotalsFromRegion(t *testing.T) {
 }
 
 func TestBaselineFlushStmtsIncludeIngestTotals(t *testing.T) {
-	region := map[dxPulseRegionBaselineDailyKey]int64{
-		{TargetGrid4: "JO32", Band: "20m", SlotOfDay: 36, Region: "NA", DayIndex: 100}: 3,
-		{TargetGrid4: "FN31", Band: "20m", SlotOfDay: 36, Region: "EU", DayIndex: 100}: 2,
+	region := map[dxPulseRegionBaselineDailyKey]regionDelta{
+		{TargetGrid4: "JO32", Band: "20m", SlotOfDay: 36, Region: "NA", DayIndex: 100}: {Count: 3},
+		{TargetGrid4: "FN31", Band: "20m", SlotOfDay: 36, Region: "EU", DayIndex: 100}: {Count: 2},
 	}
 	type flushStmt struct {
 		sql  string
@@ -869,7 +877,7 @@ func TestBaselineFlushStmtsIncludeIngestTotals(t *testing.T) {
 	}
 	var stmts []flushStmt
 	record := func(sql string, args ...any) { stmts = append(stmts, flushStmt{sql, args}) }
-	queued := baselineFlushStmts(nil, region, nil, record)
+	queued := baselineFlushStmts(nil, region, nil, false, record)
 	if queued != len(stmts) {
 		t.Fatalf("returned count %d != queued statements %d", queued, len(stmts))
 	}
@@ -892,7 +900,7 @@ func TestBaselineFlushStmtsIncludeIngestTotals(t *testing.T) {
 		t.Fatalf("stmts: region=%d totals=%d (%d total)", regionN, totals, len(stmts))
 	}
 	stmts = nil
-	if n := baselineFlushStmts(nil, nil, nil, record); n != 0 || len(stmts) != 0 {
+	if n := baselineFlushStmts(nil, nil, nil, true, record); n != 0 || len(stmts) != 0 {
 		t.Fatalf("empty flush must queue nothing")
 	}
 }

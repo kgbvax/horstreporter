@@ -21,6 +21,14 @@ import (
 //	M           = |{d : alive(d,s) ∧ active(d,s)}|
 //	N           = |{d ∈ M-days : Σ_ring count(d,s) ≥ k}|
 //	unknown     = M < M_min
+//
+// With an SNR floor (KTD13, tier t of almanacSNRTierFloors):
+//
+//	M           counts only days ≥ the SNR collection start (earlier days
+//	            have no SNR data: unknown, never closed)
+//	N           = |{d ∈ M-days : Σ_ring spots with SNR ≥ floor(d,s) ≥ k}|
+//	share(s)    = Σ_{M-days} spots ≥ floor / Σ_{M-days} SNR-carrying spots
+//	            (null when the denominator is 0)
 
 const almanacSlotsPerDay = almanacSeasonSlotsPerDay
 
@@ -129,10 +137,25 @@ type almanacAccum struct {
 	dayMasks []uint64
 	ingest   [almanacAccumDays][almanacSlotsPerDay]int64
 	lost     [almanacAccumDays]bool
+
+	// SNR floor (KTD13): tier is the almanacSNRTierFloors index, -1 = any
+	// SNR. With a tier, ge holds the spots with SNR ≥ floor and snrN the
+	// SNR-carrying spots, both indexed like counts. snrSince is the SNR
+	// collection start (hasSNRSince false: never collected).
+	tier        int
+	ge          []uint16
+	snrN        []uint16
+	snrSince    int64
+	hasSNRSince bool
 }
 
-func newAlmanacAccum(centre string, win almanacWindow) *almanacAccum {
-	a := &almanacAccum{centre: almanacNormalizeCentre(centre), win: win, wm: win.Start - 1}
+// newAlmanacAccum prepares the accumulator for centre over win; tier is the
+// SNR floor index (-1 = any SNR).
+func newAlmanacAccum(centre string, win almanacWindow, tier int) *almanacAccum {
+	if tier >= almanacSNRTiers {
+		tier = almanacSNRTiers - 1
+	}
+	a := &almanacAccum{centre: almanacNormalizeCentre(centre), win: win, wm: win.Start - 1, tier: tier}
 	a.squares, a.rings = almanacRingSquares(a.centre)
 	a.gridIdx = make(map[string]int, len(a.squares))
 	for i, sq := range a.squares {
@@ -150,7 +173,30 @@ func newAlmanacAccum(centre string, win almanacWindow) *almanacAccum {
 	a.counts = make([]uint16, almanacLevels*nb*nr*almanacAccumDays*almanacSlotsPerDay)
 	a.act = make([]uint16, almanacLevels*nb*almanacAccumDays*almanacSlotsPerDay)
 	a.dayMasks = make([]uint64, len(a.squares)*nb)
+	if tier >= 0 {
+		a.ge = make([]uint16, len(a.counts))
+		a.snrN = make([]uint16, len(a.counts))
+	}
 	return a
+}
+
+// setSNRSince records the SNR collection start read in the transaction.
+func (a *almanacAccum) setSNRSince(day int64, ok bool) {
+	a.snrSince, a.hasSNRSince = day, ok
+}
+
+// snrKnown: window day di has SNR data (it is on or after the SNR start).
+func (a *almanacAccum) snrKnown(di int) bool {
+	return a.hasSNRSince && a.win.Start+int64(di) >= a.snrSince
+}
+
+// openCounts is the per-cell count the open test (≥ k) applies to: all
+// spots, or with an SNR floor the spots at or above it.
+func (a *almanacAccum) openCounts() []uint16 {
+	if a.tier >= 0 {
+		return a.ge
+	}
+	return a.counts
 }
 
 // setWatermark records the fold watermark read at the start of the
@@ -245,7 +291,7 @@ func (a *almanacAccum) addSeasonRow(grid, band, reg string, ym int, counts []byt
 		return
 	}
 	mask := &a.dayMasks[gi*len(almanacInScopeBands)+bi]
-	err := almanacSparseEach(counts, func(pos, v int) {
+	err := almanacSparseEachCell(counts, func(pos, v int, h *almanacSNRHist) {
 		di := int(domDi[pos/almanacSlotsPerDay]) - 1
 		if di < 0 {
 			return
@@ -253,7 +299,12 @@ func (a *almanacAccum) addSeasonRow(grid, band, reg string, ym int, counts []byt
 		s := pos % almanacSlotsPerDay
 		satAdd16(&a.act[a.actIdx(level, bi, di, s)], int64(v))
 		if hasRegion {
-			satAdd16(&a.counts[a.countIdx(level, bi, ri, di, s)], int64(v))
+			ci := a.countIdx(level, bi, ri, di, s)
+			satAdd16(&a.counts[ci], int64(v))
+			if a.tier >= 0 {
+				satAdd16(&a.ge[ci], int64(h.atLeast(a.tier)))
+				satAdd16(&a.snrN[ci], int64(h.total()))
+			}
 		}
 		*mask |= 1 << uint(di)
 	})
@@ -262,8 +313,9 @@ func (a *almanacAccum) addSeasonRow(grid, band, reg string, ym int, counts []byt
 	}
 }
 
-// addTailRow adds one ring-level aggregate row from the daily table (days > W).
-func (a *almanacAccum) addTailRow(level int, band, reg string, day int64, slot int, count int64) {
+// addTailRow adds one ring-level aggregate row from the daily table (days >
+// W): all spots, SNR-carrying spots and spots at or above the floor.
+func (a *almanacAccum) addTailRow(level int, band, reg string, day int64, slot int, count, snr, ge int64) {
 	if day <= a.wm || day < a.win.Start || day > a.win.Today || slot < 0 || slot >= almanacSlotsPerDay ||
 		level < 0 || level >= almanacLevels {
 		return
@@ -275,7 +327,12 @@ func (a *almanacAccum) addTailRow(level int, band, reg string, day int64, slot i
 	di := int(day - a.win.Start)
 	satAdd16(&a.act[a.actIdx(level, bi, di, slot)], count)
 	if ri, ok := a.regIdx[reg]; ok {
-		satAdd16(&a.counts[a.countIdx(level, bi, ri, di, slot)], count)
+		ci := a.countIdx(level, bi, ri, di, slot)
+		satAdd16(&a.counts[ci], count)
+		if a.tier >= 0 {
+			satAdd16(&a.ge[ci], ge)
+			satAdd16(&a.snrN[ci], snr)
+		}
 	}
 }
 
@@ -371,12 +428,38 @@ func almanacAliveMask(ingest *[almanacAccumDays][almanacSlotsPerDay]int64, lost 
 // ---------------------------------------------------------------------------
 
 // almanacLane is one (band, region) lane: per-slot N (open days) and M
-// (alive, active days). Compact uint8 so a cached result stays ~10 KB.
+// (alive, active days). Compact uint8 so a cached result stays ~10 KB. Share
+// is the pooled SNR share coded by almanacShareCode (KTD13; 0 = none / no
+// SNR floor).
 type almanacLane struct {
 	Band   string
 	Region string
 	N      [almanacSlotsPerDay]uint8
 	M      [almanacSlotsPerDay]uint8
+	Share  [almanacSlotsPerDay]uint16
+}
+
+// almanacShareCode codes num/den as 1 + the share in per mille (1..1001);
+// 0 = no share (den 0). The zero value of a lane therefore has no share.
+func almanacShareCode(num, den int64) uint16 {
+	if den <= 0 {
+		return 0
+	}
+	if num > den {
+		num = den
+	}
+	if num < 0 {
+		num = 0
+	}
+	return uint16((num*1000+den/2)/den) + 1
+}
+
+// almanacShareValue decodes almanacShareCode: the share (0..1) and ok.
+func almanacShareValue(code uint16) (float64, bool) {
+	if code == 0 {
+		return 0, false
+	}
+	return float64(code-1) / 1000, true
 }
 
 // unknown: fewer than M_min active days → "not enough data" (R3).
@@ -387,14 +470,18 @@ func (l almanacLane) usual(s int) bool {
 	return !l.unknown(s) && l.M[s] > 0 && float64(l.N[s]) >= almanacUsuallyShare*float64(l.M[s])
 }
 
-// almanacTypical is the cached "typical" part (KTD9): lanes + radius.
+// almanacTypical is the cached "typical" part (KTD9): lanes + radius, for one
+// SNR tier (-1 = any SNR) and the SNR collection start read with it.
 type almanacTypical struct {
-	Centre    string
-	Window    almanacWindow
-	Watermark int64 // as read in the transaction; -1 when none
-	Radius    int
-	Squares   []string
-	Lanes     []almanacLane
+	Centre      string
+	Window      almanacWindow
+	Watermark   int64 // as read in the transaction; -1 when none
+	Radius      int
+	Squares     []string
+	Lanes       []almanacLane
+	Tier        int
+	SNRSince    int64
+	HasSNRSince bool
 }
 
 // computeAlmanacTypical picks the radius from the active-day masks (U1) and
@@ -406,12 +493,15 @@ func computeAlmanacTypical(a *almanacAccum) *almanacTypical {
 		wm = a.wm
 	}
 	return &almanacTypical{
-		Centre:    a.centre,
-		Window:    a.win,
-		Watermark: wm,
-		Radius:    radius,
-		Squares:   squares,
-		Lanes:     a.cells(radius),
+		Centre:      a.centre,
+		Window:      a.win,
+		Watermark:   wm,
+		Radius:      radius,
+		Squares:     squares,
+		Lanes:       a.cells(radius),
+		Tier:        a.tier,
+		SNRSince:    a.snrSince,
+		HasSNRSince: a.hasSNRSince,
 	}
 }
 
@@ -423,6 +513,7 @@ func (a *almanacAccum) cells(radius int) []almanacLane {
 		radius = almanacLevels - 1
 	}
 	alive := almanacAliveMask(&a.ingest, &a.lost)
+	open := a.openCounts()
 	var lanes []almanacLane
 	var actSum [almanacAccumDays][almanacSlotsPerDay]bool
 	var ok [almanacWindowDays][almanacSlotsPerDay]bool
@@ -437,21 +528,25 @@ func (a *almanacAccum) cells(radius int) []almanacLane {
 			}
 		}
 		var m [almanacSlotsPerDay]uint8
-		anyM := false
+		// anyActive lists the band whatever the SNR floor, so days without
+		// SNR data read as "not enough data" instead of dropping the band.
+		anyActive := false
 		for di := 0; di < almanacWindowDays; di++ {
 			for s := 0; s < almanacSlotsPerDay; s++ {
 				ok[di][s] = alive[di][s] && almanacActiveOrNext(&actSum[di], &actSum[di+1], s)
+				anyActive = anyActive || ok[di][s]
+				ok[di][s] = ok[di][s] && (a.tier < 0 || a.snrKnown(di))
 				if ok[di][s] {
 					m[s]++
-					anyM = true
 				}
 			}
 		}
-		if !anyM {
+		if !anyActive {
 			continue
 		}
 		for ri, reg := range a.regions {
 			l := almanacLane{Band: band, Region: reg, M: m}
+			var geSum, snrSum [almanacSlotsPerDay]int64
 			for di := 0; di < almanacWindowDays; di++ {
 				for s := 0; s < almanacSlotsPerDay; s++ {
 					if !ok[di][s] {
@@ -459,11 +554,21 @@ func (a *almanacAccum) cells(radius int) []almanacLane {
 					}
 					var sum int
 					for lv := 0; lv <= radius; lv++ {
-						sum += int(a.counts[a.countIdx(lv, bi, ri, di, s)])
+						ci := a.countIdx(lv, bi, ri, di, s)
+						sum += int(open[ci])
+						if a.tier >= 0 {
+							geSum[s] += int64(a.ge[ci])
+							snrSum[s] += int64(a.snrN[ci])
+						}
 					}
 					if sum >= almanacOpenMinSpotsPSKR {
 						l.N[s]++
 					}
+				}
+			}
+			if a.tier >= 0 {
+				for s := range l.Share {
+					l.Share[s] = almanacShareCode(geSum[s], snrSum[s])
 				}
 			}
 			lanes = append(lanes, l)
@@ -526,12 +631,13 @@ func (a *almanacAccum) today(radius int) *almanacToday {
 	t := &almanacToday{}
 	yd := almanacWindowDays - 1
 	td := almanacWindowDays
+	open := a.openCounts()
 	for bi, band := range almanacInScopeBands {
 		for ri, reg := range a.regions {
 			sum := func(di, s int) int {
 				var v int
 				for lv := 0; lv <= radius; lv++ {
-					v += int(a.counts[a.countIdx(lv, bi, ri, di, s)])
+					v += int(open[a.countIdx(lv, bi, ri, di, s)])
 				}
 				return v
 			}
@@ -637,6 +743,9 @@ type almanacAgendaEntry struct {
 	PeakN     int  `json:"peak_n"`
 	PeakM     int  `json:"peak_m"`
 	OpenToday bool `json:"open_today"`
+	// PeakShare is the SNR share at the peak slot (0..1) when an SNR floor
+	// is applied and the slot has SNR data (KTD13); omitted otherwise.
+	PeakShare *float64 `json:"peak_share,omitempty"`
 }
 
 func almanacHHMM(slot int) string {
@@ -677,6 +786,11 @@ func almanacAgendaEntryFor(l almanacLane, w almanacSlotWindow, today *almanacTod
 		if r > best || (r == best && int(l.M[s]) > e.PeakM) {
 			best = r
 			e.PeakSlot, e.PeakN, e.PeakM = s, int(l.N[s]), int(l.M[s])
+		}
+	}
+	if e.PeakSlot >= 0 {
+		if v, ok := almanacShareValue(l.Share[e.PeakSlot]); ok {
+			e.PeakShare = &v
 		}
 	}
 	return e

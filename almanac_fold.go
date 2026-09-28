@@ -66,10 +66,14 @@ func almanacDayFinal(d, now, lastFlushOK, pendingMinDay int64, hasPending bool) 
 // ---------------------------------------------------------------------------
 
 // almanacDailyRow is one dx_region_baseline_daily row of the day being folded.
+// SNR / GE are the KTD13 SNR counters (snr_spots, snr_ge_m20 … snr_ge_0);
+// zero when the day predates the SNR collection start.
 type almanacDailyRow struct {
 	Grid4, Band, Region string
 	Slot                int
 	Count               int64
+	SNR                 int64
+	GE                  [almanacSNRTiers]int64
 }
 
 type almanacSegKey struct {
@@ -77,14 +81,17 @@ type almanacSegKey struct {
 }
 
 // almanacDayFold accumulates one day: per-(grid, band, region) 48-byte
-// segments (uint8 per slot, saturating at 255) and the uncapped per-slot spot
-// totals (ingest-slot seed). The (grid, band) pairs active that day are the
-// Segments keys' (Grid4, Band) (almanacFoldActivitySQL's SELECT DISTINCT).
+// segments (uint8 per slot, saturating at 255), the SNR histograms of the
+// keys that had SNR-carrying spots (KTD13; absent = no SNR data) and the
+// uncapped per-slot spot totals (ingest-slot seed). The (grid, band) pairs
+// active that day are the Segments keys' (Grid4, Band)
+// (almanacFoldActivitySQL's SELECT DISTINCT).
 type almanacDayFold struct {
 	Day        int64
 	YearMonth  int
 	DayOfMonth int
 	Segments   map[almanacSegKey]*[almanacSeasonSlotsPerDay]byte
+	Hist       map[almanacSegKey]*[almanacSeasonSlotsPerDay]almanacSNRHist
 	SlotTotals [almanacSeasonSlotsPerDay]int64
 }
 
@@ -95,6 +102,7 @@ func newAlmanacDayFold(day int64) *almanacDayFold {
 		YearMonth:  ym,
 		DayOfMonth: dom,
 		Segments:   make(map[almanacSegKey]*[almanacSeasonSlotsPerDay]byte, 1024),
+		Hist:       make(map[almanacSegKey]*[almanacSeasonSlotsPerDay]almanacSNRHist, 1024),
 	}
 }
 
@@ -110,6 +118,22 @@ func (f *almanacDayFold) add(r almanacDailyRow) {
 	}
 	satAdd8(&seg[r.Slot], r.Count) // saturate; never wrap
 	f.SlotTotals[r.Slot] += r.Count
+	if r.SNR > 0 {
+		hs := f.Hist[k]
+		if hs == nil {
+			hs = new([almanacSeasonSlotsPerDay]almanacSNRHist)
+			f.Hist[k] = hs
+		}
+		h := almanacSNRHistFromCounts(r.SNR, r.GE)
+		hs[r.Slot].add(&h)
+	}
+}
+
+// almanacFoldUsesSNR: the fold stores SNR histograms for day only from the
+// SNR collection start on (KTD13); earlier days (the partial deploy day
+// included) are folded without SNR data.
+func almanacFoldUsesSNR(day, since int64, hasSince bool) bool {
+	return hasSince && day >= since
 }
 
 // dayMaskBit is the area-activity bit for this day: 1 << (day_of_month − 1).
@@ -391,7 +415,7 @@ func almanacPrewarmAreas(svc *almanacService, areas []string) {
 		return
 	}
 	for _, a := range areas {
-		if _, err := svc.get(a); err != nil {
+		if _, err := svc.get(a, -1); err != nil {
 			logInfo("almanac pre-warm %s failed: %v", a, err)
 		}
 	}

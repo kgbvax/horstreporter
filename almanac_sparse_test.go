@@ -10,9 +10,17 @@ import (
 
 func sparseRoundTrip(t *testing.T, dense *[almanacSeasonCountsLen]byte) []byte {
 	t.Helper()
-	enc := almanacSparseEncode(dense)
-	if len(enc) != almanacSparseEncodedLen(dense) || cap(enc) != len(enc) {
-		t.Fatalf("encoded len %d / cap %d, want exactly %d", len(enc), cap(enc), almanacSparseEncodedLen(dense))
+	// v1 fixtures: the format prod already holds, which must keep decoding.
+	enc := almanacSparseEncodeV1(dense)
+	// The v2 encoding without SNR data carries exactly one mask byte more
+	// per cell and decodes to the same counts.
+	enc2 := almanacSparseEncode(dense, nil)
+	if len(enc2) != almanacSparseEncodedLen(dense, nil) || cap(enc2) != len(enc2) {
+		t.Fatalf("v2 encoded len %d / cap %d, want exactly %d", len(enc2), cap(enc2), almanacSparseEncodedLen(dense, nil))
+	}
+	var got2 [almanacSeasonCountsLen]byte
+	if err := almanacSparseDecode(enc2, &got2); err != nil || got2 != *dense {
+		t.Fatalf("v2 round trip mismatch: %v", err)
 	}
 	var got [almanacSeasonCountsLen]byte
 	if err := almanacSparseDecode(enc, &got); err != nil {
@@ -102,7 +110,11 @@ func TestAlmanacSparseMalformed(t *testing.T) {
 	cases := map[string][]byte{
 		"nil":               nil,
 		"empty":             {},
-		"bad version":       {0x02},
+		"bad version":       {0x03},
+		"v2 missing mask":   {0x02, 0x05, 0x01},
+		"v2 missing bin":    {0x02, 0x05, 0x01, 0x03, 0x01},
+		"v2 zero bin":       {0x02, 0x05, 0x01, 0x01, 0x00},
+		"v2 reserved bits":  {0x02, 0x05, 0x01, 0x40},
 		"bad version data":  {0x00, 0x00, 0x01},
 		"zero count":        {0x01, 0x05, 0x00},
 		"missing count":     {0x01, 0x05},
@@ -138,24 +150,24 @@ func TestAlmanacSparseMalformed(t *testing.T) {
 func TestAlmanacSparseReplaceDay(t *testing.T) {
 	var seg [almanacSeasonSlotsPerDay]byte
 	seg[0], seg[47] = 5, 6
-	enc, err := almanacSparseReplaceDay(nil, 31, &seg)
+	enc, err := almanacSparseReplaceDay(nil, 31, &seg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var want [almanacSeasonCountsLen]byte
 	want[almanacSegmentOffset(31)], want[almanacSeasonCountsLen-1] = 5, 6
-	if !bytes.Equal(enc, almanacSparseEncode(&want)) {
+	if !bytes.Equal(enc, almanacSparseEncode(&want, nil)) {
 		t.Fatalf("fresh row = %x", enc)
 	}
 	// Replace day 31 with a different segment; add day 1; idempotent.
 	var seg2 [almanacSeasonSlotsPerDay]byte
 	seg2[3] = 1
-	enc2, _ := almanacSparseReplaceDay(enc, 31, &seg2)
-	enc3, _ := almanacSparseReplaceDay(enc2, 31, &seg2)
+	enc2, _ := almanacSparseReplaceDay(enc, 31, &seg2, nil)
+	enc3, _ := almanacSparseReplaceDay(enc2, 31, &seg2, nil)
 	if !bytes.Equal(enc2, enc3) {
 		t.Fatalf("replace not idempotent")
 	}
-	enc4, _ := almanacSparseReplaceDay(enc3, 1, &seg)
+	enc4, _ := almanacSparseReplaceDay(enc3, 1, &seg, nil)
 	var d [almanacSeasonCountsLen]byte
 	if err := almanacSparseDecode(enc4, &d); err != nil {
 		t.Fatal(err)
@@ -166,7 +178,7 @@ func TestAlmanacSparseReplaceDay(t *testing.T) {
 		t.Fatalf("replace lost or kept wrong cells")
 	}
 	// Malformed existing row: treated as absent, error reported.
-	enc5, err := almanacSparseReplaceDay([]byte{0x09}, 31, &seg)
+	enc5, err := almanacSparseReplaceDay([]byte{0x09}, 31, &seg, nil)
 	if err == nil || !bytes.Equal(enc5, enc) {
 		t.Fatalf("malformed existing: err=%v enc=%x", err, enc5)
 	}
@@ -179,8 +191,8 @@ func TestAlmanacSparseSizing(t *testing.T) {
 		cells, maxBytes int
 	}{{8, 1 + 2*8 + 8}, {95, 1 + 2*95 + 95}, {315, 1 + 2*315 + 30}, {1343, 1 + 2*1343}} {
 		d := spreadRow(tc.cells)
-		n := len(almanacSparseEncode(&d))
-		t.Logf("%4d cells → %4d B", tc.cells, n)
+		n := len(almanacSparseEncodeV1(&d))
+		t.Logf("%4d cells → %4d B (v1)", tc.cells, n)
 		if n > tc.maxBytes {
 			t.Fatalf("%d cells → %d B, want ≤ %d", tc.cells, n, tc.maxBytes)
 		}
@@ -206,13 +218,14 @@ func TestAlmanacSparseP90Cost(t *testing.T) {
 		t.Skip("timing")
 	}
 	d := spreadRow(315)
-	enc := almanacSparseEncode(&d)
+	h := spreadHist(&d)
+	enc := almanacSparseEncode(&d, h)
 	var seg [almanacSeasonSlotsPerDay]byte
 	seg[10] = 3
 	const n = 2000
 	start := time.Now()
 	for i := 0; i < n; i++ {
-		if _, err := almanacSparseReplaceDay(enc, 14, &seg); err != nil {
+		if _, err := almanacSparseReplaceDay(enc, 14, &seg, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -226,14 +239,15 @@ func TestAlmanacSparseP90Cost(t *testing.T) {
 func BenchmarkAlmanacSparseEncodeP90(b *testing.B) {
 	d := spreadRow(315)
 	b.ReportAllocs()
+	h := spreadHist(&d)
 	for i := 0; i < b.N; i++ {
-		_ = almanacSparseEncode(&d)
+		_ = almanacSparseEncode(&d, h)
 	}
 }
 
 func BenchmarkAlmanacSparseEachP90(b *testing.B) {
 	d := spreadRow(315)
-	enc := almanacSparseEncode(&d)
+	enc := almanacSparseEncode(&d, spreadHist(&d))
 	b.ReportAllocs()
 	sum := 0
 	for i := 0; i < b.N; i++ {
@@ -244,11 +258,171 @@ func BenchmarkAlmanacSparseEachP90(b *testing.B) {
 
 func BenchmarkAlmanacSparseReplaceDayP90(b *testing.B) {
 	d := spreadRow(315)
-	enc := almanacSparseEncode(&d)
+	enc := almanacSparseEncode(&d, spreadHist(&d))
 	var seg [almanacSeasonSlotsPerDay]byte
 	seg[10] = 3
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _ = almanacSparseReplaceDay(enc, 14, &seg)
+		_, _ = almanacSparseReplaceDay(enc, 14, &seg, nil)
+	}
+}
+
+// spreadHist gives every non-zero cell of d an SNR histogram with 1–4
+// non-empty bins (avg 2.5), bins summing to at most the cell count.
+func spreadHist(d *[almanacSeasonCountsLen]byte) *[almanacSeasonCountsLen]almanacSNRHist {
+	var h [almanacSeasonCountsLen]almanacSNRHist
+	i := 0
+	for pos, v := range d {
+		if v == 0 {
+			continue
+		}
+		nb := i%4 + 1
+		for b := 0; b < nb; b++ {
+			h[pos][(b*2+i)%almanacSNRBins] = byte(i%7 + 1)
+		}
+		i++
+	}
+	return &h
+}
+
+func TestAlmanacSparseV2RoundTrip(t *testing.T) {
+	var d [almanacSeasonCountsLen]byte
+	var h [almanacSeasonCountsLen]almanacSNRHist
+	d[0], h[0] = 3, almanacSNRHist{1, 0, 0, 0, 0, 2}
+	d[700] = 9 // no SNR data (DX-cluster only)
+	d[almanacSeasonCountsLen-1], h[almanacSeasonCountsLen-1] = 255, almanacSNRHist{255, 255, 255, 255, 255, 255}
+	h[5] = almanacSNRHist{7} // zero-count cell: histogram dropped
+	enc := almanacSparseEncode(&d, &h)
+	if len(enc) != almanacSparseEncodedLen(&d, &h) {
+		t.Fatalf("len %d != EncodedLen %d", len(enc), almanacSparseEncodedLen(&d, &h))
+	}
+	// pos 0: gap 0, count 3, mask 0b100001, bins 1, 2.
+	if !bytes.Equal(enc[:6], []byte{0x02, 0x00, 3, 0x21, 1, 2}) {
+		t.Fatalf("head = %x", enc[:6])
+	}
+	var gd [almanacSeasonCountsLen]byte
+	var gh [almanacSeasonCountsLen]almanacSNRHist
+	if err := almanacSparseDecodeHist(enc, &gd, &gh); err != nil {
+		t.Fatal(err)
+	}
+	h[5] = almanacSNRHist{}
+	if gd != d || gh != h {
+		t.Fatalf("v2 round trip mismatch")
+	}
+	// Random rows.
+	r := rand.New(rand.NewSource(2))
+	for i := 0; i < 100; i++ {
+		var d [almanacSeasonCountsLen]byte
+		var h [almanacSeasonCountsLen]almanacSNRHist
+		for j := r.Intn(400); j > 0; j-- {
+			p := r.Intn(almanacSeasonCountsLen)
+			d[p] = byte(r.Intn(255) + 1)
+			for b := range h[p] {
+				if r.Intn(2) == 0 {
+					h[p][b] = byte(r.Intn(256))
+				}
+			}
+		}
+		enc := almanacSparseEncode(&d, &h)
+		if err := almanacSparseDecodeHist(enc, &gd, &gh); err != nil || gd != d || gh != h {
+			t.Fatalf("random v2 round trip %d: %v", i, err)
+		}
+	}
+}
+
+func TestAlmanacSparseV1ReadsAsNoSNR(t *testing.T) {
+	var d [almanacSeasonCountsLen]byte
+	d[10], d[1000] = 4, 200
+	v1 := almanacSparseEncodeV1(&d)
+	if v1[0] != 0x01 {
+		t.Fatalf("v1 version byte %x", v1[0])
+	}
+	n := 0
+	if err := almanacSparseEachCell(v1, func(pos, c int, h *almanacSNRHist) {
+		n++
+		if *h != (almanacSNRHist{}) || h.total() != 0 || byte(c) != d[pos] {
+			t.Fatalf("v1 cell %d: count %d hist %v", pos, c, *h)
+		}
+	}); err != nil || n != 2 {
+		t.Fatalf("v1 each: n=%d err=%v", n, err)
+	}
+	// Replacing a day of a v1 row writes v2 and keeps the other days' counts.
+	var seg [almanacSeasonSlotsPerDay]byte
+	var hseg [almanacSeasonSlotsPerDay]almanacSNRHist
+	seg[1], hseg[1] = 5, almanacSNRHist{0, 0, 0, 2, 0, 3}
+	enc, err := almanacSparseReplaceDay(v1, 31, &seg, &hseg)
+	if err != nil || enc[0] != 0x02 {
+		t.Fatalf("replace on v1: %v %x", err, enc)
+	}
+	var gd [almanacSeasonCountsLen]byte
+	var gh [almanacSeasonCountsLen]almanacSNRHist
+	if err := almanacSparseDecodeHist(enc, &gd, &gh); err != nil {
+		t.Fatal(err)
+	}
+	p := almanacSegmentOffset(31) + 1
+	if gd[10] != 4 || gd[1000] != 200 || gd[p] != 5 || gh[p] != hseg[1] || gh[10] != (almanacSNRHist{}) {
+		t.Fatalf("v1→v2 replace lost data")
+	}
+}
+
+func TestAlmanacSparseReplaceDayKeepsOtherDaysHistograms(t *testing.T) {
+	var d [almanacSeasonCountsLen]byte
+	var h [almanacSeasonCountsLen]almanacSNRHist
+	d[3], h[3] = 6, almanacSNRHist{1, 1, 1, 1, 1, 1}
+	p := almanacSegmentOffset(2) + 4
+	d[p], h[p] = 2, almanacSNRHist{0, 2}
+	enc := almanacSparseEncode(&d, &h)
+	var seg [almanacSeasonSlotsPerDay]byte
+	seg[4] = 9 // day 2 re-folded without SNR data
+	out, err := almanacSparseReplaceDay(enc, 2, &seg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gd [almanacSeasonCountsLen]byte
+	var gh [almanacSeasonCountsLen]almanacSNRHist
+	if err := almanacSparseDecodeHist(out, &gd, &gh); err != nil {
+		t.Fatal(err)
+	}
+	if gh[3] != h[3] || gd[3] != 6 || gd[p] != 9 || gh[p] != (almanacSNRHist{}) {
+		t.Fatalf("replace-day must keep other days' histograms and SET the day's own")
+	}
+}
+
+func TestAlmanacSNRHistFromCounts(t *testing.T) {
+	// 10 SNR spots: 1 below −20, 2 in [−20,−15), 0, 3 in [−10,−5), 1, 3 ≥ 0.
+	h := almanacSNRHistFromCounts(10, [almanacSNRTiers]int64{9, 7, 7, 4, 3})
+	if h != (almanacSNRHist{1, 2, 0, 3, 1, 3}) || h.total() != 10 {
+		t.Fatalf("hist = %v", h)
+	}
+	for tier, want := range []int{9, 7, 7, 4, 3} {
+		if got := h.atLeast(tier); got != want {
+			t.Fatalf("atLeast(%d) = %d, want %d", tier, got, want)
+		}
+	}
+	// Saturation per bin; inconsistent input never goes negative.
+	h = almanacSNRHistFromCounts(1000, [almanacSNRTiers]int64{1000, 1000, 1000, 1000, 1000})
+	if h != (almanacSNRHist{0, 0, 0, 0, 0, 255}) {
+		t.Fatalf("saturated hist = %v", h)
+	}
+	h = almanacSNRHistFromCounts(2, [almanacSNRTiers]int64{5, 1, 0, 0, 0})
+	if h != (almanacSNRHist{0, 4, 1, 0, 0, 0}) {
+		t.Fatalf("inconsistent hist = %v", h)
+	}
+}
+
+// TestAlmanacSparseV2SizingEstimate extrapolates the prod storage of the v2
+// format: the v1 baseline measured ~1.6 GB/year (249.6k key-months per
+// month, avg 94.8 non-zero cells); v2 adds a mask byte plus one byte per
+// non-empty SNR bin per cell (fixture: 2.5 bins avg), stored at fillfactor
+// 70. Target ≤ 3.5 GB/year.
+func TestAlmanacSparseV2SizingEstimate(t *testing.T) {
+	d := spreadRow(95)
+	v1 := len(almanacSparseEncodeV1(&d))
+	v2 := len(almanacSparseEncode(&d, spreadHist(&d)))
+	const rowsPerYear = 249_600 * 12
+	est := 1.6e9 + float64(rowsPerYear)*float64(v2-v1)/0.70
+	t.Logf("95-cell row: v1 %d B, v2 %d B (+%d B/row, %.2f B/cell); est %.2f GB/year", v1, v2, v2-v1, float64(v2-v1)/95, est/1e9)
+	if est > 3.5e9 {
+		t.Fatalf("v2 estimate %.2f GB/year exceeds 3.5 GB", est/1e9)
 	}
 }

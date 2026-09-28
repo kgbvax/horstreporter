@@ -25,7 +25,7 @@ type dxPostgresStore struct {
 
 	mu              sync.Mutex
 	pendingGlobal   map[baselineGlobalKey]baselineDelta
-	pendingRegion   map[dxPulseRegionBaselineDailyKey]int64
+	pendingRegion   map[dxPulseRegionBaselineDailyKey]regionDelta
 	pendingCluster  map[clusterBaselineKey]baselineDelta
 	pendingCount    int
 	pendingRawSpots []rawSpotRow
@@ -75,12 +75,51 @@ type dxPostgresStore struct {
 	// mu): the fold's finality rule treats it as pending. almanacFold is the
 	// fold driver when -almanac-fold-enable is on; nil leaves the prune ungated.
 	regionLateDrops atomic.Int64
-	inflightRegion  map[dxPulseRegionBaselineDailyKey]int64
+	inflightRegion  map[dxPulseRegionBaselineDailyKey]regionDelta
 	almanacFold     atomic.Pointer[almanacFolder]
 	// pruneGateFailStreak counts consecutive region-baseline prunes whose
 	// fold gate (dxRegionPruneCutoff) could not be evaluated, so the
 	// dx_region_baseline_daily prune was skipped (0 = healthy).
 	pruneGateFailStreak atomic.Int64
+	// snrColumns: the Almanac SNR counter columns of dx_region_baseline_daily
+	// exist (KTD13, ensureRegionSNRColumns). False when the startup ALTER
+	// failed: the flush then writes spot_count only and the Almanac reports
+	// SNR tiers unavailable.
+	snrColumns atomic.Bool
+}
+
+// regionDelta is one pending dx_region_baseline_daily delta (Almanac KTD13):
+// all spots (spot_count), the spots carrying a real SNR (snr_spots:
+// PSKReporter; DX-cluster spots have none) and, cumulatively, those with
+// SNR ≥ each almanacSNRTierFloors tier (snr_ge_m20 … snr_ge_0).
+type regionDelta struct {
+	Count int64
+	SNR   int64
+	GE    [almanacSNRTiers]int64
+}
+
+// add merges o into d (all counters sum).
+func (d *regionDelta) add(o regionDelta) {
+	d.Count += o.Count
+	d.SNR += o.SNR
+	for i := range d.GE {
+		d.GE[i] += o.GE[i]
+	}
+}
+
+// observeSpot counts one spot; hasSNR is false for spots without a real SNR
+// (DX cluster), which count toward spot_count only.
+func (d *regionDelta) observeSpot(snr int, hasSNR bool) {
+	d.Count++
+	if !hasSNR {
+		return
+	}
+	d.SNR++
+	for i, floor := range almanacSNRTierFloors {
+		if snr >= floor {
+			d.GE[i]++
+		}
+	}
 }
 
 type baselineDelta struct {
@@ -150,7 +189,7 @@ func newDxPostgresStore(ctx context.Context, dsn string) (*dxPostgresStore, erro
 	}
 	st := &dxPostgresStore{pool: pool}
 	st.pendingGlobal = make(map[baselineGlobalKey]baselineDelta, 2048)
-	st.pendingRegion = make(map[dxPulseRegionBaselineDailyKey]int64, 2048)
+	st.pendingRegion = make(map[dxPulseRegionBaselineDailyKey]regionDelta, 2048)
 	st.pendingCluster = make(map[clusterBaselineKey]baselineDelta, 2048)
 	st.pendingRawSpots = make([]rawSpotRow, 0, 512)
 	st.flushCh = make(chan struct{}, 1)
@@ -261,7 +300,7 @@ func (s *dxPostgresStore) flushPending(ctx context.Context) error {
 	regionCount := len(region)
 	clusterCount := len(cluster)
 	s.pendingGlobal = make(map[baselineGlobalKey]baselineDelta, len(global)/2+16)
-	s.pendingRegion = make(map[dxPulseRegionBaselineDailyKey]int64, len(region)/2+16)
+	s.pendingRegion = make(map[dxPulseRegionBaselineDailyKey]regionDelta, len(region)/2+16)
 	s.pendingCluster = make(map[clusterBaselineKey]baselineDelta, len(cluster)/2+16)
 	s.pendingCount = 0
 	s.inflightRegion = region
@@ -281,7 +320,7 @@ func (s *dxPostgresStore) flushPending(ctx context.Context) error {
 	// One transaction: baseline upserts plus the per-slot ingest totals, so a
 	// failed flush writes no totals either.
 	batch := &pgx.Batch{}
-	queued := baselineFlushStmts(global, region, cluster, func(sql string, args ...any) { batch.Queue(sql, args...) })
+	queued := baselineFlushStmts(global, region, cluster, s.snrColumns.Load(), func(sql string, args ...any) { batch.Queue(sql, args...) })
 
 	if queued > 0 {
 		br := tx.SendBatch(ctx, batch)
@@ -306,7 +345,7 @@ func (s *dxPostgresStore) flushPending(ctx context.Context) error {
 	return nil
 }
 
-func (s *dxPostgresStore) mergePendingBack(global map[baselineGlobalKey]baselineDelta, region map[dxPulseRegionBaselineDailyKey]int64, cluster map[clusterBaselineKey]baselineDelta) {
+func (s *dxPostgresStore) mergePendingBack(global map[baselineGlobalKey]baselineDelta, region map[dxPulseRegionBaselineDailyKey]regionDelta, cluster map[clusterBaselineKey]baselineDelta) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -323,7 +362,9 @@ func (s *dxPostgresStore) mergePendingBack(global map[baselineGlobalKey]baseline
 		s.pendingCount++
 	}
 	for k, v := range region {
-		s.pendingRegion[k] += v
+		e := s.pendingRegion[k]
+		e.add(v)
+		s.pendingRegion[k] = e
 		s.pendingCount++
 	}
 }
@@ -342,6 +383,21 @@ const (
 			ON CONFLICT (target_grid4, band, slot_of_day, region, day_index)
 			DO UPDATE SET spot_count = dx_region_baseline_daily.spot_count + EXCLUDED.spot_count
 		`
+	// regionBaselineDailySNRUpsertSQL additionally adds the Almanac SNR
+	// counters (KTD13); used once ensureRegionSNRColumns confirmed them.
+	regionBaselineDailySNRUpsertSQL = `
+			INSERT INTO dx_region_baseline_daily (target_grid4, band, slot_of_day, region, day_index, spot_count,
+				snr_spots, snr_ge_m20, snr_ge_m15, snr_ge_m10, snr_ge_m5, snr_ge_0)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+			ON CONFLICT (target_grid4, band, slot_of_day, region, day_index)
+			DO UPDATE SET spot_count = dx_region_baseline_daily.spot_count + EXCLUDED.spot_count,
+				snr_spots = dx_region_baseline_daily.snr_spots + EXCLUDED.snr_spots,
+				snr_ge_m20 = dx_region_baseline_daily.snr_ge_m20 + EXCLUDED.snr_ge_m20,
+				snr_ge_m15 = dx_region_baseline_daily.snr_ge_m15 + EXCLUDED.snr_ge_m15,
+				snr_ge_m10 = dx_region_baseline_daily.snr_ge_m10 + EXCLUDED.snr_ge_m10,
+				snr_ge_m5 = dx_region_baseline_daily.snr_ge_m5 + EXCLUDED.snr_ge_m5,
+				snr_ge_0 = dx_region_baseline_daily.snr_ge_0 + EXCLUDED.snr_ge_0
+		`
 	baselineClusterUpsertSQL = `
 			INSERT INTO dx_baseline_cluster (cluster_anchor, band, slot_of_day, distance_tier, snr_tier, count)
 			VALUES ($1,$2,$3,$4,$5,$6)
@@ -354,9 +410,10 @@ const (
 // baselineFlushStmts queues the statements of one baseline flush
 // transaction via queue (production: batch.Queue): the three baseline upserts
 // plus the Almanac per-(day, slot) ingest totals derived from the region
-// deltas. Returns the number queued. Pure apart from queue, so the
-// transaction's contents can be asserted without a database.
-func baselineFlushStmts(global map[baselineGlobalKey]baselineDelta, region map[dxPulseRegionBaselineDailyKey]int64, cluster map[clusterBaselineKey]baselineDelta, queue func(sql string, args ...any)) int {
+// deltas. withSNR adds the Almanac SNR counters to the region upsert (false
+// when the columns are missing). Returns the number queued. Pure apart from
+// queue, so the transaction's contents can be asserted without a database.
+func baselineFlushStmts(global map[baselineGlobalKey]baselineDelta, region map[dxPulseRegionBaselineDailyKey]regionDelta, cluster map[clusterBaselineKey]baselineDelta, withSNR bool, queue func(sql string, args ...any)) int {
 	n := 0
 	q := func(sql string, args ...any) {
 		queue(sql, args...)
@@ -366,7 +423,12 @@ func baselineFlushStmts(global map[baselineGlobalKey]baselineDelta, region map[d
 		q(baselineGlobalUpsertSQL, k.Band, k.SlotOfDay, k.DistanceTier, k.SnrTier, d.Count)
 	}
 	for k, v := range region {
-		q(regionBaselineDailyUpsertSQL, k.TargetGrid4, k.Band, k.SlotOfDay, k.Region, k.DayIndex, v)
+		if withSNR {
+			q(regionBaselineDailySNRUpsertSQL, k.TargetGrid4, k.Band, k.SlotOfDay, k.Region, k.DayIndex, v.Count,
+				v.SNR, v.GE[0], v.GE[1], v.GE[2], v.GE[3], v.GE[4])
+		} else {
+			q(regionBaselineDailyUpsertSQL, k.TargetGrid4, k.Band, k.SlotOfDay, k.Region, k.DayIndex, v.Count)
+		}
 	}
 	for k, d := range cluster {
 		q(baselineClusterUpsertSQL, k.ClusterAnchor, k.Band, k.SlotOfDay, k.DistanceTier, k.SnrTier, d.Count)
@@ -384,19 +446,19 @@ type almanacIngestSlotKey struct {
 }
 
 // almanacIngestSlotTotalsFromRegion sums region-key deltas per (day, slot):
-// the same unit as dx_region_baseline_daily.spot_count.
-func almanacIngestSlotTotalsFromRegion(region map[dxPulseRegionBaselineDailyKey]int64) map[almanacIngestSlotKey]int64 {
+// the same unit as dx_region_baseline_daily.spot_count (all spots, any SNR).
+func almanacIngestSlotTotalsFromRegion(region map[dxPulseRegionBaselineDailyKey]regionDelta) map[almanacIngestSlotKey]int64 {
 	if len(region) == 0 {
 		return nil
 	}
 	out := make(map[almanacIngestSlotKey]int64, 4)
 	for k, v := range region {
-		out[almanacIngestSlotKey{Day: k.DayIndex, Slot: k.SlotOfDay}] += v
+		out[almanacIngestSlotKey{Day: k.DayIndex, Slot: k.SlotOfDay}] += v.Count
 	}
 	return out
 }
 
-func (s *dxPostgresStore) setInflightRegion(region map[dxPulseRegionBaselineDailyKey]int64) {
+func (s *dxPostgresStore) setInflightRegion(region map[dxPulseRegionBaselineDailyKey]regionDelta) {
 	s.mu.Lock()
 	s.inflightRegion = region
 	s.mu.Unlock()
@@ -409,7 +471,7 @@ func (s *dxPostgresStore) pendingRegionMinDay() (int64, bool) {
 	defer s.mu.Unlock()
 	var min int64
 	ok := false
-	for _, m := range [2]map[dxPulseRegionBaselineDailyKey]int64{s.pendingRegion, s.inflightRegion} {
+	for _, m := range [2]map[dxPulseRegionBaselineDailyKey]regionDelta{s.pendingRegion, s.inflightRegion} {
 		for k := range m {
 			if !ok || k.DayIndex < min {
 				min, ok = k.DayIndex, true
@@ -632,6 +694,9 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 			return err
 		}
 	}
+
+	// Almanac SNR counters (KTD13): best-effort, never fatal.
+	ensureRegionSNRColumns(ctx, &pgRegionSNRSchema{pool: s.pool}, &s.snrColumns, utcDayIndex(time.Now().Unix()))
 
 	type optionalMaintenanceStmt struct {
 		name string
@@ -1046,7 +1111,11 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 
 	if regionAccepted {
 		for _, key := range regionKeys {
-			s.pendingRegion[key] += 1
+			// Almanac SNR counters (KTD13): DX-cluster spots carry RP 0,
+			// not a real SNR, so they count toward spot_count only.
+			d := s.pendingRegion[key]
+			d.observeSpot(m.RP, !isDXCluster)
+			s.pendingRegion[key] = d
 			s.pendingCount++
 		}
 	} else if len(regionKeys) > 0 {
@@ -2629,4 +2698,105 @@ func (s *dxPostgresStore) regionCalendarStats(ctx context.Context, daysBack int,
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// Almanac SNR counter columns (KTD13)
+// ---------------------------------------------------------------------------
+
+// almanacSNRSinceKey is the dx_meta key holding the SNR collection start: the
+// first UTC day index whose region-baseline rows carry complete SNR counters
+// (the day after the columns were first confirmed, so the partial deploy day
+// is excluded). Written once; absent while the columns are missing.
+const almanacSNRSinceKey = "almanac_snr_since_day"
+
+// regionSNRColumnNames are the Almanac SNR counters of
+// dx_region_baseline_daily, in almanacSNRTierFloors order after snr_spots.
+var regionSNRColumnNames = []string{"snr_spots", "snr_ge_m20", "snr_ge_m15", "snr_ge_m10", "snr_ge_m5", "snr_ge_0"}
+
+const (
+	regionSNRColumnsPresentSQL = `
+		SELECT count(*) FROM information_schema.columns
+		WHERE table_schema = ANY (current_schemas(false))
+		  AND table_name = 'dx_region_baseline_daily'
+		  AND column_name = ANY($1::text[])`
+
+	// One statement for all six columns: a constant DEFAULT makes ADD COLUMN
+	// metadata-only (no rewrite) on PG ≥ 11, but it still needs the ACCESS
+	// EXCLUSIVE lock on the hot ingest table — hence the presence check
+	// first and lock_timeout around it.
+	regionSNRColumnsAlterSQL = `
+		ALTER TABLE dx_region_baseline_daily
+			ADD COLUMN IF NOT EXISTS snr_spots INTEGER NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS snr_ge_m20 INTEGER NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS snr_ge_m15 INTEGER NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS snr_ge_m10 INTEGER NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS snr_ge_m5 INTEGER NOT NULL DEFAULT 0,
+			ADD COLUMN IF NOT EXISTS snr_ge_0 INTEGER NOT NULL DEFAULT 0`
+
+	regionSNRLockTimeoutSQL = `SET LOCAL lock_timeout = '5s'`
+
+	almanacSNRSinceSeedSQL = `INSERT INTO dx_meta (k, v) VALUES ($1, $2) ON CONFLICT (k) DO NOTHING`
+)
+
+// regionSNRSchema is the database side of ensureRegionSNRColumns.
+type regionSNRSchema interface {
+	columnsPresent(ctx context.Context) (int, error)
+	alterWithLockTimeout(ctx context.Context) error
+	seedSince(ctx context.Context, day int64) error
+}
+
+// ensureRegionSNRColumns makes sure the SNR counter columns exist and records
+// the SNR collection start. The ALTER only runs when a column is missing
+// (ADD COLUMN IF NOT EXISTS takes the table lock even when it no-ops) and
+// gives up after lock_timeout 5 s. Failure is logged, never fatal: ready
+// stays false and the Almanac degrades to all-spots only. Returns ready.
+func ensureRegionSNRColumns(ctx context.Context, db regionSNRSchema, ready *atomic.Bool, today int64) bool {
+	n, err := db.columnsPresent(ctx)
+	if err != nil {
+		logError("almanac: SNR column check failed, SNR tiers disabled for this run: %v", err)
+		return false
+	}
+	if n < len(regionSNRColumnNames) {
+		if err := db.alterWithLockTimeout(ctx); err != nil {
+			logError("almanac: adding the SNR columns to dx_region_baseline_daily failed (retried at the next start), SNR tiers disabled for this run: %v", err)
+			return false
+		}
+		logInfo("almanac: added the SNR counter columns to dx_region_baseline_daily")
+	}
+	ready.Store(true)
+	if err := db.seedSince(ctx, today+1); err != nil {
+		logError("almanac: recording the SNR collection start failed (retried at the next start): %v", err)
+	}
+	return true
+}
+
+type pgRegionSNRSchema struct {
+	pool *pgxpool.Pool
+}
+
+func (p *pgRegionSNRSchema) columnsPresent(ctx context.Context) (int, error) {
+	var n int
+	err := p.pool.QueryRow(ctx, regionSNRColumnsPresentSQL, regionSNRColumnNames).Scan(&n)
+	return n, err
+}
+
+func (p *pgRegionSNRSchema) alterWithLockTimeout(ctx context.Context) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, regionSNRLockTimeoutSQL); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, regionSNRColumnsAlterSQL); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (p *pgRegionSNRSchema) seedSince(ctx context.Context, day int64) error {
+	_, err := p.pool.Exec(ctx, almanacSNRSinceSeedSQL, almanacSNRSinceKey, fmt.Sprintf("%d", day))
+	return err
 }

@@ -123,6 +123,36 @@ Run this before enabling the fold. It needs no new tables.
    encoding does the compression itself; the rare rows over ~2 KB
    (`rows_over_toast`) get Postgres' default compression on top.
 
+4. SNR histograms (encoding v2, plan KTD13; target ≤ 3.5 GB/year). Since the
+   SNR share release every cell also stores a mask byte plus one saturating
+   byte per non-empty SNR bin ([<−20], [−20,−15), [−15,−10), [−10,−5),
+   [−5,0), [≥0] dB), so `bytes/cell ≈ varint(gap) + 2 + bins`. Unit-test
+   estimate (`TestAlmanacSparseV2SizingEstimate`, 95-cell row, 2.5 bins/cell
+   avg): +308 B/row (3.24 B/cell) → ≈2.9 GB/year incl. the v1 baseline above.
+   Cells before the SNR start (and DX-cluster-only cells) cost +1 B (mask 0).
+   Once the SNR columns have filled for a few days, measure the real bin
+   count (run with `:lo` ≥ the `almanac_snr_since_day` value):
+
+   ```sql
+   SET statement_timeout = '300s';
+   WITH c AS (
+     SELECT target_grid4, band, region, day_index, slot_of_day,
+            sum(snr_spots) n, sum(snr_ge_m20) g20, sum(snr_ge_m15) g15,
+            sum(snr_ge_m10) g10, sum(snr_ge_m5) g5, sum(snr_ge_0) g0
+     FROM dx_region_baseline_daily
+     WHERE day_index >= :lo AND spot_count > 0
+     GROUP BY 1, 2, 3, 4, 5
+   )
+   SELECT count(*) AS cells,
+          round(avg((n - g20 > 0)::int + (g20 - g15 > 0)::int + (g15 - g10 > 0)::int
+                  + (g10 - g5 > 0)::int + (g5 - g0 > 0)::int + (g0 > 0)::int), 2) AS avg_bins,
+          round(avg((n > 0)::int), 3) AS share_cells_with_snr
+   FROM c;
+   ```
+
+   `bytes/year ≈ 1.6 GB + key_months × 12 × avg_cells × (1 + avg_bins) / 0.7`.
+   **Stop and report if it exceeds 3.5 GB/year.**
+
 ## 2. Deploy
 
 - [ ] Add the flags to `ARGS` in `/etc/default/horstreporter`:
@@ -264,6 +294,43 @@ up to 64 days per tick, which covers the whole ~33-day backlog.
 Set `-almanac-fold-enable=false` in `ARGS` and redeploy. The fold stops and
 the `dx_region_baseline_daily` prune is ungated again. The new tables stay;
 never drop them and never make them UNLOGGED.
+
+**After the SNR share release (sparse encoding v2), never run a pre-v2 binary
+with the fold enabled.** An older binary reads version-2 rows as malformed,
+treats them as absent and rewrites the month row with only the folded day —
+the rest of that key-month's history is lost. Rollback order: first set
+`-almanac-fold-enable=false`, then deploy the older binary. Its reader also
+shows v2 months as empty (display only; nothing is written). The SNR columns
+of `dx_region_baseline_daily` are harmless to an older binary (it writes
+`spot_count` only; the SNR counters of those days stay 0, so after a
+roll-forward those days read "no SNR" as closed-for-floor — move
+`almanac_snr_since_day` past the gap if that matters).
+
+## 5a. SNR share rollout (KTD13)
+
+- [ ] Before the deploy: `SELECT count(*) FROM information_schema.columns
+  WHERE table_name = 'dx_region_baseline_daily' AND column_name LIKE 'snr_%';`
+  (0 before, 6 after).
+- [ ] The first start runs one `ALTER TABLE dx_region_baseline_daily ADD
+  COLUMN IF NOT EXISTS snr_spots … snr_ge_0 INTEGER NOT NULL DEFAULT 0` (all
+  six in one statement) under `SET LOCAL lock_timeout = '5s'`. With a constant
+  default this is a catalog-only change on PG ≥ 11 (no rewrite), but it needs
+  the ACCESS EXCLUSIVE lock on the hot ingest table: behind a long-running
+  query it waits at most 5 s (queueing the flush meanwhile), then gives up.
+  Later starts skip the ALTER entirely when the columns exist (the check is
+  on `information_schema`, because `IF NOT EXISTS` still takes the lock).
+- [ ] On a lock timeout the log shows `adding the SNR columns … failed` at
+  ERROR; the process keeps running without SNR data (`snr_available: false`)
+  and retries at the next restart. To add them by hand in a quiet moment:
+  `SET lock_timeout = '5s'; ALTER TABLE dx_region_baseline_daily ADD COLUMN IF
+  NOT EXISTS snr_spots INTEGER NOT NULL DEFAULT 0, …;` then restart.
+- [ ] After the start: `SELECT v FROM dx_meta WHERE k = 'almanac_snr_since_day';`
+  = deploy day + 1 (the partial deploy day is excluded). Floors read
+  "not enough data" until `m_min` (10) covered days have accumulated.
+- [ ] Next day: `SELECT sum(spot_count), sum(snr_spots), sum(snr_ge_m10)
+  FROM dx_region_baseline_daily WHERE day_index = :today;` — `snr_spots` a
+  little below `spot_count` (DX-cluster spots carry no SNR), cumulative
+  counters decreasing with the tier.
 
 ## 6. U2 query plans (stop condition: any read > 1.5 s)
 

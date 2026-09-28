@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,10 +34,15 @@ import (
 // counts are passed through in their stored sparse encoding.
 type almanacReadTx interface {
 	watermark(ctx context.Context) (int64, bool, error)
+	// snrSince is the SNR collection start (KTD13); ok false = not
+	// collected (columns missing).
+	snrSince(ctx context.Context) (int64, bool, error)
 	seasonCounts(ctx context.Context, grids, bands []string, months []int, layer string,
 		fn func(grid, band, region string, ym int, counts []byte)) error
-	tailCounts(ctx context.Context, grids []string, rings []int32, bands []string, afterDay, fromDay, toDay int64,
-		fn func(ring int, band, region string, day int64, slot int, count int64)) error
+	// tailCounts: with tier ≥ 0 the rows also carry the SNR-carrying spots
+	// and the spots with SNR ≥ almanacSNRTierFloors[tier] (0 otherwise).
+	tailCounts(ctx context.Context, grids []string, rings []int32, bands []string, afterDay, fromDay, toDay int64, tier int,
+		fn func(ring int, band, region string, day int64, slot int, count, snr, ge int64)) error
 	tailActiveDays(ctx context.Context, grids, bands []string, afterDay, fromDay, toDay int64,
 		fn func(grid, band string, day int64)) error
 	ingestSlots(ctx context.Context, layer string, fromDay, toDay int64, fn func(day int64, slot int, total int64)) error
@@ -50,25 +56,31 @@ type almanacReadStore interface {
 
 // readAlmanacAccum runs the reads for centre over win in one transaction.
 // todayOnly reads just the tail of yesterday and today (the 120 s today
-// overlay refresh, KTD11); the typical read covers the whole window.
-func readAlmanacAccum(ctx context.Context, st almanacReadStore, centre string, win almanacWindow, todayOnly bool) (*almanacAccum, error) {
-	acc := newAlmanacAccum(centre, win)
+// overlay refresh, KTD11); the typical read covers the whole window. tier is
+// the SNR floor index (-1 = any SNR, KTD13).
+func readAlmanacAccum(ctx context.Context, st almanacReadStore, centre string, win almanacWindow, todayOnly bool, tier int) (*almanacAccum, error) {
+	acc := newAlmanacAccum(centre, win, tier)
 	err := st.withReadTx(ctx, func(tx almanacReadTx) error {
 		w, ok, err := tx.watermark(ctx)
 		if err != nil {
 			return err
 		}
 		acc.setWatermark(w, ok)
+		since, sok, err := tx.snrSince(ctx)
+		if err != nil {
+			return err
+		}
+		acc.setSNRSince(since, sok)
 		bands := almanacInScopeBands
 		if todayOnly {
-			return tx.tailCounts(ctx, acc.squares, acc.rings, bands, acc.tailAfter(), win.Today-1, win.Today, acc.addTailRow)
+			return tx.tailCounts(ctx, acc.squares, acc.rings, bands, acc.tailAfter(), win.Today-1, win.Today, acc.tier, acc.addTailRow)
 		}
 		if months := acc.seasonMonths(); len(months) > 0 {
 			if err := tx.seasonCounts(ctx, acc.squares, bands, months, almanacSeasonLayerPSKR, acc.addSeasonRow); err != nil {
 				return err
 			}
 		}
-		if err := tx.tailCounts(ctx, acc.squares, acc.rings, bands, acc.tailAfter(), win.Start, win.Today, acc.addTailRow); err != nil {
+		if err := tx.tailCounts(ctx, acc.squares, acc.rings, bands, acc.tailAfter(), win.Start, win.Today, acc.tier, acc.addTailRow); err != nil {
 			return err
 		}
 		if err := tx.tailActiveDays(ctx, acc.squares, bands, acc.tailAfter(), win.Start, win.End, acc.addTailActive); err != nil {
@@ -102,8 +114,11 @@ const (
 	// $1 grids, $2 ring levels (parallel to $1), $3 bands, $4 watermark
 	// (exclusive), $5/$6 day bounds. Summed across the ring per level, so
 	// the result is bounded by levels × bands × regions × days × slots.
+	// The SNR sums are 0 here; almanacTailCountsSQLFor substitutes the
+	// counter columns for a tier (KTD13).
 	almanacTailCountsSQL = `
-		SELECT r.ring, d.band, d.region, d.day_index, d.slot_of_day, SUM(d.spot_count)::bigint
+		SELECT r.ring, d.band, d.region, d.day_index, d.slot_of_day, SUM(d.spot_count)::bigint,
+			0::bigint, 0::bigint
 		FROM dx_region_baseline_daily d
 		JOIN unnest($1::text[], $2::int[]) AS r(grid4, ring) ON d.target_grid4 = r.grid4
 		WHERE d.band = ANY($3::text[])
@@ -130,9 +145,26 @@ const (
 		SELECT day_index FROM almanac_lost_days WHERE day_index BETWEEN $1 AND $2`
 )
 
-// pgAlmanacReadStore is the Postgres almanacReadStore.
+// almanacTailCountsSQLFor is almanacTailCountsSQL summing snr_spots and the
+// tier's snr_ge_* column (a fixed whitelist, never user text) when tier ≥ 0
+// and the SNR columns exist; otherwise the SNR sums stay 0.
+func almanacTailCountsSQLFor(tier int, snrColumns bool) string {
+	if tier < 0 || tier >= almanacSNRTiers || !snrColumns {
+		return almanacTailCountsSQL
+	}
+	return strings.Replace(almanacTailCountsSQL, "0::bigint, 0::bigint",
+		"SUM(d.snr_spots)::bigint, SUM(d."+regionSNRColumnNames[1+tier]+")::bigint", 1)
+}
+
+// pgAlmanacReadStore is the Postgres almanacReadStore. snrColumns reports
+// whether the KTD13 SNR counter columns exist (nil = no).
 type pgAlmanacReadStore struct {
-	pool *pgxpool.Pool
+	pool       *pgxpool.Pool
+	snrColumns func() bool
+}
+
+func (p *pgAlmanacReadStore) hasSNRColumns() bool {
+	return p.snrColumns != nil && p.snrColumns()
 }
 
 func (p *pgAlmanacReadStore) withReadTx(ctx context.Context, fn func(almanacReadTx) error) error {
@@ -141,18 +173,28 @@ func (p *pgAlmanacReadStore) withReadTx(ctx context.Context, fn func(almanacRead
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := fn(&pgAlmanacReadTx{tx: tx}); err != nil {
+	if err := fn(&pgAlmanacReadTx{tx: tx, snrColumns: p.hasSNRColumns()}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
 }
 
 type pgAlmanacReadTx struct {
-	tx pgx.Tx
+	tx         pgx.Tx
+	snrColumns bool
 }
 
 func (t *pgAlmanacReadTx) watermark(ctx context.Context) (int64, bool, error) {
 	return readAlmanacWatermark(ctx, t.tx, false)
+}
+
+// snrSince reads the SNR collection start; without the SNR columns the SNR
+// data counts as never collected.
+func (t *pgAlmanacReadTx) snrSince(ctx context.Context) (int64, bool, error) {
+	if !t.snrColumns {
+		return 0, false, nil
+	}
+	return readAlmanacSNRSince(ctx, t.tx)
 }
 
 func (t *pgAlmanacReadTx) seasonCounts(ctx context.Context, grids, bands []string, months []int, layer string,
@@ -189,23 +231,23 @@ func (t *pgAlmanacReadTx) seasonCounts(ctx context.Context, grids, bands []strin
 	return rows.Err()
 }
 
-func (t *pgAlmanacReadTx) tailCounts(ctx context.Context, grids []string, rings []int32, bands []string, afterDay, fromDay, toDay int64,
-	fn func(ring int, band, region string, day int64, slot int, count int64)) error {
-	rows, err := t.tx.Query(ctx, almanacTailCountsSQL, grids, rings, bands, afterDay, fromDay, toDay)
+func (t *pgAlmanacReadTx) tailCounts(ctx context.Context, grids []string, rings []int32, bands []string, afterDay, fromDay, toDay int64, tier int,
+	fn func(ring int, band, region string, day int64, slot int, count, snr, ge int64)) error {
+	rows, err := t.tx.Query(ctx, almanacTailCountsSQLFor(tier, t.snrColumns), grids, rings, bands, afterDay, fromDay, toDay)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	var (
-		ring, slot int32
-		band, reg  string
-		day, count int64
+		ring, slot       int32
+		band, reg        string
+		day, count, n, g int64
 	)
 	for rows.Next() {
-		if err := rows.Scan(&ring, &band, &reg, &day, &slot, &count); err != nil {
+		if err := rows.Scan(&ring, &band, &reg, &day, &slot, &count, &n, &g); err != nil {
 			return err
 		}
-		fn(int(ring), band, reg, day, int(slot), count)
+		fn(int(ring), band, reg, day, int(slot), count, n, g)
 	}
 	return rows.Err()
 }

@@ -32,6 +32,11 @@ import (
 //	days        = |{d : ∃s alive(d,s) ∧ active(d,s)}|  — the M_min test
 //	k           = 2 (PSKR), 1 (WSPR)
 //
+// With an SNR floor (min_snr, KTD13) only the PSKR layer is used (the WSPR
+// fallback needs no floor): days before the SNR collection start are left
+// out of M and N (unknown, never closed), N counts the spots with SNR ≥ the
+// tier floor, and each month carries the pooled share of such spots.
+//
 // Radius: the drill-down uses the landing view's radius. getSeason first
 // obtains the /api/almanac typical part for the same centre grid4 (cached,
 // KTD3 chooseAlmanacRadius over the 30-day PSKR active-day masks) and reads
@@ -54,6 +59,7 @@ type almanacSeasonMonth struct {
 	Days  int
 	K     int
 	N, M  [almanacSlotsPerDay]uint8
+	Share [almanacSlotsPerDay]uint16 // almanacShareCode; SNR floor only
 }
 
 // almanacSeason is one drill-down result (the cached unit).
@@ -66,6 +72,10 @@ type almanacSeason struct {
 	Watermark int64 // as read in the transaction; -1 when none
 	Today     int64 // UTC day index the result was computed for
 	Months    []almanacSeasonMonth
+	// SNR floor tier (-1 = any SNR) and the SNR collection start (KTD13).
+	Tier        int
+	SNRSince    int64
+	HasSNRSince bool
 }
 
 // ---------------------------------------------------------------------------
@@ -91,8 +101,12 @@ func almanacYMDays(ym int) int {
 
 // almanacSeasonMonthAcc holds one (layer, year_month) reduced to the target
 // region's per-slot sums, the any-region activity and the ingest totals.
+// With an SNR tier, ge / snrN hold the target region's spots with SNR ≥ the
+// floor and its SNR-carrying spots.
 type almanacSeasonMonthAcc struct {
 	cnt    [almanacSeasonDaysPerMonth][almanacSlotsPerDay]uint16
+	ge     [almanacSeasonDaysPerMonth][almanacSlotsPerDay]uint16
+	snrN   [almanacSeasonDaysPerMonth][almanacSlotsPerDay]uint16
 	act    [almanacSeasonDaysPerMonth][almanacSlotsPerDay]bool
 	ingest [almanacSeasonDaysPerMonth][almanacSlotsPerDay]int64
 	lost   [almanacSeasonDaysPerMonth]bool
@@ -102,6 +116,11 @@ type almanacSeasonAccum struct {
 	region    string
 	yesterday int64
 	layers    map[string]map[int]*almanacSeasonMonthAcc
+	// tier is the SNR floor index (-1 = any SNR); snrSince the SNR
+	// collection start (hasSNRSince false: never collected).
+	tier        int
+	snrSince    int64
+	hasSNRSince bool
 }
 
 func (a *almanacSeasonAccum) month(layer string, ym int, create bool) *almanacSeasonMonthAcc {
@@ -121,7 +140,7 @@ func (a *almanacSeasonAccum) month(layer string, ym int, create bool) *almanacSe
 	return m
 }
 
-func (a *almanacSeasonAccum) addSlot(layer string, day int64, slot int, reg string, v int64) {
+func (a *almanacSeasonAccum) addSlot(layer string, day int64, slot int, reg string, v, snr, ge int64) {
 	if v <= 0 || day > a.yesterday || slot < 0 || slot >= almanacSlotsPerDay {
 		return
 	}
@@ -130,6 +149,8 @@ func (a *almanacSeasonAccum) addSlot(layer string, day int64, slot int, reg stri
 	m.act[dom-1][slot] = true
 	if reg == a.region {
 		satAdd16(&m.cnt[dom-1][slot], v)
+		satAdd16(&m.ge[dom-1][slot], ge)
+		satAdd16(&m.snrN[dom-1][slot], snr)
 	}
 }
 
@@ -151,7 +172,7 @@ func (a *almanacSeasonAccum) seasonRow(layer string, maxDay int64) func(grid, ba
 		}
 		limit := int(lastDOM) * almanacSlotsPerDay // pos < limit
 		var m *almanacSeasonMonthAcc
-		err := almanacSparseEach(counts, func(pos, v int) {
+		err := almanacSparseEachCell(counts, func(pos, v int, h *almanacSNRHist) {
 			if pos >= limit {
 				return
 			}
@@ -162,6 +183,10 @@ func (a *almanacSeasonAccum) seasonRow(layer string, maxDay int64) func(grid, ba
 			m.act[d][s] = true
 			if target {
 				satAdd16(&m.cnt[d][s], int64(v))
+				if a.tier >= 0 {
+					satAdd16(&m.ge[d][s], int64(h.atLeast(a.tier)))
+					satAdd16(&m.snrN[d][s], int64(h.total()))
+				}
 			}
 		})
 		if err != nil {
@@ -225,6 +250,10 @@ func (a *almanacSeasonAccum) compute(layer string, ym int, k int) almanacSeasonM
 	if next := a.month(layer, almanacYMAdd(ym, 1), false); next != nil {
 		nextDay[lastDom-1] = &next.act[0]
 	}
+	// With an SNR floor, days before the SNR collection start have no SNR
+	// data: they are left out entirely (unknown, never closed).
+	first := almanacYMFirstDay(ym)
+	floor := a.tier >= 0
 	var dayOK [almanacSeasonDaysPerMonth]bool
 	col := make([]int64, lastDom)
 	for s := 0; s < almanacSlotsPerDay; s++ {
@@ -232,15 +261,28 @@ func (a *almanacSeasonAccum) compute(layer string, ym int, k int) almanacSeasonM
 			col[d] = m.ingest[d][s]
 		}
 		median := almanacAliveMedian(col)
+		var geSum, snrSum int64
 		for d := 0; d < lastDom; d++ {
+			if floor && (!a.hasSNRSince || first+int64(d) < a.snrSince) {
+				continue
+			}
 			if !almanacIsAlive(m.ingest[d][s], m.lost[d], median) || !almanacActiveOrNext(&m.act[d], nextDay[d], s) {
 				continue
 			}
 			dayOK[d] = true
 			out.M[s]++
-			if int(m.cnt[d][s]) >= k {
+			open := int(m.cnt[d][s])
+			if floor {
+				open = int(m.ge[d][s])
+				geSum += int64(m.ge[d][s])
+				snrSum += int64(m.snrN[d][s])
+			}
+			if open >= k {
 				out.N[s]++
 			}
+		}
+		if floor {
+			out.Share[s] = almanacShareCode(geSum, snrSum)
 		}
 	}
 	for d := 0; d < lastDom; d++ {
@@ -288,7 +330,10 @@ func (a *almanacSeasonAccum) pick() []almanacSeasonMonth {
 // backfilled ring. Otherwise a partial ring's n against the global ingest
 // totals would pass M_min and mislabel the month, so WSPR months stay
 // absent (not_collected).
-func readAlmanacSeason(ctx context.Context, st almanacReadStore, centre string, radius int, band, region string, now time.Time, wsprCoverage map[string]bool) (*almanacSeason, error) {
+func readAlmanacSeason(ctx context.Context, st almanacReadStore, centre string, radius int, band, region string, now time.Time, wsprCoverage map[string]bool, tier int) (*almanacSeason, error) {
+	if tier >= almanacSNRTiers {
+		tier = almanacSNRTiers - 1
+	}
 	if radius < 0 {
 		radius = 0
 	}
@@ -315,10 +360,11 @@ func readAlmanacSeason(ctx context.Context, st almanacReadStore, centre string, 
 	}
 	res := &almanacSeason{
 		Centre: almanacNormalizeCentre(centre), Band: band, Region: region,
-		Radius: radius, Squares: squares, Watermark: -1, Today: today,
+		Radius: radius, Squares: squares, Watermark: -1, Today: today, Tier: tier,
 	}
-	wsprOK := almanacWSPRCovered(squares, wsprCoverage)
-	acc := &almanacSeasonAccum{region: region, yesterday: yesterday, layers: map[string]map[int]*almanacSeasonMonthAcc{}}
+	// The WSPR fallback is used without an SNR floor only (KTD13).
+	wsprOK := tier < 0 && almanacWSPRCovered(squares, wsprCoverage)
+	acc := &almanacSeasonAccum{region: region, yesterday: yesterday, layers: map[string]map[int]*almanacSeasonMonthAcc{}, tier: tier}
 	bands := []string{band}
 
 	err := st.withReadTx(ctx, func(tx almanacReadTx) error {
@@ -326,6 +372,12 @@ func readAlmanacSeason(ctx context.Context, st almanacReadStore, centre string, 
 		if err != nil {
 			return err
 		}
+		since, sok, err := tx.snrSince(ctx)
+		if err != nil {
+			return err
+		}
+		acc.snrSince, acc.hasSNRSince = since, sok
+		res.SNRSince, res.HasSNRSince = since, sok
 		tailAfter := lookbackStart - 1
 		if ok {
 			res.Watermark = w
@@ -347,10 +399,10 @@ func readAlmanacSeason(ctx context.Context, st almanacReadStore, centre string, 
 			}
 		}
 		if tailAfter < yesterday {
-			if err := tx.tailCounts(ctx, squares, rings, bands, tailAfter, tailAfter+1, yesterday,
-				func(ring int, _, reg string, day int64, slot int, count int64) {
+			if err := tx.tailCounts(ctx, squares, rings, bands, tailAfter, tailAfter+1, yesterday, tier,
+				func(ring int, _, reg string, day int64, slot int, count, snr, ge int64) {
 					if ring <= radius && day > tailAfter {
-						acc.addSlot(almanacSeasonLayerPSKR, day, slot, reg, count)
+						acc.addSlot(almanacSeasonLayerPSKR, day, slot, reg, count, snr, ge)
 					}
 				}); err != nil {
 				return err
@@ -411,14 +463,16 @@ func (c *almanacSeasonCache) entry(key string) *almanacSeasonEntry {
 	return c.lru.get(key, true)
 }
 
+// seasonValid: entries are keyed per SNR tier, so the tier needs no check.
 func (s *almanacService) seasonValid(e *almanacSeasonEntry, now time.Time, today int64, radius int) bool {
 	return e != nil && e.season != nil && now.Sub(e.at) < almanacSeasonCacheTTL &&
 		e.season.Today == today && e.season.Radius == radius && s.watermarkCurrent(e.season.Watermark)
 }
 
-// getSeason returns the drill-down for (grid4, band, region) at the landing
-// view's radius, reading Postgres only when the cache can't serve it.
-func (s *almanacService) getSeason(grid4, band, region string) (*almanacSeason, error) {
+// getSeason returns the drill-down for (grid4, band, region) at SNR tier
+// (-1 = any SNR) and the landing view's radius, reading Postgres only when
+// the cache can't serve it.
+func (s *almanacService) getSeason(grid4, band, region string, tier int) (*almanacSeason, error) {
 	if s == nil || s.store == nil || s.season == nil {
 		return nil, errAlmanacUnavailable
 	}
@@ -428,7 +482,7 @@ func (s *almanacService) getSeason(grid4, band, region string) (*almanacSeason, 
 	}
 	now := s.now()
 	today := utcDayIndex(now.Unix())
-	key := grid4 + "|" + band + "|" + region
+	key := almanacCacheKey(grid4, tier) + "|" + band + "|" + region
 	c := s.season
 
 	check := func() (*almanacSeason, bool, error) {
@@ -454,7 +508,7 @@ func (s *almanacService) getSeason(grid4, band, region string) (*almanacSeason, 
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.queryTimeout)
 	defer cancel()
-	res, err := readAlmanacSeason(ctx, s.store, grid4, radius, band, region, now, s.wsprCoverage)
+	res, err := readAlmanacSeason(ctx, s.store, grid4, radius, band, region, now, s.wsprCoverage, tier)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -484,9 +538,12 @@ type almanacSeasonMonthJSON struct {
 	K      *int                       `json:"k"`
 	N      *[almanacSlotsPerDay]uint8 `json:"n"`
 	M      *[almanacSlotsPerDay]uint8 `json:"m"`
+	// Share: SNR floor only (KTD13), per slot the pooled share of spots at
+	// or above the floor (null where the slot has no SNR data).
+	Share []*float64 `json:"share,omitempty"`
 }
 
-func almanacSeasonMonthToJSON(m almanacSeasonMonth) almanacSeasonMonthJSON {
+func almanacSeasonMonthToJSON(m almanacSeasonMonth, withShare bool) almanacSeasonMonthJSON {
 	out := almanacSeasonMonthJSON{Month: m.Month, Status: "not_collected"}
 	if m.Month >= 1 && m.Month <= 12 {
 		out.Name = almanacMonthNames[m.Month-1]
@@ -496,41 +553,47 @@ func almanacSeasonMonthToJSON(m almanacSeasonMonth) almanacSeasonMonthJSON {
 	}
 	year, layer, k, n, mm := m.Year, m.Layer, m.K, m.N, m.M
 	out.Status, out.Year, out.Layer, out.Days, out.K, out.N, out.M = "ok", &year, &layer, m.Days, &k, &n, &mm
+	if withShare {
+		out.Share = almanacShareJSON(&m.Share)
+	}
 	return out
 }
 
 // almanacSeasonResponse is the /api/almanac/season body (docs/api.md).
 type almanacSeasonResponse struct {
-	QTH          string                   `json:"qth"`
-	Area         almanacAreaInfo          `json:"area"`
-	Band         string                   `json:"band"`
-	Region       string                   `json:"region"`
-	SlotMinutes  int                      `json:"slot_minutes"`
-	MMin         int                      `json:"m_min"`
-	K            map[string]int           `json:"k"`
-	ThroughDay   string                   `json:"through_day"`
-	WatermarkDay int64                    `json:"watermark_day"`
-	Months       []almanacSeasonMonthJSON `json:"months"`
+	QTH          string          `json:"qth"`
+	Area         almanacAreaInfo `json:"area"`
+	Band         string          `json:"band"`
+	Region       string          `json:"region"`
+	SlotMinutes  int             `json:"slot_minutes"`
+	MMin         int             `json:"m_min"`
+	K            map[string]int  `json:"k"`
+	ThroughDay   string          `json:"through_day"`
+	WatermarkDay int64           `json:"watermark_day"`
+	almanacSNRInfo
+	Months []almanacSeasonMonthJSON `json:"months"`
 }
 
-func buildAlmanacSeasonResponse(qth string, area almanacArea, res *almanacSeason) *almanacSeasonResponse {
+// buildAlmanacSeasonResponse renders res; minSNR is the requested floor.
+func buildAlmanacSeasonResponse(qth string, area almanacArea, res *almanacSeason, minSNR *int) *almanacSeasonResponse {
 	out := &almanacSeasonResponse{
 		QTH: qth,
 		Area: almanacAreaInfo{
 			Grid4: res.Centre, Source: string(area.Source), Approximate: area.Approximate(),
 			Radius: res.Radius, Squares: res.Squares,
 		},
-		Band:         res.Band,
-		Region:       res.Region,
-		SlotMinutes:  almanacSlotMinutes,
-		MMin:         almanacMinActiveDaysSeasonal,
-		K:            map[string]int{almanacSeasonLayerPSKR: almanacOpenMinSpotsPSKR, almanacSeasonLayerWSPR: almanacOpenMinSpotsWSPR},
-		ThroughDay:   almanacDayString(res.Today - 1),
-		WatermarkDay: res.Watermark,
-		Months:       make([]almanacSeasonMonthJSON, 0, len(res.Months)),
+		Band:           res.Band,
+		Region:         res.Region,
+		SlotMinutes:    almanacSlotMinutes,
+		MMin:           almanacMinActiveDaysSeasonal,
+		K:              map[string]int{almanacSeasonLayerPSKR: almanacOpenMinSpotsPSKR, almanacSeasonLayerWSPR: almanacOpenMinSpotsWSPR},
+		ThroughDay:     almanacDayString(res.Today - 1),
+		WatermarkDay:   res.Watermark,
+		almanacSNRInfo: newAlmanacSNRInfo(minSNR, res.Tier, res.SNRSince, res.HasSNRSince),
+		Months:         make([]almanacSeasonMonthJSON, 0, len(res.Months)),
 	}
 	for _, m := range res.Months {
-		out.Months = append(out.Months, almanacSeasonMonthToJSON(m))
+		out.Months = append(out.Months, almanacSeasonMonthToJSON(m, res.Tier >= 0))
 	}
 	return out
 }
@@ -556,22 +619,28 @@ func almanacSeasonHandler(w http.ResponseWriter, r *http.Request) {
 	almanacSvc.ServeSeason(w, r)
 }
 
-// ServeSeason: GET /api/almanac/season?qth=&band=&region=.
-// 400 missing/invalid qth, band or region; 404 unresolvable callsign; 503
-// when the data is unavailable (no Postgres, timeout, negative cache).
+// ServeSeason: GET /api/almanac/season?qth=&band=&region=[&min_snr=].
+// 400 missing/invalid qth, band, region or min_snr; 404 unresolvable
+// callsign; 503 when the data is unavailable (no Postgres, timeout, negative
+// cache).
 func (s *almanacService) ServeSeason(w http.ResponseWriter, r *http.Request) {
 	var band, region string
+	var minSNR *int
+	tier := -1
 	qth, area, ok := s.resolveRequest(w, r, func() (err error) {
-		band, region, err = almanacSeasonParams(r)
+		if band, region, err = almanacSeasonParams(r); err != nil {
+			return err
+		}
+		minSNR, tier, err = almanacParseMinSNR(r)
 		return err
 	})
 	if !ok {
 		return
 	}
-	res, err := s.getSeason(area.Grid4, band, region)
+	res, err := s.getSeason(area.Grid4, band, region, tier)
 	if err != nil {
 		writeAlmanacUnavailable(w, err)
 		return
 	}
-	writeAlmanacJSON(w, buildAlmanacSeasonResponse(qth, area, res))
+	writeAlmanacJSON(w, buildAlmanacSeasonResponse(qth, area, res, minSNR))
 }
