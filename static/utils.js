@@ -580,3 +580,16 @@ export function regionForLatLng(lat, lng) {
 
 // DXPulse region display order (matches Go's dxPulseAllRegions).
 export const WSPR_REGIONS = ['EU', 'NA', 'SA', 'AF', 'AS', 'JA', 'OC', 'VK', 'KH6', 'CAR', 'AN'];
+
+// Display names for the region codes (mirrors propIntelRegionDisplayNames in
+// prop_intel.go).
+export const WSPR_REGION_NAMES = {
+    EU: 'Europe', NA: 'North America', SA: 'South America', AF: 'Africa', AS: 'Asia',
+    JA: 'Japan', OC: 'Oceania', VK: 'Australia', KH6: 'Hawaii', CAR: 'Caribbean', AN: 'Antarctica',
+};
+
+// regionLabel formats a region code as "JA - Japan" (bare code when unknown).
+export function regionLabel(code) {
+    const name = WSPR_REGION_NAMES[code];
+    return name ? `${code} - ${name}` : String(code ?? '');
+}

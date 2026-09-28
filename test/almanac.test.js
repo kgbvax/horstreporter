@@ -188,12 +188,12 @@ describe('almanac panel (U7)', () => {
             },
         }));
         await openPanel();
-        const open = body().querySelector('[aria-label="20m to NA, 14:00 UTC: opened 24 of 30 days"]');
+        const open = body().querySelector('[aria-label="20m to NA - North America, 14:00 UTC: opened 24 of 30 days"]');
         expect(open).not.toBeNull();
-        expect(open.getAttribute('title')).toBe('20m to NA, 14:00 UTC: opened 24 of 30 days');
+        expect(open.getAttribute('title')).toBe('20m to NA - North America, 14:00 UTC: opened 24 of 30 days');
         expect(Number(open.style.opacity || getOpacity(open))).toBeGreaterThan(0.5);
 
-        const unknown = body().querySelector('[aria-label="10m to KH6, 05:00 UTC: not enough data (6 days)"]');
+        const unknown = body().querySelector('[aria-label="10m to KH6 - Hawaii, 05:00 UTC: not enough data (6 days)"]');
         expect(unknown).not.toBeNull();
         expect(unknown.classList.contains('is-unknown')).toBe(true);
         // Unknown is never drawn in the band colour (distinct from closed).
@@ -208,7 +208,7 @@ describe('almanac panel (U7)', () => {
             },
         }));
         await openPanel();
-        expect(body().querySelector('[aria-label="20m to NA, 13:00–14:30 UTC: opened 24 of 30 days"]')).not.toBeNull();
+        expect(body().querySelector('[aria-label="20m to NA - North America, 13:00–14:30 UTC: opened 24 of 30 days"]')).not.toBeNull();
         const naLane = body().querySelector('.almanac-lane[data-band="20m"][data-region="NA"]');
         // closed 00:00–13:00, open 13:00–14:30, closed 14:30–24:00
         expect(naLane.querySelectorAll('.almanac-run')).toHaveLength(3);
@@ -272,7 +272,7 @@ describe('almanac panel (U7)', () => {
             // Ongoing by start, then upcoming by start.
             expect(rows.map((r) => `${r.dataset.band}-${r.dataset.region}`)).toEqual(
                 ['30m-EU', '20m-JA', '20m-SA', '17m-AF', '15m-AS', '12m-OC']);
-            expect(rows[1].textContent).toContain('20m to JA');
+            expect(rows[1].textContent).toContain('20m to JA - Japan');
             expect(rows[1].textContent).toContain('10:00–13:30 UTC');
             expect(rows[1].textContent).toContain('24/30 days');
             expect(rows[1].textContent).toMatch(/open today/i);
@@ -608,7 +608,7 @@ describe('almanac seasonal drill-down (U8)', () => {
         expect(global.fetch.mock.calls.map((c) => c[0])).toContain('/api/almanac/season?qth=JO32&band=20m&region=OC');
         const drill = body().querySelector('.almanac-drill');
         expect(drill).not.toBeNull();
-        expect(drill.querySelector('.almanac-drill-title').textContent).toBe('20m to OC');
+        expect(drill.querySelector('.almanac-drill-title').textContent).toBe('20m to OC - Oceania');
         expect(body().querySelector('.almanac-lanes')).toBeNull();
         expect(body().querySelector('.almanac-drill-back')).not.toBeNull();
         // The area header stays.
@@ -651,11 +651,11 @@ describe('almanac seasonal drill-down (U8)', () => {
         routeFetch();
         await openOC();
         const sep = monthRows()[8];
-        const open = sep.querySelector('[aria-label="20m to OC, Sep 2026, 14:00 UTC: opened 15 of 20 days"]');
+        const open = sep.querySelector('[aria-label="20m to OC - Oceania, Sep 2026, 14:00 UTC: opened 15 of 20 days"]');
         expect(open).not.toBeNull();
         expect(open.getAttribute('title')).toBe(open.getAttribute('aria-label'));
         expect(Number(getOpacity(open))).toBeGreaterThan(0.5);
-        const unknown = sep.querySelector('[aria-label="20m to OC, Sep 2026, 02:30 UTC: not enough data (3 days)"]');
+        const unknown = sep.querySelector('[aria-label="20m to OC - Oceania, Sep 2026, 02:30 UTC: not enough data (3 days)"]');
         expect(unknown).not.toBeNull();
         expect(unknown.classList.contains('is-unknown')).toBe(true);
         const now = body().querySelector('.almanac-drill .almanac-now');
@@ -672,7 +672,7 @@ describe('almanac seasonal drill-down (U8)', () => {
         await flush();
         expect(pending).toHaveLength(2);
         const drill = body().querySelector('.almanac-drill');
-        expect(drill.querySelector('.almanac-drill-title').textContent).toBe('20m to OC');
+        expect(drill.querySelector('.almanac-drill-title').textContent).toBe('20m to OC - Oceania');
         expect(drill.textContent).toContain('Loading');
         expect(drill.querySelector('.almanac-month')).toBeNull();
     });
@@ -737,7 +737,7 @@ describe('almanac seasonal drill-down (U8)', () => {
         global.fetch = vi.fn(async () => response({}, 503));
         await __test.fetchAlmanac({ quiet: true });
         expect(runtime.drilldown).toMatchObject({ band: '20m', region: 'OC' });
-        expect(body().querySelector('.almanac-drill-title').textContent).toBe('20m to OC');
+        expect(body().querySelector('.almanac-drill-title').textContent).toBe('20m to OC - Oceania');
         expect(monthRows()).toHaveLength(12);
         expect(body().querySelector('.almanac-status').textContent).toMatch(/couldn't refresh/i);
 
@@ -797,9 +797,9 @@ describe('almanac seasonal drill-down (U8)', () => {
         await flush();
         pending[1].resolve(response(makeSeason({ band: '20m', region: 'OC' })));
         await flush();
-        expect(body().querySelector('.almanac-drill-title').textContent).toBe('40m to NA');
-        expect(body().querySelector('[aria-label^="20m to OC"]')).toBeNull();
-        expect(body().querySelector('[aria-label^="40m to NA, Sep 2026"]')).not.toBeNull();
+        expect(body().querySelector('.almanac-drill-title').textContent).toBe('40m to NA - North America');
+        expect(body().querySelector('[aria-label^="20m to OC - Oceania"]')).toBeNull();
+        expect(body().querySelector('[aria-label^="40m to NA - North America, Sep 2026"]')).not.toBeNull();
     });
 
     it('a season response arriving after a QTH change never reopens the view', async () => {
@@ -922,7 +922,7 @@ describe('almanac SNR floor (KTD13)', () => {
         const header = body().querySelector('.almanac-snr').textContent;
         expect(header).toBe('FT8/FT4 openings — spots ≥ −10 dB (slider −12 → −10 dB tier); SNR data since 2026-09-29');
         const run = body().querySelector('.almanac-lane[data-band="20m"][data-region="NA"] [data-slot="30"]');
-        expect(run.getAttribute('title')).toBe('20m to NA, 15:00 UTC: opened 18 of 26 days · 64% of spots ≥ −10 dB');
+        expect(run.getAttribute('title')).toBe('20m to NA - North America, 15:00 UTC: opened 18 of 26 days · 64% of spots ≥ −10 dB');
         expect(body().querySelector('.almanac-agenda-row').textContent).toContain('(18/26 days · 64% of spots ≥ −10 dB)');
     });
 

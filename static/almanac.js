@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { WSPR_REGIONS, bandColors, getMinSnrMode, regionForLocator } from './utils.js';
+import { WSPR_REGIONS, bandColors, getMinSnrMode, regionForLocator, regionLabel } from './utils.js';
 import { makeDraggable } from './panel-drag.js';
 import { setPanelToggleState } from './panel-toggle.js';
 import { escapeHtml } from './ui-helpers.js';
@@ -518,6 +518,7 @@ function agendaRowHtml(e, slotMinutes, tier = null) {
     const color = bandColor(e.band);
     const band = escapeHtml(e.band);
     const region = escapeHtml(e.region);
+    const regionText = escapeHtml(regionLabel(e.region));
     const time = e.all_day ? 'all day' : `${escapeHtml(e.start)}–${escapeHtml(e.end)} UTC`;
     const when = e.status === 'ongoing'
         ? '<span class="almanac-when is-now">usually open now</span>'
@@ -526,7 +527,7 @@ function agendaRowHtml(e, slotMinutes, tier = null) {
     const local = e.all_day ? '' : `<span class="almanac-local">${escapeHtml(localRangeLabel(e, slotMinutes))}</span>`;
     return `<li class="almanac-agenda-row" data-status="${escapeHtml(e.status)}" data-band="${band}" data-region="${region}">` +
         `<span class="almanac-agenda-what"><span class="almanac-band-dot" style="background: ${color}" aria-hidden="true"></span>` +
-        `<strong>${band}</strong> to ${region}: usually <span class="almanac-agenda-time">${time}</span> ` +
+        `<strong>${band}</strong> to ${regionText}: usually <span class="almanac-agenda-time">${time}</span> ` +
         `<span class="text-muted">(${e.peak_n}/${e.peak_m} days` +
         `${e.peak_share !== null && e.peak_share !== undefined && tier !== null && tier !== undefined
             ? ` \u00b7 ${escapeHtml(shareLabel(e.peak_share, tier))}` : ''})</span></span>` +
@@ -556,7 +557,7 @@ function lanesHtml(data, lanes) {
     for (const region of regions) {
         const isOwn = region === own;
         html += `<div class="almanac-region${isOwn ? ' is-own' : ''}" data-region="${escapeHtml(region)}">` +
-            `<div class="almanac-region-label">${escapeHtml(region)}${isOwn ? ' <span class="text-muted">(your region)</span>' : ''}</div>` +
+            `<div class="almanac-region-label">${escapeHtml(regionLabel(region))}${isOwn ? ' <span class="text-muted">(your region)</span>' : ''}</div>` +
             '<div class="almanac-tracks">';
         for (const band of bands) {
             const lane = byKey.get(`${band}|${region}`) || { band, region, n: new Array(SLOTS).fill(0), m: bandM.get(band) || [] };
@@ -614,10 +615,10 @@ function runsHtml(nIn, mIn, mMin, slotMinutes, color, where, shareIn = null, tie
 function laneHtml(lane, mMin, slotMinutes, tier = null) {
     const { band, region } = lane;
     const color = bandColor(band);
-    const runs = runsHtml(lane.n, lane.m, mMin, slotMinutes, color, `${band} to ${region}`, lane.share, tier);
+    const runs = runsHtml(lane.n, lane.m, mMin, slotMinutes, color, `${band} to ${regionLabel(region)}`, lane.share, tier);
     const b = escapeHtml(band);
     const r = escapeHtml(region);
-    return `<div class="almanac-lane" role="button" tabindex="-1" data-band="${b}" data-region="${r}" aria-label="${b} to ${r}: open the seasonal view">` +
+    return `<div class="almanac-lane" role="button" tabindex="-1" data-band="${b}" data-region="${r}" aria-label="${b} to ${escapeHtml(regionLabel(lane.region))}: open the seasonal view">` +
         `<span class="almanac-lane-label" style="--band: ${color}">${b}</span><span class="almanac-lane-track">${runs}</span></div>`;
 }
 
@@ -646,7 +647,7 @@ function drillErrorText(kind) {
 }
 
 function drilldownHtml(dd) {
-    const title = `${dd.band} to ${dd.region}`;
+    const title = `${dd.band} to ${regionLabel(dd.region)}`;
     let html = `<section class="almanac-drill" aria-label="${escapeHtml(title)} by month">` +
         '<div class="almanac-drill-head">' +
         '<button type="button" class="almanac-drill-back" aria-label="Back to all regions">&larr; Back</button>' +
@@ -669,7 +670,7 @@ function monthsHtml(dd) {
     const color = bandColor(dd.band);
     const months = Array.isArray(data.months) ? data.months : [];
     const current = new Date().getUTCMonth();
-    let html = `<div class="almanac-months" role="group" aria-label="${escapeHtml(dd.band)} to ${escapeHtml(dd.region)}, typical openings per month, 24 hours UTC">`;
+    let html = `<div class="almanac-months" role="group" aria-label="${escapeHtml(dd.band)} to ${escapeHtml(regionLabel(dd.region))}, typical openings per month, 24 hours UTC">`;
     html += axisHtml();
     html += '<div class="almanac-month-rows">';
     for (let i = 0; i < 12; i += 1) {
@@ -687,7 +688,7 @@ function monthsHtml(dd) {
         }
         const layer = LAYER_LABELS[mo.layer] || String(mo.layer || '').toUpperCase();
         const when = `${name} ${mo.year}`;
-        const runs = runsHtml(mo.n, mo.m, mMin, slotMinutes, color, `${dd.band} to ${dd.region}, ${when}`, mo.share, data.snr_tier);
+        const runs = runsHtml(mo.n, mo.m, mMin, slotMinutes, color, `${dd.band} to ${regionLabel(dd.region)}, ${when}`, mo.share, data.snr_tier);
         html += `<div class="${cls}" data-month="${i + 1}" data-layer="${escapeHtml(mo.layer || '')}"${cur}>` +
             `<span class="almanac-month-label">${escapeHtml(`${when} · ${layer}`)}</span>` +
             `<span class="almanac-month-track">${runs}</span></div>`;
