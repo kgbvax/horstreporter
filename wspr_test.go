@@ -240,8 +240,8 @@ func TestFetchWSPRSpotsParsesRows(t *testing.T) {
 		if got := r.Header.Get("Accept"); got != "application/json" {
 			t.Errorf("Accept = %q, want application/json", got)
 		}
-		if got := r.Header.Get("User-Agent"); got != "horstreporter/1.0" {
-			t.Errorf("User-Agent = %q, want horstreporter/1.0", got)
+		if got := r.Header.Get("User-Agent"); got != wsprUserAgent {
+			t.Errorf("User-Agent = %q, want %q", got, wsprUserAgent)
 		}
 		if q := r.URL.Query().Get("query"); !strings.Contains(q, "wspr.rx") || !strings.Contains(q, "FORMAT JSON") {
 			t.Errorf("query = %q, want a wspr.rx ClickHouse FORMAT JSON query", q)
