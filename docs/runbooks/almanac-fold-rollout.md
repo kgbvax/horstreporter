@@ -377,6 +377,20 @@ moves down.
 - [ ] The Almanac caches are purged after a successful run, so SNR floors
   cover the backfilled days at once.
 
+## 5c. WSPR archive backfill (off until enabled)
+
+- **Before enabling:** email the wspr.live admin. Say what is fetched (two
+  aggregate GETs per UTC day for one area, ~2,200 requests for 3 years), the
+  pace, and the User-Agent to look for:
+  `horstreporter/1.0 (+https://horstreporter.kgbvax.net; DL9ET; almanac backfill)`.
+- **Pacing:** one request at a time, 2 s pause after each one completes, at
+  most 18 per rolling minute. Failures back off 15 s, 30 s (the backoff
+  replaces the pause), and the run aborts after 3 in a row.
+- **Duration:** about 2–2.5 h per area for 3 years (the 18/min cap binds when
+  queries are fast; slower queries stretch it).
+- **Enable:** add `-almanac-wspr-backfill-areas JO32` to ARGS, then watch
+  `/api/stats` and the `ALMANAC_WSPR` log lines.
+
 ## 6. U2 query plans (stop condition: any read > 1.5 s)
 
 Result (prod, 2026-09-28, JO32 r=2, watermark today−2, cold): (a) seasonal 64 ms, (b) tail aggregate 368 ms, (c) tail active days 181 ms, ingest/lost < 1 ms. No single read exceeds 1.5 s. The whole cold request (typical plus today-overlay reads) landed at 1.3–1.6 s, so `almanacQueryTimeout` was raised to 4 s. The tail index is not needed.

@@ -697,8 +697,13 @@ A sibling `almanac_snr_backfill` sub-object reports the one-off SNR backfill
   - **Coverage:** complete months only, newest first. It never touches the
     current month and never goes before 2008-03.
   - **Requests:** each UTC day makes two aggregate GETs, a ring aggregate and a
-    global per-slot count (used for the WSPR ingest-alive totals). Requests are
-    paced at about 17/min; wspr.live allows 20.
+    global per-slot count (used for the WSPR ingest-alive totals). Requests run
+    one at a time with a 2 s pause after each one completes, capped at 18 in
+    any rolling minute so that, with the live poller's ~1/min, the total stays
+    under wspr.live's 20/min.
+  - **Identification:** requests send `User-Agent: horstreporter/1.0
+    (+https://horstreporter.kgbvax.net; DL9ET; almanac backfill)` (the live
+    `-wspr-enable` poller sends the same without `; almanac backfill`).
   - **Failures:** exponential backoff from 15 s, and the run aborts after 3
     consecutive failures. The last error is stored in dx_meta
     `almanac_wspr_backfill_last_error`.

@@ -53,9 +53,14 @@ const (
 	almanacSeasonLayerWSPR = "wspr"
 
 	almanacWSPRDefaultEndpoint = "https://db1.wspr.live"
-	// almanacWSPRRequestInterval paces requests at ~17/min, under the
-	// documented 20 req/min wspr.live limit.
-	almanacWSPRRequestInterval = 3500 * time.Millisecond
+	// almanacWSPRPauseAfterRequest is the pause between the end of one
+	// request and the start of the next (be gentle with the volunteer-run
+	// wspr.live service).
+	almanacWSPRPauseAfterRequest = 2 * time.Second
+	// almanacWSPRMaxPerMinute caps backfill requests in any rolling minute,
+	// so fast responses (2 s pause + short query) plus the live poller's
+	// ~1/min stay under the documented 20 req/min wspr.live limit.
+	almanacWSPRMaxPerMinute = 18
 	// almanacWSPRBackoffBase is the first retry delay; it doubles per
 	// consecutive failure.
 	almanacWSPRBackoffBase = 15 * time.Second
@@ -305,24 +310,46 @@ func (almanacWSPRRealClock) Sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// almanacWSPRLimiter spaces consecutive requests at least interval apart.
+// almanacWSPRLimiter paces requests: a fixed pause after each request has
+// finished, plus a cap of maxPerMinute request starts in any rolling minute.
+// A backoff sleep (>= pause) already covers the pause, so they never stack.
 type almanacWSPRLimiter struct {
-	clock    almanacWSPRClock
-	interval time.Duration
-	last     time.Time
+	clock        almanacWSPRClock
+	pause        time.Duration
+	maxPerMinute int
+	lastDone     time.Time
+	starts       []time.Time
 }
 
 func (l *almanacWSPRLimiter) wait(ctx context.Context) error {
-	if !l.last.IsZero() {
-		if d := l.last.Add(l.interval).Sub(l.clock.Now()); d > 0 {
+	if !l.lastDone.IsZero() {
+		if d := l.lastDone.Add(l.pause).Sub(l.clock.Now()); d > 0 {
 			if err := l.clock.Sleep(ctx, d); err != nil {
 				return err
 			}
 		}
 	}
-	l.last = l.clock.Now()
+	if l.maxPerMinute > 0 {
+		for {
+			cutoff := l.clock.Now().Add(-time.Minute)
+			for len(l.starts) > 0 && !l.starts[0].After(cutoff) {
+				l.starts = l.starts[1:]
+			}
+			if len(l.starts) < l.maxPerMinute {
+				break
+			}
+			if err := l.clock.Sleep(ctx, l.starts[0].Sub(cutoff)); err != nil {
+				return err
+			}
+		}
+	}
+	l.starts = append(l.starts, l.clock.Now())
 	return nil
 }
+
+// done marks the end of a request (success or failure); the next wait
+// pauses from here.
+func (l *almanacWSPRLimiter) done() { l.lastDone = l.clock.Now() }
 
 // ---------------------------------------------------------------------------
 // Month accumulator
@@ -487,7 +514,7 @@ func newAlmanacWSPRBackfill(cfg almanacWSPRBackfillConfig) *almanacWSPRBackfill 
 		client:    client,
 		store:     cfg.Store,
 		clock:     clock,
-		limiter:   &almanacWSPRLimiter{clock: clock, interval: almanacWSPRRequestInterval},
+		limiter:   &almanacWSPRLimiter{clock: clock, pause: almanacWSPRPauseAfterRequest, maxPerMinute: almanacWSPRMaxPerMinute},
 		diskProbe: cfg.DiskProbe,
 		maxRows:   almanacWSPRMaxRowsPerResponse,
 	}
@@ -604,6 +631,7 @@ func (b *almanacWSPRBackfill) request(ctx context.Context, sql string, canSplit 
 			return nil, err
 		}
 		rows, err := b.do(ctx, sql)
+		b.limiter.done()
 		if err == nil {
 			b.failures = 0
 			return rows, nil
@@ -642,7 +670,7 @@ func (b *almanacWSPRBackfill) do(ctx context.Context, sql string) ([]almanacWSPR
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "horstreporter/1.0 (almanac backfill)")
+	req.Header.Set("User-Agent", almanacWSPRUserAgent)
 	res, err := b.client.Do(req)
 	if err != nil {
 		return nil, err

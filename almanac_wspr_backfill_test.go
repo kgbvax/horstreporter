@@ -60,7 +60,9 @@ type wsprStubRequest struct {
 	From   int64
 	To     int64
 	Global bool
+	UA     string
 	At     time.Time
+	Done   time.Time
 }
 
 var wsprStubWindowRE = regexp.MustCompile(`time >= toDateTime\((\d+)\) AND time < toDateTime\((\d+)\)`)
@@ -75,6 +77,7 @@ type wsprStub struct {
 	requests []wsprStubRequest
 	rowsFor  func(from, to int64) []wsprStubRow
 	globalC  int64
+	latency  time.Duration // simulated server time per request (fake clock)
 	fail     func(r wsprStubRequest, n int) (status int, body string, failed bool)
 }
 
@@ -92,8 +95,13 @@ func (s *wsprStub) RoundTrip(req *http.Request) (*http.Response, error) {
 		From:   from,
 		To:     to,
 		Global: !strings.Contains(q, "tx_loc),1,4) AS tx4"),
+		UA:     req.Header.Get("User-Agent"),
 		At:     s.clock.Now(),
 	}
+	if s.latency > 0 {
+		_ = s.clock.Sleep(context.Background(), s.latency)
+	}
+	r.Done = s.clock.Now()
 	s.mu.Lock()
 	s.requests = append(s.requests, r)
 	n := len(s.requests)
@@ -686,9 +694,75 @@ func TestAlmanacWSPRBackfillPacing(t *testing.T) {
 	if len(reqs) < 40 {
 		t.Fatalf("burst too small to test pacing: %d", len(reqs))
 	}
-	for i := 0; i+20 < len(reqs); i++ {
-		if span := reqs[i+20].At.Sub(reqs[i].At); span < time.Minute {
-			t.Fatalf("21 requests within %v (≤ 20/min violated at %d)", span, i)
+	// Instant responses: the rolling cap is what binds.
+	for i := 0; i+almanacWSPRMaxPerMinute < len(reqs); i++ {
+		if span := reqs[i+almanacWSPRMaxPerMinute].At.Sub(reqs[i].At); span < time.Minute {
+			t.Fatalf("%d requests within %v (≤ %d/min violated at %d)", almanacWSPRMaxPerMinute+1, span, almanacWSPRMaxPerMinute, i)
+		}
+	}
+	assertWSPRPauseAfterRequest(t, reqs)
+}
+
+func TestAlmanacWSPRBackfillPauseAfterSlowRequest(t *testing.T) {
+	h := newWSPRHarness(t, []string{"JO32"}, 1, nil)
+	h.markDoneExcept("JO32", wsprTestMonth)
+	// Slow responses: 2 s + 5 s = 7 s per request, so the cap never binds
+	// and the next request starts exactly 2 s after the previous completed.
+	h.stub.latency = 5 * time.Second
+	if err := h.bf.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reqs := h.stub.reqs()
+	if len(reqs) < 2 {
+		t.Fatalf("too few requests: %d", len(reqs))
+	}
+	assertWSPRPauseAfterRequest(t, reqs)
+	for i := 1; i < len(reqs); i++ {
+		if gap := reqs[i].At.Sub(reqs[i-1].Done); gap != almanacWSPRPauseAfterRequest {
+			t.Fatalf("request %d started %v after the previous completed, want exactly %v", i, gap, almanacWSPRPauseAfterRequest)
+		}
+	}
+}
+
+func TestAlmanacWSPRBackfillBackoffDoesNotStackPause(t *testing.T) {
+	h := newWSPRHarness(t, []string{"JO32"}, 1, nil)
+	h.markDoneExcept("JO32", wsprTestMonth)
+	h.stub.latency = 5 * time.Second
+	h.stub.fail = func(r wsprStubRequest, n int) (int, string, bool) {
+		return http.StatusInternalServerError, "boom", n == 1
+	}
+	if err := h.bf.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reqs := h.stub.reqs()
+	if len(reqs) < 2 {
+		t.Fatalf("too few requests: %d", len(reqs))
+	}
+	if gap := reqs[1].At.Sub(reqs[0].Done); gap != almanacWSPRBackoffBase {
+		t.Fatalf("retry started %v after the failure, want the backoff alone (%v)", gap, almanacWSPRBackoffBase)
+	}
+}
+
+func TestAlmanacWSPRBackfillUserAgent(t *testing.T) {
+	h := newWSPRHarness(t, []string{"JO32"}, 1, nil)
+	h.markDoneExcept("JO32", wsprTestMonth)
+	if err := h.bf.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range h.stub.reqs() {
+		for _, want := range []string{"https://horstreporter.kgbvax.net", "DL9ET", "almanac backfill"} {
+			if !strings.Contains(r.UA, want) {
+				t.Fatalf("User-Agent %q lacks %q", r.UA, want)
+			}
+		}
+	}
+}
+
+func assertWSPRPauseAfterRequest(t *testing.T, reqs []wsprStubRequest) {
+	t.Helper()
+	for i := 1; i < len(reqs); i++ {
+		if gap := reqs[i].At.Sub(reqs[i-1].Done); gap < almanacWSPRPauseAfterRequest {
+			t.Fatalf("request %d started %v after the previous completed (< %v)", i, gap, almanacWSPRPauseAfterRequest)
 		}
 	}
 }

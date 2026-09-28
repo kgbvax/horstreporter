@@ -12,6 +12,13 @@ import (
 	"horstreporter/internal/cty"
 )
 
+// wsprUserAgent identifies HorstReporter to the volunteer-run wspr.live
+// service (site URL + operator callsign) so its admins can reach us.
+const wsprUserAgent = "horstreporter/1.0 (+https://horstreporter.kgbvax.net; DL9ET)"
+
+// almanacWSPRUserAgent is the same identity, tagged for the archive backfill.
+const almanacWSPRUserAgent = "horstreporter/1.0 (+https://horstreporter.kgbvax.net; DL9ET; almanac backfill)"
+
 // wspr.go ingests WSPR (Weak Signal Propagation Reporter) spots from the
 // wspr.live ClickHouse HTTP interface (https://db1.wspr.live). WSPR is a
 // beacon mode: low-power transmitters run continuously, so it shows whether a
@@ -33,13 +40,13 @@ import (
 // well under the rate limit.
 
 type wsprAccountingState struct {
-	pollAttempts  atomic.Int64
-	pollFailures  atomic.Int64
-	rowsSeen      atomic.Int64
-	parsedSpots   atomic.Int64
+	pollAttempts   atomic.Int64
+	pollFailures   atomic.Int64
+	rowsSeen       atomic.Int64
+	parsedSpots    atomic.Int64
 	persistedSpots atomic.Int64
 	forwardedSpots atomic.Int64
-	droppedNoLoc  atomic.Int64
+	droppedNoLoc   atomic.Int64
 }
 
 func (a *wsprAccountingState) snapshot() (attempts, failures, rowsSeen, parsed, persisted, forwarded, droppedNoLoc int64) {
@@ -167,7 +174,7 @@ func fetchWSPRSpots(client *http.Client, endpoint string, cfg wsprConfig) {
 		return
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "horstreporter/1.0")
+	req.Header.Set("User-Agent", wsprUserAgent)
 	res, err := client.Do(req)
 	if err != nil {
 		wsprAccounting.pollFailures.Add(1)
