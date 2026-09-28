@@ -1043,6 +1043,81 @@ body[data-theme="dark"] .wspr-matrix-cell {
     display: inline-block;
     height: 10px;
 }
+.almanac-legend-note { flex-basis: 100%; }
+
+/* Seasonal drill-down (U8): replaces agenda + lanes with 12 month rows. The
+   wider label column holds "Dec 2025 · WSPR"; the axis and now line reuse the
+   lane classes through --almanac-label-w. */
+.almanac-drill-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0 6px;
+}
+.almanac-drill-back {
+    padding: 1px 8px;
+    border: 1px solid color-mix(in srgb, var(--text-color) 30%, transparent);
+    border-radius: 4px;
+    background: none;
+    color: var(--text-color);
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+.almanac-drill-back:hover { background: color-mix(in srgb, var(--text-color) 8%, transparent); }
+.almanac-drill-back:focus-visible {
+    outline: 2px solid var(--text-color);
+    outline-offset: 1px;
+}
+.almanac-drill-title {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+.almanac-months { --almanac-label-w: 96px; }
+.almanac-month-rows {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.almanac-month {
+    display: grid;
+    grid-template-columns: var(--almanac-label-w) 1fr;
+    align-items: center;
+    height: 12px;
+}
+.almanac-month-label {
+    font-size: 0.62rem;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    padding-left: 4px;
+    border-left: 3px solid transparent;
+}
+.almanac-month.is-current .almanac-month-label {
+    font-weight: 700;
+    border-left-color: var(--text-color);
+}
+.almanac-month.is-current .almanac-month-track {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 55%, transparent);
+}
+.almanac-month-track {
+    display: flex;
+    height: 100%;
+    min-width: 0;
+    border-radius: 2px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--text-color) 6%, transparent);
+}
+.almanac-month-empty {
+    align-items: center;
+    padding-left: 6px;
+    font-size: 0.6rem;
+    font-style: italic;
+    color: color-mix(in srgb, var(--text-color) 60%, transparent);
+    background: none;
+}
 
 /* Chip row: source multi-select (WSPR / PSKR / RBN / DXC) and the color
    scale pair (Viridis / Inferno), each its own labelled group. */

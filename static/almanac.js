@@ -21,8 +21,11 @@ import { escapeHtml } from './ui-helpers.js';
 // change listener, AbortController, plus a request token so a late response
 // for an old QTH can never overwrite the current one.
 //
-// Clicking a lane (or Enter/Space on the focused lane) calls openDrilldown —
-// the seasonal month × hour view arrives with U8.
+// Clicking a lane (or Enter/Space on the focused lane) calls openDrilldown
+// (U8): the seasonal month × hour view for that band and region replaces the
+// agenda and lanes inside the panel (GET /api/almanac/season). One row per
+// calendar month Jan–Dec, each labelled with the year and layer it comes from
+// (PSKR, or the backfilled WSPR layer). Back, Escape or a QTH change close it.
 
 const PANEL_ID = 'almanac-window';
 const TOGGLE_ID = 'almanac-toggle';
@@ -51,7 +54,10 @@ const runtime = {
     error: null,        // { kind: 'invalid' | 'notfound' | 'unavailable', qth }
     lastQth: '',
     agendaExpanded: false,
-    drilldown: null,    // last lane handed to openDrilldown (U8 renders it)
+    // Open seasonal drill-down: { band, region, qth, loading, data, error }.
+    drilldown: null,
+    drillAbort: null,   // AbortController of the in-flight season fetch
+    drillToken: 0,      // request token: a late season response is dropped
     onLayoutChange: null,
 };
 
@@ -116,6 +122,7 @@ function stopTimer() {
     // Any response still in flight is now stale.
     runtime.token += 1;
     runtime.loading = false;
+    closeDrilldownState();
 }
 
 function currentQth() {
@@ -130,6 +137,7 @@ async function fetchAlmanac({ quiet = false } = {}) {
     runtime.abortController = null;
 
     if (!qth) {
+        closeDrilldownState();
         runtime.lastQth = '';
         runtime.cache = null;
         runtime.error = null;
@@ -140,8 +148,16 @@ async function fetchAlmanac({ quiet = false } = {}) {
 
     const qthChanged = qth !== runtime.lastQth;
     runtime.lastQth = qth;
-    if (qthChanged) runtime.agendaExpanded = false;
     runtime.loading = true;
+    if (qthChanged) {
+        runtime.agendaExpanded = false;
+        // The seasonal view belongs to the old area: close it and put the
+        // (about to be dimmed) lanes back.
+        if (runtime.drilldown) {
+            closeDrilldownState();
+            render();
+        }
+    }
     // A background refresh of the same QTH keeps the lanes steady; anything
     // else dims them (or shows "Loading" on a first load).
     if (!quiet || qthChanged) showLoading();
@@ -176,6 +192,7 @@ async function fetchAlmanac({ quiet = false } = {}) {
         runtime.error = null;
     } else {
         // Never leave a previous area's lanes on screen next to an error.
+        closeDrilldownState();
         runtime.cache = null;
         runtime.error = { kind: outcome.error, qth };
     }
@@ -189,9 +206,9 @@ function bodyEl() {
 function showLoading() {
     const body = bodyEl();
     if (!body) return;
-    const lanes = body.querySelector('.almanac-lanes');
-    if (lanes && runtime.cache) {
-        lanes.classList.add('is-loading');
+    const view = body.querySelector('.almanac-lanes, .almanac-drill');
+    if (view && runtime.cache) {
+        if (view.classList.contains('almanac-lanes')) view.classList.add('is-loading');
         const status = body.querySelector('.almanac-status');
         if (status) status.textContent = 'Loading…';
     } else {
@@ -219,10 +236,11 @@ function slotRangeLabel(start, len, slotMinutes = DEFAULT_SLOT_MINUTES) {
 }
 
 // Accessible name and title of one slot (or run of equal slots).
-function slotLabel(band, region, start, len, n, m, mMin, slotMinutes) {
-    const where = `${band} to ${region}, ${slotRangeLabel(start, len, slotMinutes)}`;
-    if (m < mMin) return `${where}: not enough data (${m} ${m === 1 ? 'day' : 'days'})`;
-    return `${where}: opened ${n} of ${m} days`;
+// `where` is "20m to NA" (lanes) or "20m to NA, Dec 2025" (drill-down).
+function slotLabel(where, start, len, n, m, mMin, slotMinutes) {
+    const at = `${where}, ${slotRangeLabel(start, len, slotMinutes)}`;
+    if (m < mMin) return `${at}: not enough data (${m} ${m === 1 ? 'day' : 'days'})`;
+    return `${at}: opened ${n} of ${m} days`;
 }
 
 function startsInLabel(min) {
@@ -306,6 +324,13 @@ function render() {
 
     let html = headerHtml(data);
     html += `<div class="almanac-status text-muted small" role="status">${runtime.loading ? 'Loading…' : ''}</div>`;
+    if (runtime.drilldown) {
+        html += drilldownHtml(runtime.drilldown);
+        body.innerHTML = html;
+        attachDrilldownHandlers(body);
+        restoreFocus(body, focus);
+        return;
+    }
     const lanes = Array.isArray(data.lanes) ? data.lanes : [];
     if (lanes.length === 0) {
         html += message('No data from this area yet.');
@@ -366,7 +391,7 @@ function agendaHtml(data) {
 }
 
 function agendaRowHtml(e, slotMinutes) {
-    const color = bandColors[e.band] || bandColors.all || '#6c757d';
+    const color = bandColor(e.band);
     const band = escapeHtml(e.band);
     const region = escapeHtml(e.region);
     const time = e.all_day ? 'all day' : `${escapeHtml(e.start)}–${escapeHtml(e.end)} UTC`;
@@ -416,11 +441,16 @@ function lanesHtml(data, lanes) {
     return `${html}</div>`;
 }
 
-function laneHtml(lane, mMin, slotMinutes) {
-    const { band, region } = lane;
-    const color = bandColors[band] || bandColors.all || '#6c757d';
-    const n = Array.isArray(lane.n) ? lane.n : [];
-    const m = Array.isArray(lane.m) ? lane.m : [];
+function bandColor(band) {
+    return bandColors[band] || bandColors.all || '#6c757d';
+}
+
+// 48 slots → runs of equal (n, m): opacity from n/m in the band colour,
+// neutral hatch when m < m_min, empty track when closed. `where` prefixes
+// each run's title/aria-label (e.g. "20m to NA" or "20m to NA, Dec 2025").
+function runsHtml(nIn, mIn, mMin, slotMinutes, color, where) {
+    const n = Array.isArray(nIn) ? nIn : [];
+    const m = Array.isArray(mIn) ? mIn : [];
     let runs = '';
     let s = 0;
     while (s < SLOTS) {
@@ -428,7 +458,7 @@ function laneHtml(lane, mMin, slotMinutes) {
         const ns = Number(n[s]) || 0;
         let len = 1;
         while (s + len < SLOTS && (Number(m[s + len]) || 0) === ms && (Number(n[s + len]) || 0) === ns) len += 1;
-        const label = escapeHtml(slotLabel(band, region, s, len, ns, ms, mMin, slotMinutes));
+        const label = escapeHtml(slotLabel(where, s, len, ns, ms, mMin, slotMinutes));
         const common = `title="${label}" aria-label="${label}" role="img" data-slot="${s}"`;
         if (ms < mMin) {
             runs += `<span class="almanac-run is-unknown" style="flex-grow: ${len}" ${common}></span>`;
@@ -440,18 +470,93 @@ function laneHtml(lane, mMin, slotMinutes) {
         }
         s += len;
     }
+    return runs;
+}
+
+function laneHtml(lane, mMin, slotMinutes) {
+    const { band, region } = lane;
+    const color = bandColor(band);
+    const runs = runsHtml(lane.n, lane.m, mMin, slotMinutes, color, `${band} to ${region}`);
     const b = escapeHtml(band);
     const r = escapeHtml(region);
     return `<div class="almanac-lane" role="button" tabindex="-1" data-band="${b}" data-region="${r}" aria-label="${b} to ${r}: open the seasonal view">` +
         `<span class="almanac-lane-label" style="--band: ${color}">${b}</span><span class="almanac-lane-track">${runs}</span></div>`;
 }
 
-function legendHtml() {
+function legendHtml(note = '') {
     return '<div class="almanac-legend small text-muted">' +
         '<span class="almanac-legend-item"><span class="almanac-legend-ramp" aria-hidden="true"></span>opened on few &rarr; most days</span>' +
         '<span class="almanac-legend-item"><span class="almanac-legend-unknown" aria-hidden="true"></span>not enough data</span>' +
         '<span class="almanac-legend-item"><span class="almanac-legend-now" aria-hidden="true"></span>now (UTC)</span>' +
+        (note ? `<span class="almanac-legend-note">${escapeHtml(note)}</span>` : '') +
         '</div>';
+}
+
+// --- Seasonal drill-down (U8) ---------------------------------------------------
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const LAYER_LABELS = { pskr: 'PSKR', wspr: 'WSPR' };
+const LAYER_NOTE = 'WSPR and PSKR months come from different networks and are not directly comparable.';
+
+function drillErrorText(kind) {
+    switch (kind) {
+        case 'unavailable': return 'The seasonal view is temporarily unavailable. Try again in a minute.';
+        case 'invalid': return 'Could not load the seasonal view: invalid QTH, band or region.';
+        case 'notfound': return 'Could not load the seasonal view: this QTH could not be located.';
+        default: return 'Could not load the seasonal view. Try again later.';
+    }
+}
+
+function drilldownHtml(dd) {
+    const title = `${dd.band} to ${dd.region}`;
+    let html = `<section class="almanac-drill" aria-label="${escapeHtml(title)} by month">` +
+        '<div class="almanac-drill-head">' +
+        '<button type="button" class="almanac-drill-back" aria-label="Back to all regions">&larr; Back</button>' +
+        `<h3 class="almanac-drill-title">${escapeHtml(title)}</h3></div>`;
+    if (dd.loading) {
+        html += '<div class="almanac-message text-muted small" role="status">Loading…</div>';
+    } else if (dd.error) {
+        html += `<div class="almanac-message text-muted small" role="alert">${escapeHtml(drillErrorText(dd.error))}</div>`;
+    } else if (dd.data) {
+        html += monthsHtml(dd);
+        html += legendHtml(LAYER_NOTE);
+    }
+    return `${html}</section>`;
+}
+
+function monthsHtml(dd) {
+    const data = dd.data;
+    const mMin = Number(data.m_min) || 0;
+    const slotMinutes = data.slot_minutes || DEFAULT_SLOT_MINUTES;
+    const color = bandColor(dd.band);
+    const months = Array.isArray(data.months) ? data.months : [];
+    const current = new Date().getUTCMonth();
+    let html = `<div class="almanac-months" role="group" aria-label="${escapeHtml(dd.band)} to ${escapeHtml(dd.region)}, typical openings per month, 24 hours UTC">`;
+    html += '<div class="almanac-axis" aria-hidden="true"><span></span><span class="almanac-axis-ticks">' +
+        '<span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></span></div>';
+    html += '<div class="almanac-month-rows">';
+    for (let i = 0; i < 12; i += 1) {
+        const mo = months[i] || {};
+        const name = mo.name || MONTH_NAMES[i];
+        const ok = mo.status === 'ok';
+        const isCurrent = i === current;
+        const cls = `almanac-month${isCurrent ? ' is-current' : ''}${ok ? '' : ' is-empty'}`;
+        const cur = isCurrent ? ' aria-current="date"' : '';
+        if (!ok) {
+            html += `<div class="${cls}" data-month="${i + 1}"${cur}>` +
+                `<span class="almanac-month-label">${escapeHtml(name)}</span>` +
+                '<span class="almanac-month-track almanac-month-empty">not collected yet</span></div>';
+            continue;
+        }
+        const layer = LAYER_LABELS[mo.layer] || String(mo.layer || '').toUpperCase();
+        const when = `${name} ${mo.year}`;
+        const runs = runsHtml(mo.n, mo.m, mMin, slotMinutes, color, `${dd.band} to ${dd.region}, ${when}`);
+        html += `<div class="${cls}" data-month="${i + 1}" data-layer="${escapeHtml(mo.layer || '')}"${cur}>` +
+            `<span class="almanac-month-label">${escapeHtml(`${when} · ${layer}`)}</span>` +
+            `<span class="almanac-month-track">${runs}</span></div>`;
+    }
+    html += `<div class="almanac-now-layer" aria-hidden="true"><div class="almanac-now" style="left: ${nowLeft()}"></div></div>`;
+    return `${html}</div></div>`;
 }
 
 function updateNowLines() {
@@ -463,11 +568,86 @@ function updateNowLines() {
 
 // --- Interaction ----------------------------------------------------------------
 
-// Drill-down hook (U8 replaces the body): the seasonal month × hour view for
-// one band × region lane. For now it only records the request.
+// Opens the seasonal month × hour view for one band × region lane in place
+// of the agenda and lanes, and fetches /api/almanac/season for it.
 export function openDrilldown(band, region) {
-    if (!band || !region) return;
-    runtime.drilldown = { band, region };
+    if (!band || !region || !runtime.lastQth) return;
+    closeDrilldownState();
+    runtime.drilldown = { band, region, qth: runtime.lastQth, loading: true, data: null, error: null };
+    render();
+    bodyEl()?.querySelector('.almanac-drill-back')?.focus();
+    fetchSeason();
+}
+
+// Drops the drill-down state and invalidates any season fetch in flight.
+function closeDrilldownState() {
+    if (runtime.drillAbort) {
+        runtime.drillAbort.abort();
+        runtime.drillAbort = null;
+    }
+    runtime.drillToken += 1;
+    runtime.drilldown = null;
+}
+
+// Back / Escape: restore the lanes and return focus to the lane that opened
+// the view (or the lanes' tab stop when that lane is gone).
+function closeDrilldown() {
+    const dd = runtime.drilldown;
+    if (!dd) return;
+    closeDrilldownState();
+    render();
+    const body = bodyEl();
+    if (!body) return;
+    const target = Array.from(body.querySelectorAll('.almanac-lane'))
+        .find((l) => l.dataset.band === dd.band && l.dataset.region === dd.region)
+        || body.querySelector('.almanac-lane[tabindex="0"]');
+    if (target) {
+        setRovingLane(target);
+        target.focus();
+    }
+}
+
+async function fetchSeason() {
+    const dd = runtime.drilldown;
+    if (!dd) return;
+    const token = ++runtime.drillToken;
+    const controller = new AbortController();
+    runtime.drillAbort = controller;
+    const url = `/api/almanac/season?qth=${encodeURIComponent(dd.qth)}` +
+        `&band=${encodeURIComponent(dd.band)}&region=${encodeURIComponent(dd.region)}`;
+    let outcome;
+    try {
+        const resp = await fetch(url, { signal: controller.signal });
+        if (token !== runtime.drillToken) return;
+        if (resp.ok) outcome = { data: await resp.json() };
+        else if (resp.status === 503) outcome = { error: 'unavailable' };
+        else if (resp.status === 400) outcome = { error: 'invalid' };
+        else if (resp.status === 404) outcome = { error: 'notfound' };
+        else outcome = { error: 'error' };
+    } catch (err) {
+        if (err?.name === 'AbortError' || token !== runtime.drillToken) return;
+        console.warn('almanac season fetch failed:', err);
+        outcome = { error: 'error' };
+    } finally {
+        if (runtime.drillAbort === controller) runtime.drillAbort = null;
+    }
+    if (token !== runtime.drillToken || runtime.drilldown !== dd) return;
+    dd.loading = false;
+    dd.data = outcome.data || null;
+    dd.error = outcome.error || null;
+    render();
+}
+
+function attachDrilldownHandlers(body) {
+    const drill = body.querySelector('.almanac-drill');
+    if (!drill) return;
+    drill.querySelector('.almanac-drill-back')?.addEventListener('click', () => closeDrilldown());
+    drill.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        e.stopPropagation();
+        closeDrilldown();
+    });
 }
 
 function setRovingLane(lane) {
@@ -536,6 +716,7 @@ function captureFocus(body) {
     if (!el || !body.contains(el)) return null;
     if (el.classList.contains('almanac-lane')) return { band: el.dataset.band, region: el.dataset.region };
     if (el.classList.contains('almanac-agenda-more')) return { more: true };
+    if (el.classList.contains('almanac-drill-back')) return { back: true };
     return null;
 }
 
@@ -544,6 +725,8 @@ function restoreFocus(body, focus) {
     let target = null;
     if (focus.more) {
         target = body.querySelector('.almanac-agenda-more');
+    } else if (focus.back) {
+        target = body.querySelector('.almanac-drill-back');
     } else {
         target = Array.from(body.querySelectorAll('.almanac-lane'))
             .find((l) => l.dataset.band === focus.band && l.dataset.region === focus.region) || null;
@@ -563,6 +746,7 @@ export const __test = {
     sortAgenda,
     render,
     fetchAlmanac,
+    closeDrilldown,
     reset() {
         stopTimer();
         runtime.enabled = false;
@@ -571,7 +755,7 @@ export const __test = {
         runtime.loading = false;
         runtime.lastQth = '';
         runtime.agendaExpanded = false;
-        runtime.drilldown = null;
+        closeDrilldownState();
         runtime.onLayoutChange = null;
     },
     PANEL_ID,

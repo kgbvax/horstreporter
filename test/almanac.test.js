@@ -233,9 +233,9 @@ describe('almanac panel (U7)', () => {
         mockFetchOnce(makePayload({ bands: ['20m'] }));
         await openPanel();
         body().querySelector('.almanac-lane[data-band="20m"][data-region="JA"] .almanac-run').click();
-        expect(runtime.drilldown).toEqual({ band: '20m', region: 'JA' });
+        expect(runtime.drilldown).toMatchObject({ band: '20m', region: 'JA' });
         openDrilldown('40m', 'NA');
-        expect(runtime.drilldown).toEqual({ band: '40m', region: 'NA' });
+        expect(runtime.drilldown).toMatchObject({ band: '40m', region: 'NA' });
     });
 
     it('Enter on a focused lane opens the drill-down; arrows move the tab stop', async () => {
@@ -248,7 +248,7 @@ describe('almanac panel (U7)', () => {
         expect(document.activeElement).toBe(lanes[1]);
         expect(lanes[1].getAttribute('tabindex')).toBe('0');
         lanes[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-        expect(runtime.drilldown).toEqual({ band: lanes[1].dataset.band, region: lanes[1].dataset.region });
+        expect(runtime.drilldown).toMatchObject({ band: lanes[1].dataset.band, region: lanes[1].dataset.region });
     });
 
     describe('agenda', () => {
@@ -451,3 +451,249 @@ function getOpacity(el) {
     const m = (el.getAttribute('style') || '').match(/opacity:\s*([\d.]+)/);
     return m ? m[1] : '0';
 }
+
+// --- U8: seasonal drill-down (month × hour) ------------------------------------
+// Fixtures mirror GET /api/almanac/season (docs/api.md): always 12 months,
+// index 0 = January, each either status "ok" (year + layer pskr|wspr, n[48],
+// m[48]) or "not_collected".
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function seasonMonth(i, { status = 'ok', year = 2026, layer = 'pskr', patch } = {}) {
+    if (status !== 'ok') {
+        return { month: i + 1, name: MONTH_NAMES[i], status: 'not_collected', year: null, layer: null,
+            days: 0, k: null, n: null, m: null };
+    }
+    const mo = { month: i + 1, name: MONTH_NAMES[i], status: 'ok', year, layer,
+        days: 20, k: layer === 'wspr' ? 1 : 2, n: zeros(), m: new Array(48).fill(20) };
+    if (patch) patch(mo);
+    return mo;
+}
+
+// Jan–Mar never collected; Apr–Sep 2026 PSKR; Oct–Dec 2025 backfilled WSPR.
+function makeSeason({ band = '20m', region = 'OC', grid4 = 'JO32', months } = {}) {
+    return {
+        qth: grid4,
+        area: { grid4, source: 'locator', approximate: false, radius: 1, squares: [grid4] },
+        band, region, slot_minutes: 30, m_min: 8, k: { pskr: 2, wspr: 1 },
+        through_day: '2026-09-27', watermark_day: 20721,
+        months: months || MONTH_NAMES.map((_, i) => {
+            if (i < 3) return seasonMonth(i, { status: 'not_collected' });
+            if (i < 9) return seasonMonth(i, { year: 2026, layer: 'pskr', patch(mo) {
+                if (i === 8) { mo.n[28] = 15; mo.m[5] = 3; }
+            } });
+            return seasonMonth(i, { year: 2025, layer: 'wspr' });
+        }),
+    };
+}
+
+// Landing and season requests answered by URL.
+function routeFetch({ landing = makePayload({ bands: ['20m', '40m'] }), season = makeSeason(), seasonStatus = 200 } = {}) {
+    global.fetch = vi.fn(async (url) => (String(url).startsWith('/api/almanac/season')
+        ? response(season, seasonStatus)
+        : response(landing)));
+}
+
+function lane(band, region) {
+    return body().querySelector(`.almanac-lane[data-band="${band}"][data-region="${region}"]`);
+}
+
+function monthRows() {
+    return Array.from(body().querySelectorAll('.almanac-drill .almanac-month'));
+}
+
+describe('almanac seasonal drill-down (U8)', () => {
+    let originalFetch;
+
+    beforeEach(() => {
+        originalFetch = global.fetch;
+        installLocalStorageMock();
+        setupDom();
+        reset();
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-09-28T12:30:00Z'));
+    });
+
+    afterEach(() => {
+        reset();
+        global.fetch = originalFetch;
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    async function openOC() {
+        await openPanel();
+        lane('20m', 'OC').click();
+        await flush();
+        await flush();
+    }
+
+    it('clicking a lane fetches /api/almanac/season and replaces the lanes with "<band> to <region>"', async () => {
+        routeFetch();
+        await openOC();
+        expect(global.fetch.mock.calls.map((c) => c[0])).toContain('/api/almanac/season?qth=JO32&band=20m&region=OC');
+        const drill = body().querySelector('.almanac-drill');
+        expect(drill).not.toBeNull();
+        expect(drill.querySelector('.almanac-drill-title').textContent).toBe('20m to OC');
+        expect(body().querySelector('.almanac-lanes')).toBeNull();
+        expect(body().querySelector('.almanac-drill-back')).not.toBeNull();
+        // The area header stays.
+        expect(body().querySelector('.almanac-area').textContent).toContain('JO32');
+    });
+
+    it('mixed PSKR and WSPR months render both layer labels with the year', async () => {
+        routeFetch();
+        await openOC();
+        const labels = monthRows().map((r) => r.querySelector('.almanac-month-label').textContent);
+        expect(labels).toContain('Sep 2026 · PSKR');
+        expect(labels).toContain('Dec 2025 · WSPR');
+        expect(body().querySelector('.almanac-drill .almanac-legend').textContent).toMatch(/not directly comparable/i);
+    });
+
+    it('an empty month renders "not collected yet"', async () => {
+        routeFetch();
+        await openOC();
+        const jan = monthRows()[0];
+        expect(jan.classList.contains('is-empty')).toBe(true);
+        expect(jan.textContent).toContain('not collected yet');
+        expect(jan.querySelector('.almanac-run')).toBeNull();
+        expect(monthRows()[3].textContent).not.toContain('not collected yet');
+    });
+
+    it('runs Jan to Dec and highlights the current month', async () => {
+        routeFetch();
+        await openOC();
+        const rows = monthRows();
+        expect(rows).toHaveLength(12);
+        expect(rows.map((r) => r.dataset.month)).toEqual(MONTH_NAMES.map((_, i) => String(i + 1)));
+        expect(rows.map((r) => r.querySelector('.almanac-month-label').textContent.slice(0, 3))).toEqual(MONTH_NAMES);
+        const current = rows.filter((r) => r.classList.contains('is-current'));
+        expect(current).toHaveLength(1);
+        expect(current[0].dataset.month).toBe('9');
+        expect(current[0].getAttribute('aria-current')).toBe('date');
+    });
+
+    it('slot cells carry opened-N-of-M labels, the band colour and the unknown hatch; the now line carries over', async () => {
+        routeFetch();
+        await openOC();
+        const sep = monthRows()[8];
+        const open = sep.querySelector('[aria-label="20m to OC, Sep 2026, 14:00 UTC: opened 15 of 20 days"]');
+        expect(open).not.toBeNull();
+        expect(open.getAttribute('title')).toBe(open.getAttribute('aria-label'));
+        expect(Number(getOpacity(open))).toBeGreaterThan(0.5);
+        const unknown = sep.querySelector('[aria-label="20m to OC, Sep 2026, 02:30 UTC: not enough data (3 days)"]');
+        expect(unknown).not.toBeNull();
+        expect(unknown.classList.contains('is-unknown')).toBe(true);
+        const now = body().querySelector('.almanac-drill .almanac-now');
+        expect(now).not.toBeNull();
+        expect(now.style.left).toBe('52.0833%');
+    });
+
+    it('shows "Loading" while the season fetch is in flight', async () => {
+        const pending = deferredFetch();
+        await openPanel();
+        pending[0].resolve(response(makePayload({ bands: ['20m'] })));
+        await flush();
+        lane('20m', 'OC').click();
+        await flush();
+        expect(pending).toHaveLength(2);
+        const drill = body().querySelector('.almanac-drill');
+        expect(drill.querySelector('.almanac-drill-title').textContent).toBe('20m to OC');
+        expect(drill.textContent).toContain('Loading');
+        expect(drill.querySelector('.almanac-month')).toBeNull();
+    });
+
+    it('a 503 reads "temporarily unavailable"', async () => {
+        routeFetch({ season: {}, seasonStatus: 503 });
+        await openOC();
+        const drill = body().querySelector('.almanac-drill');
+        expect(drill.textContent).toMatch(/temporarily unavailable/i);
+        expect(drill.querySelector('.almanac-month')).toBeNull();
+        expect(drill.querySelector('.almanac-drill-back')).not.toBeNull();
+    });
+
+    it('any other failure shows an error message', async () => {
+        routeFetch({ season: {}, seasonStatus: 500 });
+        await openOC();
+        expect(body().querySelector('.almanac-drill').textContent).toMatch(/could not load the seasonal view/i);
+    });
+
+    it('the back control closes the view, restores the lanes and returns focus to the opening lane', async () => {
+        routeFetch();
+        await openOC();
+        body().querySelector('.almanac-drill-back').click();
+        expect(body().querySelector('.almanac-drill')).toBeNull();
+        expect(body().querySelector('.almanac-lanes')).not.toBeNull();
+        expect(runtime.drilldown).toBeNull();
+        expect(document.activeElement).toBe(lane('20m', 'OC'));
+        expect(lane('20m', 'OC').getAttribute('tabindex')).toBe('0');
+    });
+
+    it('Escape closes the view and restores the lanes', async () => {
+        routeFetch();
+        await openOC();
+        const back = body().querySelector('.almanac-drill-back');
+        expect(document.activeElement).toBe(back);
+        back.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        expect(body().querySelector('.almanac-drill')).toBeNull();
+        expect(body().querySelectorAll('.almanac-lane').length).toBeGreaterThan(0);
+        expect(document.activeElement).toBe(lane('20m', 'OC'));
+    });
+
+    it('a QTH change closes the view', async () => {
+        routeFetch();
+        await openOC();
+        expect(body().querySelector('.almanac-drill')).not.toBeNull();
+        routeFetch({ landing: makePayload({ grid4: 'JO62', bands: ['20m'] }) });
+        const qth = document.getElementById('qth');
+        qth.value = 'JO62';
+        qth.dispatchEvent(new Event('change'));
+        await flush();
+        await flush();
+        expect(runtime.drilldown).toBeNull();
+        expect(body().querySelector('.almanac-drill')).toBeNull();
+        expect(body().querySelector('.almanac-area').textContent).toContain('JO62');
+        expect(body().querySelector('.almanac-lanes')).not.toBeNull();
+    });
+
+    it('drops a stale season response (closed view, or a newer lane opened)', async () => {
+        const pending = deferredFetch();
+        await openPanel();
+        pending[0].resolve(response(makePayload({ bands: ['20m', '40m'] })));
+        await flush();
+
+        lane('20m', 'OC').click();
+        await flush();
+        body().querySelector('.almanac-drill-back').click();
+        lane('40m', 'NA').click();
+        await flush();
+        expect(pending).toHaveLength(3);
+        expect(pending[2].url).toBe('/api/almanac/season?qth=JO32&band=40m&region=NA');
+
+        pending[2].resolve(response(makeSeason({ band: '40m', region: 'NA' })));
+        await flush();
+        pending[1].resolve(response(makeSeason({ band: '20m', region: 'OC' })));
+        await flush();
+        expect(body().querySelector('.almanac-drill-title').textContent).toBe('40m to NA');
+        expect(body().querySelector('[aria-label^="20m to OC"]')).toBeNull();
+        expect(body().querySelector('[aria-label^="40m to NA, Sep 2026"]')).not.toBeNull();
+    });
+
+    it('a season response arriving after a QTH change never reopens the view', async () => {
+        const pending = deferredFetch();
+        await openPanel();
+        pending[0].resolve(response(makePayload({ bands: ['20m'] })));
+        await flush();
+        lane('20m', 'OC').click();
+        await flush();
+        const qth = document.getElementById('qth');
+        qth.value = 'JO62';
+        qth.dispatchEvent(new Event('change'));
+        await flush();
+        pending[1].resolve(response(makeSeason()));
+        await flush();
+        expect(runtime.drilldown).toBeNull();
+        expect(body().querySelector('.almanac-drill')).toBeNull();
+    });
+});
