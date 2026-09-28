@@ -69,8 +69,12 @@ const (
 	almanacTypicalCacheTTL = 6 * time.Hour
 	// almanacTodayCacheTTL: the "open today" overlay (KTD11).
 	almanacTodayCacheTTL = 120 * time.Second
-	// almanacQueryTimeout bounds one read transaction (prop_intel guard).
-	almanacQueryTimeout = 1500 * time.Millisecond
+	// almanacQueryTimeout bounds one read transaction. prop_intel uses 1.5 s,
+	// but on prod (2026-09-28) the cold typical read measured ~0.6 s of SQL
+	// (season 64 ms, tail 368 ms, tail active days 181 ms) plus cold-cache I/O,
+	// landing at 1.3-1.6 s and timing out. The typical part is cached for 6 h,
+	// so one slower cold read is cheap; the negative cache still caps retries.
+	almanacQueryTimeout = 4 * time.Second
 	// almanacNegCacheTTL: a failed/timed-out read is remembered this long per
 	// key before Postgres is tried again (503 meanwhile).
 	almanacNegCacheTTL = 30 * time.Second

@@ -235,7 +235,7 @@ Two items are deferred to implementation:
 - **KTD9. Almanac results are cached in two parts, keyed by centre grid4.**
   - **Typical part:** n/m arrays plus the radius. TTL is 6 h, or until the fold watermark changes.
   - **Today overlay** (KTD11): TTL 120 s.
-  - Both use the prop_intel guards: a 1.5 s query timeout, a 30 s negative cache and a serialized slow path.
+  - Both use the prop_intel guards: a query timeout, a 30 s negative cache and a serialized slow path. The timeout is 4 s, not prop_intel's 1.5 s: on prod the cold typical read measured about 0.6 s of SQL plus cold-cache I/O and landed at 1.3–1.6 s, while each individual read stayed under 0.4 s.
   - The LRU holds 256 entries of compact uint8 arrays, about 10 KB each.
   - Responses carry per-(band, region) 48-element n[]/m[] arrays, not one object per cell.
 - **KTD10. The summary field is additive and served only from a warm cache.** (session-settled: user-directed — chosen over a new endpoint: extend `/api/prop_intel/summary` with an optional field.)

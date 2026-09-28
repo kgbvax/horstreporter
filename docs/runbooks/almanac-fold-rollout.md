@@ -267,6 +267,8 @@ never drop them and never make them UNLOGGED.
 
 ## 6. U2 query plans (stop condition: any read > 1.5 s)
 
+Result (prod, 2026-09-28, JO32 r=2, watermark today−2, cold): (a) seasonal 64 ms, (b) tail aggregate 368 ms, (c) tail active days 181 ms, ingest/lost < 1 ms. No single read exceeds 1.5 s. The whole cold request (typical plus today-overlay reads) landed at 1.3–1.6 s, so `almanacQueryTimeout` was raised to 4 s. The tail index is not needed.
+
 Status: **pending** — must be run on prod (prod-sized tables); not runnable
 from a dev checkout. Verification Contract "Query plans" for unit U2
 (`/api/almanac`, `almanac_store.go`). Run each statement twice: once cold

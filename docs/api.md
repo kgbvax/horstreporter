@@ -390,7 +390,7 @@ locator is truncated to its grid4; a callsign resolves via QRZ, falling back
 to the DXCC centroid (`area.approximate: true`).
 
 Status: `400` missing or invalid qth · `404` callsign that cannot be located ·
-`503` no Postgres, read over the 1.5 s budget, or a failed read in the last
+`503` no Postgres, read over the 4 s budget, or a failed read in the last
 30 s (negative cache; `Retry-After: 30`).
 
 Caching (keyed by the centre grid4, LRU of 256): the typical part (lanes,
@@ -467,7 +467,7 @@ Params: `qth` (as `/api/almanac`), `band` (`160m`…`10m`, case-insensitive),
 `region` (one of the 11 region codes, case-insensitive).
 
 Status: `400` missing or invalid qth, band or region · `404` callsign that
-cannot be located · `503` no Postgres, read over the 1.5 s budget, or a
+cannot be located · `503` no Postgres, read over the 4 s budget, or a
 failed read in the last 30 s (`Retry-After: 30`).
 
 Radius: the same as the landing view. The server takes `area.radius` from the
