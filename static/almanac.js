@@ -15,7 +15,20 @@ import { escapeHtml } from './ui-helpers.js';
 // block per far-end region (the operator's own region last) holding a thin
 // lane per band. A lane's opacity follows n/m in the band's canonical colour;
 // a slot with m < m_min is "not enough data" (neutral hatch, never "closed").
-// A vertical line marks the current UTC time.
+// A vertical line marks the current time.
+//
+// Local time: the API speaks UTC (48 slots from 00:00 UTC, start_slot,
+// data-slot); the panel shows the browser's local time. Each lane is drawn
+// rotated by the UTC offset (offset / 30 min slots, rounded to the nearest
+// slot for zones like UTC+5:45, which the header then notes), so the axis
+// 00/06/12/18/24 is local midnight; titles, the now line and the agenda read
+// local time (the agenda keeps UTC as its muted secondary label). A
+// drill-down month row uses that month's own offset (mid-month), so summer
+// and winter months each sit right across a DST change.
+//
+// Preliminary SNR views: with a floor and fewer than 10 SNR days the server
+// judges cells against a smaller effective m_min and sets `preliminary`; the
+// header then says how many SNR days the view rests on.
 //
 // Fetch discipline mirrors wspr-matrix.js: enable key in localStorage, #qth
 // change listener, AbortController, plus a request token so a late response
@@ -45,6 +58,9 @@ const AGENDA_CAP = 6;
 const SNR_DEBOUNCE_MS = 400;    // slider input → refetch
 const SLOTS = 48;
 const DEFAULT_SLOT_MINUTES = 30;
+// Full 30-day M_min (almanacMinActiveDays30): a preliminary view becomes a
+// full one once this many days carry SNR data.
+const FULL_M_MIN = 10;
 
 const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
 
@@ -302,16 +318,88 @@ function pad2(v) {
     return String(v).padStart(2, '0');
 }
 
-// Minutes after 00:00 UTC → "HH:MM" (1440 → "24:00", used as a range end).
+// Minutes after midnight → "HH:MM" (1440 → "24:00", used as a range end).
 function hhmm(minutes) {
     return `${pad2(Math.floor(minutes / 60))}:${pad2(minutes % 60)}`;
 }
 
-// "14:00 UTC" for one slot, "13:00–14:30 UTC" for a run (end exclusive).
-function slotRangeLabel(start, len, slotMinutes = DEFAULT_SLOT_MINUTES) {
-    const a = hhmm(start * slotMinutes);
-    if (len <= 1) return `${a} UTC`;
-    return `${a}–${hhmm((start + len) * slotMinutes)} UTC`;
+function mod(v, n) {
+    return ((v % n) + n) % n;
+}
+
+// --- Local time ---------------------------------------------------------------
+
+// Browser UTC offset in minutes EAST of UTC (+120 = CEST) at `date`.
+function tzOffsetMinutes(date = new Date()) {
+    const v = -date.getTimezoneOffset();
+    return v === 0 ? 0 : v; // no -0
+}
+
+// Offset of a calendar month (mid-month, midday), so a month row follows
+// its own DST state. `month` is 1–12.
+function monthOffsetMinutes(year, month) {
+    const y = Number(year) || new Date().getFullYear();
+    return tzOffsetMinutes(new Date(y, Number(month) - 1, 15, 12));
+}
+
+// Whole slots to rotate UTC data by (nearest slot for non-30-min offsets).
+function slotShift(offsetMin, slotMinutes = DEFAULT_SLOT_MINUTES) {
+    const v = Math.round(offsetMin / slotMinutes);
+    return v === 0 ? 0 : v;
+}
+
+// UTC-ordered slots → local display order: out[i] = arr[i − shift] (wrapping).
+function rotateSlots(arr, shift) {
+    if (!Array.isArray(arr)) return arr;
+    const out = new Array(SLOTS);
+    for (let i = 0; i < SLOTS; i += 1) out[i] = arr[mod(i - shift, SLOTS)];
+    return out;
+}
+
+// "UTC+2", "UTC−5", "UTC+5:45", "UTC".
+function offsetLabel(offsetMin) {
+    if (!offsetMin) return 'UTC';
+    const a = Math.abs(offsetMin);
+    const h = Math.floor(a / 60);
+    const m = a % 60;
+    return `UTC${offsetMin < 0 ? '\u2212' : '+'}${h}${m ? `:${pad2(m)}` : ''}`;
+}
+
+// The zone's short name ("CEST") when Intl has a real abbreviation (not
+// just "GMT+2"), else ''.
+function zoneAbbr(date = new Date()) {
+    try {
+        const part = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
+            .formatToParts(date).find((p) => p.type === 'timeZoneName');
+        const name = part?.value || '';
+        return /^[A-Z]{2,5}$/.test(name) && !/^(GMT|UTC)/.test(name) ? name : '';
+    } catch {
+        return '';
+    }
+}
+
+// "local time (UTC+2, CEST)", plus a note when the lanes are rounded.
+function localZoneText(date = new Date(), slotMinutes = DEFAULT_SLOT_MINUTES) {
+    const off = tzOffsetMinutes(date);
+    const abbr = zoneAbbr(date);
+    let text = `local time (${offsetLabel(off)}${abbr ? `, ${abbr}` : ''})`;
+    if (off % slotMinutes !== 0) text += `; lanes rounded to the nearest ${slotMinutes} min`;
+    return text;
+}
+
+// Local "HH:MM" of `utcMinutes` after 00:00 UTC.
+function localHHMM(utcMinutes, offsetMin) {
+    return hhmm(mod(utcMinutes + offsetMin, 1440));
+}
+
+// "16:00 local" for one UTC slot, "13:00–14:30 local" for a run (end
+// exclusive; a run ending at local midnight reads "24:00").
+function slotRangeLabel(start, len, slotMinutes = DEFAULT_SLOT_MINUTES, offsetMin = 0) {
+    const a = mod(start * slotMinutes + offsetMin, 1440);
+    if (len <= 1) return `${hhmm(a)} local`;
+    let b = a + len * slotMinutes;
+    if (b > 1440) b -= 1440;
+    return `${hhmm(a)}–${hhmm(b)} local`;
 }
 
 // "−10 dB" (typographic minus).
@@ -328,8 +416,9 @@ function shareLabel(share, tier) {
 // Accessible name and title of one slot (or run of equal slots).
 // `where` is "20m to NA" (lanes) or "20m to NA, Dec 2025" (drill-down).
 // With an SNR floor, `share` (0..1 or null) and `tier` add the SNR share.
-function slotLabel(where, start, len, n, m, mMin, slotMinutes, share = null, tier = null) {
-    const at = `${where}, ${slotRangeLabel(start, len, slotMinutes)}`;
+// `start` is the run's first UTC slot; offsetMin the local offset used.
+function slotLabel(where, start, len, n, m, mMin, slotMinutes, share = null, tier = null, offsetMin = 0) {
+    const at = `${where}, ${slotRangeLabel(start, len, slotMinutes, offsetMin)}`;
     if (m < mMin) return `${at}: not enough data (${m} ${m === 1 ? 'day' : 'days'})`;
     const snr = share !== null && share !== undefined && tier !== null && tier !== undefined
         ? ` \u00b7 ${shareLabel(share, tier)}` : '';
@@ -360,25 +449,38 @@ function startsInLabel(min) {
     return rest ? `in ${h} h ${rest} min` : `in ${h} h`;
 }
 
-function localTime(ms) {
-    return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+// Local "20:00–22:00" of an agenda window (UTC start_slot / len_slots);
+// a window across local midnight reads "23:00–01:00".
+function localRangeLabel(entry, slotMinutes = DEFAULT_SLOT_MINUTES, offsetMin = tzOffsetMinutes()) {
+    const start = Number(entry.start_slot) * slotMinutes;
+    const end = start + Number(entry.len_slots) * slotMinutes;
+    return `${localHHMM(start, offsetMin)}–${localHHMM(end, offsetMin)}`;
 }
 
-// Secondary local-time label for an agenda window (browser time zone).
-function localRangeLabel(entry, slotMinutes = DEFAULT_SLOT_MINUTES) {
-    const now = new Date();
-    const midnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    const startMs = midnight + entry.start_slot * slotMinutes * 60_000;
-    const endMs = startMs + entry.len_slots * slotMinutes * 60_000;
-    return `${localTime(startMs)}–${localTime(endMs)} local`;
-}
-
-function nowFraction(date = new Date()) {
-    return (date.getUTCHours() * 60 + date.getUTCMinutes()) / 1440;
+// Now as a fraction of the local day on the drawn (slot-rotated) grid: the
+// exact local time for whole-slot offsets.
+function nowFraction(date = new Date(), slotMinutes = DEFAULT_SLOT_MINUTES) {
+    const utc = date.getUTCHours() * 60 + date.getUTCMinutes();
+    const shiftMin = slotShift(tzOffsetMinutes(date), slotMinutes) * slotMinutes;
+    return mod(utc + shiftMin, 1440) / 1440;
 }
 
 function nowLeft() {
     return `${(nowFraction() * 100).toFixed(4)}%`;
+}
+
+// Header note of a preliminary SNR view: "preliminary — based on 3 days of
+// SNR data (full view from 2026-10-05)" ('' otherwise).
+function preliminaryText(data) {
+    if (!data?.preliminary) return '';
+    const days = Number(data.snr_days) || 0;
+    let text = `preliminary \u2014 based on ${days} ${days === 1 ? 'day' : 'days'} of SNR data`;
+    const since = Date.parse(`${data.snr_since}T00:00:00Z`);
+    if (Number.isFinite(since)) {
+        const full = new Date(since + FULL_M_MIN * 86_400_000).toISOString().slice(0, 10);
+        text += ` (full view from ${full})`;
+    }
+    return text;
 }
 
 // Canonical band position; unknown bands sort after all known ones.
@@ -490,9 +592,13 @@ function headerHtml(data) {
         ? '<div class="almanac-approx">Approximate location: taken from the country centre. Enter a locator for your own square.</div>'
         : '';
     const sq = `${squares} ${squares === 1 ? 'square' : 'squares'}`;
+    const zone = localZoneText(new Date(), data.slot_minutes || DEFAULT_SLOT_MINUTES);
+    const prelim = preliminaryText(data);
     return `<div class="almanac-area small"><span class="almanac-area-main"><strong>${escapeHtml(grid4)}</strong>, radius ${radius} (${sq})</span>` +
-        ` <span class="text-muted">last ${days} days, times UTC</span>${approx}` +
-        `<div class="almanac-snr text-muted">${escapeHtml(snrHeaderText(data))}</div></div>`;
+        ` <span class="text-muted">last ${days} days, times in ${escapeHtml(zone)}</span>${approx}` +
+        `<div class="almanac-snr text-muted">${escapeHtml(snrHeaderText(data))}</div>` +
+        (prelim ? `<div class="almanac-preliminary">${escapeHtml(prelim)}</div>` : '') +
+        '</div>';
 }
 
 function agendaHtml(data) {
@@ -519,19 +625,19 @@ function agendaRowHtml(e, slotMinutes, tier = null) {
     const band = escapeHtml(e.band);
     const region = escapeHtml(e.region);
     const regionText = escapeHtml(regionLabel(e.region));
-    const time = e.all_day ? 'all day' : `${escapeHtml(e.start)}–${escapeHtml(e.end)} UTC`;
+    const time = e.all_day ? 'all day' : escapeHtml(localRangeLabel(e, slotMinutes));
     const when = e.status === 'ongoing'
         ? '<span class="almanac-when is-now">usually open now</span>'
         : `<span class="almanac-when">${startsInLabel(e.starts_in_min)}</span>`;
     const today = e.open_today ? '<span class="almanac-today">open today</span>' : '';
-    const local = e.all_day ? '' : `<span class="almanac-local">${escapeHtml(localRangeLabel(e, slotMinutes))}</span>`;
+    const utc = e.all_day ? '' : `<span class="almanac-utc text-muted">${escapeHtml(`${e.start}–${e.end} UTC`)}</span>`;
     return `<li class="almanac-agenda-row" data-status="${escapeHtml(e.status)}" data-band="${band}" data-region="${region}">` +
         `<span class="almanac-agenda-what"><span class="almanac-band-dot" style="background: ${color}" aria-hidden="true"></span>` +
         `<strong>${band}</strong> to ${regionText}: usually <span class="almanac-agenda-time">${time}</span> ` +
         `<span class="text-muted">(${e.peak_n}/${e.peak_m} days` +
         `${e.peak_share !== null && e.peak_share !== undefined && tier !== null && tier !== undefined
             ? ` \u00b7 ${escapeHtml(shareLabel(e.peak_share, tier))}` : ''})</span></span>` +
-        `<span class="almanac-agenda-meta">${when}${today}${local}</span></li>`;
+        `<span class="almanac-agenda-meta">${when}${today}${utc}</span></li>`;
 }
 
 function lanesHtml(data, lanes) {
@@ -551,8 +657,9 @@ function lanesHtml(data, lanes) {
     const own = regionForLocator(data.area?.grid4 || '');
     const regions = orderRegions(own, extraRegions);
     const left = nowLeft();
+    const offset = tzOffsetMinutes();
 
-    let html = `<div class="almanac-lanes${runtime.loading ? ' is-loading' : ''}" role="group" aria-label="Openings by region and band, 24 hours UTC">`;
+    let html = `<div class="almanac-lanes${runtime.loading ? ' is-loading' : ''}" role="group" aria-label="Openings by region and band, 24 hours local time">`;
     html += axisHtml();
     for (const region of regions) {
         const isOwn = region === own;
@@ -561,7 +668,7 @@ function lanesHtml(data, lanes) {
             '<div class="almanac-tracks">';
         for (const band of bands) {
             const lane = byKey.get(`${band}|${region}`) || { band, region, n: new Array(SLOTS).fill(0), m: bandM.get(band) || [] };
-            html += laneHtml(lane, mMin, slotMinutes, data.snr_tier);
+            html += laneHtml(lane, mMin, slotMinutes, data.snr_tier, offset);
         }
         html += `<div class="almanac-now-layer" aria-hidden="true"><div class="almanac-now" style="left: ${left}"></div></div>`;
         html += '</div></div>';
@@ -579,14 +686,17 @@ function bandColor(band) {
     return bandColors[band] || bandColors.all || '#6c757d';
 }
 
-// 48 slots → runs of equal (n, m, share): opacity from n/m in the band
-// colour, neutral hatch when m < m_min, empty track when closed. `where`
-// prefixes each run's title/aria-label (e.g. "20m to NA" or "20m to NA, Dec
-// 2025"); with an SNR floor (`tier`) the label carries the slot's share.
-function runsHtml(nIn, mIn, mMin, slotMinutes, color, where, shareIn = null, tier = null) {
-    const n = Array.isArray(nIn) ? nIn : [];
-    const m = Array.isArray(mIn) ? mIn : [];
-    const sh = Array.isArray(shareIn) ? shareIn : [];
+// 48 UTC slots → runs of equal (n, m, share) in local display order (the
+// arrays rotated by `offsetMin`): opacity from n/m in the band colour,
+// neutral hatch when m < m_min, empty track when closed. `where` prefixes
+// each run's title/aria-label (e.g. "20m to NA" or "20m to NA, Dec 2025");
+// with an SNR floor (`tier`) the label carries the slot's share. data-slot
+// is the run's first UTC slot.
+function runsHtml(nIn, mIn, mMin, slotMinutes, color, where, shareIn = null, tier = null, offsetMin = 0) {
+    const shift = slotShift(offsetMin, slotMinutes);
+    const n = Array.isArray(nIn) ? rotateSlots(nIn, shift) : [];
+    const m = Array.isArray(mIn) ? rotateSlots(mIn, shift) : [];
+    const sh = Array.isArray(shareIn) ? rotateSlots(shareIn, shift) : [];
     const shareAt = (i) => (sh[i] === null || sh[i] === undefined ? null : Number(sh[i]));
     let runs = '';
     let s = 0;
@@ -597,8 +707,9 @@ function runsHtml(nIn, mIn, mMin, slotMinutes, color, where, shareIn = null, tie
         let len = 1;
         while (s + len < SLOTS && (Number(m[s + len]) || 0) === ms && (Number(n[s + len]) || 0) === ns &&
             shareAt(s + len) === ss) len += 1;
-        const label = escapeHtml(slotLabel(where, s, len, ns, ms, mMin, slotMinutes, ss, tier));
-        const common = `title="${label}" aria-label="${label}" role="img" data-slot="${s}"`;
+        const utcStart = mod(s - shift, SLOTS);
+        const label = escapeHtml(slotLabel(where, utcStart, len, ns, ms, mMin, slotMinutes, ss, tier, offsetMin));
+        const common = `title="${label}" aria-label="${label}" role="img" data-slot="${utcStart}"`;
         if (ms < mMin) {
             runs += `<span class="almanac-run is-unknown" style="flex-grow: ${len}" ${common}></span>`;
         } else if (ns === 0 || ms === 0) {
@@ -612,10 +723,10 @@ function runsHtml(nIn, mIn, mMin, slotMinutes, color, where, shareIn = null, tie
     return runs;
 }
 
-function laneHtml(lane, mMin, slotMinutes, tier = null) {
+function laneHtml(lane, mMin, slotMinutes, tier = null, offsetMin = 0) {
     const { band, region } = lane;
     const color = bandColor(band);
-    const runs = runsHtml(lane.n, lane.m, mMin, slotMinutes, color, `${band} to ${regionLabel(region)}`, lane.share, tier);
+    const runs = runsHtml(lane.n, lane.m, mMin, slotMinutes, color, `${band} to ${regionLabel(region)}`, lane.share, tier, offsetMin);
     const b = escapeHtml(band);
     const r = escapeHtml(region);
     return `<div class="almanac-lane" role="button" tabindex="-1" data-band="${b}" data-region="${r}" aria-label="${b} to ${escapeHtml(regionLabel(lane.region))}: open the seasonal view">` +
@@ -626,7 +737,7 @@ function legendHtml(note = '') {
     return '<div class="almanac-legend small text-muted">' +
         '<span class="almanac-legend-item"><span class="almanac-legend-ramp" aria-hidden="true"></span>opened on few &rarr; most days</span>' +
         '<span class="almanac-legend-item"><span class="almanac-legend-unknown" aria-hidden="true"></span>not enough data</span>' +
-        '<span class="almanac-legend-item"><span class="almanac-legend-now" aria-hidden="true"></span>now (UTC)</span>' +
+        '<span class="almanac-legend-item"><span class="almanac-legend-now" aria-hidden="true"></span>now (local time)</span>' +
         (note ? `<span class="almanac-legend-note">${escapeHtml(note)}</span>` : '') +
         '</div>';
 }
@@ -670,7 +781,7 @@ function monthsHtml(dd) {
     const color = bandColor(dd.band);
     const months = Array.isArray(data.months) ? data.months : [];
     const current = new Date().getUTCMonth();
-    let html = `<div class="almanac-months" role="group" aria-label="${escapeHtml(dd.band)} to ${escapeHtml(regionLabel(dd.region))}, typical openings per month, 24 hours UTC">`;
+    let html = `<div class="almanac-months" role="group" aria-label="${escapeHtml(dd.band)} to ${escapeHtml(regionLabel(dd.region))}, typical openings per month, 24 hours local time">`;
     html += axisHtml();
     html += '<div class="almanac-month-rows">';
     for (let i = 0; i < 12; i += 1) {
@@ -688,9 +799,13 @@ function monthsHtml(dd) {
         }
         const layer = LAYER_LABELS[mo.layer] || String(mo.layer || '').toUpperCase();
         const when = `${name} ${mo.year}`;
-        const runs = runsHtml(mo.n, mo.m, mMin, slotMinutes, color, `${dd.band} to ${regionLabel(dd.region)}, ${when}`, mo.share, data.snr_tier);
+        // A preliminary (SNR floor) month is judged against its own m_min.
+        const moMin = Number(mo.m_min) > 0 ? Number(mo.m_min) : mMin;
+        const offset = monthOffsetMinutes(mo.year, mo.month || i + 1);
+        const runs = runsHtml(mo.n, mo.m, moMin, slotMinutes, color, `${dd.band} to ${regionLabel(dd.region)}, ${when}`, mo.share, data.snr_tier, offset);
+        const prelim = mo.preliminary ? ' · preliminary' : '';
         html += `<div class="${cls}" data-month="${i + 1}" data-layer="${escapeHtml(mo.layer || '')}"${cur}>` +
-            `<span class="almanac-month-label">${escapeHtml(`${when} · ${layer}`)}</span>` +
+            `<span class="almanac-month-label">${escapeHtml(`${when} · ${layer}${prelim}`)}</span>` +
             `<span class="almanac-month-track">${runs}</span></div>`;
     }
     html += `<div class="almanac-now-layer" aria-hidden="true"><div class="almanac-now" style="left: ${nowLeft()}"></div></div>`;
@@ -883,6 +998,12 @@ export const __test = {
     openDrilldown,
     slotLabel,
     snrHeaderText,
+    preliminaryText,
+    slotShift,
+    rotateSlots,
+    offsetLabel,
+    localRangeLabel,
+    nowFraction,
     currentMinSnr,
     slotRangeLabel,
     startsInLabel,

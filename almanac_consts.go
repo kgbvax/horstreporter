@@ -11,6 +11,11 @@ const (
 	almanacMinActiveDays30 = 10
 	// almanacMinActiveDaysSeasonal is M_min for the seasonal (per-month) view.
 	almanacMinActiveDaysSeasonal = 8
+	// almanacPreliminaryMinActiveDays is the floor of the effective M_min of
+	// an SNR-floored view while fewer than M_min days carry SNR data (the
+	// "preliminary" view): M_min_eff = min(M_min, max(this, covered SNR
+	// days)), so a lane needs at least 2 SNR days before it reads known.
+	almanacPreliminaryMinActiveDays = 2
 
 	// almanacWidenBandShare: the area stops widening at the smallest radius
 	// where STRICTLY MORE than this share of the in-scope bands meet M_min.
@@ -30,6 +35,14 @@ const (
 	// almanacAreaCacheMaxEntries bounds the resolver cache.
 	almanacAreaCacheMaxEntries = 4096
 )
+
+// almanacEffectiveMMin is the M_min of an SNR-floored view (30-day or one
+// seasonal month) given how many of its days carry SNR data: the full M_min
+// once enough days are covered, else the covered days, floored at
+// almanacPreliminaryMinActiveDays.
+func almanacEffectiveMMin(full, coveredSNRDays int) int {
+	return min(full, max(almanacPreliminaryMinActiveDays, coveredSNRDays))
+}
 
 // almanacInScopeBands is the Almanac band set: 160 m … 10 m, 6 m and up
 // excluded (KTD3). Order follows propIntelBandOrder (HF low → high).

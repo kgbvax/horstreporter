@@ -29,6 +29,11 @@ import (
 //	N           = |{d ∈ M-days : Σ_ring spots with SNR ≥ floor(d,s) ≥ k}|
 //	share(s)    = Σ_{M-days} spots ≥ floor / Σ_{M-days} SNR-carrying spots
 //	            (null when the denominator is 0)
+//	unknown     = M < M_min_eff, M_min_eff = min(M_min, max(2, covered)),
+//	            covered = window days on/after the SNR start, not lost
+//	            and ingest-alive in at least one slot
+//	            ("preliminary" while M_min_eff < M_min; the widening radius
+//	            is still chosen on all-SNR activity at the full M_min)
 
 const almanacSlotsPerDay = almanacSeasonSlotsPerDay
 
@@ -188,6 +193,31 @@ func (a *almanacAccum) setSNRSince(day int64, ok bool) {
 // snrKnown: window day di has SNR data (it is on or after the SNR start).
 func (a *almanacAccum) snrKnown(di int) bool {
 	return a.hasSNRSince && a.win.Start+int64(di) >= a.snrSince
+}
+
+// snrCoveredDays counts the window days that carry SNR data: on or after
+// the SNR start, not lost, and ingest-alive in at least one slot. A lost or
+// wholly dead day (no ingest totals, e.g. an outage) can never count toward
+// M, so counting it would hold the preliminary M_min above every cell's M.
+func (a *almanacAccum) snrCoveredDays() int {
+	alive := almanacAliveMask(&a.ingest, &a.lost)
+	n := 0
+	for di := 0; di < almanacWindowDays; di++ {
+		if a.snrKnown(di) && slices.Contains(alive[di][:], true) {
+			n++
+		}
+	}
+	return n
+}
+
+// mMin is the M_min of this read: the full 30-day M_min, or with an SNR
+// floor and an SNR start the preliminary almanacEffectiveMMin. Without an
+// SNR start a floored view keeps the full M_min (every cell reads unknown).
+func (a *almanacAccum) mMin() int {
+	if a.tier < 0 || !a.hasSNRSince {
+		return almanacMinActiveDays30
+	}
+	return almanacEffectiveMMin(almanacMinActiveDays30, a.snrCoveredDays())
 }
 
 // openCounts is the per-cell count the open test (≥ k) applies to: all
@@ -430,13 +460,15 @@ func almanacAliveMask(ingest *[almanacAccumDays][almanacSlotsPerDay]int64, lost 
 // almanacLane is one (band, region) lane: per-slot N (open days) and M
 // (alive, active days). Compact uint8 so a cached result stays ~10 KB. Share
 // is the pooled SNR share coded by almanacShareCode (KTD13; 0 = none / no
-// SNR floor).
+// SNR floor). MMin is the lane's (effective) M_min; 0 means the full
+// almanacMinActiveDays30.
 type almanacLane struct {
 	Band   string
 	Region string
 	N      [almanacSlotsPerDay]uint8
 	M      [almanacSlotsPerDay]uint8
 	Share  [almanacSlotsPerDay]uint16
+	MMin   uint8
 }
 
 // almanacShareCode codes num/den as 1 + the share in per mille (1..1001);
@@ -462,8 +494,16 @@ func almanacShareValue(code uint16) (float64, bool) {
 	return float64(code-1) / 1000, true
 }
 
+// mMin is the lane's M_min (the full 30-day one unless set).
+func (l almanacLane) mMin() int {
+	if l.MMin == 0 {
+		return almanacMinActiveDays30
+	}
+	return int(l.MMin)
+}
+
 // unknown: fewer than M_min active days → "not enough data" (R3).
-func (l almanacLane) unknown(s int) bool { return int(l.M[s]) < almanacMinActiveDays30 }
+func (l almanacLane) unknown(s int) bool { return int(l.M[s]) < l.mMin() }
 
 // usual: a known cell open on at least almanacUsuallyShare of its days.
 func (l almanacLane) usual(s int) bool {
@@ -482,12 +522,36 @@ type almanacTypical struct {
 	Tier        int
 	SNRSince    int64
 	HasSNRSince bool
+	// MMin is the M_min the lanes were judged against (the preliminary
+	// effective one for a floored view with few SNR days); SNRDays the
+	// window days carrying SNR data (floored views only, else 0).
+	MMin    int
+	SNRDays int
+}
+
+// preliminary: a floored view judged against less than the full M_min.
+func (t *almanacTypical) preliminary() bool {
+	return t.Tier >= 0 && t.mMin() < almanacMinActiveDays30
+}
+
+// mMin is MMin, or the full 30-day M_min when unset.
+func (t *almanacTypical) mMin() int {
+	if t.MMin <= 0 {
+		return almanacMinActiveDays30
+	}
+	return t.MMin
 }
 
 // computeAlmanacTypical picks the radius from the active-day masks (U1) and
-// computes the lanes at that radius.
+// computes the lanes at that radius. The radius always uses the all-SNR
+// activity at the full M_min, so floored and any-SNR views share it.
 func computeAlmanacTypical(a *almanacAccum) *almanacTypical {
 	radius, squares := chooseAlmanacRadius(a.centre, a.masks(), almanacMinActiveDays30)
+	mMin := a.mMin()
+	snrDays := 0
+	if a.tier >= 0 {
+		snrDays = a.snrCoveredDays()
+	}
 	wm := int64(-1)
 	if a.hasWM {
 		wm = a.wm
@@ -498,17 +562,20 @@ func computeAlmanacTypical(a *almanacAccum) *almanacTypical {
 		Watermark:   wm,
 		Radius:      radius,
 		Squares:     squares,
-		Lanes:       a.cells(radius),
+		Lanes:       a.cells(radius, mMin),
 		Tier:        a.tier,
 		SNRSince:    a.snrSince,
 		HasSNRSince: a.hasSNRSince,
+		MMin:        mMin,
+		SNRDays:     snrDays,
 	}
 }
 
 // cells computes N/M per (band, region, slot) at radius (levels 0…radius).
 // Bands with no active slot at all are omitted; every region of an active
-// band gets a lane, so never-reached regions read "closed" (R2).
-func (a *almanacAccum) cells(radius int) []almanacLane {
+// band gets a lane, so never-reached regions read "closed" (R2). mMin is
+// the M_min each lane is judged against (stored in the lane).
+func (a *almanacAccum) cells(radius, mMin int) []almanacLane {
 	if radius >= almanacLevels {
 		radius = almanacLevels - 1
 	}
@@ -545,7 +612,7 @@ func (a *almanacAccum) cells(radius int) []almanacLane {
 			continue
 		}
 		for ri, reg := range a.regions {
-			l := almanacLane{Band: band, Region: reg, M: m}
+			l := almanacLane{Band: band, Region: reg, M: m, MMin: uint8(mMin)}
 			var geSum, snrSum [almanacSlotsPerDay]int64
 			for di := 0; di < almanacWindowDays; di++ {
 				for s := 0; s < almanacSlotsPerDay; s++ {

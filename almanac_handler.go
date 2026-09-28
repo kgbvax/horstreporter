@@ -396,17 +396,23 @@ func newAlmanacSNRInfo(minSNR *int, tier int, since int64, hasSince bool) almana
 
 // almanacResponse is the /api/almanac body (documented in docs/api.md).
 type almanacResponse struct {
-	QTH          string            `json:"qth"`
-	Area         almanacAreaInfo   `json:"area"`
-	Window       almanacWindowInfo `json:"window"`
-	SlotMinutes  int               `json:"slot_minutes"`
-	MMin         int               `json:"m_min"`
-	K            int               `json:"k"`
-	UsuallyShare float64           `json:"usually_share"`
-	WatermarkDay int64             `json:"watermark_day"`
-	NowSlot      int               `json:"now_slot"`
-	GeneratedAt  int64             `json:"generated_at"`
-	TodayAsOf    int64             `json:"today_as_of"`
+	QTH         string            `json:"qth"`
+	Area        almanacAreaInfo   `json:"area"`
+	Window      almanacWindowInfo `json:"window"`
+	SlotMinutes int               `json:"slot_minutes"`
+	// MMin is the effective M_min the lanes and agenda were judged against:
+	// with an SNR floor and fewer than 10 SNR days, the preliminary
+	// min(10, max(2, snr_days)); Preliminary is then true.
+	MMin int `json:"m_min"`
+	// SNRDays: window days carrying SNR data (SNR-floored views only).
+	SNRDays      *int    `json:"snr_days,omitempty"`
+	Preliminary  bool    `json:"preliminary,omitempty"`
+	K            int     `json:"k"`
+	UsuallyShare float64 `json:"usually_share"`
+	WatermarkDay int64   `json:"watermark_day"`
+	NowSlot      int     `json:"now_slot"`
+	GeneratedAt  int64   `json:"generated_at"`
+	TodayAsOf    int64   `json:"today_as_of"`
 	almanacSNRInfo
 	Lanes  []almanacLaneJSON    `json:"lanes"`
 	Agenda []almanacAgendaEntry `json:"agenda"`
@@ -440,7 +446,8 @@ func buildAlmanacResponse(qth string, area almanacArea, snap almanacSnapshot, no
 			EndDayIndex:   typ.Window.End,
 		},
 		SlotMinutes:    almanacSlotMinutes,
-		MMin:           almanacMinActiveDays30,
+		MMin:           typ.mMin(),
+		Preliminary:    typ.preliminary(),
 		K:              almanacOpenMinSpotsPSKR,
 		UsuallyShare:   almanacUsuallyShare,
 		WatermarkDay:   typ.Watermark,
@@ -452,6 +459,10 @@ func buildAlmanacResponse(qth string, area almanacArea, snap almanacSnapshot, no
 	}
 	if !snap.todayAt.IsZero() {
 		resp.TodayAsOf = snap.todayAt.Unix()
+	}
+	if typ.Tier >= 0 {
+		d := typ.SNRDays
+		resp.SNRDays = &d
 	}
 	for _, l := range typ.Lanes {
 		lj := almanacLaneJSON{

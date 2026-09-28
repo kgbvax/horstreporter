@@ -875,6 +875,13 @@ body[data-theme="dark"] .wspr-matrix-cell {
     background: color-mix(in srgb, var(--accent-strong) 10%, transparent);
 }
 .almanac-status:empty { display: none; }
+.almanac-preliminary {
+    margin-top: 2px;
+    padding: 2px 6px;
+    border-left: 3px solid var(--border-color);
+    color: color-mix(in srgb, var(--text-color) 75%, transparent);
+    font-style: italic;
+}
 .almanac-subhead {
     font-weight: 600;
     margin: 6px 0 2px;
@@ -910,7 +917,7 @@ body[data-theme="dark"] .wspr-matrix-cell {
     color: var(--accent-strong);
     font-weight: 600;
 }
-.almanac-local { white-space: nowrap; }
+.almanac-utc { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .almanac-band-dot {
     display: inline-block;
     width: 8px;

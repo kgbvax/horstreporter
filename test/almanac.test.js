@@ -101,6 +101,16 @@ async function openPanel() {
 
 function body() { return document.getElementById(BODY_ID); }
 
+// Stubs the browser's UTC offset: `offset` is minutes EAST of UTC (+120 =
+// CEST), or a function (date) => minutes for zone rules (DST). Install AFTER
+// vi.useFakeTimers so the spy sits on the (possibly faked) Date prototype.
+function stubOffset(offset) {
+    return vi.spyOn(Date.prototype, 'getTimezoneOffset').mockImplementation(function stubbed() {
+        const east = typeof offset === 'function' ? offset(this) : offset;
+        return east === 0 ? 0 : -east;
+    });
+}
+
 describe('almanac panel (U7)', () => {
     let store;
     let originalFetch;
@@ -111,6 +121,7 @@ describe('almanac panel (U7)', () => {
         setupDom();
         reset();
         Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+        stubOffset(0);
     });
 
     afterEach(() => {
@@ -188,12 +199,12 @@ describe('almanac panel (U7)', () => {
             },
         }));
         await openPanel();
-        const open = body().querySelector('[aria-label="20m to NA - North America, 14:00 UTC: opened 24 of 30 days"]');
+        const open = body().querySelector('[aria-label="20m to NA - North America, 14:00 local: opened 24 of 30 days"]');
         expect(open).not.toBeNull();
-        expect(open.getAttribute('title')).toBe('20m to NA - North America, 14:00 UTC: opened 24 of 30 days');
+        expect(open.getAttribute('title')).toBe('20m to NA - North America, 14:00 local: opened 24 of 30 days');
         expect(Number(open.style.opacity || getOpacity(open))).toBeGreaterThan(0.5);
 
-        const unknown = body().querySelector('[aria-label="10m to KH6 - Hawaii, 05:00 UTC: not enough data (6 days)"]');
+        const unknown = body().querySelector('[aria-label="10m to KH6 - Hawaii, 05:00 local: not enough data (6 days)"]');
         expect(unknown).not.toBeNull();
         expect(unknown.classList.contains('is-unknown')).toBe(true);
         // Unknown is never drawn in the band colour (distinct from closed).
@@ -208,15 +219,16 @@ describe('almanac panel (U7)', () => {
             },
         }));
         await openPanel();
-        expect(body().querySelector('[aria-label="20m to NA - North America, 13:00–14:30 UTC: opened 24 of 30 days"]')).not.toBeNull();
+        expect(body().querySelector('[aria-label="20m to NA - North America, 13:00–14:30 local: opened 24 of 30 days"]')).not.toBeNull();
         const naLane = body().querySelector('.almanac-lane[data-band="20m"][data-region="NA"]');
         // closed 00:00–13:00, open 13:00–14:30, closed 14:30–24:00
         expect(naLane.querySelectorAll('.almanac-run')).toHaveLength(3);
     });
 
-    it('draws a UTC now line and a legend (ramp, unknown hatch, now line)', async () => {
+    it('draws a now line and a legend (ramp, unknown hatch, now line)', async () => {
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(new Date('2026-09-28T12:30:00Z'));
+        stubOffset(0);
         mockFetchOnce(makePayload({ bands: ['20m'] }));
         await openPanel();
         const now = body().querySelector('.almanac-now');
@@ -293,14 +305,14 @@ describe('almanac panel (U7)', () => {
             expect(body().querySelector('.almanac-agenda-more')).toBeNull();
         });
 
-        it('renders a window that crosses midnight as "20:00–08:00 UTC", plus a local-time label', async () => {
+        it('renders a window that crosses midnight as "20:00–08:00" local, plus the UTC label', async () => {
             mockFetchOnce(makePayload({ bands: ['40m'], agenda: [
                 agendaEntry({ band: '40m', region: 'NA', start_slot: 40, len_slots: 24, start: '20:00', end: '08:00', crosses_midnight: true }),
             ] }));
             await openPanel();
             const row = body().querySelector('.almanac-agenda-row');
-            expect(row.textContent).toContain('20:00–08:00 UTC');
-            expect(row.querySelector('.almanac-local').textContent).toMatch(/local/);
+            expect(row.querySelector('.almanac-agenda-time').textContent).toBe('20:00–08:00');
+            expect(row.querySelector('.almanac-utc').textContent).toBe('20:00–08:00 UTC');
         });
 
         it('labels an all-day window', async () => {
@@ -586,6 +598,7 @@ describe('almanac seasonal drill-down (U8)', () => {
         Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(new Date('2026-09-28T12:30:00Z'));
+        stubOffset(0);
     });
 
     afterEach(() => {
@@ -651,11 +664,11 @@ describe('almanac seasonal drill-down (U8)', () => {
         routeFetch();
         await openOC();
         const sep = monthRows()[8];
-        const open = sep.querySelector('[aria-label="20m to OC - Oceania, Sep 2026, 14:00 UTC: opened 15 of 20 days"]');
+        const open = sep.querySelector('[aria-label="20m to OC - Oceania, Sep 2026, 14:00 local: opened 15 of 20 days"]');
         expect(open).not.toBeNull();
         expect(open.getAttribute('title')).toBe(open.getAttribute('aria-label'));
         expect(Number(getOpacity(open))).toBeGreaterThan(0.5);
-        const unknown = sep.querySelector('[aria-label="20m to OC - Oceania, Sep 2026, 02:30 UTC: not enough data (3 days)"]');
+        const unknown = sep.querySelector('[aria-label="20m to OC - Oceania, Sep 2026, 02:30 local: not enough data (3 days)"]');
         expect(unknown).not.toBeNull();
         expect(unknown.classList.contains('is-unknown')).toBe(true);
         const now = body().querySelector('.almanac-drill .almanac-now');
@@ -857,6 +870,7 @@ describe('almanac SNR floor (KTD13)', () => {
         setupDom();
         reset();
         Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+        stubOffset(0);
     });
 
     afterEach(() => {
@@ -922,7 +936,7 @@ describe('almanac SNR floor (KTD13)', () => {
         const header = body().querySelector('.almanac-snr').textContent;
         expect(header).toBe('FT8/FT4 openings — spots ≥ −10 dB (slider −12 → −10 dB tier); SNR data since 2026-09-29');
         const run = body().querySelector('.almanac-lane[data-band="20m"][data-region="NA"] [data-slot="30"]');
-        expect(run.getAttribute('title')).toBe('20m to NA - North America, 15:00 UTC: opened 18 of 26 days · 64% of spots ≥ −10 dB');
+        expect(run.getAttribute('title')).toBe('20m to NA - North America, 15:00 local: opened 18 of 26 days · 64% of spots ≥ −10 dB');
         expect(body().querySelector('.almanac-agenda-row').textContent).toContain('(18/26 days · 64% of spots ≥ −10 dB)');
     });
 
@@ -930,7 +944,7 @@ describe('almanac SNR floor (KTD13)', () => {
         expect(__test.snrHeaderText(makePayload())).toBe('FT8/FT4 openings — any SNR');
         expect(__test.snrHeaderText({ min_snr: -10, snr_tier: -10, snr_available: false, snr_since: null }))
             .toBe('FT8/FT4 openings — spots ≥ −10 dB; no SNR data collected yet');
-        expect(__test.slotLabel('20m to NA', 30, 1, 18, 26, 10, 30)).toBe('20m to NA, 15:00 UTC: opened 18 of 26 days');
+        expect(__test.slotLabel('20m to NA', 30, 1, 18, 26, 10, 30)).toBe('20m to NA, 15:00 local: opened 18 of 26 days');
     });
 
     it('the drill-down passes min_snr and refetches on a floor change', async () => {
@@ -949,5 +963,296 @@ describe('almanac SNR floor (KTD13)', () => {
         expect(urls()).toContain('/api/almanac?qth=JO32&min_snr=-20');
         expect(urls()).toContain('/api/almanac/season?qth=JO32&band=20m&region=NA&min_snr=-20');
         expect(runtime.drilldown?.band).toBe('20m');
+    });
+});
+
+// Local time: the server works in UTC slots (data-slot, API params); the
+// panel shows every time in the browser's local time. Lanes are rotated by
+// the UTC offset (offset / 30 min slots), drill-down month rows by that
+// month's own offset (DST), the agenda leads with local and keeps UTC as the
+// muted secondary label.
+describe('almanac local time', () => {
+    let originalFetch;
+
+    // Central Europe: CEST (+120) from the last Sunday of March to the last
+    // Sunday of October, CET (+60) otherwise — close enough by month here.
+    const europeBerlin = (d) => {
+        const m = d.getUTCMonth();
+        return m >= 3 && m <= 9 ? 120 : 60;
+    };
+
+    beforeEach(() => {
+        originalFetch = global.fetch;
+        installLocalStorageMock();
+        setupDom();
+        reset();
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-09-28T12:30:00Z'));
+    });
+
+    afterEach(() => {
+        reset();
+        global.fetch = originalFetch;
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    // Display position (in slots) of a run: the flex-grow of the runs before it.
+    function displayStart(run) {
+        let pos = 0;
+        for (let el = run.previousElementSibling; el; el = el.previousElementSibling) {
+            pos += Number(el.style.flexGrow) || 0;
+        }
+        return pos;
+    }
+
+    it('helpers: slot shift, rotation with wrap, offset label', () => {
+        expect(__test.slotShift(120, 30)).toBe(4);
+        expect(__test.slotShift(-300, 30)).toBe(-10);
+        expect(__test.slotShift(345, 30)).toBe(12);   // +5:45 rounds to +6:00
+        expect(__test.slotShift(-570, 30)).toBe(-19); // −9:30 exact
+        const utc = Array.from({ length: 48 }, (_, i) => i);
+        const rotated = __test.rotateSlots(utc, 4);
+        expect(rotated[0]).toBe(44);   // local 00:00 = UTC 22:00
+        expect(rotated[4]).toBe(0);    // local 02:00 = UTC 00:00
+        expect(rotated[47]).toBe(43);
+        expect(__test.rotateSlots(utc, -10)[40]).toBe(2); // UTC−5: local 20:00 = UTC 01:00
+        expect(__test.offsetLabel(120)).toBe('UTC+2');
+        expect(__test.offsetLabel(0)).toBe('UTC');
+        expect(__test.offsetLabel(-300)).toBe('UTC−5');
+        expect(__test.offsetLabel(345)).toBe('UTC+5:45');
+        expect(__test.offsetLabel(-570)).toBe('UTC−9:30');
+    });
+
+    it('rotates the lanes so the axis is local midnight; titles read local time; data-slot stays UTC', async () => {
+        stubOffset(120);
+        mockFetchOnce(makePayload({
+            bands: ['20m'],
+            patch(lane) { if (lane.region === 'NA') lane.n[28] = 24; },
+        }));
+        await openPanel();
+        const run = body().querySelector('.almanac-lane[data-band="20m"][data-region="NA"] [data-slot="28"]');
+        expect(run).not.toBeNull();
+        expect(run.getAttribute('title')).toBe('20m to NA - North America, 16:00 local: opened 24 of 30 days');
+        expect(run.getAttribute('aria-label')).toBe(run.getAttribute('title'));
+        expect(displayStart(run)).toBe(32);
+        // The leading closed run starts at local 00:00 = UTC 22:00.
+        const first = body().querySelector('.almanac-lane[data-band="20m"][data-region="NA"] .almanac-run');
+        expect(first.dataset.slot).toBe('44');
+        expect(first.getAttribute('title')).toBe('20m to NA - North America, 00:00–16:00 local: opened 0 of 30 days');
+        expect(body().querySelector('.almanac-lanes').getAttribute('aria-label')).toMatch(/local time/);
+    });
+
+    it('a UTC run across 00:00 UTC stays one run in local time (wrap)', async () => {
+        stubOffset(120);
+        mockFetchOnce(makePayload({
+            bands: ['20m'],
+            patch(lane) { if (lane.region === 'NA') { lane.n[46] = 24; lane.n[47] = 24; lane.n[0] = 24; } },
+        }));
+        await openPanel();
+        const lane = body().querySelector('.almanac-lane[data-band="20m"][data-region="NA"]');
+        const run = lane.querySelector('[data-slot="46"]');
+        expect(run.getAttribute('title')).toBe('20m to NA - North America, 01:00–02:30 local: opened 24 of 30 days');
+        expect(displayStart(run)).toBe(2);
+        expect(lane.querySelectorAll('.almanac-run')).toHaveLength(3);
+    });
+
+    it('west of UTC: an early-UTC slot lands on the local evening', async () => {
+        stubOffset(-300);
+        mockFetchOnce(makePayload({
+            bands: ['20m'],
+            patch(lane) { if (lane.region === 'NA') lane.n[2] = 24; },
+        }));
+        await openPanel();
+        const run = body().querySelector('.almanac-lane[data-band="20m"][data-region="NA"] [data-slot="2"]');
+        expect(run.getAttribute('title')).toBe('20m to NA - North America, 20:00 local: opened 24 of 30 days');
+        expect(displayStart(run)).toBe(40);
+        // The lane's last run ends at local midnight.
+        const runs = Array.from(body().querySelectorAll('.almanac-lane[data-band="20m"][data-region="NA"] .almanac-run'));
+        expect(runs[runs.length - 1].getAttribute('title')).toMatch(/20:30–24:00 local/);
+    });
+
+    it('the now line uses local time', async () => {
+        stubOffset(120);
+        mockFetchOnce(makePayload({ bands: ['20m'] }));
+        await openPanel();
+        // 12:30 UTC = 14:30 CEST → 870 / 1440.
+        expect(body().querySelector('.almanac-now').style.left).toBe('60.4167%');
+        vi.restoreAllMocks();
+        stubOffset(-300);
+        __test.render();
+        // 12:30 UTC = 07:30 UTC−5 → 450 / 1440.
+        expect(body().querySelector('.almanac-now').style.left).toBe('31.25%');
+        expect(body().querySelector('.almanac-legend').textContent).toMatch(/now \(local time\)/);
+    });
+
+    it('a non-30-minute offset rounds the lanes to the nearest slot and says so', async () => {
+        stubOffset(345); // Nepal, UTC+5:45
+        mockFetchOnce(makePayload({
+            bands: ['20m'],
+            patch(lane) { if (lane.region === 'NA') lane.n[28] = 24; },
+        }));
+        await openPanel();
+        const head = body().querySelector('.almanac-area').textContent;
+        expect(head).toContain('UTC+5:45');
+        expect(head).toMatch(/rounded to the nearest 30 min/);
+        const run = body().querySelector('[data-slot="28"]');
+        // Exact local time in the label; the drawing sits on the rounded slot.
+        expect(run.getAttribute('title')).toBe('20m to NA - North America, 19:45 local: opened 24 of 30 days');
+        expect(displayStart(run)).toBe(40);
+        // Now line on the rounded grid: 12:30 UTC + 6:00 = 18:30.
+        expect(body().querySelector('.almanac-now').style.left).toBe('77.0833%');
+    });
+
+    it('header says "times in local time (UTC+2)"', async () => {
+        stubOffset(120);
+        mockFetchOnce(makePayload({ bands: ['20m'] }));
+        await openPanel();
+        const head = body().querySelector('.almanac-area').textContent;
+        expect(head).toContain('times in local time (UTC+2');
+        expect(head).not.toMatch(/times UTC/);
+        expect(head).not.toMatch(/rounded/);
+    });
+
+    describe('agenda', () => {
+        it('leads with the local range and keeps UTC as the secondary label', async () => {
+            stubOffset(120);
+            mockFetchOnce(makePayload({ bands: ['20m'], agenda: [
+                agendaEntry({ band: '20m', region: 'NA', start_slot: 36, len_slots: 4, start: '18:00', end: '20:00' }),
+            ] }));
+            await openPanel();
+            const row = body().querySelector('.almanac-agenda-row');
+            expect(row.querySelector('.almanac-agenda-time').textContent).toBe('20:00–22:00');
+            expect(row.querySelector('.almanac-utc').textContent).toBe('18:00–20:00 UTC');
+            expect(row.dataset.band).toBe('20m');
+        });
+
+        it('crosses midnight in local terms', async () => {
+            stubOffset(120);
+            mockFetchOnce(makePayload({ bands: ['40m'], agenda: [
+                // 21:00–23:00 UTC (no UTC midnight) = 23:00–01:00 CEST.
+                agendaEntry({ band: '40m', region: 'NA', start_slot: 42, len_slots: 4, start: '21:00', end: '23:00' }),
+                // 20:00–08:00 UTC (crosses UTC midnight) = 22:00–10:00 CEST.
+                agendaEntry({ band: '40m', region: 'SA', start_slot: 40, len_slots: 24, start: '20:00', end: '08:00', crosses_midnight: true, starts_in_min: 60 }),
+            ] }));
+            await openPanel();
+            const rows = Array.from(body().querySelectorAll('.almanac-agenda-row'));
+            const na = rows.find((r) => r.dataset.region === 'NA');
+            const sa = rows.find((r) => r.dataset.region === 'SA');
+            expect(na.querySelector('.almanac-agenda-time').textContent).toBe('23:00–01:00');
+            expect(na.querySelector('.almanac-utc').textContent).toBe('21:00–23:00 UTC');
+            expect(sa.querySelector('.almanac-agenda-time').textContent).toBe('22:00–10:00');
+        });
+
+        it('all day has no UTC label', async () => {
+            stubOffset(120);
+            mockFetchOnce(makePayload({ bands: ['40m'], agenda: [
+                agendaEntry({ band: '40m', region: 'EU', start_slot: 0, len_slots: 48, start: '00:00', end: '00:00', all_day: true, status: 'ongoing', starts_in_min: 0 }),
+            ] }));
+            await openPanel();
+            const row = body().querySelector('.almanac-agenda-row');
+            expect(row.textContent).toContain('all day');
+            expect(row.querySelector('.almanac-utc')).toBeNull();
+        });
+    });
+
+    it('drill-down: each month row is rotated by its own mid-month offset (CEST vs CET)', async () => {
+        stubOffset(europeBerlin);
+        const season = makeSeason({ months: MONTH_NAMES.map((_, i) => {
+            if (i === 8) return seasonMonth(i, { year: 2026, layer: 'pskr', patch(mo) { mo.n[28] = 15; } });
+            if (i === 11) return seasonMonth(i, { year: 2025, layer: 'wspr', patch(mo) { mo.n[28] = 5; } });
+            return seasonMonth(i, { status: 'not_collected' });
+        }) });
+        routeFetch({ season });
+        await openPanel();
+        lane('20m', 'OC').click();
+        await flush();
+        await flush();
+        const rows = monthRows();
+        const sep = rows[8].querySelector('[data-slot="28"]');
+        const dec = rows[11].querySelector('[data-slot="28"]');
+        expect(sep.getAttribute('title')).toBe('20m to OC - Oceania, Sep 2026, 16:00 local: opened 15 of 20 days');
+        expect(dec.getAttribute('title')).toBe('20m to OC - Oceania, Dec 2025, 15:00 local: opened 5 of 20 days');
+        expect(displayStart(sep)).toBe(32);
+        expect(displayStart(dec)).toBe(30);
+        // The drill-down now line uses today's offset (CEST): 14:30.
+        expect(body().querySelector('.almanac-drill .almanac-now').style.left).toBe('60.4167%');
+        expect(body().querySelector('.almanac-months').getAttribute('aria-label')).toMatch(/local time/);
+    });
+});
+
+describe('almanac preliminary SNR view', () => {
+    let originalFetch;
+
+    beforeEach(() => {
+        originalFetch = global.fetch;
+        installLocalStorageMock();
+        setupDom();
+        reset();
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+        stubOffset(0);
+    });
+
+    afterEach(() => {
+        reset();
+        global.fetch = originalFetch;
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    function prelimPayload(days = 3) {
+        const p = makePayload({
+            bands: ['20m'],
+            patch(l) {
+                l.m = new Array(48).fill(days);
+                if (l.region === 'NA') l.n[20] = days;
+            },
+        });
+        return { ...p, m_min: Math.max(2, days), min_snr: -15, snr_tier: -15, snr_available: true,
+            snr_since: '2026-09-25', snr_days: days, preliminary: true };
+    }
+
+    it('shows the preliminary note with the SNR day count and the full-view date', async () => {
+        mockFetchOnce(prelimPayload(3));
+        await openPanel();
+        const note = body().querySelector('.almanac-preliminary');
+        expect(note).not.toBeNull();
+        expect(note.textContent).toBe('preliminary — based on 3 days of SNR data (full view from 2026-10-05)');
+        // m = 3 ≥ the effective m_min 3: known, not hatched.
+        const run = body().querySelector('.almanac-lane[data-band="20m"][data-region="NA"] [data-slot="20"]');
+        expect(run.classList.contains('is-unknown')).toBe(false);
+        expect(run.getAttribute('title')).toBe('20m to NA - North America, 10:00 local: opened 3 of 3 days');
+    });
+
+    it('one SNR day reads singular; no note without the flag', () => {
+        expect(__test.preliminaryText({ preliminary: true, snr_days: 1, snr_since: '2026-12-30' }))
+            .toBe('preliminary — based on 1 day of SNR data (full view from 2027-01-09)');
+        expect(__test.preliminaryText({ preliminary: false, snr_days: 12, snr_since: '2026-09-25' })).toBe('');
+        expect(__test.preliminaryText(makePayload())).toBe('');
+    });
+
+    it('drill-down months use their own m_min and are marked preliminary', async () => {
+        const season = makeSeason({ months: MONTH_NAMES.map((_, i) => {
+            if (i !== 8) return seasonMonth(i, { status: 'not_collected' });
+            return seasonMonth(i, { year: 2026, layer: 'pskr', patch(mo) {
+                mo.m = new Array(48).fill(4);
+                mo.n[28] = 4;
+                mo.days = 4;
+                mo.m_min = 4;
+                mo.snr_days = 4;
+                mo.preliminary = true;
+            } });
+        }) });
+        routeFetch({ landing: prelimPayload(3), season: { ...season, min_snr: -15, snr_tier: -15, preliminary: true } });
+        await openPanel();
+        openDrilldown('20m', 'NA');
+        await flush();
+        await flush();
+        const sep = monthRows()[8];
+        expect(sep.querySelector('.almanac-month-label').textContent).toBe('Sep 2026 · PSKR · preliminary');
+        const run = sep.querySelector('[data-slot="28"]');
+        expect(run.classList.contains('is-unknown')).toBe(false);
+        expect(run.getAttribute('title')).toBe('20m to NA - North America, Sep 2026, 14:00 local: opened 4 of 4 days');
     });
 });

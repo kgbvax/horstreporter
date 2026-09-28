@@ -468,6 +468,13 @@ Response:
 - `snr_available` / `snr_since`: SNR data is being collected (the SNR
   columns exist) and the first UTC day it covers (the day after the deploy
   that added them). `snr_available: false` → every floor reads unknown.
+- Preliminary floor views: with a floor, `snr_days` is the number of window
+  days carrying SNR data (on/after `snr_since`, not lost, ingest-alive in at
+  least one slot) and `m_min` is the
+  effective `min(10, max(2, snr_days))` that the lanes and the agenda were
+  judged against. While that is below 10, `preliminary: true` (omitted
+  otherwise). `snr_days` is absent without a floor. The widening radius is
+  always chosen on the all-SNR activity at the full `m_min` of 10.
 - The widget summary (`/api/prop_intel/summary` `almanac`) always uses any
   SNR.
 
@@ -538,6 +545,11 @@ Response:
   `snr_since` as `/api/almanac`, and each `ok` month a `share[48]`. With a
   floor only the `pskr` layer is used (no WSPR fallback) and days before
   `snr_since` are left out, so earlier months read `not_collected`.
+  With a floor each `ok` month also carries `snr_days` (its days on/after
+  `snr_since`, not lost, ingest-alive in at least one slot) and its own effective `m_min` =
+  `min(8, max(2, snr_days))`, plus `preliminary: true` when that is below 8;
+  the top-level `preliminary: true` flags that some month is preliminary.
+  The top-level `m_min` stays 8.
 
 ### `GET /api/push/vapid-public-key` — Web Push public key
 

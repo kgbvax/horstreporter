@@ -30,6 +30,10 @@ import (
 //	active(d,s) = ≥1 spot on the band to any region in slot s or s+1
 //	M[s]        = |{d : alive ∧ active}|,  N[s] = those days with count ≥ k
 //	days        = |{d : ∃s alive(d,s) ∧ active(d,s)}|  — the M_min test
+//	M_min       = 8, or with an SNR floor min(8, max(2, covered)) where
+//	              covered = the month's days on/after the SNR start, not lost
+//	              and ingest-alive in at least one slot
+//	              ("preliminary" while below 8)
 //	k           = 2 (PSKR), 1 (WSPR)
 //
 // With an SNR floor (min_snr, KTD13) only the PSKR layer is used (the WSPR
@@ -58,8 +62,13 @@ type almanacSeasonMonth struct {
 	Layer string
 	Days  int
 	K     int
-	N, M  [almanacSlotsPerDay]uint8
-	Share [almanacSlotsPerDay]uint16 // almanacShareCode; SNR floor only
+	// MMin is the month's M_min: almanacMinActiveDaysSeasonal, or with an
+	// SNR floor the preliminary almanacEffectiveMMin over SNRDays (the
+	// month's days carrying SNR data; floored reads only).
+	MMin    int
+	SNRDays int
+	N, M    [almanacSlotsPerDay]uint8
+	Share   [almanacSlotsPerDay]uint16 // almanacShareCode; SNR floor only
 }
 
 // almanacSeason is one drill-down result (the cached unit).
@@ -233,7 +242,7 @@ func (a *almanacSeasonAccum) lostDay(layer string) func(day int64) {
 // compute applies the alive / activity / k rules to one (layer, ym).
 func (a *almanacSeasonAccum) compute(layer string, ym int, k int) almanacSeasonMonth {
 	m := a.month(layer, ym, false)
-	out := almanacSeasonMonth{Month: ym % 100, Year: ym / 100, Layer: layer, K: k}
+	out := almanacSeasonMonth{Month: ym % 100, Year: ym / 100, Layer: layer, K: k, MMin: almanacMinActiveDaysSeasonal}
 	if m == nil {
 		return out
 	}
@@ -254,7 +263,7 @@ func (a *almanacSeasonAccum) compute(layer string, ym int, k int) almanacSeasonM
 	// data: they are left out entirely (unknown, never closed).
 	first := almanacYMFirstDay(ym)
 	floor := a.tier >= 0
-	var dayOK [almanacSeasonDaysPerMonth]bool
+	var dayOK, dayAlive [almanacSeasonDaysPerMonth]bool
 	col := make([]int64, lastDom)
 	for s := 0; s < almanacSlotsPerDay; s++ {
 		for d := 0; d < lastDom; d++ {
@@ -266,7 +275,11 @@ func (a *almanacSeasonAccum) compute(layer string, ym int, k int) almanacSeasonM
 			if floor && (!a.hasSNRSince || first+int64(d) < a.snrSince) {
 				continue
 			}
-			if !almanacIsAlive(m.ingest[d][s], m.lost[d], median) || !almanacActiveOrNext(&m.act[d], nextDay[d], s) {
+			if !almanacIsAlive(m.ingest[d][s], m.lost[d], median) {
+				continue
+			}
+			dayAlive[d] = true
+			if !almanacActiveOrNext(&m.act[d], nextDay[d], s) {
 				continue
 			}
 			dayOK[d] = true
@@ -289,6 +302,15 @@ func (a *almanacSeasonAccum) compute(layer string, ym int, k int) almanacSeasonM
 		if dayOK[d] {
 			out.Days++
 		}
+	}
+	if floor && a.hasSNRSince {
+		// dayAlive is only set on/after the SNR start (earlier days skipped).
+		for d := 0; d < lastDom; d++ {
+			if dayAlive[d] {
+				out.SNRDays++
+			}
+		}
+		out.MMin = almanacEffectiveMMin(almanacMinActiveDaysSeasonal, out.SNRDays)
 	}
 	return out
 }
@@ -314,7 +336,7 @@ func (a *almanacSeasonAccum) pick() []almanacSeasonMonth {
 			if months[i].Year != 0 {
 				continue
 			}
-			if row := a.compute(layer.name, ym, layer.k); row.Days >= almanacMinActiveDaysSeasonal {
+			if row := a.compute(layer.name, ym, layer.k); row.Days >= row.MMin {
 				months[i] = row
 			}
 		}
@@ -541,6 +563,11 @@ type almanacSeasonMonthJSON struct {
 	// Share: SNR floor only (KTD13), per slot the pooled share of spots at
 	// or above the floor (null where the slot has no SNR data).
 	Share []*float64 `json:"share,omitempty"`
+	// SNR floor only, status "ok": the month's effective M_min, its days
+	// carrying SNR data, and Preliminary when M_min < 8.
+	MMin        *int `json:"m_min,omitempty"`
+	SNRDays     *int `json:"snr_days,omitempty"`
+	Preliminary bool `json:"preliminary,omitempty"`
 }
 
 func almanacSeasonMonthToJSON(m almanacSeasonMonth, withShare bool) almanacSeasonMonthJSON {
@@ -555,6 +582,12 @@ func almanacSeasonMonthToJSON(m almanacSeasonMonth, withShare bool) almanacSeaso
 	out.Status, out.Year, out.Layer, out.Days, out.K, out.N, out.M = "ok", &year, &layer, m.Days, &k, &n, &mm
 	if withShare {
 		out.Share = almanacShareJSON(&m.Share)
+		mMin, days := m.MMin, m.SNRDays
+		if mMin <= 0 {
+			mMin = almanacMinActiveDaysSeasonal
+		}
+		out.MMin, out.SNRDays = &mMin, &days
+		out.Preliminary = mMin < almanacMinActiveDaysSeasonal
 	}
 	return out
 }
@@ -570,6 +603,8 @@ type almanacSeasonResponse struct {
 	K            map[string]int  `json:"k"`
 	ThroughDay   string          `json:"through_day"`
 	WatermarkDay int64           `json:"watermark_day"`
+	// Preliminary: some shown month uses a preliminary (SNR floor) M_min.
+	Preliminary bool `json:"preliminary,omitempty"`
 	almanacSNRInfo
 	Months []almanacSeasonMonthJSON `json:"months"`
 }
@@ -593,7 +628,9 @@ func buildAlmanacSeasonResponse(qth string, area almanacArea, res *almanacSeason
 		Months:         make([]almanacSeasonMonthJSON, 0, len(res.Months)),
 	}
 	for _, m := range res.Months {
-		out.Months = append(out.Months, almanacSeasonMonthToJSON(m, res.Tier >= 0))
+		mj := almanacSeasonMonthToJSON(m, res.Tier >= 0)
+		out.Preliminary = out.Preliminary || mj.Preliminary
+		out.Months = append(out.Months, mj)
 	}
 	return out
 }
