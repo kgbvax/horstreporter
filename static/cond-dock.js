@@ -78,6 +78,9 @@ export function initCondDock({ onLayoutChange } = {}) {
         const qth = document.getElementById('qth');
         qth?.addEventListener('input', syncQthLabel);
         qth?.addEventListener('change', syncQthLabel);
+        // The locator is also rewritten programmatically (geolocation, map
+        // click, 6 -> 4 character shortening on submit) without an input event.
+        document.getElementById('fetch-form')?.addEventListener('submit', () => setTimeout(syncQthLabel, 0));
         setupResize(dock);
         runtime.initialized = true;
     }
@@ -100,6 +103,8 @@ export function setOpen(open) {
     runtime.open = open;
     localStorage.setItem(OPEN_KEY, open ? 'true' : 'false');
     apply();
+    // The control that was pressed is now hidden; keep keyboard focus useful.
+    document.getElementById(open ? 'cond-tab-conditions' : 'cond-open')?.focus();
 }
 
 export function setHorizon(horizon) {
@@ -121,6 +126,7 @@ function apply() {
     if (!dock) return;
     const { open, horizon, tab } = runtime;
 
+    if (open) syncQthLabel();
     dock.classList.toggle('is-hidden', !open);
     document.getElementById('cond-collapsed')?.classList.toggle('is-hidden', open);
     setPanelToggleState(document.getElementById('cond-open'), open, TOGGLE_LABELS);

@@ -362,7 +362,10 @@ async function pollMatrix(force) {
         if (err?.name === 'AbortError') return;
         console.warn('prop_intel v2 fetch failed:', err);
         if (body && runtime.cache == null) {
-            body.innerHTML = '<div class="text-muted small">Propagation data unavailable.</div>';
+            // With row extras the rows still carry verdict / count / plot from
+            // other sources, so draw them (cells empty) instead of a bare message.
+            if (runtime.rowExtras) renderMatrix();
+            else body.innerHTML = '<div class="text-muted small">Propagation data unavailable.</div>';
         }
     } finally {
         if (runtime.abortController === controller) {
@@ -782,9 +785,10 @@ export function setRowExtras(extras) {
     runtime.lastRenderKey = '';
 }
 
-// Repaint from cache (no refetch); no-op until a payload arrived.
+// Repaint from cache (no refetch). Without a payload only the extra rows can
+// be drawn, so this is a no-op unless row extras are set.
 export function refreshMatrix() {
-    if (runtime.enabled && runtime.cache) renderMatrix();
+    if (runtime.enabled && currentQth() && (runtime.cache || runtime.rowExtras)) renderMatrix();
 }
 
 // Test hooks.

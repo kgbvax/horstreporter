@@ -19,11 +19,12 @@ const LEVEL_WORDS = {
 
 // Verdict text for a row model (see band-lab.js getBandRow). '' while dx
 // metrics have not arrived, so a row never flashes a verdict computed from
-// missing data.
+// missing data. A band with live reports but no dx entry (only RBN / WSPR, or
+// nothing at or above the conditions SNR floor) is "not scored", not "no reports".
 export function verdictText(row) {
     if (!row) return '';
     const m = row.metrics;
-    if (!m) return row.dxReady ? 'no reports' : '';
+    if (!m) return row.dxReady ? (row.reports > 0 ? 'not scored' : 'no reports') : '';
     const parts = [];
     const word = LEVEL_WORDS[String(m.activity_level || '')];
     if (word) parts.push(word);

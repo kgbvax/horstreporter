@@ -1105,8 +1105,8 @@ body[data-theme="dark"] .wspr-matrix-cell {
    queue. Closed, #cond-collapsed (hot-band pills + toggle) sits top-right. */
 .cond-dock {
     position: relative;
-    flex: 0 0 var(--cond-w, 620px);
-    width: var(--cond-w, 620px);
+    flex: 0 0 var(--cond-w, min(620px, 45vw));
+    width: var(--cond-w, min(620px, 45vw));
     min-width: 360px;
     max-width: 70vw;
     height: 100%;

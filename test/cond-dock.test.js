@@ -151,6 +151,25 @@ describe('cond dock', () => {
         expect(setAlmanacVisible).toHaveBeenLastCalledWith(false);
     });
 
+    it('moves focus into the dock on open and back to the toggle on close', () => {
+        initCondDock();
+        click('cond-open');
+        expect(document.activeElement.id).toBe('cond-tab-conditions');
+        click('cond-close');
+        expect(document.activeElement.id).toBe('cond-open');
+    });
+
+    it('keeps the locator label current, also after a programmatic change and submit', () => {
+        document.body.insertAdjacentHTML('beforeend', '<form id="fetch-form"></form>');
+        vi.useFakeTimers();
+        initCondDock();
+        document.getElementById('qth').value = 'jo62wa';
+        document.getElementById('fetch-form').dispatchEvent(new Event('submit'));
+        vi.runAllTimers();
+        vi.useRealTimers();
+        expect(document.getElementById('cond-qth').textContent).toBe('JO62WA');
+    });
+
     it('hides the Chase queue tab unless it is enabled', () => {
         initCondDock();
         expect(document.getElementById('cond-tab-chase').hidden).toBe(true);

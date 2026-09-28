@@ -28,8 +28,9 @@ describe('verdictText', () => {
         expect(verdictText(null)).toBe('');
     });
 
-    it('says no reports for a band without dx metrics once dx has landed', () => {
-        expect(verdictText(row(null, true))).toBe('no reports');
+    it('says no reports for a silent band, not scored for one with live reports but no dx entry', () => {
+        expect(verdictText({ ...row(null, true), reports: 0 })).toBe('no reports');
+        expect(verdictText(row(null, true))).toBe('not scored');
     });
 
     it('adds the reach qualifier, also to an otherwise blank verdict', () => {

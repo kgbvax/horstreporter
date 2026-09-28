@@ -993,4 +993,28 @@ describe('wspr-matrix row extras (Conditions dock)', () => {
         refreshMatrix();
         expect(document.querySelector('#wspr-matrix-body table')).not.toBe(first);
     });
+
+    it('still draws the rows when the propagation fetch fails', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        mockFetch({}, false);
+        initWsprMatrix();
+        setRowExtras(extras());
+        setWsprMatrixVisible(true);
+        await new Promise((r) => setTimeout(r, 0));
+        expect(document.querySelectorAll('#wspr-matrix-body tbody tr')).toHaveLength(2);
+        expect(document.getElementById(BODY_ID).textContent).not.toContain('unavailable');
+    });
+
+    it('refreshMatrix draws the rows before any payload, but not without a locator', () => {
+        mockFetch({ cells: [] });
+        initWsprMatrix();
+        setRowExtras(extras());
+        runtime.enabled = true;
+        document.getElementById('qth').value = '';
+        refreshMatrix();
+        expect(document.querySelectorAll('#wspr-matrix-body tbody tr')).toHaveLength(0);
+        document.getElementById('qth').value = 'JO32';
+        refreshMatrix();
+        expect(document.querySelectorAll('#wspr-matrix-body tbody tr')).toHaveLength(2);
+    });
 });
