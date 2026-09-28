@@ -709,3 +709,59 @@ func TestPlausibleBaselinePairGuard(t *testing.T) {
 		t.Fatalf("sumPairs must skip implausible pairs")
 	}
 }
+
+func TestInitSchemaStmtsAlmanacTables(t *testing.T) {
+	// Almanac seasonal record (U3): the three tables plus the lost-days log are
+	// always created, LOGGED (never UNLOGGED: they are never pruned and can't be
+	// rebuilt), and initSchema adds no new index on dx_region_baseline_daily.
+	stmts := initSchemaStmts()
+	want := map[string]bool{
+		"CREATE TABLE IF NOT EXISTS almanac_season_counts": false,
+		"CREATE TABLE IF NOT EXISTS almanac_area_activity": false,
+		"CREATE TABLE IF NOT EXISTS almanac_ingest_slots":  false,
+		"CREATE TABLE IF NOT EXISTS almanac_lost_days":     false,
+	}
+	dailyIndexes := 0
+	for _, q := range stmts {
+		for prefix := range want {
+			if strings.Contains(q, prefix) {
+				want[prefix] = true
+				if strings.Contains(strings.ToUpper(q), "UNLOGGED") {
+					t.Fatalf("almanac table must be LOGGED: %q", q)
+				}
+			}
+		}
+		if strings.Contains(q, "CREATE INDEX") && strings.Contains(q, "ON dx_region_baseline_daily") {
+			dailyIndexes++
+		}
+		if strings.Contains(q, "almanac_season_counts") && strings.Contains(q, "CREATE TABLE") {
+			if !strings.Contains(q, "counts BYTEA NOT NULL") || !strings.Contains(q, "fillfactor = 70") ||
+				!strings.Contains(q, "PRIMARY KEY (grid4, band, region, year_month, layer)") {
+				t.Fatalf("almanac_season_counts DDL drifted: %q", q)
+			}
+		}
+	}
+	for prefix, ok := range want {
+		if !ok {
+			t.Fatalf("missing from initSchemaStmts: %s", prefix)
+		}
+	}
+	if dailyIndexes != 1 {
+		t.Fatalf("dx_region_baseline_daily indexes in initSchema = %d, want only the existing day_index index", dailyIndexes)
+	}
+	var lz4, toastVac bool
+	for _, m := range almanacSeasonMaintenanceStmts() {
+		if strings.Contains(m[1], "SET COMPRESSION lz4") {
+			lz4 = true
+		}
+		if strings.Contains(m[1], "toast.autovacuum_vacuum_scale_factor") {
+			toastVac = true
+		}
+		if strings.Contains(strings.ToUpper(m[1]), "UNLOGGED") {
+			t.Fatalf("maintenance stmt must never switch to UNLOGGED: %q", m[1])
+		}
+	}
+	if !lz4 || !toastVac {
+		t.Fatalf("optional maintenance must set lz4 (%v) and TOAST autovacuum (%v)", lz4, toastVac)
+	}
+}

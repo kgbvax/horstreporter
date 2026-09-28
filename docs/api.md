@@ -432,6 +432,40 @@ counters, plus a `prop_intel` block (`requests`, `errors`, `surges_detected`)
 and a `push` block (`surges_detected`, `push_sent`, `push_errors`). The
 de-facto health endpoint.
 
+When Postgres is configured, a `postgres` block carries persistence health:
+`raw_flush_last_ok_unix`, `raw_flush_fail_streak`,
+`baseline_flush_last_ok_unix`, `baseline_flush_fail_streak`, and an
+`almanac_fold` sub-object (Almanac seasonal-record fold health):
+
+| Field | Meaning |
+|---|---|
+| `enabled` | `-almanac-fold-enable` is on and the fold driver is running |
+| `watermark_day` | last folded UTC day index (`unix/86400`); `-1` until known or when disabled. Healthy: today−2 |
+| `watermark_date` | the same day as `YYYY-MM-DD` (omitted while unknown) |
+| `fail_streak` | consecutive failed fold runs (0 = healthy) |
+| `last_ok_unix` | unix time of the last successful fold run |
+| `lost_days` | rows in `almanac_lost_days`: days pruned before they were folded (read as "unknown", never "closed"). Expected: 1 (the partly pruned first day) |
+| `late_region_drops` | live spots since start whose region-baseline keys were dropped because the spot time was outside [now − 24 h, now + 10 min] |
+
+#### Almanac fold flags
+
+- `-almanac-fold-enable` (default `true`): fold every final day of
+  `dx_region_baseline_daily` (day ≤ today−2, a baseline flush succeeded after
+  the day's end + 1 h, no pending delta for it) into the permanent seasonal
+  record (`almanac_season_counts`, `almanac_area_activity`,
+  `almanac_ingest_slots`), one day per transaction, on its own 15-minute
+  ticker — independent of `-dx-region-baseline-retention-days` (the fold also
+  runs with retention 0). While enabled, the `dx_region_baseline_daily` prune
+  deletes only `day_index < min(cutoff, watermark + 1)`; unfolded days may
+  outlive the cutoff by a 7-day grace period, after which a forced prune
+  advances the watermark, records the days in `almanac_lost_days` and logs at
+  ERROR. `false`: no fold and the prune is ungated. The `wspr_` and
+  `prop_region_baseline_daily` prunes are never gated.
+- `-almanac-disk-path` (default empty): filesystem path whose usage is probed
+  (statfs) before the prune — on prod, the Postgres data directory. Above 80%
+  used the grace period is skipped. Fail-safe: an unset, missing or
+  unreadable path counts as over 80%, i.e. no grace.
+
 ## Removed features
 
 **Propagation Lab** (`/api/proplab/v1/params|ladder|fusion|reachability`,

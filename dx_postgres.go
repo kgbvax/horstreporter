@@ -68,6 +68,15 @@ type dxPostgresStore struct {
 	// taken from a half-backfilled table would be cached for an hour and
 	// overstate every cluster rate once the backfill completes.
 	clusterCoverageReady atomic.Bool
+
+	// Almanac (plan U3). regionLateDrops counts live region-baseline keys
+	// dropped by the observe() timestamp clamp. inflightRegion is the region
+	// batch a running flush has swapped out but not yet committed (guarded by
+	// mu): the fold's finality rule treats it as pending. almanacFold is the
+	// fold driver when -almanac-fold-enable is on; nil leaves the prune ungated.
+	regionLateDrops atomic.Int64
+	inflightRegion  map[dxPulseRegionBaselineDailyKey]int64
+	almanacFold     atomic.Pointer[almanacFolder]
 }
 
 type baselineDelta struct {
@@ -251,7 +260,11 @@ func (s *dxPostgresStore) flushPending(ctx context.Context) error {
 	s.pendingRegion = make(map[dxPulseRegionBaselineDailyKey]int64, len(region)/2+16)
 	s.pendingCluster = make(map[clusterBaselineKey]baselineDelta, len(cluster)/2+16)
 	s.pendingCount = 0
+	s.inflightRegion = region
 	s.mu.Unlock()
+	// Cleared after commit or after mergePendingBack re-queued the batch, so
+	// the batch is always visible to pendingRegionMinDay.
+	defer s.setInflightRegion(nil)
 
 	started := time.Now()
 	tx, err := s.pool.Begin(ctx)
@@ -261,40 +274,14 @@ func (s *dxPostgresStore) flushPending(ctx context.Context) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// One transaction: baseline upserts plus the per-slot ingest totals, so a
+	// failed flush writes no totals either.
 	batch := &pgx.Batch{}
-	queued := 0
-
-	for k, d := range global {
-		batch.Queue(`
-			INSERT INTO dx_baseline_global (band, slot_of_day, distance_tier, snr_tier, count)
-			VALUES ($1,$2,$3,$4,$5)
-			ON CONFLICT (band, slot_of_day, distance_tier, snr_tier)
-			DO UPDATE SET
-				count = dx_baseline_global.count + EXCLUDED.count
-		`, k.Band, k.SlotOfDay, k.DistanceTier, k.SnrTier, d.Count)
-		queued++
+	stmts := baselineFlushStmts(global, region, cluster)
+	for _, st := range stmts {
+		batch.Queue(st.sql, st.args...)
 	}
-
-	for k, v := range region {
-		batch.Queue(`
-			INSERT INTO dx_region_baseline_daily (target_grid4, band, slot_of_day, region, day_index, spot_count)
-			VALUES ($1,$2,$3,$4,$5,$6)
-			ON CONFLICT (target_grid4, band, slot_of_day, region, day_index)
-			DO UPDATE SET spot_count = dx_region_baseline_daily.spot_count + EXCLUDED.spot_count
-		`, k.TargetGrid4, k.Band, k.SlotOfDay, k.Region, k.DayIndex, v)
-		queued++
-	}
-
-	for k, d := range cluster {
-		batch.Queue(`
-			INSERT INTO dx_baseline_cluster (cluster_anchor, band, slot_of_day, distance_tier, snr_tier, count)
-			VALUES ($1,$2,$3,$4,$5,$6)
-			ON CONFLICT (cluster_anchor, band, slot_of_day, distance_tier, snr_tier)
-			DO UPDATE SET
-				count = dx_baseline_cluster.count + EXCLUDED.count
-		`, k.ClusterAnchor, k.Band, k.SlotOfDay, k.DistanceTier, k.SnrTier, d.Count)
-		queued++
-	}
+	queued := len(stmts)
 
 	if queued > 0 {
 		br := tx.SendBatch(ctx, batch)
@@ -339,6 +326,138 @@ func (s *dxPostgresStore) mergePendingBack(global map[baselineGlobalKey]baseline
 		s.pendingRegion[k] += v
 		s.pendingCount++
 	}
+}
+
+// flushStmt is one queued statement of a baseline flush transaction.
+type flushStmt struct {
+	sql  string
+	args []any
+}
+
+const (
+	baselineGlobalUpsertSQL = `
+			INSERT INTO dx_baseline_global (band, slot_of_day, distance_tier, snr_tier, count)
+			VALUES ($1,$2,$3,$4,$5)
+			ON CONFLICT (band, slot_of_day, distance_tier, snr_tier)
+			DO UPDATE SET
+				count = dx_baseline_global.count + EXCLUDED.count
+		`
+	regionBaselineDailyUpsertSQL = `
+			INSERT INTO dx_region_baseline_daily (target_grid4, band, slot_of_day, region, day_index, spot_count)
+			VALUES ($1,$2,$3,$4,$5,$6)
+			ON CONFLICT (target_grid4, band, slot_of_day, region, day_index)
+			DO UPDATE SET spot_count = dx_region_baseline_daily.spot_count + EXCLUDED.spot_count
+		`
+	baselineClusterUpsertSQL = `
+			INSERT INTO dx_baseline_cluster (cluster_anchor, band, slot_of_day, distance_tier, snr_tier, count)
+			VALUES ($1,$2,$3,$4,$5,$6)
+			ON CONFLICT (cluster_anchor, band, slot_of_day, distance_tier, snr_tier)
+			DO UPDATE SET
+				count = dx_baseline_cluster.count + EXCLUDED.count
+		`
+)
+
+// baselineFlushStmts builds the statements of one baseline flush
+// transaction: the three baseline upserts plus the Almanac per-(day, slot)
+// ingest totals derived from the region deltas. Pure so the transaction's
+// contents can be asserted without a database.
+func baselineFlushStmts(global map[baselineGlobalKey]baselineDelta, region map[dxPulseRegionBaselineDailyKey]int64, cluster map[clusterBaselineKey]baselineDelta) []flushStmt {
+	totals := almanacIngestSlotTotalsFromRegion(region)
+	stmts := make([]flushStmt, 0, len(global)+len(region)+len(cluster)+len(totals))
+	for k, d := range global {
+		stmts = append(stmts, flushStmt{baselineGlobalUpsertSQL, []any{k.Band, k.SlotOfDay, k.DistanceTier, k.SnrTier, d.Count}})
+	}
+	for k, v := range region {
+		stmts = append(stmts, flushStmt{regionBaselineDailyUpsertSQL, []any{k.TargetGrid4, k.Band, k.SlotOfDay, k.Region, k.DayIndex, v}})
+	}
+	for k, d := range cluster {
+		stmts = append(stmts, flushStmt{baselineClusterUpsertSQL, []any{k.ClusterAnchor, k.Band, k.SlotOfDay, k.DistanceTier, k.SnrTier, d.Count}})
+	}
+	for k, v := range totals {
+		stmts = append(stmts, flushStmt{almanacIngestSlotFlushSQL, []any{k.Day, k.Slot, almanacSeasonLayerPSKR, v}})
+	}
+	return stmts
+}
+
+// almanacIngestSlotKey keys the Almanac per-(day, slot) ingest totals.
+type almanacIngestSlotKey struct {
+	Day  int64
+	Slot int
+}
+
+// almanacIngestSlotTotalsFromRegion sums region-key deltas per (day, slot):
+// the same unit as dx_region_baseline_daily.spot_count.
+func almanacIngestSlotTotalsFromRegion(region map[dxPulseRegionBaselineDailyKey]int64) map[almanacIngestSlotKey]int64 {
+	if len(region) == 0 {
+		return nil
+	}
+	out := make(map[almanacIngestSlotKey]int64, 4)
+	for k, v := range region {
+		out[almanacIngestSlotKey{Day: k.DayIndex, Slot: k.SlotOfDay}] += v
+	}
+	return out
+}
+
+func (s *dxPostgresStore) setInflightRegion(region map[dxPulseRegionBaselineDailyKey]int64) {
+	s.mu.Lock()
+	s.inflightRegion = region
+	s.mu.Unlock()
+}
+
+// pendingRegionMinDay is the oldest day with a region delta not yet
+// committed (queued or in a running flush). Part of almanacFlushState.
+func (s *dxPostgresStore) pendingRegionMinDay() (int64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var min int64
+	ok := false
+	for _, m := range [2]map[dxPulseRegionBaselineDailyKey]int64{s.pendingRegion, s.inflightRegion} {
+		for k := range m {
+			if !ok || k.DayIndex < min {
+				min, ok = k.DayIndex, true
+			}
+		}
+	}
+	return min, ok
+}
+
+// baselineFlushLastOK is the unix time of the last successful baseline flush.
+// Part of almanacFlushState.
+func (s *dxPostgresStore) baselineFlushLastOK() int64 {
+	return s.baselineFlushLastOKUnix.Load()
+}
+
+// RegionLateDrops is the number of live region-baseline keys dropped by the
+// observe() timestamp clamp since start.
+func (s *dxPostgresStore) RegionLateDrops() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.regionLateDrops.Load()
+}
+
+// setAlmanacFolder installs the fold driver, gating the daily-table prune.
+func (s *dxPostgresStore) setAlmanacFolder(f *almanacFolder) {
+	s.almanacFold.Store(f)
+}
+
+// AlmanacFolder returns the fold driver (nil when the fold is disabled).
+func (s *dxPostgresStore) AlmanacFolder() *almanacFolder {
+	if s == nil {
+		return nil
+	}
+	return s.almanacFold.Load()
+}
+
+// dxRegionPruneCutoff is the effective dx_region_baseline_daily prune cutoff:
+// the requested one when the fold is disabled, otherwise gated by the fold
+// watermark (almanacFolder.pruneCutoff).
+func (s *dxPostgresStore) dxRegionPruneCutoff(ctx context.Context, cutoffDayIndex int64) (int64, error) {
+	f := s.almanacFold.Load()
+	if f == nil {
+		return cutoffDayIndex, nil
+	}
+	return f.pruneCutoff(ctx, cutoffDayIndex)
 }
 
 // initSchemaStmts returns the always-applied schema DDL: fresh installs and
@@ -503,6 +622,7 @@ func initSchemaStmts() []string {
 		);`,
 	}
 	stmts = append(stmts, cellfeedSchemaStmts()...)
+	stmts = append(stmts, almanacSeasonSchemaStmts()...)
 	return stmts
 }
 
@@ -610,6 +730,10 @@ func (s *dxPostgresStore) initSchema(ctx context.Context) error {
 				autovacuum_analyze_scale_factor = 0.02
 			);`,
 		},
+	}
+
+	for _, m := range almanacSeasonMaintenanceStmts() {
+		optional = append(optional, optionalMaintenanceStmt{name: m[0], sql: m[1]})
 	}
 
 	for _, st := range optional {
@@ -914,9 +1038,19 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 	s.pendingGlobal[gk] = gd
 	s.pendingCount++
 
-	for _, key := range dxPulseRegionBaselineKeysForSpot(m.T, band, m.SL, m.RL) {
-		s.pendingRegion[key] += 1
-		s.pendingCount++
+	// Live-only late-spot clamp (Almanac KTD6): region keys from spots outside
+	// [now − 24 h, now + 10 min] are dropped and counted, so no spot can land
+	// on a day the fold already treated as final. The shared key emitter
+	// stays unclamped for the raw-spot rebuild.
+	if regionKeys := dxPulseRegionBaselineKeysForSpot(m.T, band, m.SL, m.RL); len(regionKeys) > 0 {
+		if almanacRegionTimestampAccepted(m.T, time.Now().Unix()) {
+			for _, key := range regionKeys {
+				s.pendingRegion[key] += 1
+				s.pendingCount++
+			}
+		} else {
+			s.regionLateDrops.Add(1)
+		}
 	}
 
 	// Grid-cluster baseline (dx_baseline_cluster): increment for both ends'
@@ -2076,10 +2210,24 @@ func (s *dxPostgresStore) pruneDayIndexedBaselineOlderThan(table string, cutoffD
 // wspr_region_baseline_daily, and prop_region_baseline_daily (the day-indexed
 // climatology tables). They share the same store pool; only the day_index
 // cutoff matters.
+//
+// dx_region_baseline_daily alone is gated by the Almanac fold watermark
+// (dxRegionPruneCutoff): unfolded days are kept past the cutoff for the grace
+// period. If the gate cannot be evaluated the dx table is not pruned this
+// round (the other two tables keep today's behaviour).
 func (s *dxPostgresStore) pruneRegionBaselinesOlderThan(cutoffDayIndex int64) (int64, error) {
-	n1, err := s.pruneDayIndexedBaselineOlderThan("dx_region_baseline_daily", cutoffDayIndex)
-	if err != nil {
-		return n1, fmt.Errorf("dx_region_baseline_daily: %w", err)
+	gateCtx, cancel := context.WithTimeout(context.Background(), almanacFoldDayTimeout)
+	dxCutoff, gateErr := s.dxRegionPruneCutoff(gateCtx, cutoffDayIndex)
+	cancel()
+	var n1 int64
+	if gateErr != nil {
+		logInfo("dx_region_baseline_daily prune skipped: almanac fold gate unavailable: %v", gateErr)
+	} else {
+		var err error
+		n1, err = s.pruneDayIndexedBaselineOlderThan("dx_region_baseline_daily", dxCutoff)
+		if err != nil {
+			return n1, fmt.Errorf("dx_region_baseline_daily: %w", err)
+		}
 	}
 	n2, err := s.pruneDayIndexedBaselineOlderThan("wspr_region_baseline_daily", cutoffDayIndex)
 	if err != nil {

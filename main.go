@@ -280,6 +280,11 @@ func main() {
 	// 35d covers the 30-day regionCalendarStats / WsprRegionCalendarStats lookback
 	// (propIntelRegionBaselineDaysBack = dxlensRegionStatsLookbackDays = 30) with headroom.
 	dxRegionBaselineRetentionDaysFlag := flag.Int("dx-region-baseline-retention-days", 35, "Delete dx_region_baseline_daily / wspr_region_baseline_daily rows older than this many day_index days (0 disables retention).")
+	// Almanac seasonal record (U3): folds final days of dx_region_baseline_daily
+	// into the permanent packed record and gates that table's prune by the fold
+	// watermark. Runs on its own ticker, independent of the retention flag.
+	almanacFoldEnableFlag := flag.Bool("almanac-fold-enable", true, "Fold final days of dx_region_baseline_daily into the permanent Almanac seasonal record and gate that table's retention prune by the fold watermark (false: no fold, prune ungated).")
+	almanacDiskPathFlag := flag.String("almanac-disk-path", "", "Filesystem path whose disk usage gates the Almanac prune grace period (prod: the Postgres data directory). Unset or unreadable counts as over 80% full: the 7-day grace is skipped.")
 	proplabSWEnableFlag := flag.Bool("proplab-sw-enable", false, "Enable space-weather index series ingest (NOAA SWPC kp/F10.7/xray/OVATION; consumed by pathscope)")
 	opModeAgentURLFlag := flag.String("opmode-agent-url", "", "Deprecated and ignored: backend never proxies to local operator agent")
 	pushEnableFlag := flag.Bool("push-enable", false, "Enable Web Push notification channel for surge alerts (requires VAPID keys via -push-vapid-private-key/-push-vapid-public-key or PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
@@ -401,6 +406,9 @@ func main() {
 		logInfo("DX postgres init failed (dsn=%s, fail-fast=false). Continuing with in-memory fallback: %v", maskDSN(dxPostgresDSNResolved), err)
 	} else {
 		logInfo("DX postgres initialized (dsn=%s)", maskDSN(dxPostgresDSNResolved))
+		if st := dxBaseline.Store(); st != nil && *almanacFoldEnableFlag {
+			startAlmanacFold(st, *almanacDiskPathFlag)
+		}
 		// Wire the WSPR climatology to the same Postgres pool and ensure the
 		// wspr_region_baseline_daily table exists.
 		wsprClimatology.SetStore(dxBaseline.Store())
