@@ -720,3 +720,46 @@ func TestPropIntelSummaryAlmanacText(t *testing.T) {
 		}
 	}
 }
+
+// TestPropIntelSummaryAlmanacDataPoor: a warm cache for an area where no
+// lane slot reaches m_min (all "not enough data", or no lanes) omits the
+// field, so the widget never reports a data-poor area as closed.
+func TestPropIntelSummaryAlmanacDataPoor(t *testing.T) {
+	now := time.Now().Unix()
+	setHubHistory(t, []MQTTMessage{makeWSPRSpot(now-60, "20m", "JO62", "JO31", 5, 43)})
+
+	cases := map[string]func() *fakeAggStore{
+		"no lanes": newAggWorld,
+		"all unknown": func() *fakeAggStore {
+			f := newAggWorld()
+			win := almanacWindowFor(aggTestNow.Unix())
+			// Active on fewer than M_min days: every cell is "unknown".
+			f.activeAllBands("JO32", win.Today-(almanacMinActiveDays30-2), win.Today, allSlots())
+			return f
+		},
+	}
+	for name, mk := range cases {
+		t.Run(name, func(t *testing.T) {
+			svc, _, _ := newTestAlmanacService(mk())
+			if _, err := svc.get("JO32"); err != nil {
+				t.Fatalf("warm-up get: %v", err)
+			}
+			area, ok := almanacSummaryArea("JO32")
+			if !ok {
+				t.Fatalf("area unresolved")
+			}
+			resp, ok := svc.warm(area)
+			if !ok || resp == nil {
+				t.Fatalf("cache not warm; the test must exercise the warm path")
+			}
+			if almanacResponseHasKnownSlot(resp) {
+				t.Fatalf("fixture has a known slot; want data-poor")
+			}
+			withAlmanacSvc(t, svc)
+			rr, m := summaryBody(t, "qth=JO32")
+			if _, ok := m["almanac"]; ok {
+				t.Fatalf("almanac present for data-poor area: %s", rr.Body.String())
+			}
+		})
+	}
+}

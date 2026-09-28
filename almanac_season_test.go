@@ -49,7 +49,8 @@ func (f *fakeAggStore) wsprDays(grid, band, region string, from, to int64, slot 
 
 func readSeason(t *testing.T, f *fakeAggStore, radius int, band, region string) *almanacSeason {
 	t.Helper()
-	s, err := readAlmanacSeason(context.Background(), f, "JO32", radius, band, region, aggTestNow)
+	s, err := readAlmanacSeason(context.Background(), f, "JO32", radius, band, region, aggTestNow,
+		almanacWSPRCoverage([]string{"JO32"}))
 	if err != nil {
 		t.Fatalf("readAlmanacSeason: %v", err)
 	}
@@ -361,5 +362,39 @@ func TestAlmanacSeasonCacheAndWatermarkInvalidation(t *testing.T) {
 	// The landing typical part and the season entry are both re-read.
 	if f.txCalls != before+2 {
 		t.Fatalf("tx calls = %d, want %d after watermark change", f.txCalls, before+2)
+	}
+}
+
+// TestAlmanacSeasonWSPRGatedByConfiguredAreas: the WSPR layer is read only
+// when every chosen square lies within a configured backfill area's r=2
+// ring. An adjacent unconfigured centre (JO33 at r=2 when JO32 is
+// configured) reaches outside the backfilled ring and gets no WSPR months;
+// the configured centre still does.
+func TestAlmanacSeasonWSPRGatedByConfiguredAreas(t *testing.T) {
+	f := newFakeAggStore(aggToday() - 3)
+	f.wsprDays("JO33", "20m", "NA", seasonDay(2025, 9, 1), seasonDay(2025, 9, 30), 26, 1)
+	cov := almanacWSPRCoverage([]string{"JO32"})
+	read := func(centre string, cov map[string]bool) *almanacSeason {
+		t.Helper()
+		s, err := readAlmanacSeason(context.Background(), f, centre, almanacMaxWidenRadius, "20m", "NA", aggTestNow, cov)
+		if err != nil {
+			t.Fatalf("readAlmanacSeason(%s): %v", centre, err)
+		}
+		return s
+	}
+
+	if sep := seasonMonthOf(t, read("JO32", cov), time.September); sep.Layer != almanacSeasonLayerWSPR || sep.Year != 2025 {
+		t.Fatalf("configured JO32: sep = year %d layer %q, want 2025 wspr", sep.Year, sep.Layer)
+	}
+	for name, c := range map[string]map[string]bool{"JO33 vs JO32 configured": cov, "no areas": nil} {
+		centre := "JO33"
+		if name == "no areas" {
+			centre = "JO32"
+		}
+		for _, m := range read(centre, c).Months {
+			if m.Layer == almanacSeasonLayerWSPR || m.Year != 0 {
+				t.Fatalf("%s: month %d = year %d layer %q, want not collected", name, m.Month, m.Year, m.Layer)
+			}
+		}
 	}
 }

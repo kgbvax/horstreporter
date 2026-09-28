@@ -87,7 +87,9 @@ func (c *almanacAreaCache) cached(qth string) (almanacArea, bool) {
 }
 
 // propIntelSummaryAlmanacFor builds the field for qth, or nil when the
-// Almanac is unavailable or its cache is cold for that area.
+// Almanac is unavailable, its cache is cold for that area, or the area is
+// data-poor (no lane slot has m >= m_min): an empty agenda there means "not
+// enough data", never "closed" (R3), so the widget must not show it.
 func propIntelSummaryAlmanacFor(qth string) *propIntelSummaryAlmanac {
 	if almanacSvc == nil {
 		return nil
@@ -97,7 +99,7 @@ func propIntelSummaryAlmanacFor(qth string) *propIntelSummaryAlmanac {
 		return nil
 	}
 	resp, ok := almanacSvc.warm(area)
-	if !ok || resp == nil {
+	if !ok || resp == nil || !almanacResponseHasKnownSlot(resp) {
 		return nil
 	}
 	out := &propIntelSummaryAlmanac{
@@ -117,6 +119,19 @@ func propIntelSummaryAlmanacFor(qth string) *propIntelSummaryAlmanac {
 		})
 	}
 	return out
+}
+
+// almanacResponseHasKnownSlot reports whether any lane has a slot with at
+// least m_min active days (a known, non-"unknown" cell).
+func almanacResponseHasKnownSlot(resp *almanacResponse) bool {
+	for i := range resp.Lanes {
+		for _, m := range resp.Lanes[i].M {
+			if int(m) >= resp.MMin {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // propIntelSummaryAlmanacText renders the agenda (ongoing first, then by

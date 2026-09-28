@@ -52,6 +52,7 @@ const runtime = {
     loading: false,
     cache: null,        // last good /api/almanac payload (for the current QTH)
     error: null,        // { kind: 'invalid' | 'notfound' | 'unavailable', qth }
+    refreshFailed: false, // last quiet refresh failed; cache shown as-is
     lastQth: '',
     agendaExpanded: false,
     // Open seasonal drill-down: { band, region, qth, loading, data, error }.
@@ -75,13 +76,15 @@ export function initAlmanac({ onLayoutChange } = {}) {
 
     toggle.addEventListener('click', () => setAlmanacVisible(!runtime.enabled));
 
-    const qthInput = document.getElementById('qth');
-    if (qthInput) {
-        qthInput.addEventListener('change', () => {
-            if (!runtime.enabled) return;
-            if (currentQth() !== runtime.lastQth) fetchAlmanac();
-        });
-    }
+    // Refetch when the QTH changed: on #qth change, and on #fetch-form submit
+    // (Enter in the field can submit before a change event fires). The form's
+    // own submit handling is left alone (no preventDefault).
+    const onQthMaybeChanged = () => {
+        if (!runtime.enabled) return;
+        if (currentQth() !== runtime.lastQth) fetchAlmanac();
+    };
+    document.getElementById('qth')?.addEventListener('change', onQthMaybeChanged);
+    document.getElementById('fetch-form')?.addEventListener('submit', onQthMaybeChanged);
 
     makeDraggable(panel, panel.querySelector('.almanac-window-header'), POS_KEY);
 }
@@ -122,7 +125,14 @@ function stopTimer() {
     // Any response still in flight is now stale.
     runtime.token += 1;
     runtime.loading = false;
-    closeDrilldownState();
+    if (runtime.drilldown) {
+        // Put the lanes back so no drill-down with a dead Back button is
+        // left in the (hidden) body for the next show.
+        closeDrilldownState();
+        render();
+    } else {
+        closeDrilldownState();
+    }
 }
 
 function currentQth() {
@@ -141,16 +151,21 @@ async function fetchAlmanac({ quiet = false } = {}) {
         runtime.lastQth = '';
         runtime.cache = null;
         runtime.error = null;
+        runtime.refreshFailed = false;
         runtime.loading = false;
         render();
         return;
     }
 
     const qthChanged = qth !== runtime.lastQth;
+    // A background refresh of the same area with data on screen: a failure
+    // keeps that data (and any open drill-down) instead of wiping it.
+    const keepStale = quiet && !qthChanged && !!runtime.cache;
     runtime.lastQth = qth;
     runtime.loading = true;
     if (qthChanged) {
         runtime.agendaExpanded = false;
+        runtime.refreshFailed = false;
         // The seasonal view belongs to the old area: close it and put the
         // (about to be dimmed) lanes back.
         if (runtime.drilldown) {
@@ -190,10 +205,14 @@ async function fetchAlmanac({ quiet = false } = {}) {
     if (outcome.payload) {
         runtime.cache = outcome.payload;
         runtime.error = null;
+        runtime.refreshFailed = false;
+    } else if (keepStale) {
+        runtime.refreshFailed = true;
     } else {
         // Never leave a previous area's lanes on screen next to an error.
         closeDrilldownState();
         runtime.cache = null;
+        runtime.refreshFailed = false;
         runtime.error = { kind: outcome.error, qth };
     }
     render();
@@ -324,7 +343,7 @@ function render() {
     }
 
     let html = headerHtml(data);
-    html += `<div class="almanac-status text-muted small" role="status">${runtime.loading ? 'Loading…' : ''}</div>`;
+    html += `<div class="almanac-status text-muted small" role="status">${statusText()}</div>`;
     if (runtime.drilldown) {
         html += drilldownHtml(runtime.drilldown);
         body.innerHTML = html;
@@ -344,6 +363,14 @@ function render() {
     body.innerHTML = html;
     attachHandlers(body);
     restoreFocus(body, focus);
+}
+
+// Status line above the lanes / drill-down: in-flight fetch, or a quiet
+// refresh that failed while the last good data stays on screen.
+function statusText() {
+    if (runtime.loading) return 'Loading…';
+    if (runtime.refreshFailed) return 'Couldn\'t refresh; showing last data';
+    return '';
 }
 
 // Status line shown while a fetch is in flight (lanes body or drill-down).
@@ -768,6 +795,7 @@ export const __test = {
         runtime.enabled = false;
         runtime.cache = null;
         runtime.error = null;
+        runtime.refreshFailed = false;
         runtime.loading = false;
         runtime.lastQth = '';
         runtime.agendaExpanded = false;

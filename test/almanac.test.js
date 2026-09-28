@@ -26,7 +26,7 @@ function installLocalStorageMock() {
 
 function setupDom(qth = 'JO32') {
     document.body.innerHTML = `
-        <input id="qth" value="${qth}" />
+        <form id="fetch-form"><input id="qth" value="${qth}" /></form>
         <div id="map-stack">
             <div id="map-toggles"><button id="${TOGGLE_ID}"></button></div>
             <div id="${PANEL_ID}" class="almanac-window is-hidden">
@@ -438,6 +438,79 @@ describe('almanac panel (U7)', () => {
             expect(body().querySelector('.almanac-agenda')).toBeNull();
         });
 
+        it('a quiet same-QTH refresh that gets a 503 keeps the lanes and says it could not refresh', async () => {
+            const pending = deferredFetch();
+            await openPanel();
+            pending[0].resolve(response(makePayload({ bands: ['20m'] })));
+            await flush();
+            const before = body().querySelectorAll('.almanac-lane').length;
+            expect(before).toBeGreaterThan(0);
+
+            __test.fetchAlmanac({ quiet: true });
+            await flush();
+            pending[1].resolve(response({}, 503));
+            await flush();
+            expect(body().querySelectorAll('.almanac-lane')).toHaveLength(before);
+            expect(body().textContent).not.toMatch(/temporarily unavailable/i);
+            expect(body().querySelector('.almanac-status').textContent).toMatch(/couldn't refresh; showing last data/i);
+            expect(body().getAttribute('aria-busy')).toBe('false');
+            expect(runtime.cache).not.toBeNull();
+            expect(runtime.loading).toBe(false);
+
+            // The next good refresh clears the notice.
+            __test.fetchAlmanac({ quiet: true });
+            await flush();
+            pending[2].resolve(response(makePayload({ bands: ['20m'] })));
+            await flush();
+            expect(body().querySelector('.almanac-status').textContent).toBe('');
+        });
+
+        it('a quiet same-QTH refresh that fails on the network keeps the lanes', async () => {
+            vi.spyOn(console, 'warn').mockImplementation(() => {});
+            mockFetchOnce(makePayload({ bands: ['20m'] }));
+            await openPanel();
+            const before = body().querySelectorAll('.almanac-lane').length;
+            global.fetch = vi.fn(async () => { throw new Error('offline'); });
+            await __test.fetchAlmanac({ quiet: true });
+            expect(body().querySelectorAll('.almanac-lane')).toHaveLength(before);
+            expect(body().querySelector('.almanac-status').textContent).toMatch(/couldn't refresh/i);
+        });
+
+        it('a non-quiet same-QTH fetch failure still shows the error', async () => {
+            mockFetchOnce(makePayload({ bands: ['20m'] }));
+            await openPanel();
+            mockFetchOnce({}, 503);
+            await __test.fetchAlmanac();
+            expect(body().textContent).toMatch(/temporarily unavailable/i);
+            expect(body().querySelector('.almanac-lane')).toBeNull();
+        });
+
+        it('submitting #fetch-form with a new QTH (no change event) refetches for it', async () => {
+            const pending = deferredFetch();
+            await openPanel();
+            pending[0].resolve(response(makePayload({ bands: ['20m'] })));
+            await flush();
+            document.getElementById('qth').value = 'FN31';
+            const ev = new Event('submit', { cancelable: true, bubbles: true });
+            document.getElementById('fetch-form').dispatchEvent(ev);
+            await flush();
+            expect(ev.defaultPrevented).toBe(false);
+            expect(pending).toHaveLength(2);
+            expect(pending[1].url).toBe('/api/almanac?qth=FN31');
+
+            // Same QTH again: no extra fetch.
+            document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            await flush();
+            expect(pending).toHaveLength(2);
+        });
+
+        it('works without a #fetch-form', async () => {
+            document.getElementById('fetch-form').replaceWith(document.getElementById('qth'));
+            mockFetchOnce(makePayload({ bands: ['20m'] }));
+            await openPanel();
+            expect(body().querySelectorAll('.almanac-lane').length).toBeGreaterThan(0);
+        });
+
         it('a network failure also reads as temporarily unavailable', async () => {
             vi.spyOn(console, 'warn').mockImplementation(() => {});
             global.fetch = vi.fn(async () => { throw new Error('offline'); });
@@ -654,6 +727,55 @@ describe('almanac seasonal drill-down (U8)', () => {
         expect(runtime.drilldown).toBeNull();
         expect(body().querySelector('.almanac-drill')).toBeNull();
         expect(body().querySelector('.almanac-area').textContent).toContain('JO62');
+        expect(body().querySelector('.almanac-lanes')).not.toBeNull();
+    });
+
+    it('a quiet same-QTH refresh that fails keeps the open drill-down', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        routeFetch();
+        await openOC();
+        global.fetch = vi.fn(async () => response({}, 503));
+        await __test.fetchAlmanac({ quiet: true });
+        expect(runtime.drilldown).toMatchObject({ band: '20m', region: 'OC' });
+        expect(body().querySelector('.almanac-drill-title').textContent).toBe('20m to OC');
+        expect(monthRows()).toHaveLength(12);
+        expect(body().querySelector('.almanac-status').textContent).toMatch(/couldn't refresh/i);
+
+        global.fetch = vi.fn(async () => { throw new Error('offline'); });
+        await __test.fetchAlmanac({ quiet: true });
+        expect(runtime.drilldown).not.toBeNull();
+        expect(monthRows()).toHaveLength(12);
+    });
+
+    it('a failed fetch after a QTH change still closes the view and wipes the lanes', async () => {
+        routeFetch();
+        await openOC();
+        global.fetch = vi.fn(async () => response({}, 503));
+        const qth = document.getElementById('qth');
+        qth.value = 'JO62';
+        qth.dispatchEvent(new Event('change'));
+        await flush();
+        await flush();
+        expect(runtime.drilldown).toBeNull();
+        expect(runtime.cache).toBeNull();
+        expect(body().querySelector('.almanac-drill')).toBeNull();
+        expect(body().querySelector('.almanac-lane')).toBeNull();
+        expect(body().textContent).toMatch(/temporarily unavailable/i);
+    });
+
+    it('hiding the panel with the view open leaves no stale drill-down behind on show', async () => {
+        routeFetch();
+        await openOC();
+        expect(body().querySelector('.almanac-drill')).not.toBeNull();
+        const toggle = document.getElementById(TOGGLE_ID);
+        toggle.click(); // hide
+        expect(runtime.drilldown).toBeNull();
+        expect(body().querySelector('.almanac-drill')).toBeNull();
+        toggle.click(); // show again
+        expect(body().querySelector('.almanac-drill')).toBeNull();
+        await flush();
+        await flush();
+        expect(body().querySelector('.almanac-drill')).toBeNull();
         expect(body().querySelector('.almanac-lanes')).not.toBeNull();
     });
 

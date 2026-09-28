@@ -281,7 +281,12 @@ func (a *almanacSeasonAccum) pick() []almanacSeasonMonth {
 // readAlmanacSeason runs the drill-down reads for centre at radius in one
 // transaction and returns the 12 calendar-month rows. Days run through
 // yesterday (today is partial); the lookback is almanacSeasonLookbackMonths.
-func readAlmanacSeason(ctx context.Context, st almanacReadStore, centre string, radius int, band, region string, now time.Time) (*almanacSeason, error) {
+// wsprCoverage (almanacWSPRCoverage of the configured backfill areas) gates
+// the WSPR layer: it is read only when every chosen square lies in a
+// backfilled ring. Otherwise a partial ring's n against the global ingest
+// totals would pass M_min and mislabel the month, so WSPR months stay
+// absent (not_collected).
+func readAlmanacSeason(ctx context.Context, st almanacReadStore, centre string, radius int, band, region string, now time.Time, wsprCoverage map[string]bool) (*almanacSeason, error) {
 	if radius < 0 {
 		radius = 0
 	}
@@ -310,6 +315,7 @@ func readAlmanacSeason(ctx context.Context, st almanacReadStore, centre string, 
 		Centre: almanacNormalizeCentre(centre), Band: band, Region: region,
 		Radius: radius, Squares: squares, Watermark: -1, Today: today,
 	}
+	wsprOK := almanacWSPRCovered(squares, wsprCoverage)
 	acc := &almanacSeasonAccum{region: region, yesterday: yesterday, layers: map[string]map[int]*almanacSeasonMonthAcc{}}
 	bands := []string{band}
 
@@ -348,11 +354,15 @@ func readAlmanacSeason(ctx context.Context, st almanacReadStore, centre string, 
 				return err
 			}
 		}
-		if err := tx.seasonCounts(ctx, squares, bands, months, almanacSeasonLayerWSPR,
-			acc.seasonRow(almanacSeasonLayerWSPR, yesterday)); err != nil {
-			return err
+		layers := []string{almanacSeasonLayerPSKR}
+		if wsprOK {
+			if err := tx.seasonCounts(ctx, squares, bands, months, almanacSeasonLayerWSPR,
+				acc.seasonRow(almanacSeasonLayerWSPR, yesterday)); err != nil {
+				return err
+			}
+			layers = append(layers, almanacSeasonLayerWSPR)
 		}
-		for _, layer := range []string{almanacSeasonLayerPSKR, almanacSeasonLayerWSPR} {
+		for _, layer := range layers {
 			from, ok := acc.firstDay(layer)
 			if !ok {
 				continue
@@ -442,7 +452,7 @@ func (s *almanacService) getSeason(grid4, band, region string) (*almanacSeason, 
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.queryTimeout)
 	defer cancel()
-	res, err := readAlmanacSeason(ctx, s.store, grid4, radius, band, region, now)
+	res, err := readAlmanacSeason(ctx, s.store, grid4, radius, band, region, now, s.wsprCoverage)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

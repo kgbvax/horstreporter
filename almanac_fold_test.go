@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -886,21 +888,25 @@ func (failingAlmanacFoldStore) ensureWatermark(context.Context, int64) (int64, e
 
 func TestAlmanacFoldPrewarmsConfiguredAreas(t *testing.T) {
 	svc, _, _ := newTestAlmanacService(populatedAggWorld())
-	prevSvc, prevFlag := almanacSvc, *almanacWSPRBackfillAreasFlag
-	t.Cleanup(func() { almanacSvc, *almanacWSPRBackfillAreasFlag = prevSvc, prevFlag })
+	prevSvc := almanacSvc
+	t.Cleanup(func() { almanacSvc = prevSvc })
 	almanacSvc = svc
-	*almanacWSPRBackfillAreasFlag = "jo32, JO33"
+	areas, err := parseAlmanacWSPRBackfillAreas("jo32, JO33")
+	if err != nil {
+		t.Fatalf("parse areas: %v", err)
+	}
+	hook := almanacPrewarmHook(areas)
 
 	// A failed fold run does not pre-warm.
 	bad := newTestAlmanacFolder(failingAlmanacFoldStore{newFakeAlmanacFoldStore()}, &fakeAlmanacFlushState{})
-	bad.afterFold = almanacPrewarmConfiguredAreas
+	bad.afterFold = hook
 	bad.tick(context.Background())
 	if _, ok := svc.warm(almanacArea{Grid4: "JO32", Source: qthSourceLocator}); ok {
 		t.Fatalf("JO32 warm after a failed fold run")
 	}
 
 	f := newTestAlmanacFolder(newFakeAlmanacFoldStore(), &fakeAlmanacFlushState{})
-	f.afterFold = almanacPrewarmConfiguredAreas
+	f.afterFold = hook
 	f.tick(context.Background())
 	for _, g := range []string{"JO32", "JO33"} {
 		if _, ok := svc.warm(almanacArea{Grid4: g, Source: qthSourceLocator}); !ok {
@@ -909,7 +915,7 @@ func TestAlmanacFoldPrewarmsConfiguredAreas(t *testing.T) {
 	}
 }
 
-// TestAlmanacPrewarmTolerant: no service, a bad flag, or a failing read are
+// TestAlmanacPrewarmTolerant: no service, no areas, or a failing read are
 // logged and never fatal.
 func TestAlmanacPrewarmTolerant(t *testing.T) {
 	almanacPrewarmAreas(nil, []string{"JO32"})
@@ -920,11 +926,12 @@ func TestAlmanacPrewarmTolerant(t *testing.T) {
 	if _, ok := svc.warm(almanacArea{Grid4: "JO32"}); ok {
 		t.Fatalf("warm after failed read")
 	}
-	prevSvc, prevFlag := almanacSvc, *almanacWSPRBackfillAreasFlag
-	t.Cleanup(func() { almanacSvc, *almanacWSPRBackfillAreasFlag = prevSvc, prevFlag })
+	prevSvc := almanacSvc
+	t.Cleanup(func() { almanacSvc = prevSvc })
 	almanacSvc = svc
-	*almanacWSPRBackfillAreasFlag = "XX99"
-	almanacPrewarmConfiguredAreas()
+	almanacPrewarmHook(nil)()
+	almanacSvc = nil
+	almanacPrewarmHook([]string{"JO32"})()
 }
 
 // foldActive is the day's active (grid, band) set: the distinct (Grid4, Band)
@@ -935,4 +942,67 @@ func foldActive(f *almanacDayFold) map[almanacGridBand]struct{} {
 		out[almanacGridBand{Grid: k.Grid4, Band: k.Band}] = struct{}{}
 	}
 	return out
+}
+
+// TestPruneRegionBaselinesGateFailure: a gate error skips only the dx
+// table (never pruned ungated), still prunes the other two, and bumps the
+// streak; a gate success resets it. ERROR escalation fires at 3, then every
+// 24 further failures.
+func TestPruneRegionBaselinesGateFailure(t *testing.T) {
+	var streak atomic.Int64
+	var pruned map[string]int64
+	prune := func(table string, cutoff int64) (int64, error) {
+		pruned[table] = cutoff
+		return 1, nil
+	}
+	gateErr := func() (int64, error) { return 0, errors.New("injected gate failure") }
+	for i := 1; i <= 3; i++ {
+		pruned = map[string]int64{}
+		n, err := pruneRegionBaselinesGated(100, gateErr, prune, &streak)
+		if err != nil || n != 2 {
+			t.Fatalf("run %d: n=%d err=%v, want 2 nil", i, n, err)
+		}
+		if _, ok := pruned["dx_region_baseline_daily"]; ok {
+			t.Fatalf("run %d: dx table pruned despite gate failure", i)
+		}
+		if pruned["wspr_region_baseline_daily"] != 100 || pruned["prop_region_baseline_daily"] != 100 {
+			t.Fatalf("run %d: other tables = %v", i, pruned)
+		}
+		if got := streak.Load(); got != int64(i) {
+			t.Fatalf("run %d: streak = %d", i, got)
+		}
+	}
+
+	pruned = map[string]int64{}
+	n, err := pruneRegionBaselinesGated(100, func() (int64, error) { return 93, nil }, prune, &streak)
+	if err != nil || n != 3 {
+		t.Fatalf("gate ok: n=%d err=%v", n, err)
+	}
+	if pruned["dx_region_baseline_daily"] != 93 {
+		t.Fatalf("dx cutoff = %d, want gated 93", pruned["dx_region_baseline_daily"])
+	}
+	if streak.Load() != 0 {
+		t.Fatalf("streak = %d after success, want 0", streak.Load())
+	}
+
+	for n, want := range map[int64]bool{1: false, 2: false, 3: true, 4: false, 26: false, 27: true, 51: true, 50: false} {
+		if got := pruneGateEscalate(n); got != want {
+			t.Errorf("pruneGateEscalate(%d) = %v, want %v", n, got, want)
+		}
+	}
+}
+
+// TestAlmanacFoldStatsPruneGateStreak: the streak is exposed in
+// /api/stats postgres.almanac_fold.
+func TestAlmanacFoldStatsPruneGateStreak(t *testing.T) {
+	st := &dxPostgresStore{}
+	st.pruneGateFailStreak.Store(5)
+	b := almanacFoldStats(st)
+	if b == nil || b.PruneGateFailStreak != 5 {
+		t.Fatalf("stats = %+v, want prune_gate_fail_streak 5", b)
+	}
+	raw, _ := json.Marshal(b)
+	if !strings.Contains(string(raw), `"prune_gate_fail_streak":5`) {
+		t.Fatalf("json = %s", raw)
+	}
 }

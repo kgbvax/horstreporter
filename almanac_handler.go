@@ -47,6 +47,12 @@ type almanacService struct {
 	slow sync.Mutex // serializes Postgres reads
 
 	season *almanacSeasonCache // /api/almanac/season entries (almanac_season.go)
+
+	// wsprCoverage is the set of grid4 squares whose WSPR layer the backfill
+	// writes: the r=almanacMaxWidenRadius ring of each configured
+	// -almanac-wspr-backfill-areas centre. The drill-down reads the WSPR
+	// layer only when every chosen square is covered. nil = none.
+	wsprCoverage map[string]bool
 }
 
 // almanacSvc is the process-wide service (nil without Postgres → 503).
@@ -66,13 +72,43 @@ func newAlmanacService(st almanacReadStore, resolve func(string) (almanacArea, e
 
 // startAlmanacService wires the Postgres reader. The watermark is read from
 // the fold driver (in memory) so a fold invalidates the typical cache.
-func startAlmanacService(st *dxPostgresStore, resolve func(string) (almanacArea, error)) *almanacService {
-	return newAlmanacService(&pgAlmanacReadStore{pool: st.pool}, resolve, func() int64 {
+// wsprAreas are the parsed -almanac-wspr-backfill-areas (drill-down WSPR gate).
+func startAlmanacService(st *dxPostgresStore, resolve func(string) (almanacArea, error), wsprAreas []string) *almanacService {
+	s := newAlmanacService(&pgAlmanacReadStore{pool: st.pool}, resolve, func() int64 {
 		if f := st.AlmanacFolder(); f != nil {
 			return f.health().WatermarkDay
 		}
 		return -1
 	})
+	s.wsprCoverage = almanacWSPRCoverage(wsprAreas)
+	return s
+}
+
+// almanacWSPRCoverage is the union of the backfill rings of areas.
+func almanacWSPRCoverage(areas []string) map[string]bool {
+	if len(areas) == 0 {
+		return nil
+	}
+	cov := map[string]bool{}
+	for _, a := range areas {
+		for _, sq := range getSquaresWithinRings(almanacNormalizeCentre(a), almanacMaxWidenRadius) {
+			cov[sq] = true
+		}
+	}
+	return cov
+}
+
+// almanacWSPRCovered: every square lies within some configured backfill ring.
+func almanacWSPRCovered(squares []string, cov map[string]bool) bool {
+	if len(squares) == 0 || len(cov) == 0 {
+		return false
+	}
+	for _, sq := range squares {
+		if !cov[sq] {
+			return false
+		}
+	}
+	return true
 }
 
 func almanacHandler(w http.ResponseWriter, r *http.Request) {

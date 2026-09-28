@@ -285,6 +285,12 @@ func main() {
 	// watermark. Runs on its own ticker, independent of the retention flag.
 	almanacFoldEnableFlag := flag.Bool("almanac-fold-enable", true, "Fold final days of dx_region_baseline_daily into the permanent Almanac seasonal record and gate that table's retention prune by the fold watermark (false: no fold, prune ungated).")
 	almanacDiskPathFlag := flag.String("almanac-disk-path", "", "Filesystem path whose disk usage gates the Almanac prune grace period (prod: the Postgres data directory). Unset or unreadable counts as over 80% full: the 7-day grace is skipped.")
+	// Almanac WSPR archive backfill (U5); the parsed areas also gate the
+	// drill-down's WSPR layer and are pre-warmed after each fold.
+	almanacWSPRBackfillAreasFlag := flag.String("almanac-wspr-backfill-areas", "",
+		"Comma-separated grid4 areas (e.g. JO32) whose r=2 ring gets the Almanac WSPR layer backfilled from the wspr.live archive. Empty = off.")
+	almanacWSPRBackfillYearsFlag := flag.Int("almanac-wspr-backfill-years", 3,
+		"How many years of complete months the Almanac WSPR backfill covers (newest first; never before 2008-03).")
 	proplabSWEnableFlag := flag.Bool("proplab-sw-enable", false, "Enable space-weather index series ingest (NOAA SWPC kp/F10.7/xray/OVATION; consumed by pathscope)")
 	opModeAgentURLFlag := flag.String("opmode-agent-url", "", "Deprecated and ignored: backend never proxies to local operator agent")
 	pushEnableFlag := flag.Bool("push-enable", false, "Enable Web Push notification channel for surge alerts (requires VAPID keys via -push-vapid-private-key/-push-vapid-public-key or PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
@@ -410,11 +416,17 @@ func main() {
 		// post-run pre-warm sees almanacSvc (happens-before). Resolvers are read per request, so the
 		// QRZ resolver wired later is picked up.
 		if st := dxBaseline.Store(); st != nil {
-			almanacSvc = startAlmanacService(st, dxBaseline.resolveAlmanacArea)
+			almanacAreas, err := parseAlmanacWSPRBackfillAreas(*almanacWSPRBackfillAreasFlag)
+			if err != nil {
+				logError("almanac WSPR backfill disabled: %v", err)
+				almanacAreas = nil
+			}
+			almanacSvc = startAlmanacService(st, dxBaseline.resolveAlmanacArea, almanacAreas)
 			// WSPR archive backfill (U5): no-op unless -almanac-wspr-backfill-areas is set.
-			startAlmanacWSPRBackfill(context.Background(), st, *wsprEndpoint, *almanacDiskPathFlag)
+			startAlmanacWSPRBackfill(context.Background(), st, *wsprEndpoint, *almanacDiskPathFlag,
+				almanacAreas, *almanacWSPRBackfillYearsFlag)
 			if *almanacFoldEnableFlag {
-				startAlmanacFold(st, *almanacDiskPathFlag)
+				startAlmanacFold(st, *almanacDiskPathFlag, almanacAreas)
 			}
 		}
 		// Wire the WSPR climatology to the same Postgres pool and ensure the

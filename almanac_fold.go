@@ -336,11 +336,12 @@ func (f *almanacFolder) pruneCutoff(ctx context.Context, cutoff int64) (int64, e
 }
 
 // startAlmanacFold wires the Postgres fold driver into the store (which gates
-// the daily prune from then on) and starts its ticker.
-func startAlmanacFold(st *dxPostgresStore, diskPath string) *almanacFolder {
+// the daily prune from then on) and starts its ticker. prewarmAreas (the
+// parsed -almanac-wspr-backfill-areas) are pre-warmed after each fold.
+func startAlmanacFold(st *dxPostgresStore, diskPath string, prewarmAreas []string) *almanacFolder {
 	f := newAlmanacFolder(&pgAlmanacFoldStore{pool: st.pool}, st, diskPath)
 	st.setAlmanacFolder(f)
-	f.afterFold = almanacPrewarmConfiguredAreas
+	f.afterFold = almanacPrewarmHook(prewarmAreas)
 	if frac, err := almanacDiskUsedFraction(diskPath); err != nil {
 		logInfo("almanac fold enabled; disk probe unavailable (%v): prune grace period disabled (fail-safe)", err)
 	} else {
@@ -375,17 +376,12 @@ func (f *almanacFolder) tick(ctx context.Context) {
 	f.afterFold()
 }
 
-// almanacPrewarmConfiguredAreas fills the Almanac cache for the configured
-// -almanac-wspr-backfill-areas after a fold (the fold moves the watermark,
-// which invalidates their typical part), so the widget summary field
-// (KTD10) finds them warm. Errors are logged, never fatal.
-func almanacPrewarmConfiguredAreas() {
-	areas, err := parseAlmanacWSPRBackfillAreas(*almanacWSPRBackfillAreasFlag)
-	if err != nil {
-		logInfo("almanac pre-warm skipped: %v", err)
-		return
-	}
-	almanacPrewarmAreas(almanacSvc, areas)
+// almanacPrewarmHook returns the afterFold hook that fills the Almanac cache
+// for the configured areas after a fold (the fold moves the watermark, which
+// invalidates their typical part), so the widget summary field (KTD10) finds
+// them warm. almanacSvc is read per call. Errors are logged, never fatal.
+func almanacPrewarmHook(areas []string) func() {
+	return func() { almanacPrewarmAreas(almanacSvc, areas) }
 }
 
 // almanacPrewarmAreas runs the full read path for each grid4 area.

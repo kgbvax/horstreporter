@@ -284,6 +284,9 @@ glance from the QTH Almanac for the requesting QTH.
     pre-warmed after every fold run.
   - The `qth` is a callsign whose area has not yet been resolved by an
     earlier `/api/almanac` request.
+  - The area is data-poor: no lane has any slot with `m >= m_min` (all
+    lanes "not enough data", or no lanes). Such an area is never reported
+    as closed.
 - **Client handling:** treat a missing field as "no data". When the field is
   absent, the body is byte-identical to the pre-Almanac payload.
 - **Fields:**
@@ -451,6 +454,9 @@ month (Jan–Dec) with 48 half-hour UTC slots of `n` (open days) and `m`
 recent year with at least `m_min` (8) active days — the PSKReporter/cluster
 layer (`pskr`) first, else the backfilled WSPR layer (`wspr`) — labelled
 with its year and layer; months with neither read `not_collected`.
+The WSPR layer is read only when every square at the chosen radius lies
+within the r=2 ring of some `-almanac-wspr-backfill-areas` centre (the
+rings the backfill writes); for any other centre WSPR months are absent.
 The watermark, the PSKR seasonal rows (days ≤ watermark), the PSKR daily
 tail (later days, through yesterday) and the WSPR rows are read in one
 read-only REPEATABLE READ transaction, so the current month joins folded and
@@ -611,6 +617,7 @@ When Postgres is configured, a `postgres` block carries persistence health:
 | `last_ok_unix` | unix time of the last successful fold run |
 | `lost_days` | rows in `almanac_lost_days`: days pruned before they were folded (read as "unknown", never "closed"). Expected: 1 (the partly pruned first day) |
 | `late_region_drops` | live spots since start whose region-baseline keys were dropped because the spot time was outside [now − 24 h, now + 10 min] |
+| `prune_gate_fail_streak` | consecutive daily prunes that skipped `dx_region_baseline_daily` because the fold gate (watermark / forced advance) could not be evaluated; the table is never pruned ungated. Logged at ERROR from 3, then every 24. 0 = healthy |
 
 #### Almanac fold flags
 

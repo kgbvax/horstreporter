@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,13 +46,6 @@ import (
 //     grid4s, month), INSERT, set the month-done key — replace, never add.
 //   - The job refuses to start (and stops before the next month) when the
 //     database disk is over almanacDiskFullThreshold (fail-safe probe).
-
-var (
-	almanacWSPRBackfillAreasFlag = flag.String("almanac-wspr-backfill-areas", "",
-		"Comma-separated grid4 areas (e.g. JO32) whose r=2 ring gets the Almanac WSPR layer backfilled from the wspr.live archive. Empty = off.")
-	almanacWSPRBackfillYearsFlag = flag.Int("almanac-wspr-backfill-years", 3,
-		"How many years of complete months the Almanac WSPR backfill covers (newest first; never before 2008-03).")
-)
 
 const (
 	// almanacSeasonLayerWSPR is the seasonal-record layer filled by this
@@ -755,16 +747,12 @@ func (p *pgAlmanacWSPRBackfillStore) commitMonth(ctx context.Context, m *almanac
 // Wiring
 // ---------------------------------------------------------------------------
 
-// startAlmanacWSPRBackfill starts the backfill goroutine when
-// -almanac-wspr-backfill-areas is set and Postgres is available. endpoint is
-// the wspr.live base URL (the -wspr-endpoint flag; empty = default) and
-// diskPath the -almanac-disk-path probe path. Returns nil when not started.
-func startAlmanacWSPRBackfill(ctx context.Context, st *dxPostgresStore, endpoint, diskPath string) *almanacWSPRBackfill {
-	areas, err := parseAlmanacWSPRBackfillAreas(*almanacWSPRBackfillAreasFlag)
-	if err != nil {
-		logError("almanac WSPR backfill disabled: %v", err)
-		return nil
-	}
+// startAlmanacWSPRBackfill starts the backfill goroutine when areas (the
+// parsed -almanac-wspr-backfill-areas) is non-empty and Postgres is
+// available. endpoint is the wspr.live base URL (the -wspr-endpoint flag;
+// empty = default), diskPath the -almanac-disk-path probe path and years
+// -almanac-wspr-backfill-years. Returns nil when not started.
+func startAlmanacWSPRBackfill(ctx context.Context, st *dxPostgresStore, endpoint, diskPath string, areas []string, years int) *almanacWSPRBackfill {
 	if len(areas) == 0 {
 		return nil
 	}
@@ -772,7 +760,6 @@ func startAlmanacWSPRBackfill(ctx context.Context, st *dxPostgresStore, endpoint
 		logInfo("almanac WSPR backfill disabled: Postgres is not available")
 		return nil
 	}
-	years := *almanacWSPRBackfillYearsFlag
 	if years < 1 {
 		logInfo("almanac WSPR backfill disabled: -almanac-wspr-backfill-years=%d", years)
 		return nil

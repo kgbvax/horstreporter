@@ -819,13 +819,16 @@ type almanacFoldStatsBlock struct {
 	// LateRegionDrops counts live spots whose region-baseline keys were
 	// dropped by the 24 h / +10 min timestamp clamp since start.
 	LateRegionDrops int64 `json:"late_region_drops"`
+	// PruneGateFailStreak counts consecutive daily prunes that skipped
+	// dx_region_baseline_daily because the fold gate could not be evaluated.
+	PruneGateFailStreak int64 `json:"prune_gate_fail_streak"`
 }
 
 func almanacFoldStats(st *dxPostgresStore) *almanacFoldStatsBlock {
 	if st == nil {
 		return nil
 	}
-	b := &almanacFoldStatsBlock{WatermarkDay: -1, LateRegionDrops: st.RegionLateDrops()}
+	b := &almanacFoldStatsBlock{WatermarkDay: -1, LateRegionDrops: st.RegionLateDrops(), PruneGateFailStreak: st.PruneGateFailStreak()}
 	if f := st.AlmanacFolder(); f != nil {
 		h := f.health()
 		b.Enabled = true

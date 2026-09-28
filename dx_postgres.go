@@ -77,6 +77,10 @@ type dxPostgresStore struct {
 	regionLateDrops atomic.Int64
 	inflightRegion  map[dxPulseRegionBaselineDailyKey]int64
 	almanacFold     atomic.Pointer[almanacFolder]
+	// pruneGateFailStreak counts consecutive region-baseline prunes whose
+	// fold gate (dxRegionPruneCutoff) could not be evaluated, so the
+	// dx_region_baseline_daily prune was skipped (0 = healthy).
+	pruneGateFailStreak atomic.Int64
 }
 
 type baselineDelta struct {
@@ -2212,24 +2216,61 @@ func (s *dxPostgresStore) pruneDayIndexedBaselineOlderThan(table string, cutoffD
 // period. If the gate cannot be evaluated the dx table is not pruned this
 // round (the other two tables keep today's behaviour).
 func (s *dxPostgresStore) pruneRegionBaselinesOlderThan(cutoffDayIndex int64) (int64, error) {
-	gateCtx, cancel := context.WithTimeout(context.Background(), almanacFoldDayTimeout)
-	dxCutoff, gateErr := s.dxRegionPruneCutoff(gateCtx, cutoffDayIndex)
-	cancel()
+	gate := func() (int64, error) {
+		gateCtx, cancel := context.WithTimeout(context.Background(), almanacFoldDayTimeout)
+		defer cancel()
+		return s.dxRegionPruneCutoff(gateCtx, cutoffDayIndex)
+	}
+	return pruneRegionBaselinesGated(cutoffDayIndex, gate, s.pruneDayIndexedBaselineOlderThan, &s.pruneGateFailStreak)
+}
+
+// PruneGateFailStreak is the number of consecutive region-baseline prunes
+// that skipped dx_region_baseline_daily because the fold gate failed.
+func (s *dxPostgresStore) PruneGateFailStreak() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.pruneGateFailStreak.Load()
+}
+
+// pruneGateEscalate reports whether a gate-failure streak of n should be
+// logged at ERROR level: once at 3, then every 24 further failures.
+func pruneGateEscalate(n int64) bool {
+	return n == 3 || (n > 3 && (n-3)%24 == 0)
+}
+
+// pruneRegionBaselinesGated is pruneRegionBaselinesOlderThan with its
+// dependencies injected. A gate error skips the dx table (never prune it
+// ungated: that would drop unfolded days without recording them as lost),
+// bumps streak and escalates to ERROR on a persistent failure; a gate
+// success resets streak. The other two tables are always pruned.
+func pruneRegionBaselinesGated(
+	cutoffDayIndex int64,
+	gate func() (int64, error),
+	prune func(table string, cutoffDayIndex int64) (int64, error),
+	streak *atomic.Int64,
+) (int64, error) {
+	dxCutoff, gateErr := gate()
 	var n1 int64
 	if gateErr != nil {
-		logInfo("dx_region_baseline_daily prune skipped: almanac fold gate unavailable: %v", gateErr)
+		n := streak.Add(1)
+		logInfo("dx_region_baseline_daily prune skipped: almanac fold gate unavailable (streak=%d): %v", n, gateErr)
+		if pruneGateEscalate(n) {
+			logError("dx_region_baseline_daily prune has been skipped %d times consecutively (almanac fold gate failing: %v); the table is growing past retention", n, gateErr)
+		}
 	} else {
+		streak.Store(0)
 		var err error
-		n1, err = s.pruneDayIndexedBaselineOlderThan("dx_region_baseline_daily", dxCutoff)
+		n1, err = prune("dx_region_baseline_daily", dxCutoff)
 		if err != nil {
 			return n1, fmt.Errorf("dx_region_baseline_daily: %w", err)
 		}
 	}
-	n2, err := s.pruneDayIndexedBaselineOlderThan("wspr_region_baseline_daily", cutoffDayIndex)
+	n2, err := prune("wspr_region_baseline_daily", cutoffDayIndex)
 	if err != nil {
 		return n1 + n2, fmt.Errorf("wspr_region_baseline_daily: %w", err)
 	}
-	n3, err := s.pruneDayIndexedBaselineOlderThan("prop_region_baseline_daily", cutoffDayIndex)
+	n3, err := prune("prop_region_baseline_daily", cutoffDayIndex)
 	if err != nil {
 		return n1 + n2 + n3, fmt.Errorf("prop_region_baseline_daily: %w", err)
 	}

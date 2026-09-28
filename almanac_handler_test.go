@@ -17,6 +17,7 @@ func (c *aggClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 // newTestAlmanacService wires a service to a fake store, a locator-only
 // resolver (callsign "NOCALL1" is unresolvable) and a settable watermark.
+// JO32 is the configured WSPR backfill area (as on prod).
 func newTestAlmanacService(f *fakeAggStore) (*almanacService, *aggClock, *int64) {
 	clk := &aggClock{t: aggTestNow}
 	wm := f.wm
@@ -30,6 +31,7 @@ func newTestAlmanacService(f *fakeAggStore) (*almanacService, *aggClock, *int64)
 		func() int64 { return wm })
 	s.now = clk.now
 	s.queryTimeout = 20 * time.Millisecond
+	s.wsprCoverage = almanacWSPRCoverage([]string{"JO32"})
 	return s, clk, &wm
 }
 
