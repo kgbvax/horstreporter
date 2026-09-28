@@ -862,3 +862,56 @@ func TestAlmanacFoldStatsBlock(t *testing.T) {
 		t.Fatalf("enabled block = %+v", b)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// U6: pre-warm the configured areas after each successful fold
+// ---------------------------------------------------------------------------
+
+type failingAlmanacFoldStore struct{ *fakeAlmanacFoldStore }
+
+func (failingAlmanacFoldStore) ensureWatermark(context.Context, int64) (int64, error) {
+	return 0, errors.New("injected watermark failure")
+}
+
+func TestAlmanacFoldPrewarmsConfiguredAreas(t *testing.T) {
+	svc, _, _ := newTestAlmanacService(populatedAggWorld())
+	prevSvc, prevFlag := almanacSvc, *almanacWSPRBackfillAreasFlag
+	t.Cleanup(func() { almanacSvc, *almanacWSPRBackfillAreasFlag = prevSvc, prevFlag })
+	almanacSvc = svc
+	*almanacWSPRBackfillAreasFlag = "jo32, JO33"
+
+	// A failed fold run does not pre-warm.
+	bad := newTestAlmanacFolder(failingAlmanacFoldStore{newFakeAlmanacFoldStore()}, &fakeAlmanacFlushState{})
+	bad.afterFold = almanacPrewarmConfiguredAreas
+	bad.tick(context.Background())
+	if _, ok := svc.warm(almanacArea{Grid4: "JO32", Source: qthSourceLocator}); ok {
+		t.Fatalf("JO32 warm after a failed fold run")
+	}
+
+	f := newTestAlmanacFolder(newFakeAlmanacFoldStore(), &fakeAlmanacFlushState{})
+	f.afterFold = almanacPrewarmConfiguredAreas
+	f.tick(context.Background())
+	for _, g := range []string{"JO32", "JO33"} {
+		if _, ok := svc.warm(almanacArea{Grid4: g, Source: qthSourceLocator}); !ok {
+			t.Errorf("%s not warm after a fold run", g)
+		}
+	}
+}
+
+// TestAlmanacPrewarmTolerant: no service, a bad flag, or a failing read are
+// logged and never fatal.
+func TestAlmanacPrewarmTolerant(t *testing.T) {
+	almanacPrewarmAreas(nil, []string{"JO32"})
+	f := populatedAggWorld()
+	f.err = errors.New("boom")
+	svc, _, _ := newTestAlmanacService(f)
+	almanacPrewarmAreas(svc, []string{"JO32"})
+	if _, ok := svc.warm(almanacArea{Grid4: "JO32"}); ok {
+		t.Fatalf("warm after failed read")
+	}
+	prevSvc, prevFlag := almanacSvc, *almanacWSPRBackfillAreasFlag
+	t.Cleanup(func() { almanacSvc, *almanacWSPRBackfillAreasFlag = prevSvc, prevFlag })
+	almanacSvc = svc
+	*almanacWSPRBackfillAreasFlag = "XX99"
+	almanacPrewarmConfiguredAreas()
+}

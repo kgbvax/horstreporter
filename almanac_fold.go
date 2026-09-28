@@ -232,6 +232,10 @@ type almanacFolder struct {
 	failStreak atomic.Int64
 	lastOKUnix atomic.Int64
 	lostDays   atomic.Int64
+
+	// afterFold, when set, runs in the fold goroutine after each successful
+	// runOnce (production: pre-warm the configured Almanac areas, U6/KTD10).
+	afterFold func()
 }
 
 func newAlmanacFolder(store almanacFoldStore, flush almanacFlushState, diskPath string) *almanacFolder {
@@ -346,6 +350,7 @@ func (f *almanacFolder) pruneCutoff(ctx context.Context, cutoff int64) (int64, e
 func startAlmanacFold(st *dxPostgresStore, diskPath string) *almanacFolder {
 	f := newAlmanacFolder(&pgAlmanacFoldStore{pool: st.pool}, st, diskPath)
 	st.setAlmanacFolder(f)
+	f.afterFold = almanacPrewarmConfiguredAreas
 	if frac, err := almanacDiskUsedFraction(diskPath); err != nil {
 		logInfo("almanac fold enabled; disk probe unavailable (%v): prune grace period disabled (fail-safe)", err)
 	} else {
@@ -366,8 +371,41 @@ func (f *almanacFolder) start(stop <-chan struct{}) {
 				return
 			case <-t.C:
 			}
-			_ = f.runOnce(context.Background())
+			f.tick(context.Background())
 			t.Reset(almanacFoldInterval)
 		}
 	}()
+}
+
+// tick is one fold run followed, on success, by the afterFold hook.
+func (f *almanacFolder) tick(ctx context.Context) {
+	if err := f.runOnce(ctx); err != nil || f.afterFold == nil {
+		return
+	}
+	f.afterFold()
+}
+
+// almanacPrewarmConfiguredAreas fills the Almanac cache for the configured
+// -almanac-wspr-backfill-areas after a fold (the fold moves the watermark,
+// which invalidates their typical part), so the widget summary field
+// (KTD10) finds them warm. Errors are logged, never fatal.
+func almanacPrewarmConfiguredAreas() {
+	areas, err := parseAlmanacWSPRBackfillAreas(*almanacWSPRBackfillAreasFlag)
+	if err != nil {
+		logInfo("almanac pre-warm skipped: %v", err)
+		return
+	}
+	almanacPrewarmAreas(almanacSvc, areas)
+}
+
+// almanacPrewarmAreas runs the full read path for each grid4 area.
+func almanacPrewarmAreas(svc *almanacService, areas []string) {
+	if svc == nil {
+		return
+	}
+	for _, a := range areas {
+		if _, err := svc.get(a); err != nil {
+			logInfo("almanac pre-warm %s failed: %v", a, err)
+		}
+	}
 }
