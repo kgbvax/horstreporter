@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../static/perf.js', () => ({
     startPerfTimer: () => 0,
@@ -9,7 +9,7 @@ vi.mock('../static/perf.js', () => ({
 vi.mock('../static/map.js', () => ({ map: {} }));
 
 import { readFileSync } from 'node:fs';
-import { bandActivity, updateBandLabels } from '../static/renderers.js';
+import { bandActivity, updateBandLabels, refreshBandLabels, setBandNormalRateProvider } from '../static/renderers.js';
 
 const ctx = { minSnrMode: 'all', ssbMinDb: 0, cwMinDb: -15 };
 
@@ -103,5 +103,45 @@ describe('band rail accessibility', () => {
         document.getElementById('band-container').dataset.focusBand = '20m';
         updateBandLabels(spots);
         expect(b20.getAttribute('aria-pressed')).toBe('true');
+    });
+});
+
+describe('band rail sparkline normal line', () => {
+    const sparkRow = (band) => row(band, true).replace('<polyline points="" />',
+        '<line class="spark-zero" /><line class="spark-normal" data-off /><polyline points="" />');
+    const spots = [{ band: '20m', snr: 0, t: 1000 }, { band: '20m', snr: 3, t: 990 }, { band: '17m', snr: 1, t: 995 }];
+    const normalOf = (band) => document.querySelector(`[data-band="${band}"] .spark-normal`);
+
+    beforeEach(() => {
+        document.body.innerHTML = `<input id="minutes" value="15"><div id="band-container" data-focus-band="">${sparkRow('20m')}${sparkRow('17m')}</div>`;
+    });
+    afterEach(() => setBandNormalRateProvider(null));
+
+    it('stays off until a normal rate is known', () => {
+        updateBandLabels(spots);
+        expect(normalOf('20m').hasAttribute('data-off')).toBe(true);
+        setBandNormalRateProvider(() => null);
+        updateBandLabels(spots);
+        expect(normalOf('20m').hasAttribute('data-off')).toBe(true);
+    });
+
+    it('draws the dashed line at the band normal, converted to spots per bin', () => {
+        // 15-minute window over 15 bins = 1 min per bin: 4/min = 4 spots per bin.
+        setBandNormalRateProvider((band) => (band === '20m' ? 4 : null));
+        updateBandLabels(spots);
+        const line = normalOf('20m');
+        expect(line.hasAttribute('data-off')).toBe(false);
+        // The normal joins the shared peak (4 > busiest bin), so it sits at the top: y = 15 - 14.
+        expect(Number(line.getAttribute('y1'))).toBeCloseTo(1, 1);
+        expect(line.getAttribute('y2')).toBe(line.getAttribute('y1'));
+        expect(normalOf('17m').hasAttribute('data-off')).toBe(true);
+    });
+
+    it('refreshBandLabels redraws from the last inputs when only the normal changed', () => {
+        updateBandLabels(spots);
+        expect(normalOf('20m').hasAttribute('data-off')).toBe(true);
+        setBandNormalRateProvider(() => 1);
+        refreshBandLabels();
+        expect(normalOf('20m').hasAttribute('data-off')).toBe(false);
     });
 });

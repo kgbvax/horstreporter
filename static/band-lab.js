@@ -143,7 +143,14 @@ export function initBandLab(options = {}) {
 export function setBandLabVisible(visible) {
     if (runtime.enabled === visible) return;
     runtime.enabled = visible;
-    if (visible) updateBandLab({ force: true });
+    if (visible) {
+        updateBandLab({ force: true });
+    } else {
+        // Stale numbers must not linger (e.g. the rail's dashed normal line).
+        cancelTrailingUpdate();
+        runtime.rowsSnap = null;
+        notifyRows();
+    }
 }
 
 function onSnrControlChange(event) {
@@ -430,6 +437,21 @@ export function getBandRow(band) {
         reports: points.length,
         minutes: snap.minutes,
     };
+}
+
+// Normal rate (spots/min, this time of day) of a band in your squares' units,
+// for the rail sparkline's dashed line: the region baseline scaled by
+// baseline_local_scale, as the removed activity chart did. null until the
+// band's dx_conditions metrics have arrived, or without a baseline.
+export function getBandNormalRate(band) {
+    const m = runtime.rowsSnap?.dxBands.get(band);
+    if (!m || m.activity_level === 'no_baseline') return null;
+    const base = Number(m.baseline_activity);
+    if (!Number.isFinite(base) || base <= 0) return null;
+    const rawScale = m.baseline_local_scale;
+    const scale = typeof rawScale === 'number' && Number.isFinite(rawScale) && rawScale >= 0 ? rawScale : 1;
+    const rate = base * scale;
+    return rate > 0 ? rate : null;
 }
 
 // Fixed SNR axis of the mini plot, shared by every row so rows compare.

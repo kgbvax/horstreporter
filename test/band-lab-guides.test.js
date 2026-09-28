@@ -8,6 +8,8 @@ import {
     snrGuideSpecs,
     subscribeBandRows,
     drawBandMiniPlot,
+    getBandNormalRate,
+    getBandRow,
 } from '../static/band-lab.js';
 import { state } from '../static/state.js';
 
@@ -211,5 +213,37 @@ describe('Mini plot guides', () => {
         // New York is beyond the p95 distance cap of the three reports; Paris
         // and Moscow are dots.
         expect(document.getElementById('mini').__ctx.dots).toBe(2);
+    });
+
+    it('exposes the band normal rate and row model once dx_conditions has landed', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => ({
+            ok: true,
+            json: async () => ({
+                status: 'green',
+                bands: [{ band: '20m', activity_level: 'above', baseline_activity: 2, baseline_local_scale: 0.5, regional_spots: 30, regional_expected: 12 }],
+            }),
+        })));
+        // A qth of its own: the module keeps the last dx_conditions response per key.
+        mountFixture({ ssb: 0, cw: -15 });
+        document.getElementById('qth').value = 'JO64';
+        initBandLab();
+        unsubscribe = subscribeBandRows(() => {});
+        setBandLabVisible(true);
+        // Before dx arrives: no normal, and the row says dx is not ready.
+        expect(getBandNormalRate('20m')).toBe(null);
+        expect(getBandRow('20m')).toMatchObject({ dxReady: false, reports: 3, metrics: null });
+        await vi.advanceTimersByTimeAsync(0);
+        // The region baseline scaled to your squares' share.
+        expect(getBandNormalRate('20m')).toBeCloseTo(1, 5);
+        expect(getBandRow('20m')).toMatchObject({ dxReady: true, metrics: { activity_level: 'above', regional_spots: 30 } });
+        expect(getBandNormalRate('40m')).toBe(null);
+    });
+
+    it('drops the snapshot when the Now view stops', async () => {
+        start({ ssb: 0, cw: -15 });
+        expect(getBandRow('20m')).not.toBe(null);
+        setBandLabVisible(false);
+        expect(getBandRow('20m')).toBe(null);
+        expect(getBandNormalRate('20m')).toBe(null);
     });
 });

@@ -53,6 +53,8 @@ vi.mock('../static/ui.js', () => ({
 vi.mock('../static/renderers.js', () => ({
     updateMapVisualization: vi.fn(),
     updateBandLabels: vi.fn(),
+    refreshBandLabels: vi.fn(),
+    setBandNormalRateProvider: vi.fn(),
     clearDxClusterMarkers: vi.fn(),
     resetRenderFingerprint: vi.fn()
 }));
@@ -62,7 +64,8 @@ vi.mock('../static/cond-dock.js', () => ({ initCondDock: vi.fn() }));
 vi.mock('../static/band-lab.js', () => ({
     initBandLab: vi.fn(),
     updateBandLab: vi.fn(),
-    getBandLabLookbackMinutes: vi.fn(() => 15)
+    getBandLabLookbackMinutes: vi.fn(() => 15),
+    getBandNormalRate: vi.fn(() => null)
 }));
 
 vi.mock('../static/state.js', () => ({

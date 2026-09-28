@@ -5,13 +5,14 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../static/wspr-matrix.js', () => ({ setRowExtras: vi.fn(), refreshMatrix: vi.fn() }));
 vi.mock('../static/band-lab.js', () => ({
     getBandRow: vi.fn(() => null),
+    getBandNormalRate: vi.fn(() => null),
     subscribeBandRows: vi.fn(() => () => {}),
     drawBandMiniPlot: vi.fn(),
 }));
 
 import { verdictText, reportsPair, initCondNow, __test } from '../static/cond-now.js';
 import { setRowExtras, refreshMatrix } from '../static/wspr-matrix.js';
-import { getBandRow, subscribeBandRows, drawBandMiniPlot } from '../static/band-lab.js';
+import { getBandRow, getBandNormalRate, subscribeBandRows, drawBandMiniPlot } from '../static/band-lab.js';
 
 const row = (metrics, dxReady = true) => ({ band: '20m', metrics, dxReady, reports: 5, minutes: 60 });
 
@@ -82,5 +83,18 @@ describe('row extras', () => {
         onRows();
         expect(refreshMatrix).toHaveBeenCalled();
         expect(drawBandMiniPlot).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), '17m');
+    });
+
+    it('tells the rail only when a normal rate changed', () => {
+        const onRailChange = vi.fn();
+        initCondNow({ onRailChange });
+        const onRows = subscribeBandRows.mock.calls.at(-1)[0];
+        onRows();
+        expect(onRailChange).toHaveBeenCalledTimes(0); // nothing known yet, nothing changed
+        getBandNormalRate.mockImplementation((b) => (b === '20m' ? 2.5 : null));
+        onRows();
+        onRows();
+        expect(onRailChange).toHaveBeenCalledTimes(1);
+        getBandNormalRate.mockReturnValue(null);
     });
 });

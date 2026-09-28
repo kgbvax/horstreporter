@@ -1400,6 +1400,23 @@ body[data-theme="dark"] .band-row {
     height: 16px;
     overflow: visible;
 }
+/* Zero line (solid) and the band's normal rate for this hour (dashed); both
+   sit behind the trend polyline. The normal line needs the Now view's
+   dx_conditions data, so it stays off until that has arrived. */
+.band-spark .spark-zero,
+.band-spark .spark-normal {
+    stroke: var(--band-ink);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+    opacity: 0.35;
+}
+.band-spark .spark-normal {
+    stroke-dasharray: 3 2;
+    opacity: 0.8;
+}
+.band-spark .spark-normal[data-off] {
+    display: none;
+}
 .band-spark polyline {
     fill: none;
     stroke: var(--band-ink);

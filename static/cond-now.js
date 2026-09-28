@@ -1,5 +1,5 @@
 import { setRowExtras, refreshMatrix } from './wspr-matrix.js';
-import { getBandRow, subscribeBandRows, drawBandMiniPlot } from './band-lab.js';
+import { getBandRow, getBandNormalRate, subscribeBandRows, drawBandMiniPlot } from './band-lab.js';
 import { escapeHtml } from './ui-helpers.js';
 
 // cond-now.js — the "Now" view of the Conditions dock. One table row per
@@ -43,6 +43,9 @@ export function reportsPair(row) {
     return `${Math.round(spots).toLocaleString('en-US')} / ${Math.round(expected).toLocaleString('en-US')}`;
 }
 
+// Bands the rail can show; matches the band rail in index.html.
+const RAIL_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
+
 const COLUMNS = [
     { label: 'Activity', className: 'cond-col-verdict' },
     { label: 'Reports / normal', className: 'cond-col-pair' },
@@ -81,12 +84,21 @@ const extras = {
 
 let unsubscribe = null;
 
-export function initCondNow() {
+// onRailChange: called when a band's normal rate (the rail sparkline's dashed
+// line) changed, so the rail can redraw.
+export function initCondNow({ onRailChange } = {}) {
     setRowExtras(extras);
     unsubscribe?.();
+    const railKeyNow = () => RAIL_BANDS.map((b) => getBandNormalRate(b) ?? '').join('|');
+    let railKey = railKeyNow();
     unsubscribe = subscribeBandRows(() => {
         refreshMatrix();
         drawPlots();
+        const key = railKeyNow();
+        if (key !== railKey) {
+            railKey = key;
+            onRailChange?.();
+        }
     });
 }
 
