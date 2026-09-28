@@ -1,9 +1,7 @@
 package main
 
 import (
-	"container/list"
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
@@ -135,21 +133,36 @@ func (a *almanacSeasonAccum) addSlot(layer string, day int64, slot int, reg stri
 }
 
 // seasonRow returns a seasonCounts callback for layer that unpacks the days
-// ≤ maxDay of each row.
+// ≤ maxDay (and ≤ yesterday, as addSlot) of each row. The row's month
+// accumulator is created on its first non-zero byte, so a month exists only
+// if it has data.
 func (a *almanacSeasonAccum) seasonRow(layer string, maxDay int64) func(grid, band, reg string, ym int, counts []byte) {
 	return func(_, _, reg string, ym int, counts []byte) {
 		first := almanacYMFirstDay(ym)
-		for dom := 1; dom <= almanacYMDays(ym); dom++ {
-			day := first + int64(dom-1)
-			if day > maxDay {
-				break
+		days := almanacYMDays(ym)
+		monthYM, _ := almanacYearMonthDOM(first) // == ym for a valid ym
+		target := reg == a.region
+		lastDay := min(maxDay, a.yesterday)
+		var m *almanacSeasonMonthAcc
+		for dom := 1; dom <= days; dom++ {
+			if first+int64(dom-1) > lastDay {
+				break // days ascend
 			}
 			off := almanacSegmentOffset(dom)
 			if off+almanacSlotsPerDay > len(counts) {
 				break
 			}
 			for s, v := range counts[off : off+almanacSlotsPerDay] {
-				a.addSlot(layer, day, s, reg, int64(v))
+				if v == 0 {
+					continue
+				}
+				if m == nil {
+					m = a.month(layer, monthYM, true)
+				}
+				m.act[dom-1][s] = true
+				if target {
+					satAdd16(&m.cnt[dom-1][s], int64(v))
+				}
 			}
 		}
 	}
@@ -201,15 +214,14 @@ func (a *almanacSeasonAccum) compute(layer string, ym int, k int) almanacSeasonM
 	if yYM, yDom := almanacYearMonthDOM(a.yesterday); yYM == ym {
 		lastDom = yDom
 	}
-	next := a.month(layer, almanacYMAdd(ym, 1), false)
-	activeAt := func(d, s int) bool {
-		if s < almanacSlotsPerDay {
-			return m.act[d][s]
-		}
-		if d+1 < lastDom {
-			return m.act[d+1][0]
-		}
-		return next != nil && next.act[0][0]
+	// nextDay[d] is the day after d (slot 0 feeds "active in s+1" of slot 47):
+	// the month's next day, else the next month's first day when present.
+	var nextDay [almanacSeasonDaysPerMonth]*[almanacSlotsPerDay]bool
+	for d := 0; d+1 < lastDom; d++ {
+		nextDay[d] = &m.act[d+1]
+	}
+	if next := a.month(layer, almanacYMAdd(ym, 1), false); next != nil {
+		nextDay[lastDom-1] = &next.act[0]
 	}
 	var dayOK [almanacSeasonDaysPerMonth]bool
 	col := make([]int64, lastDom)
@@ -217,12 +229,9 @@ func (a *almanacSeasonAccum) compute(layer string, ym int, k int) almanacSeasonM
 		for d := 0; d < lastDom; d++ {
 			col[d] = m.ingest[d][s]
 		}
-		sort.Slice(col, func(i, j int) bool { return col[i] < col[j] })
-		median := float64(col[(lastDom-1)/2]+col[lastDom/2]) / 2
+		median := almanacAliveMedian(col)
 		for d := 0; d < lastDom; d++ {
-			t := m.ingest[d][s]
-			alive := !m.lost[d] && t > 0 && float64(t) >= almanacAliveFraction*median
-			if !alive || !(activeAt(d, s) || activeAt(d, s+1)) {
+			if !almanacIsAlive(m.ingest[d][s], m.lost[d], median) || !almanacActiveOrNext(&m.act[d], nextDay[d], s) {
 				continue
 			}
 			dayOK[d] = true
@@ -371,49 +380,28 @@ func readAlmanacSeason(ctx context.Context, st almanacReadStore, centre string, 
 // ---------------------------------------------------------------------------
 
 type almanacSeasonEntry struct {
-	key    string
 	season *almanacSeason
 	at     time.Time
 	errAt  time.Time
 }
 
 type almanacSeasonCache struct {
-	mu    sync.Mutex
-	lru   *list.List // front = most recent; values *almanacSeasonEntry
-	items map[string]*list.Element
+	mu  sync.Mutex
+	lru *almanacLRU[almanacSeasonEntry]
 }
 
 func newAlmanacSeasonCache() *almanacSeasonCache {
-	return &almanacSeasonCache{lru: list.New(), items: map[string]*list.Element{}}
+	return &almanacSeasonCache{lru: newAlmanacLRU[almanacSeasonEntry](almanacCacheMaxEntries)}
 }
 
 // entry returns (creating) the entry for key. Caller holds c.mu.
 func (c *almanacSeasonCache) entry(key string) *almanacSeasonEntry {
-	if el, ok := c.items[key]; ok {
-		c.lru.MoveToFront(el)
-		return el.Value.(*almanacSeasonEntry)
-	}
-	for c.lru.Len() >= almanacCacheMaxEntries {
-		back := c.lru.Back()
-		c.lru.Remove(back)
-		delete(c.items, back.Value.(*almanacSeasonEntry).key)
-	}
-	e := &almanacSeasonEntry{key: key}
-	c.items[key] = c.lru.PushFront(e)
-	return e
+	return c.lru.get(key, true)
 }
 
 func (s *almanacService) seasonValid(e *almanacSeasonEntry, now time.Time, today int64, radius int) bool {
-	if e == nil || e.season == nil || now.Sub(e.at) >= almanacSeasonCacheTTL ||
-		e.season.Today != today || e.season.Radius != radius {
-		return false
-	}
-	if s.watermark != nil {
-		if cur := s.watermark(); cur >= 0 && cur != e.season.Watermark {
-			return false
-		}
-	}
-	return true
+	return e != nil && e.season != nil && now.Sub(e.at) < almanacSeasonCacheTTL &&
+		e.season.Today == today && e.season.Radius == radius && s.watermarkCurrent(e.season.Watermark)
 }
 
 // getSeason returns the drill-down for (grid4, band, region) at the landing
@@ -422,11 +410,10 @@ func (s *almanacService) getSeason(grid4, band, region string) (*almanacSeason, 
 	if s == nil || s.store == nil || s.season == nil {
 		return nil, errAlmanacUnavailable
 	}
-	snap, err := s.get(grid4) // landing typical part → radius (cached)
+	radius, err := s.typicalRadius(grid4) // landing typical part → radius (cached)
 	if err != nil {
 		return nil, err
 	}
-	radius := snap.typical.Radius
 	now := s.now()
 	today := utcDayIndex(now.Unix())
 	key := grid4 + "|" + band + "|" + region
@@ -523,7 +510,7 @@ func buildAlmanacSeasonResponse(qth string, area almanacArea, res *almanacSeason
 		},
 		Band:         res.Band,
 		Region:       res.Region,
-		SlotMinutes:  30,
+		SlotMinutes:  almanacSlotMinutes,
 		MMin:         almanacMinActiveDaysSeasonal,
 		K:            map[string]int{almanacSeasonLayerPSKR: almanacOpenMinSpotsPSKR, almanacSeasonLayerWSPR: almanacOpenMinSpotsWSPR},
 		ThroughDay:   almanacDayString(res.Today - 1),
@@ -541,19 +528,16 @@ func buildAlmanacSeasonResponse(qth string, area almanacArea, res *almanacSeason
 func almanacSeasonParams(r *http.Request) (band, region string, err error) {
 	band = strings.ToLower(strings.TrimSpace(r.URL.Query().Get("band")))
 	region = strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("region")))
-	okBand := false
-	for _, b := range almanacInScopeBands {
-		okBand = okBand || b == band
-	}
-	if !okBand {
+	if !almanacBandInScope(band) {
 		return "", "", errors.New("band required: one of 160m…10m")
 	}
-	for _, rc := range almanacRegionCodes() {
+	regions := allRegionStrings()
+	for _, rc := range regions {
 		if rc == region {
 			return band, region, nil
 		}
 	}
-	return "", "", errors.New("region required: one of " + strings.Join(almanacRegionCodes(), ","))
+	return "", "", errors.New("region required: one of " + strings.Join(regions, ","))
 }
 
 func almanacSeasonHandler(w http.ResponseWriter, r *http.Request) {
@@ -564,48 +548,18 @@ func almanacSeasonHandler(w http.ResponseWriter, r *http.Request) {
 // 400 missing/invalid qth, band or region; 404 unresolvable callsign; 503
 // when the data is unavailable (no Postgres, timeout, negative cache).
 func (s *almanacService) ServeSeason(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	qth, _ := resolveQTHQuery(r)
-	if qth == "" {
-		http.Error(w, "qth required", http.StatusBadRequest)
-		return
-	}
-	band, region, err := almanacSeasonParams(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if s == nil || s.store == nil {
-		http.Error(w, "almanac unavailable (no Postgres)", http.StatusServiceUnavailable)
-		return
-	}
-	area, err := s.resolve(qth)
-	switch {
-	case errors.Is(err, errAlmanacInvalidQTH):
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	case errors.Is(err, errAlmanacUnresolved):
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	case err != nil:
-		http.Error(w, "qth resolution failed", http.StatusInternalServerError)
+	var band, region string
+	qth, area, ok := s.resolveRequest(w, r, func() (err error) {
+		band, region, err = almanacSeasonParams(r)
+		return err
+	})
+	if !ok {
 		return
 	}
 	res, err := s.getSeason(area.Grid4, band, region)
 	if err != nil {
-		w.Header().Set("Retry-After", "30")
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		writeAlmanacUnavailable(w, err)
 		return
 	}
-	body, err := json.Marshal(buildAlmanacSeasonResponse(qth, area, res))
-	if err != nil {
-		http.Error(w, "encode error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "max-age=60")
-	_, _ = w.Write(body)
+	writeAlmanacJSON(w, buildAlmanacSeasonResponse(qth, area, res))
 }

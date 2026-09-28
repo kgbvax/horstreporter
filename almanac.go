@@ -2,9 +2,8 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"sort"
-
-	"horstreporter/internal/region"
 )
 
 // almanac.go is the pure core of the 30-day Almanac (plan U2, KTD2/KTD4/
@@ -25,6 +24,33 @@ import (
 
 const almanacSlotsPerDay = almanacSeasonSlotsPerDay
 
+// almanacMinutesPerDay / almanacSlotMinutes: the slot length (30 min).
+const (
+	almanacMinutesPerDay = 1440
+	almanacSlotMinutes   = almanacMinutesPerDay / almanacSlotsPerDay
+)
+
+// Agenda entry statuses.
+const (
+	almanacStatusOngoing  = "ongoing"
+	almanacStatusUpcoming = "upcoming"
+)
+
+// almanacBandIndex maps each in-scope band to its almanacInScopeBands index.
+var almanacBandIndex = func() map[string]int {
+	m := make(map[string]int, len(almanacInScopeBands))
+	for i, b := range almanacInScopeBands {
+		m[b] = i
+	}
+	return m
+}()
+
+// almanacBandInScope reports whether band is an Almanac band (160 m … 10 m).
+func almanacBandInScope(band string) bool {
+	_, ok := almanacBandIndex[band]
+	return ok
+}
+
 // almanacLevels is the number of ring levels (0 … almanacMaxWidenRadius).
 const almanacLevels = almanacMaxWidenRadius + 1
 
@@ -40,16 +66,6 @@ type almanacWindow struct {
 func almanacWindowFor(now int64) almanacWindow {
 	today := utcDayIndex(now)
 	return almanacWindow{Start: today - almanacWindowDays, End: today - 1, Today: today}
-}
-
-// almanacRegionCodes is the 11-region taxonomy in display order (KTD1).
-func almanacRegionCodes() []string {
-	all := region.AllRegions()
-	out := make([]string, len(all))
-	for i, r := range all {
-		out[i] = string(r)
-	}
-	return out
 }
 
 // almanacNormalizeCentre uppercases and truncates a locator to grid4.
@@ -103,7 +119,6 @@ type almanacAccum struct {
 	squares []string
 	rings   []int32
 	gridIdx map[string]int
-	bandIdx map[string]int
 	regIdx  map[string]int
 	regions []string
 	dayYM   [almanacAccumDays]int
@@ -123,11 +138,7 @@ func newAlmanacAccum(centre string, win almanacWindow) *almanacAccum {
 	for i, sq := range a.squares {
 		a.gridIdx[sq] = i
 	}
-	a.bandIdx = make(map[string]int, len(almanacInScopeBands))
-	for i, b := range almanacInScopeBands {
-		a.bandIdx[b] = i
-	}
-	a.regions = almanacRegionCodes()
+	a.regions = allRegionStrings()
 	a.regIdx = make(map[string]int, len(a.regions))
 	for i, r := range a.regions {
 		a.regIdx[r] = i
@@ -143,13 +154,12 @@ func newAlmanacAccum(centre string, win almanacWindow) *almanacAccum {
 }
 
 // setWatermark records the fold watermark read at the start of the
-// transaction. Without one (fold never ran) every day comes from the tail.
+// transaction. Without one (fold never ran) wm keeps newAlmanacAccum's
+// win.Start − 1, so every day comes from the tail.
 func (a *almanacAccum) setWatermark(w int64, ok bool) {
 	a.hasWM = ok
 	if ok {
 		a.wm = w
-	} else {
-		a.wm = a.win.Start - 1
 	}
 }
 
@@ -160,7 +170,7 @@ func (a *almanacAccum) tailAfter() int64 { return a.wm }
 func (a *almanacAccum) seasonMonths() []int {
 	var out []int
 	for di := 0; di < almanacWindowDays; di++ {
-		if !a.hasWM || a.win.Start+int64(di) > a.wm {
+		if a.win.Start+int64(di) > a.wm {
 			break
 		}
 		if len(out) == 0 || out[len(out)-1] != a.dayYM[di] {
@@ -181,6 +191,19 @@ func satAdd16(p *uint16, v int64) {
 	}
 }
 
+// satAdd8 adds v > 0 to *p, saturating at 255 (never wraps, also on int64
+// overflow of the sum).
+func satAdd8(p *uint8, v int64) {
+	if v <= 0 {
+		return
+	}
+	if s := int64(*p) + v; s >= 0xFF || s < 0 {
+		*p = 0xFF
+	} else {
+		*p = uint8(s)
+	}
+}
+
 func (a *almanacAccum) countIdx(level, b, r, di, s int) int {
 	nb, nr := len(almanacInScopeBands), len(a.regions)
 	return ((((level*nb+b)*nr+r)*almanacAccumDays)+di)*almanacSlotsPerDay + s
@@ -198,14 +221,14 @@ func (a *almanacAccum) addSeasonRow(grid, band, reg string, ym int, counts []byt
 	if !ok {
 		return
 	}
-	bi, ok := a.bandIdx[band]
+	bi, ok := almanacBandIndex[band]
 	if !ok {
 		return
 	}
 	ri, hasRegion := a.regIdx[reg]
 	level := int(a.rings[gi])
 	for di := 0; di < almanacWindowDays; di++ {
-		if !a.hasWM || a.win.Start+int64(di) > a.wm {
+		if a.win.Start+int64(di) > a.wm {
 			break // days ascend: everything later belongs to the tail
 		}
 		if a.dayYM[di] != ym {
@@ -239,7 +262,7 @@ func (a *almanacAccum) addTailRow(level int, band, reg string, day int64, slot i
 		level < 0 || level >= almanacLevels {
 		return
 	}
-	bi, ok := a.bandIdx[band]
+	bi, ok := almanacBandIndex[band]
 	if !ok {
 		return
 	}
@@ -259,7 +282,7 @@ func (a *almanacAccum) addTailActive(grid, band string, day int64) {
 	if !ok {
 		return
 	}
-	bi, ok := a.bandIdx[band]
+	bi, ok := almanacBandIndex[band]
 	if !ok {
 		return
 	}
@@ -293,22 +316,45 @@ func (a *almanacAccum) masks() map[almanacGridBand]uint64 {
 	return out
 }
 
+// almanacAliveMedian sorts vals (non-empty) in place and returns their
+// median: the average of the two middle values (the middle one when odd).
+func almanacAliveMedian(vals []int64) float64 {
+	slices.Sort(vals)
+	n := len(vals)
+	return float64(vals[(n-1)/2]+vals[n/2]) / 2
+}
+
+// almanacIsAlive is the ingest-alive rule for one (d, s): total t > 0 and
+// ≥ almanacAliveFraction × the slot's median; lost days are never alive.
+func almanacIsAlive(t int64, lost bool, median float64) bool {
+	return !lost && t > 0 && float64(t) >= almanacAliveFraction*median
+}
+
+// almanacActiveOrNext: activity in slot s of day, or in slot s+1 (slot 0 of
+// next, which may be nil, after the day's last slot).
+func almanacActiveOrNext(day, next *[almanacSlotsPerDay]bool, s int) bool {
+	if day[s] {
+		return true
+	}
+	if s+1 < almanacSlotsPerDay {
+		return day[s+1]
+	}
+	return next != nil && next[0]
+}
+
 // almanacAliveMask applies the ingest-alive rule: (d, s) is alive when its
 // total is > 0 and ≥ almanacAliveFraction × the slot's 30-day median (days
 // without a row count as 0 in the median). Lost days are never alive.
 func almanacAliveMask(ingest *[almanacAccumDays][almanacSlotsPerDay]int64, lost *[almanacAccumDays]bool) [almanacWindowDays][almanacSlotsPerDay]bool {
 	var alive [almanacWindowDays][almanacSlotsPerDay]bool
-	var col [almanacWindowDays]int64
+	var sorted [almanacWindowDays]int64
 	for s := 0; s < almanacSlotsPerDay; s++ {
 		for di := 0; di < almanacWindowDays; di++ {
-			col[di] = ingest[di][s]
+			sorted[di] = ingest[di][s]
 		}
-		sorted := col
-		sort.Slice(sorted[:], func(i, j int) bool { return sorted[i] < sorted[j] })
-		median := float64(sorted[almanacWindowDays/2-1]+sorted[almanacWindowDays/2]) / 2
+		median := almanacAliveMedian(sorted[:])
 		for di := 0; di < almanacWindowDays; di++ {
-			t := col[di]
-			alive[di][s] = !lost[di] && t > 0 && float64(t) >= almanacAliveFraction*median
+			alive[di][s] = almanacIsAlive(ingest[di][s], lost[di], median)
 		}
 	}
 	return alive
@@ -388,13 +434,7 @@ func (a *almanacAccum) cells(radius int) []almanacLane {
 		anyM := false
 		for di := 0; di < almanacWindowDays; di++ {
 			for s := 0; s < almanacSlotsPerDay; s++ {
-				next := false
-				if s+1 < almanacSlotsPerDay {
-					next = actSum[di][s+1]
-				} else {
-					next = actSum[di+1][0]
-				}
-				ok[di][s] = alive[di][s] && (actSum[di][s] || next)
+				ok[di][s] = alive[di][s] && almanacActiveOrNext(&actSum[di], &actSum[di+1], s)
 				if ok[di][s] {
 					m[s]++
 					anyM = true
@@ -433,10 +473,12 @@ func (a *almanacAccum) cells(radius int) []almanacLane {
 // almanacToday holds the ring's per-lane spot sums for yesterday's last slot
 // (index 0) and today's 48 slots (index 1+s), at the typical radius.
 type almanacToday struct {
-	lanes map[string]*[almanacSlotsPerDay + 1]uint16
+	lanes map[almanacLaneKey]*[almanacSlotsPerDay + 1]uint16
 }
 
-func almanacLaneKey(band, reg string) string { return band + "|" + reg }
+type almanacLaneKey struct {
+	band, region string
+}
 
 // set stores a count; slot -1 is yesterday's slot 47.
 func (t *almanacToday) set(band, reg string, slot int, n int) {
@@ -444,9 +486,9 @@ func (t *almanacToday) set(band, reg string, slot int, n int) {
 		return
 	}
 	if t.lanes == nil {
-		t.lanes = map[string]*[almanacSlotsPerDay + 1]uint16{}
+		t.lanes = map[almanacLaneKey]*[almanacSlotsPerDay + 1]uint16{}
 	}
-	k := almanacLaneKey(band, reg)
+	k := almanacLaneKey{band, reg}
 	arr := t.lanes[k]
 	if arr == nil {
 		arr = new([almanacSlotsPerDay + 1]uint16)
@@ -463,7 +505,7 @@ func (t *almanacToday) openNow(band, reg string, nowSlot int) bool {
 	if t == nil || nowSlot < 0 || nowSlot >= almanacSlotsPerDay {
 		return false
 	}
-	arr := t.lanes[almanacLaneKey(band, reg)]
+	arr := t.lanes[almanacLaneKey{band, reg}]
 	if arr == nil {
 		return false
 	}
@@ -593,13 +635,14 @@ type almanacAgendaEntry struct {
 
 func almanacHHMM(slot int) string {
 	slot = ((slot % almanacSlotsPerDay) + almanacSlotsPerDay) % almanacSlotsPerDay
-	return fmt.Sprintf("%02d:%02d", slot/2, (slot%2)*30)
+	m := slot * almanacSlotMinutes
+	return fmt.Sprintf("%02d:%02d", m/60, m%60)
 }
 
 // almanacAgendaEntryFor describes window w of lane l relative to nowMin
 // (minutes since 00:00 UTC).
 func almanacAgendaEntryFor(l almanacLane, w almanacSlotWindow, today *almanacToday, nowMin int) almanacAgendaEntry {
-	nowSlot := nowMin / 30
+	nowSlot := nowMin / almanacSlotMinutes
 	e := almanacAgendaEntry{
 		Band:            l.Band,
 		Region:          l.Region,
@@ -613,10 +656,10 @@ func almanacAgendaEntryFor(l almanacLane, w almanacSlotWindow, today *almanacTod
 		OpenToday:       today.openNow(l.Band, l.Region, nowSlot),
 	}
 	if w.contains(nowSlot) {
-		e.Status = "ongoing"
+		e.Status = almanacStatusOngoing
 	} else {
-		e.Status = "upcoming"
-		e.StartsInMin = ((w.Start*30-nowMin)%1440 + 1440) % 1440
+		e.Status = almanacStatusUpcoming
+		e.StartsInMin = ((w.Start*almanacSlotMinutes-nowMin)%almanacMinutesPerDay + almanacMinutesPerDay) % almanacMinutesPerDay
 	}
 	best := -1.0
 	for i := 0; i < w.Len; i++ {
@@ -643,15 +686,15 @@ func almanacAgenda(t *almanacTypical, today *almanacToday, nowMin int) []almanac
 	for _, l := range t.Lanes {
 		for _, w := range almanacUsualWindows(l) {
 			e := almanacAgendaEntryFor(l, w, today, nowMin)
-			if e.Status == "ongoing" || e.StartsInMin <= almanacAgendaLookAheadSlots*30 {
+			if e.Status == almanacStatusOngoing || e.StartsInMin <= almanacAgendaLookAheadSlots*almanacSlotMinutes {
 				out = append(out, e)
 			}
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i], out[j]
-		if (a.Status == "ongoing") != (b.Status == "ongoing") {
-			return a.Status == "ongoing"
+		if (a.Status == almanacStatusOngoing) != (b.Status == almanacStatusOngoing) {
+			return a.Status == almanacStatusOngoing
 		}
 		if a.StartsInMin != b.StartsInMin {
 			return a.StartsInMin < b.StartsInMin

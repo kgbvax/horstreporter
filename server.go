@@ -834,7 +834,7 @@ func almanacFoldStats(st *dxPostgresStore) *almanacFoldStatsBlock {
 		b.LastOKUnix = h.LastOKUnix
 		b.LostDays = h.LostDays
 		if h.WatermarkDay >= 0 {
-			b.WatermarkDate = time.Unix(h.WatermarkDay*86400, 0).UTC().Format("2006-01-02")
+			b.WatermarkDate = almanacDayString(h.WatermarkDay)
 		}
 	}
 	return b

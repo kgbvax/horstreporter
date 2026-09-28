@@ -25,7 +25,6 @@ import (
 var errAlmanacUnavailable = errors.New("almanac: data temporarily unavailable")
 
 type almanacCacheEntry struct {
-	key        string
 	typical    *almanacTypical
 	typicalAt  time.Time
 	errAt      time.Time
@@ -42,9 +41,8 @@ type almanacService struct {
 	now          func() time.Time
 	queryTimeout time.Duration
 
-	mu    sync.Mutex
-	lru   *list.List // front = most recent; values *almanacCacheEntry
-	items map[string]*list.Element
+	mu  sync.Mutex
+	lru *almanacLRU[almanacCacheEntry]
 
 	slow sync.Mutex // serializes Postgres reads
 
@@ -61,8 +59,7 @@ func newAlmanacService(st almanacReadStore, resolve func(string) (almanacArea, e
 		watermark:    watermark,
 		now:          time.Now,
 		queryTimeout: almanacQueryTimeout,
-		lru:          list.New(),
-		items:        map[string]*list.Element{},
+		lru:          newAlmanacLRU[almanacCacheEntry](almanacCacheMaxEntries),
 		season:       newAlmanacSeasonCache(),
 	}
 }
@@ -86,52 +83,39 @@ func almanacHandler(w http.ResponseWriter, r *http.Request) {
 // Cache
 // ---------------------------------------------------------------------------
 
-func (s *almanacService) typicalValid(e *almanacCacheEntry, now time.Time, win almanacWindow) bool {
-	if e == nil || e.typical == nil || now.Sub(e.typicalAt) >= almanacTypicalCacheTTL || e.typical.Window.Today != win.Today {
-		return false
-	}
+// watermarkCurrent: a cached part computed at fold watermark wm is still
+// current (the live watermark is unknown or unchanged).
+func (s *almanacService) watermarkCurrent(wm int64) bool {
 	if s.watermark != nil {
-		if cur := s.watermark(); cur >= 0 && cur != e.typical.Watermark {
+		if cur := s.watermark(); cur >= 0 && cur != wm {
 			return false
 		}
 	}
 	return true
 }
 
+func (s *almanacService) typicalValid(e *almanacCacheEntry, now time.Time, win almanacWindow) bool {
+	return e != nil && e.typical != nil && now.Sub(e.typicalAt) < almanacTypicalCacheTTL &&
+		e.typical.Window.Today == win.Today && s.watermarkCurrent(e.typical.Watermark)
+}
+
 // entry returns (creating if asked) the entry for key, marking it recent.
 // Caller holds s.mu.
 func (s *almanacService) entry(key string, create bool) *almanacCacheEntry {
-	if el, ok := s.items[key]; ok {
-		s.lru.MoveToFront(el)
-		return el.Value.(*almanacCacheEntry)
-	}
-	if !create {
-		return nil
-	}
-	for s.lru.Len() >= almanacCacheMaxEntries {
-		back := s.lru.Back()
-		s.lru.Remove(back)
-		delete(s.items, back.Value.(*almanacCacheEntry).key)
-	}
-	e := &almanacCacheEntry{key: key}
-	s.items[key] = s.lru.PushFront(e)
-	return e
+	return s.lru.get(key, create)
 }
 
 // peek returns the entry without touching recency (tests/diagnostics).
 func (s *almanacService) peek(key string) *almanacCacheEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if el, ok := s.items[key]; ok {
-		return el.Value.(*almanacCacheEntry)
-	}
-	return nil
+	return s.lru.peek(key)
 }
 
 func (s *almanacService) cacheLen() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.lru.Len()
+	return s.lru.len()
 }
 
 // almanacSnapshot is an immutable view of one cache entry.
@@ -142,13 +126,18 @@ type almanacSnapshot struct {
 	todayAt   time.Time
 }
 
+// snapshot copies the entry's current parts. Caller holds s.mu.
+func (e *almanacCacheEntry) snapshot() almanacSnapshot {
+	return almanacSnapshot{e.typical, e.typicalAt, e.today, e.todayAt}
+}
+
 // fresh returns the snapshot when both parts are servable without a read.
 // Caller holds s.mu.
 func (s *almanacService) fresh(e *almanacCacheEntry, now time.Time, win almanacWindow) (almanacSnapshot, bool, bool) {
 	if !s.typicalValid(e, now, win) {
 		return almanacSnapshot{}, false, false
 	}
-	snap := almanacSnapshot{e.typical, e.typicalAt, e.today, e.todayAt}
+	snap := e.snapshot()
 	todayOK := now.Sub(e.todayAt) < almanacTodayCacheTTL || now.Sub(e.todayErrAt) < almanacNegCacheTTL
 	return snap, true, todayOK
 }
@@ -164,11 +153,12 @@ func (s *almanacService) get(grid4 string) (almanacSnapshot, error) {
 
 	s.mu.Lock()
 	e := s.entry(grid4, false)
-	if snap, ok, todayOK := s.fresh(e, now, win); ok && todayOK {
+	snap, typOK, todayOK := s.fresh(e, now, win)
+	if typOK && todayOK {
 		s.mu.Unlock()
 		return snap, nil
 	}
-	if e != nil && !s.typicalValid(e, now, win) && now.Sub(e.errAt) < almanacNegCacheTTL {
+	if e != nil && !typOK && now.Sub(e.errAt) < almanacNegCacheTTL {
 		s.mu.Unlock()
 		return almanacSnapshot{}, errAlmanacUnavailable
 	}
@@ -180,7 +170,7 @@ func (s *almanacService) get(grid4 string) (almanacSnapshot, error) {
 	// Re-check: a request queued ahead of us may have filled the entry.
 	s.mu.Lock()
 	e = s.entry(grid4, true)
-	snap, typOK, todayOK := s.fresh(e, now, win)
+	snap, typOK, todayOK = s.fresh(e, now, win)
 	if typOK && todayOK {
 		s.mu.Unlock()
 		return snap, nil
@@ -213,7 +203,7 @@ func (s *almanacService) get(grid4 string) (almanacSnapshot, error) {
 			e.today = acc.today(radius)
 			e.todayAt = now
 		}
-		return almanacSnapshot{e.typical, e.typicalAt, e.today, e.todayAt}, nil
+		return e.snapshot(), nil
 	}
 	if err != nil {
 		logInfo("almanac %s: read failed: %v", grid4, err)
@@ -223,7 +213,28 @@ func (s *almanacService) get(grid4 string) (almanacSnapshot, error) {
 	typ := computeAlmanacTypical(acc)
 	e.typical, e.typicalAt, e.errAt = typ, now, time.Time{}
 	e.today, e.todayAt, e.todayErrAt = acc.today(typ.Radius), now, time.Time{}
-	return almanacSnapshot{e.typical, e.typicalAt, e.today, e.todayAt}, nil
+	return e.snapshot(), nil
+}
+
+// typicalRadius returns the landing view's radius for grid4. A valid cached
+// typical part is served as is (marking the entry recent, like get) without
+// forcing a today-overlay refresh; only otherwise does it take get()'s full
+// read path.
+func (s *almanacService) typicalRadius(grid4 string) (int, error) {
+	now := s.now()
+	win := almanacWindowFor(now.Unix())
+	s.mu.Lock()
+	if e := s.entry(grid4, false); s.typicalValid(e, now, win) {
+		radius := e.typical.Radius
+		s.mu.Unlock()
+		return radius, nil
+	}
+	s.mu.Unlock()
+	snap, err := s.get(grid4)
+	if err != nil {
+		return 0, err
+	}
+	return snap.typical.Radius, nil
 }
 
 // warm returns the response for area only when the typical part is cached
@@ -235,17 +246,12 @@ func (s *almanacService) warm(area almanacArea) (*almanacResponse, bool) {
 	}
 	now := s.now()
 	s.mu.Lock()
-	el, ok := s.items[area.Grid4]
-	if !ok {
-		s.mu.Unlock()
-		return nil, false
-	}
-	e := el.Value.(*almanacCacheEntry)
+	e := s.lru.peek(area.Grid4)
 	if !s.typicalValid(e, now, almanacWindowFor(now.Unix())) {
 		s.mu.Unlock()
 		return nil, false
 	}
-	snap := almanacSnapshot{e.typical, e.typicalAt, e.today, e.todayAt}
+	snap := e.snapshot()
 	s.mu.Unlock()
 	return buildAlmanacResponse(area.Grid4, area, snap, now), true
 }
@@ -303,7 +309,7 @@ func buildAlmanacResponse(qth string, area almanacArea, snap almanacSnapshot, no
 	typ := snap.typical
 	u := now.UTC()
 	nowMin := u.Hour()*60 + u.Minute()
-	nowSlot := nowMin / 30
+	nowSlot := nowMin / almanacSlotMinutes
 	resp := &almanacResponse{
 		QTH: qth,
 		Area: almanacAreaInfo{
@@ -320,7 +326,7 @@ func buildAlmanacResponse(qth string, area almanacArea, snap almanacSnapshot, no
 			StartDayIndex: typ.Window.Start,
 			EndDayIndex:   typ.Window.End,
 		},
-		SlotMinutes:  30,
+		SlotMinutes:  almanacSlotMinutes,
 		MMin:         almanacMinActiveDays30,
 		K:            almanacOpenMinSpotsPSKR,
 		UsuallyShare: almanacUsuallyShare,
@@ -346,38 +352,68 @@ func buildAlmanacResponse(qth string, area almanacArea, snap almanacSnapshot, no
 // 400 missing/invalid qth, 404 unresolvable callsign, 503 when the data is
 // unavailable (no Postgres, timeout, negative cache).
 func (s *almanacService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	qth, area, ok := s.resolveRequest(w, r, nil)
+	if !ok {
 		return
 	}
-	qth, _ := resolveQTHQuery(r)
+	snap, err := s.get(area.Grid4)
+	if err != nil {
+		writeAlmanacUnavailable(w, err)
+		return
+	}
+	writeAlmanacJSON(w, buildAlmanacResponse(qth, area, snap, s.now()))
+}
+
+// resolveRequest is the shared /api/almanac* request prelude: GET/HEAD only
+// (405), qth required (400), then validate when non-nil (400 with its error;
+// before the no-Postgres 503 so parameter errors win), 503 without Postgres,
+// and qth resolution (400 invalid, 404 unresolvable, 500 otherwise). ok is
+// false when a response has been written.
+func (s *almanacService) resolveRequest(w http.ResponseWriter, r *http.Request, validate func() error) (qth string, area almanacArea, ok bool) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return "", almanacArea{}, false
+	}
+	qth, _ = resolveQTHQuery(r)
 	if qth == "" {
 		http.Error(w, "qth required", http.StatusBadRequest)
-		return
+		return "", almanacArea{}, false
+	}
+	if validate != nil {
+		if err := validate(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return "", almanacArea{}, false
+		}
 	}
 	if s == nil || s.store == nil {
 		http.Error(w, "almanac unavailable (no Postgres)", http.StatusServiceUnavailable)
-		return
+		return "", almanacArea{}, false
 	}
 	area, err := s.resolve(qth)
 	switch {
 	case errors.Is(err, errAlmanacInvalidQTH):
 		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return "", almanacArea{}, false
 	case errors.Is(err, errAlmanacUnresolved):
 		http.Error(w, err.Error(), http.StatusNotFound)
-		return
+		return "", almanacArea{}, false
 	case err != nil:
 		http.Error(w, "qth resolution failed", http.StatusInternalServerError)
-		return
+		return "", almanacArea{}, false
 	}
-	snap, err := s.get(area.Grid4)
-	if err != nil {
-		w.Header().Set("Retry-After", "30")
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	body, err := json.Marshal(buildAlmanacResponse(qth, area, snap, s.now()))
+	return qth, area, true
+}
+
+// writeAlmanacUnavailable writes the 503 for a failed/negative-cached read.
+func writeAlmanacUnavailable(w http.ResponseWriter, err error) {
+	w.Header().Set("Retry-After", "30")
+	http.Error(w, err.Error(), http.StatusServiceUnavailable)
+}
+
+// writeAlmanacJSON writes v as a 60 s cacheable JSON body (500 when it can't
+// be encoded).
+func writeAlmanacJSON(w http.ResponseWriter, v any) {
+	body, err := json.Marshal(v)
 	if err != nil {
 		http.Error(w, "encode error", http.StatusInternalServerError)
 		return
@@ -386,3 +422,54 @@ func (s *almanacService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "max-age=60")
 	_, _ = w.Write(body)
 }
+
+// ---------------------------------------------------------------------------
+// LRU
+// ---------------------------------------------------------------------------
+
+// almanacLRU is a string-keyed LRU of *T (front = most recent), holding at
+// most cap entries. Not synchronized: callers hold their own lock.
+type almanacLRU[T any] struct {
+	cap   int
+	ll    *list.List // values *almanacLRUItem[T]
+	items map[string]*list.Element
+}
+
+type almanacLRUItem[T any] struct {
+	key string
+	val *T
+}
+
+func newAlmanacLRU[T any](cap int) *almanacLRU[T] {
+	return &almanacLRU[T]{cap: cap, ll: list.New(), items: map[string]*list.Element{}}
+}
+
+// get returns key's value marking it recent; when absent it returns nil, or
+// with create evicts least-recent entries down to cap−1 and inserts a zero T.
+func (c *almanacLRU[T]) get(key string, create bool) *T {
+	if el, ok := c.items[key]; ok {
+		c.ll.MoveToFront(el)
+		return el.Value.(*almanacLRUItem[T]).val
+	}
+	if !create {
+		return nil
+	}
+	for c.ll.Len() >= c.cap {
+		back := c.ll.Back()
+		c.ll.Remove(back)
+		delete(c.items, back.Value.(*almanacLRUItem[T]).key)
+	}
+	v := new(T)
+	c.items[key] = c.ll.PushFront(&almanacLRUItem[T]{key: key, val: v})
+	return v
+}
+
+// peek returns key's value (nil when absent) without touching recency.
+func (c *almanacLRU[T]) peek(key string) *T {
+	if el, ok := c.items[key]; ok {
+		return el.Value.(*almanacLRUItem[T]).val
+	}
+	return nil
+}
+
+func (c *almanacLRU[T]) len() int { return c.ll.Len() }

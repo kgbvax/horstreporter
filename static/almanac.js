@@ -212,7 +212,7 @@ function showLoading() {
         const status = body.querySelector('.almanac-status');
         if (status) status.textContent = 'Loading…';
     } else {
-        body.innerHTML = '<div class="almanac-status almanac-message text-muted small" role="status">Loading…</div>';
+        body.innerHTML = loadingHtml();
     }
     body.setAttribute('aria-busy', 'true');
 }
@@ -272,9 +272,10 @@ function nowLeft() {
     return `${(nowFraction() * 100).toFixed(4)}%`;
 }
 
+// Canonical band position; unknown bands sort after all known ones.
+const BAND_RANK = new Map(BAND_ORDER.map((b, i) => [b, i]));
 function bandRank(band) {
-    const i = BAND_ORDER.indexOf(band);
-    return i < 0 ? BAND_ORDER.length : i;
+    return BAND_RANK.get(band) ?? BAND_ORDER.length;
 }
 
 // Region rows: canonical order with the operator's own region last.
@@ -317,7 +318,7 @@ function render() {
     const data = runtime.cache;
     if (!data) {
         body.innerHTML = runtime.loading
-            ? '<div class="almanac-status almanac-message text-muted small" role="status">Loading…</div>'
+            ? loadingHtml()
             : '';
         return;
     }
@@ -343,6 +344,11 @@ function render() {
     body.innerHTML = html;
     attachHandlers(body);
     restoreFocus(body, focus);
+}
+
+// Status line shown while a fetch is in flight (lanes body or drill-down).
+function loadingHtml(classes = 'almanac-status almanac-message') {
+    return `<div class="${classes} text-muted small" role="status">Loading…</div>`;
 }
 
 function message(text) {
@@ -418,14 +424,15 @@ function lanesHtml(data, lanes) {
         if (!bandM.has(lane.band)) bandM.set(lane.band, lane.m);
         if (!WSPR_REGIONS.includes(lane.region) && !extraRegions.includes(lane.region)) extraRegions.push(lane.region);
     }
+    // Safeguard against payload order: O(1) rank lookups; the stable sort keeps
+    // unknown bands in arrival order after the known ones.
     const bands = Array.from(bandM.keys()).sort((a, b) => bandRank(a) - bandRank(b));
     const own = regionForLocator(data.area?.grid4 || '');
     const regions = orderRegions(own, extraRegions);
     const left = nowLeft();
 
     let html = `<div class="almanac-lanes${runtime.loading ? ' is-loading' : ''}" role="group" aria-label="Openings by region and band, 24 hours UTC">`;
-    html += '<div class="almanac-axis" aria-hidden="true"><span></span><span class="almanac-axis-ticks">' +
-        '<span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></span></div>';
+    html += axisHtml();
     for (const region of regions) {
         const isOwn = region === own;
         html += `<div class="almanac-region${isOwn ? ' is-own' : ''}" data-region="${escapeHtml(region)}">` +
@@ -439,6 +446,12 @@ function lanesHtml(data, lanes) {
         html += '</div></div>';
     }
     return `${html}</div>`;
+}
+
+// 00–24 h tick row shared by the lanes and the seasonal drill-down.
+function axisHtml() {
+    return '<div class="almanac-axis" aria-hidden="true"><span></span><span class="almanac-axis-ticks">' +
+        '<span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></span></div>';
 }
 
 function bandColor(band) {
@@ -514,7 +527,7 @@ function drilldownHtml(dd) {
         '<button type="button" class="almanac-drill-back" aria-label="Back to all regions">&larr; Back</button>' +
         `<h3 class="almanac-drill-title">${escapeHtml(title)}</h3></div>`;
     if (dd.loading) {
-        html += '<div class="almanac-message text-muted small" role="status">Loading…</div>';
+        html += loadingHtml('almanac-message');
     } else if (dd.error) {
         html += `<div class="almanac-message text-muted small" role="alert">${escapeHtml(drillErrorText(dd.error))}</div>`;
     } else if (dd.data) {
@@ -532,8 +545,7 @@ function monthsHtml(dd) {
     const months = Array.isArray(data.months) ? data.months : [];
     const current = new Date().getUTCMonth();
     let html = `<div class="almanac-months" role="group" aria-label="${escapeHtml(dd.band)} to ${escapeHtml(dd.region)}, typical openings per month, 24 hours UTC">`;
-    html += '<div class="almanac-axis" aria-hidden="true"><span></span><span class="almanac-axis-ticks">' +
-        '<span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></span></div>';
+    html += axisHtml();
     html += '<div class="almanac-month-rows">';
     for (let i = 0; i < 12; i += 1) {
         const mo = months[i] || {};
@@ -598,8 +610,7 @@ function closeDrilldown() {
     render();
     const body = bodyEl();
     if (!body) return;
-    const target = Array.from(body.querySelectorAll('.almanac-lane'))
-        .find((l) => l.dataset.band === dd.band && l.dataset.region === dd.region)
+    const target = findLane(body, dd.band, dd.region)
         || body.querySelector('.almanac-lane[tabindex="0"]');
     if (target) {
         setRovingLane(target);
@@ -648,6 +659,12 @@ function attachDrilldownHandlers(body) {
         e.stopPropagation();
         closeDrilldown();
     });
+}
+
+// The rendered lane for band × region, or null.
+function findLane(body, band, region) {
+    return Array.from(body.querySelectorAll('.almanac-lane'))
+        .find((l) => l.dataset.band === band && l.dataset.region === region) || null;
 }
 
 function setRovingLane(lane) {
@@ -728,8 +745,7 @@ function restoreFocus(body, focus) {
     } else if (focus.back) {
         target = body.querySelector('.almanac-drill-back');
     } else {
-        target = Array.from(body.querySelectorAll('.almanac-lane'))
-            .find((l) => l.dataset.band === focus.band && l.dataset.region === focus.region) || null;
+        target = findLane(body, focus.band, focus.region);
         if (target) setRovingLane(target);
     }
     target?.focus();

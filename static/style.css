@@ -975,17 +975,22 @@ body[data-theme="dark"] .wspr-matrix-cell {
     outline: 2px solid var(--text-color);
     outline-offset: 1px;
 }
-.almanac-lane-label {
-    font-size: 0.6rem;
+/* Shared by lane rows and drill-down month rows. */
+.almanac-lane-label,
+.almanac-month-label {
     line-height: 1;
-    font-weight: 600;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     overflow: hidden;
     padding-left: 4px;
+}
+.almanac-lane-label {
+    font-size: 0.6rem;
+    font-weight: 600;
     border-left: 3px solid var(--band, #6c757d);
 }
-.almanac-lane-track {
+.almanac-lane-track,
+.almanac-month-track {
     display: flex;
     height: 100%;
     min-width: 0;
@@ -1088,11 +1093,6 @@ body[data-theme="dark"] .wspr-matrix-cell {
 }
 .almanac-month-label {
     font-size: 0.62rem;
-    line-height: 1;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-    overflow: hidden;
-    padding-left: 4px;
     border-left: 3px solid transparent;
 }
 .almanac-month.is-current .almanac-month-label {
@@ -1101,14 +1101,6 @@ body[data-theme="dark"] .wspr-matrix-cell {
 }
 .almanac-month.is-current .almanac-month-track {
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 55%, transparent);
-}
-.almanac-month-track {
-    display: flex;
-    height: 100%;
-    min-width: 0;
-    border-radius: 2px;
-    overflow: hidden;
-    background: color-mix(in srgb, var(--text-color) 6%, transparent);
 }
 .almanac-month-empty {
     align-items: center;

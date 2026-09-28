@@ -75,19 +75,15 @@ type almanacSegKey struct {
 	Grid4, Band, Region string
 }
 
-type almanacFoldGridBand struct {
-	Grid4, Band string
-}
-
 // almanacDayFold accumulates one day: per-(grid, band, region) 48-byte
-// segments (uint8 per slot, saturating at 255), the (grid, band) pairs active
-// that day, and the uncapped per-slot spot totals (ingest-slot seed).
+// segments (uint8 per slot, saturating at 255) and the uncapped per-slot spot
+// totals (ingest-slot seed). The (grid, band) pairs active that day are the
+// Segments keys' (Grid4, Band) (almanacFoldActivitySQL's SELECT DISTINCT).
 type almanacDayFold struct {
 	Day        int64
 	YearMonth  int
 	DayOfMonth int
 	Segments   map[almanacSegKey]*[almanacSeasonSlotsPerDay]byte
-	Active     map[almanacFoldGridBand]struct{}
 	SlotTotals [almanacSeasonSlotsPerDay]int64
 }
 
@@ -98,7 +94,6 @@ func newAlmanacDayFold(day int64) *almanacDayFold {
 		YearMonth:  ym,
 		DayOfMonth: dom,
 		Segments:   make(map[almanacSegKey]*[almanacSeasonSlotsPerDay]byte, 1024),
-		Active:     make(map[almanacFoldGridBand]struct{}, 256),
 	}
 }
 
@@ -112,12 +107,7 @@ func (f *almanacDayFold) add(r almanacDailyRow) {
 		seg = new([almanacSeasonSlotsPerDay]byte)
 		f.Segments[k] = seg
 	}
-	if sum := int64(seg[r.Slot]) + r.Count; sum >= 255 || sum < 0 {
-		seg[r.Slot] = 255 // saturate; never wrap
-	} else {
-		seg[r.Slot] = byte(sum)
-	}
-	f.Active[almanacFoldGridBand{r.Grid4, r.Band}] = struct{}{}
+	satAdd8(&seg[r.Slot], r.Count) // saturate; never wrap
 	f.SlotTotals[r.Slot] += r.Count
 }
 
@@ -302,10 +292,10 @@ func (f *almanacFolder) runOnce(ctx context.Context) error {
 		nw, err := f.store.foldDay(dayCtx, d)
 		cancel()
 		if err != nil {
-			return f.recordFailure("day "+time.Unix(d*86400, 0).UTC().Format("2006-01-02"), err)
+			return f.recordFailure("day "+almanacDayString(d), err)
 		}
 		logInfo("almanac fold: day %s folded in %s (watermark %d)",
-			time.Unix(d*86400, 0).UTC().Format("2006-01-02"), time.Since(started).Round(time.Millisecond), nw)
+			almanacDayString(d), time.Since(started).Round(time.Millisecond), nw)
 		w = nw
 		f.watermark.Store(w)
 	}

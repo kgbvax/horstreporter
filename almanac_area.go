@@ -197,7 +197,8 @@ func (e *DxBaselineEngine) resolveAlmanacArea(qth string) (almanacArea, error) {
 	return cache.resolve(qth, qrz, ctyRes)
 }
 
-// almanacGridBand keys per-(grid4, band) active-day masks.
+// almanacGridBand keys per-(grid4, band) data: the active-day masks, the
+// fold's active pairs and the WSPR backfill's area activity.
 type almanacGridBand struct {
 	Grid string
 	Band string
@@ -231,10 +232,7 @@ func almanacBandsMeeting(squares []string, masks map[almanacGridBand]uint64, mMi
 // does, it returns the cap. masks holds per-(grid4, band) day bitmasks (bit i
 // = active on day i). center is normalized to its uppercase grid4.
 func chooseAlmanacRadius(center string, masks map[almanacGridBand]uint64, mMin int) (radius int, squares []string) {
-	c := strings.ToUpper(strings.TrimSpace(center))
-	if len(c) >= 4 && isLocator(c) {
-		c = c[:4]
-	}
+	c := almanacNormalizeCentre(center)
 	need := almanacBandsNeeded(len(almanacInScopeBands))
 	for r := 0; r <= almanacMaxWidenRadius; r++ {
 		squares = getSquaresWithinRings(c, r)

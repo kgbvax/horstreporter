@@ -277,11 +277,7 @@ func (s *dxPostgresStore) flushPending(ctx context.Context) error {
 	// One transaction: baseline upserts plus the per-slot ingest totals, so a
 	// failed flush writes no totals either.
 	batch := &pgx.Batch{}
-	stmts := baselineFlushStmts(global, region, cluster)
-	for _, st := range stmts {
-		batch.Queue(st.sql, st.args...)
-	}
-	queued := len(stmts)
+	queued := baselineFlushStmts(global, region, cluster, func(sql string, args ...any) { batch.Queue(sql, args...) })
 
 	if queued > 0 {
 		br := tx.SendBatch(ctx, batch)
@@ -328,12 +324,6 @@ func (s *dxPostgresStore) mergePendingBack(global map[baselineGlobalKey]baseline
 	}
 }
 
-// flushStmt is one queued statement of a baseline flush transaction.
-type flushStmt struct {
-	sql  string
-	args []any
-}
-
 const (
 	baselineGlobalUpsertSQL = `
 			INSERT INTO dx_baseline_global (band, slot_of_day, distance_tier, snr_tier, count)
@@ -357,26 +347,30 @@ const (
 		`
 )
 
-// baselineFlushStmts builds the statements of one baseline flush
-// transaction: the three baseline upserts plus the Almanac per-(day, slot)
-// ingest totals derived from the region deltas. Pure so the transaction's
-// contents can be asserted without a database.
-func baselineFlushStmts(global map[baselineGlobalKey]baselineDelta, region map[dxPulseRegionBaselineDailyKey]int64, cluster map[clusterBaselineKey]baselineDelta) []flushStmt {
-	totals := almanacIngestSlotTotalsFromRegion(region)
-	stmts := make([]flushStmt, 0, len(global)+len(region)+len(cluster)+len(totals))
+// baselineFlushStmts queues the statements of one baseline flush
+// transaction via queue (production: batch.Queue): the three baseline upserts
+// plus the Almanac per-(day, slot) ingest totals derived from the region
+// deltas. Returns the number queued. Pure apart from queue, so the
+// transaction's contents can be asserted without a database.
+func baselineFlushStmts(global map[baselineGlobalKey]baselineDelta, region map[dxPulseRegionBaselineDailyKey]int64, cluster map[clusterBaselineKey]baselineDelta, queue func(sql string, args ...any)) int {
+	n := 0
+	q := func(sql string, args ...any) {
+		queue(sql, args...)
+		n++
+	}
 	for k, d := range global {
-		stmts = append(stmts, flushStmt{baselineGlobalUpsertSQL, []any{k.Band, k.SlotOfDay, k.DistanceTier, k.SnrTier, d.Count}})
+		q(baselineGlobalUpsertSQL, k.Band, k.SlotOfDay, k.DistanceTier, k.SnrTier, d.Count)
 	}
 	for k, v := range region {
-		stmts = append(stmts, flushStmt{regionBaselineDailyUpsertSQL, []any{k.TargetGrid4, k.Band, k.SlotOfDay, k.Region, k.DayIndex, v}})
+		q(regionBaselineDailyUpsertSQL, k.TargetGrid4, k.Band, k.SlotOfDay, k.Region, k.DayIndex, v)
 	}
 	for k, d := range cluster {
-		stmts = append(stmts, flushStmt{baselineClusterUpsertSQL, []any{k.ClusterAnchor, k.Band, k.SlotOfDay, k.DistanceTier, k.SnrTier, d.Count}})
+		q(baselineClusterUpsertSQL, k.ClusterAnchor, k.Band, k.SlotOfDay, k.DistanceTier, k.SnrTier, d.Count)
 	}
-	for k, v := range totals {
-		stmts = append(stmts, flushStmt{almanacIngestSlotFlushSQL, []any{k.Day, k.Slot, almanacSeasonLayerPSKR, v}})
+	for k, v := range almanacIngestSlotTotalsFromRegion(region) {
+		q(almanacIngestSlotFlushSQL, k.Day, k.Slot, almanacSeasonLayerPSKR, v)
 	}
-	return stmts
+	return n
 }
 
 // almanacIngestSlotKey keys the Almanac per-(day, slot) ingest totals.
@@ -1026,6 +1020,14 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 		}
 	}
 
+	// Live-only late-spot clamp (Almanac KTD6): region keys from spots outside
+	// [now − 24 h, now + 10 min] are dropped and counted, so no spot can land
+	// on a day the fold already treated as final. The shared key emitter
+	// stays unclamped for the raw-spot rebuild. Keys and the clamp only
+	// depend on m, so they are computed before taking the lock.
+	regionKeys := dxPulseRegionBaselineKeysForSpot(m.T, band, m.SL, m.RL)
+	regionAccepted := len(regionKeys) > 0 && almanacRegionTimestampAccepted(m.T, time.Now().Unix())
+
 	s.mu.Lock()
 	gk := baselineGlobalKey{
 		Band:         band,
@@ -1038,19 +1040,13 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 	s.pendingGlobal[gk] = gd
 	s.pendingCount++
 
-	// Live-only late-spot clamp (Almanac KTD6): region keys from spots outside
-	// [now − 24 h, now + 10 min] are dropped and counted, so no spot can land
-	// on a day the fold already treated as final. The shared key emitter
-	// stays unclamped for the raw-spot rebuild.
-	if regionKeys := dxPulseRegionBaselineKeysForSpot(m.T, band, m.SL, m.RL); len(regionKeys) > 0 {
-		if almanacRegionTimestampAccepted(m.T, time.Now().Unix()) {
-			for _, key := range regionKeys {
-				s.pendingRegion[key] += 1
-				s.pendingCount++
-			}
-		} else {
-			s.regionLateDrops.Add(1)
+	if regionAccepted {
+		for _, key := range regionKeys {
+			s.pendingRegion[key] += 1
+			s.pendingCount++
 		}
+	} else if len(regionKeys) > 0 {
+		s.regionLateDrops.Add(1)
 	}
 
 	// Grid-cluster baseline (dx_baseline_cluster): increment for both ends'

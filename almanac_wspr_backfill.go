@@ -143,11 +143,10 @@ func parseAlmanacWSPRBackfillAreas(s string) ([]string, error) {
 // first: the `years`×12 months before now's month, never before 2008-03.
 func almanacWSPRBackfillMonths(now time.Time, years int) []int {
 	now = now.UTC()
-	cur := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	cur := now.Year()*100 + int(now.Month())
 	var out []int
 	for i := 1; i <= years*12; i++ {
-		t := cur.AddDate(0, -i, 0)
-		ym := t.Year()*100 + int(t.Month())
+		ym := almanacYMAdd(cur, -i)
 		if ym < almanacWSPRArchiveStart {
 			break
 		}
@@ -158,8 +157,8 @@ func almanacWSPRBackfillMonths(now time.Time, years int) []int {
 
 // almanacWSPRMonthDays returns the first and last UTC day index of yyyymm.
 func almanacWSPRMonthDays(ym int) (first, last int64) {
-	start := time.Date(ym/100, time.Month(ym%100), 1, 0, 0, 0, 0, time.UTC)
-	return start.Unix() / 86400, start.AddDate(0, 1, 0).Unix()/86400 - 1
+	first = almanacYMFirstDay(ym)
+	return first, first + int64(almanacYMDays(ym)) - 1
 }
 
 // almanacWSPRRegion maps a far-end grid4 to its region ("" when invalid or
@@ -168,7 +167,7 @@ func almanacWSPRRegion(grid4 string) string {
 	if !region.IsLocator(grid4) {
 		return ""
 	}
-	r := region.FromLocator(grid4)
+	r := regionFromLocatorCached(grid4)
 	if !r.IsValid() {
 		return ""
 	}
@@ -329,7 +328,7 @@ type almanacWSPRMonth struct {
 	// Ring is the area's r=2 grid4 set: the DELETE scope of the commit.
 	Ring     []string
 	Counts   map[almanacSegKey]*[almanacSeasonCountsLen]byte
-	Activity map[almanacFoldGridBand]uint32
+	Activity map[almanacGridBand]uint32
 	// IngestTotals is nil when this month's WSPR ingest totals were already
 	// committed (by another area); otherwise it replaces the month's totals.
 	IngestTotals  map[almanacIngestSlotKey]int64
@@ -348,7 +347,7 @@ func newAlmanacWSPRMonth(area string, ring []string, ym int, withIngest bool) *a
 		LastDay:       last,
 		Ring:          ring,
 		Counts:        make(map[almanacSegKey]*[almanacSeasonCountsLen]byte, 256),
-		Activity:      make(map[almanacFoldGridBand]uint32, 64),
+		Activity:      make(map[almanacGridBand]uint32, 64),
 		DoneKey:       almanacWSPRMonthDoneKey(area, ym),
 		IngestDoneKey: almanacWSPRIngestDoneKey(ym),
 		ringSet:       make(map[string]bool, len(ring)),
@@ -367,7 +366,7 @@ func newAlmanacWSPRMonth(area string, ring []string, ym int, withIngest bool) *a
 // ring; a same-grid pair yields one key, as the daily table de-duplicates.
 func (m *almanacWSPRMonth) addRing(day int64, r almanacWSPRAggRow) {
 	band := bandFromWSPR(int(r.Band))
-	if band == "" || !almanacWSPRBandInScope(band) {
+	if band == "" || !almanacBandInScope(band) {
 		return
 	}
 	slot := int(r.Slot)
@@ -397,13 +396,8 @@ func (m *almanacWSPRMonth) emit(day int64, slot int, band, near4, far4 string, c
 		counts = new([almanacSeasonCountsLen]byte)
 		m.Counts[k] = counts
 	}
-	i := almanacSegmentOffset(dom) + slot
-	if sum := int64(counts[i]) + c; sum >= 255 {
-		counts[i] = 255 // saturate; never wrap
-	} else {
-		counts[i] = byte(sum)
-	}
-	m.Activity[almanacFoldGridBand{Grid4: near4, Band: band}] |= 1 << uint(dom-1)
+	satAdd8(&counts[almanacSegmentOffset(dom)+slot], c)
+	m.Activity[almanacGridBand{Grid: near4, Band: band}] |= 1 << uint(dom-1)
 }
 
 // addIngest adds a global per-slot count in the region-key unit: a spot with
@@ -414,15 +408,6 @@ func (m *almanacWSPRMonth) addIngest(day int64, r almanacWSPRAggRow) {
 		return
 	}
 	m.IngestTotals[almanacIngestSlotKey{Day: day, Slot: slot}] += 2 * int64(r.C)
-}
-
-func almanacWSPRBandInScope(band string) bool {
-	for _, b := range almanacInScopeBands {
-		if b == band {
-			return true
-		}
-	}
-	return false
 }
 
 // ---------------------------------------------------------------------------
@@ -734,7 +719,7 @@ func (p *pgAlmanacWSPRBackfillStore) commitMonth(ctx context.Context, m *almanac
 	if len(m.Activity) > 0 {
 		rows := make([][]any, 0, len(m.Activity))
 		for k, mask := range m.Activity {
-			rows = append(rows, []any{k.Grid4, k.Band, int32(m.YearMonth), almanacSeasonLayerWSPR, int32(mask)})
+			rows = append(rows, []any{k.Grid, k.Band, int32(m.YearMonth), almanacSeasonLayerWSPR, int32(mask)})
 		}
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"almanac_area_activity"},
 			[]string{"grid4", "band", "year_month", "layer", "day_mask"}, pgx.CopyFromRows(rows)); err != nil {

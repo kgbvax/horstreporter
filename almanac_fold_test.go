@@ -131,8 +131,8 @@ func (f *fakeAlmanacFoldStore) foldDay(_ context.Context, day int64) (int64, err
 	if day == f.failDay {
 		return 0, errors.New("injected mid-transaction failure")
 	}
-	for gb := range fold.Active {
-		ak := fakeActivityKey{gb.Grid4, gb.Band, fold.YearMonth}
+	for gb := range foldActive(fold) {
+		ak := fakeActivityKey{gb.Grid, gb.Band, fold.YearMonth}
 		tx.masks[ak] |= fold.dayMaskBit()
 	}
 	for slot, total := range fold.SlotTotals {
@@ -263,13 +263,14 @@ func TestAlmanacDayFoldBuilder(t *testing.T) {
 	if len(f.Segments) != 3 {
 		t.Fatalf("segments = %d, want 3", len(f.Segments))
 	}
-	for _, gb := range []almanacFoldGridBand{{"JO32", "20m"}, {"JO32", "40m"}, {"JO33", "20m"}} {
-		if _, ok := f.Active[gb]; !ok {
+	active := foldActive(f)
+	for _, gb := range []almanacGridBand{{"JO32", "20m"}, {"JO32", "40m"}, {"JO33", "20m"}} {
+		if _, ok := active[gb]; !ok {
 			t.Fatalf("activity missing %+v", gb)
 		}
 	}
-	if len(f.Active) != 3 {
-		t.Fatalf("activity entries = %d, want 3", len(f.Active))
+	if len(active) != 3 {
+		t.Fatalf("activity entries = %d, want 3", len(active))
 	}
 	// Ingest totals are uncapped sums of spot_count (the region-key unit).
 	if f.SlotTotals[31] != 301 || f.SlotTotals[30] != 7 || f.SlotTotals[2] != 3 {
@@ -790,7 +791,16 @@ func TestBaselineFlushStmtsIncludeIngestTotals(t *testing.T) {
 		{TargetGrid4: "JO32", Band: "20m", SlotOfDay: 36, Region: "NA", DayIndex: 100}: 3,
 		{TargetGrid4: "FN31", Band: "20m", SlotOfDay: 36, Region: "EU", DayIndex: 100}: 2,
 	}
-	stmts := baselineFlushStmts(nil, region, nil)
+	type flushStmt struct {
+		sql  string
+		args []any
+	}
+	var stmts []flushStmt
+	record := func(sql string, args ...any) { stmts = append(stmts, flushStmt{sql, args}) }
+	queued := baselineFlushStmts(nil, region, nil, record)
+	if queued != len(stmts) {
+		t.Fatalf("returned count %d != queued statements %d", queued, len(stmts))
+	}
 	var regionN, totals int
 	for _, st := range stmts {
 		switch {
@@ -809,7 +819,8 @@ func TestBaselineFlushStmtsIncludeIngestTotals(t *testing.T) {
 	if regionN != 2 || totals != 1 {
 		t.Fatalf("stmts: region=%d totals=%d (%d total)", regionN, totals, len(stmts))
 	}
-	if len(baselineFlushStmts(nil, nil, nil)) != 0 {
+	stmts = nil
+	if n := baselineFlushStmts(nil, nil, nil, record); n != 0 || len(stmts) != 0 {
 		t.Fatalf("empty flush must queue nothing")
 	}
 }
@@ -914,4 +925,14 @@ func TestAlmanacPrewarmTolerant(t *testing.T) {
 	almanacSvc = svc
 	*almanacWSPRBackfillAreasFlag = "XX99"
 	almanacPrewarmConfiguredAreas()
+}
+
+// foldActive is the day's active (grid, band) set: the distinct (Grid4, Band)
+// of the segment keys, as almanacFoldActivitySQL derives it.
+func foldActive(f *almanacDayFold) map[almanacGridBand]struct{} {
+	out := make(map[almanacGridBand]struct{}, len(f.Segments))
+	for k := range f.Segments {
+		out[almanacGridBand{Grid: k.Grid4, Band: k.Band}] = struct{}{}
+	}
+	return out
 }

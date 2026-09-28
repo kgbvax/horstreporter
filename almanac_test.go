@@ -653,7 +653,7 @@ func denseAggStore() *fakeAggStore {
 	f := newFakeAggStore(today - 3)
 	f.setIngest(today-31, today, 1000)
 	grids := getSquaresWithinRings("JO32", 2)
-	regions := almanacRegionCodes()
+	regions := allRegionStrings()
 	win := almanacWindowFor(aggTestNow.Unix())
 	for _, g := range grids {
 		for _, b := range almanacInScopeBands {

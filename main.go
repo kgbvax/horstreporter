@@ -413,9 +413,9 @@ func main() {
 			almanacSvc = startAlmanacService(st, dxBaseline.resolveAlmanacArea)
 			// WSPR archive backfill (U5): no-op unless -almanac-wspr-backfill-areas is set.
 			startAlmanacWSPRBackfill(context.Background(), st, *wsprEndpoint, *almanacDiskPathFlag)
-		}
-		if st := dxBaseline.Store(); st != nil && *almanacFoldEnableFlag {
-			startAlmanacFold(st, *almanacDiskPathFlag)
+			if *almanacFoldEnableFlag {
+				startAlmanacFold(st, *almanacDiskPathFlag)
+			}
 		}
 		// Wire the WSPR climatology to the same Postgres pool and ensure the
 		// wspr_region_baseline_daily table exists.

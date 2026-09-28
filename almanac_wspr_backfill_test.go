@@ -214,7 +214,7 @@ func (s *wsprFakeStore) commitMonth(ctx context.Context, m *almanacWSPRMonth) er
 		s.counts[wsprFakeSeasonKey{k.Grid4, k.Band, k.Region, m.YearMonth, almanacSeasonLayerWSPR}] = append([]byte(nil), v[:]...)
 	}
 	for k, v := range m.Activity {
-		s.activity[wsprFakeActivityKey{k.Grid4, k.Band, m.YearMonth, almanacSeasonLayerWSPR}] = v
+		s.activity[wsprFakeActivityKey{k.Grid, k.Band, m.YearMonth, almanacSeasonLayerWSPR}] = v
 	}
 	if m.IngestTotals != nil {
 		for k := range s.ingest {

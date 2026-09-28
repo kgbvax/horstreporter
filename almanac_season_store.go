@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
+	"maps"
 	"strconv"
 	"time"
 
@@ -294,12 +296,18 @@ func (p *pgAlmanacFoldStore) foldDay(ctx context.Context, day int64) (int64, err
 		if _, err := tx.Exec(ctx, almanacFoldTempTableSQL); err != nil {
 			return 0, err
 		}
-		copyRows := make([][]any, 0, len(fold.Segments))
-		for k, seg := range fold.Segments {
-			copyRows = append(copyRows, []any{k.Grid4, k.Band, k.Region, seg[:]})
-		}
-		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"almanac_fold_seg"},
-			[]string{"grid4", "band", "region", "seg"}, pgx.CopyFromRows(copyRows)); err != nil {
+		// Stream the segments straight from the map (no [][]any copy).
+		next, stop := iter.Pull2(maps.All(fold.Segments))
+		_, err := tx.CopyFrom(ctx, pgx.Identifier{"almanac_fold_seg"},
+			[]string{"grid4", "band", "region", "seg"}, pgx.CopyFromFunc(func() ([]any, error) {
+				k, seg, ok := next()
+				if !ok {
+					return nil, nil
+				}
+				return []any{k.Grid4, k.Band, k.Region, seg[:]}, nil
+			}))
+		stop()
+		if err != nil {
 			return 0, err
 		}
 		offset1 := almanacSegmentOffset(fold.DayOfMonth) + 1

@@ -122,13 +122,12 @@ function evalCombo(test, payload, band, region, mMin) {
   const shares = perSlot.filter((p) => p.known).map((p) => p.share);
   const base = { band, region, lane: lane ? lane.source : 'band absent', slots: perSlot,
     known: shares.length, total: slots.length };
+  const agg = shares.length
+    ? { median: median(shares), min: Math.min(...shares), max: Math.max(...shares) }
+    : { median: null, min: null, max: null };
   if (shares.length === 0 || shares.length < Math.ceil(slots.length * MIN_KNOWN_FRACTION)) {
-    return { ...base, verdict: 'INCONCLUSIVE',
-      median: shares.length ? median(shares) : null,
-      min: shares.length ? Math.min(...shares) : null,
-      max: shares.length ? Math.max(...shares) : null, stat: null };
+    return { ...base, verdict: 'INCONCLUSIVE', ...agg, stat: null };
   }
-  const agg = { median: median(shares), min: Math.min(...shares), max: Math.max(...shares) };
   const stat = test.stat === 'max' ? agg.max : agg.median;
   return { ...base, ...agg, stat, verdict: judge(test, stat) ? 'PASS' : 'FAIL' };
 }
