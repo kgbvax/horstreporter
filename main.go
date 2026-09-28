@@ -406,15 +406,16 @@ func main() {
 		logInfo("DX postgres init failed (dsn=%s, fail-fast=false). Continuing with in-memory fallback: %v", maskDSN(dxPostgresDSNResolved), err)
 	} else {
 		logInfo("DX postgres initialized (dsn=%s)", maskDSN(dxPostgresDSNResolved))
-		if st := dxBaseline.Store(); st != nil && *almanacFoldEnableFlag {
-			startAlmanacFold(st, *almanacDiskPathFlag)
-		}
-		// /api/almanac reader (U2). Resolvers are read per request, so the
+		// /api/almanac reader (U2), started before the fold so the fold's
+		// post-run pre-warm sees almanacSvc (happens-before). Resolvers are read per request, so the
 		// QRZ resolver wired later is picked up.
 		if st := dxBaseline.Store(); st != nil {
 			almanacSvc = startAlmanacService(st, dxBaseline.resolveAlmanacArea)
 			// WSPR archive backfill (U5): no-op unless -almanac-wspr-backfill-areas is set.
 			startAlmanacWSPRBackfill(context.Background(), st, *wsprEndpoint, *almanacDiskPathFlag)
+		}
+		if st := dxBaseline.Store(); st != nil && *almanacFoldEnableFlag {
+			startAlmanacFold(st, *almanacDiskPathFlag)
 		}
 		// Wire the WSPR climatology to the same Postgres pool and ensure the
 		// wspr_region_baseline_daily table exists.
@@ -658,6 +659,8 @@ func main() {
 	// QTH propagation Almanac (U2): 30-day "opened N of M days" lanes + agenda.
 	// 503 without Postgres.
 	appMux.HandleFunc("/api/almanac", almanacHandler)
+	// Seasonal month × hour drill-down (U4) for one band + region.
+	appMux.HandleFunc("/api/almanac/season", almanacSeasonHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
 	appMux.HandleFunc("/api/history", historyHandler)
 	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)

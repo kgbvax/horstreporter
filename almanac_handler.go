@@ -47,6 +47,8 @@ type almanacService struct {
 	items map[string]*list.Element
 
 	slow sync.Mutex // serializes Postgres reads
+
+	season *almanacSeasonCache // /api/almanac/season entries (almanac_season.go)
 }
 
 // almanacSvc is the process-wide service (nil without Postgres → 503).
@@ -61,6 +63,7 @@ func newAlmanacService(st almanacReadStore, resolve func(string) (almanacArea, e
 		queryTimeout: almanacQueryTimeout,
 		lru:          list.New(),
 		items:        map[string]*list.Element{},
+		season:       newAlmanacSeasonCache(),
 	}
 }
 

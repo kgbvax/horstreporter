@@ -273,6 +273,39 @@ Response:
   busiest cell (0–1, 2 decimals — the chip-ramp input), `f` is a flag
   bitmask: ssb=1, cw=2, rising=4, atypical=8, from_here=16.
 
+**Additive optional fields.** The payload is frozen except for additive
+optional fields. `almanac` (object, optional) is a "usually open now / next"
+glance from the QTH Almanac for the requesting QTH.
+- **Source:** it is served only from the warm Almanac cache. The request path
+  never queries Postgres or QRZ.
+- **When it is omitted:**
+  - Postgres or the Almanac is unavailable.
+  - The area's cache is cold. Areas in `-almanac-wspr-backfill-areas` are
+    pre-warmed after every fold run.
+  - The `qth` is a callsign whose area has not yet been resolved by an
+    earlier `/api/almanac` request.
+- **Client handling:** treat a missing field as "no data". When the field is
+  absent, the body is byte-identical to the pre-Almanac payload.
+- **Fields:**
+  - `grid4`: the Almanac centre.
+  - `approximate`: true when a callsign resolved only to its DXCC centroid.
+  - `text`: one line, no emojis, e.g.
+    `Now usually: 20m NA, 17m AS. Next: 40m OC ~21:00`.
+  - `entries`: the first ≤3 `/api/almanac` agenda windows, ongoing first and
+    then by start time. Each entry has `band`, `region`, `start`/`end` (UTC
+    `HH:MM`), `status` (`ongoing`|`upcoming`), `starts_in_min`, `n`/`m` (the
+    peak slot opened on n of m active days) and `open_today`.
+
+```
+"almanac": {
+  "grid4": "JO32", "approximate": false,
+  "text": "Now usually: 20m NA. Next: 40m OC ~21:00",
+  "entries": [
+    {"band":"20m","region":"NA","start":"13:00","end":"18:00","status":"ongoing","starts_in_min":0,"n":22,"m":28,"open_today":true}
+  ]
+}
+```
+
 ### `GET /api/prop_intel/v2` — unified multi-source propagation nowcast
 
 The consolidated successor of v1: a per-(band × region) nowcast across ALL
@@ -409,6 +442,66 @@ Response:
   within the same squares (from the unfolded daily tail).
 - `watermark_day`: fold watermark (UTC day index) the lanes were read at;
   `-1` when the fold has never run.
+
+### `GET /api/almanac/season` — Almanac seasonal drill-down (month × hour)
+
+For one band and far-end region of the operator's area: one row per calendar
+month (Jan–Dec) with 48 half-hour UTC slots of `n` (open days) and `m`
+(observed days), taken from the seasonal record. Each month shows the most
+recent year with at least `m_min` (8) active days — the PSKReporter/cluster
+layer (`pskr`) first, else the backfilled WSPR layer (`wspr`) — labelled
+with its year and layer; months with neither read `not_collected`.
+The watermark, the PSKR seasonal rows (days ≤ watermark), the PSKR daily
+tail (later days, through yesterday) and the WSPR rows are read in one
+read-only REPEATABLE READ transaction, so the current month joins folded and
+unfolded days without counting any day twice. Lookback: the current month
+and the 59 before it.
+
+Params: `qth` (as `/api/almanac`), `band` (`160m`…`10m`, case-insensitive),
+`region` (one of the 11 region codes, case-insensitive).
+
+Status: `400` missing or invalid qth, band or region · `404` callsign that
+cannot be located · `503` no Postgres, read over the 1.5 s budget, or a
+failed read in the last 30 s (`Retry-After: 30`).
+
+Radius: the same as the landing view. The server takes `area.radius` from the
+`/api/almanac` result for the same centre grid4 (computing it first when not
+cached) and reads the squares within that radius, so lanes and drill-down
+always describe the same area.
+
+Caching (keyed by centre grid4 + band + region, LRU of 256): 6 h, or until
+the fold watermark changes, the UTC day rolls or the landing radius changes.
+Served with `Cache-Control: max-age=60`.
+
+Response:
+```
+{
+  "qth": "JO32",
+  "area": {"grid4": "JO32", "source": "locator", "approximate": false,
+           "radius": 1, "squares": ["JO32", "…"]},
+  "band": "20m", "region": "OC",
+  "slot_minutes": 30, "m_min": 8, "k": {"pskr": 2, "wspr": 1},
+  "through_day": "2026-10-14", "watermark_day": 20738,
+  "months": [
+    {"month": 1, "name": "Jan", "status": "not_collected", "year": null,
+     "layer": null, "days": 0, "k": null, "n": null, "m": null},
+    {"month": 10, "name": "Oct", "status": "ok", "year": 2026, "layer": "pskr",
+     "days": 14, "k": 2, "n": [0, …48], "m": [14, …48]},
+    {"month": 12, "name": "Dec", "status": "ok", "year": 2025, "layer": "wspr",
+     "days": 31, "k": 1, "n": [0, …48], "m": [31, …48]}
+  ]
+}
+```
+
+- `months` always has 12 entries, index 0 = January.
+- Per layer, the same rules as `/api/almanac`: `m[s]` counts days on which
+  slot `s` was alive (that layer's own ingest total > 0 and ≥ 10% of the
+  slot's median over the month; lost PSKR days never count) and the area was
+  active on the band (≥ 1 spot to any region in `s` or `s+1`); `n[s]` counts
+  those days with ≥ `k` spots to the region (k = 2 PSKR, 1 WSPR).
+- `days`: the month's days with at least one alive, active slot (the
+  `m_min` test). Individual slots with `m[s] < m_min` are "not enough data".
+- `through_day`: the last day included (yesterday; today is partial).
 
 ### `GET /api/push/vapid-public-key` — Web Push public key
 

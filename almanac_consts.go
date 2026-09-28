@@ -77,3 +77,17 @@ const (
 	// almanacCacheMaxEntries bounds the per-grid4 LRU (≈10 KB per entry).
 	almanacCacheMaxEntries = 256
 )
+
+// Seasonal drill-down (plan U4: KTD7). M_min is almanacMinActiveDaysSeasonal;
+// k per layer is almanacOpenMinSpotsPSKR / almanacOpenMinSpotsWSPR.
+const (
+	// almanacSeasonLookbackMonths bounds the year-months the drill-down reads
+	// (the current month and the 59 before it): five years covers the WSPR
+	// backfill depth (-almanac-wspr-backfill-years, default 3) with room to
+	// grow, and caps the rows one request streams.
+	almanacSeasonLookbackMonths = 60
+	// almanacSeasonCacheTTL: a drill-down entry is kept this long, or until
+	// the fold watermark changes, the UTC day rolls or the landing view's
+	// radius changes.
+	almanacSeasonCacheTTL = almanacTypicalCacheTTL
+)
