@@ -703,38 +703,77 @@ body[data-theme="dark"] .wspr-matrix-cell {
     font-weight: 600;
     margin: 6px 0 2px;
 }
-.almanac-agenda { margin-bottom: 8px; }
-.almanac-agenda-list {
+.almanac-schedule { margin-bottom: 8px; }
+/* Schedule: label | 3 h track | n of m. Bars sit on the track (left/width in
+   % of 3 h from now); an outlined bar is open now, a cut bar fades out. */
+.cond-sched-list {
     list-style: none;
     margin: 0;
     padding: 0;
 }
-.almanac-agenda-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
+.cond-sched-row,
+.cond-sched-axis {
+    display: grid;
+    grid-template-columns: 11.5em minmax(0, 1fr) 4.4em;
+    align-items: center;
     column-gap: 8px;
-    padding: 2px 0;
+}
+.cond-sched-row {
+    min-height: 22px;
     border-bottom: 1px solid var(--border-color);
-    overflow-wrap: anywhere;
 }
-.almanac-agenda-what { min-width: 0; }
-.almanac-agenda-time { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.almanac-agenda-meta {
-    display: inline-flex;
-    flex-wrap: wrap;
-    gap: 6px;
+.cond-sched-what {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.cond-sched-track {
+    position: relative;
+    height: 14px;
+}
+.cond-sched-axis .cond-sched-track {
+    height: 16px;
+}
+.cond-sched-tick {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid var(--border-color);
+}
+.cond-sched-hour {
+    position: absolute;
+    top: 0;
+    left: 3px;
     color: color-mix(in srgb, var(--text-color) 70%, transparent);
+    font-variant-numeric: tabular-nums;
 }
-.almanac-when.is-now { color: var(--accent-strong); font-weight: 600; }
-.almanac-today {
-    padding: 0 4px;
-    border-radius: 3px;
-    border: 1px solid var(--accent-strong);
-    color: var(--accent-strong);
-    font-weight: 600;
+.cond-sched-bar {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    border-radius: 2px;
 }
-.almanac-utc { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cond-sched-bar .almanac-run {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 2px;
+}
+.cond-sched-bar.is-now {
+    outline: 2px solid var(--band);
+    outline-offset: 0;
+}
+.cond-sched-bar.is-cut {
+    -webkit-mask-image: linear-gradient(90deg, #000 60%, transparent);
+    mask-image: linear-gradient(90deg, #000 60%, transparent);
+}
+.cond-sched-n {
+    white-space: nowrap;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: color-mix(in srgb, var(--text-color) 75%, transparent);
+}
 .almanac-band-dot {
     display: inline-block;
     width: 8px;
@@ -742,16 +781,6 @@ body[data-theme="dark"] .wspr-matrix-cell {
     border-radius: 2px;
     margin-right: 4px;
     vertical-align: baseline;
-}
-.almanac-agenda-more {
-    margin-top: 2px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--accent-strong);
-    font-size: inherit;
-    text-decoration: underline;
-    cursor: pointer;
 }
 
 /* Lanes: label column + 24 h track. The now line sits in an overlay that
@@ -1183,6 +1212,9 @@ body[data-theme="dark"] .wspr-matrix-cell {
     padding: 0 6px;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
+}
+.cond-cell-verdict {
+    text-align: left;
 }
 .cond-cell-pair {
     text-align: right;

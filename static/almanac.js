@@ -10,7 +10,8 @@ import { escapeHtml } from './ui-helpers.js';
 // always the operator's QTH (widened to neighbouring squares when sparse).
 //
 // Layout: header (area grid4 + radius, "approximate location" for a DXCC
-// fallback), the agenda (usual openings now / in the next 12 h), then one
+// fallback), the schedule (usual openings now / within the next 3 h, as bars
+// on a 3 h axis), then one
 // block per far-end region (the operator's own region last) holding a thin
 // lane per band. A lane's opacity follows n/m in the band's canonical colour;
 // a slot with m < m_min is "not enough data" (neutral hatch, never "closed").
@@ -20,8 +21,8 @@ import { escapeHtml } from './ui-helpers.js';
 // data-slot); the panel shows the browser's local time. Each lane is drawn
 // rotated by the UTC offset (offset / 30 min slots, rounded to the nearest
 // slot for zones like UTC+5:45, which the header then notes), so the axis
-// 00/06/12/18/24 is local midnight; titles, the now line and the agenda read
-// local time (the agenda keeps UTC as its muted secondary label). A
+// 00/06/12/18/24 is local midnight; titles, the now line and the schedule read
+// local time (a bar's title also gives UTC). A
 // drill-down month row uses that month's own offset (mid-month), so summer
 // and winter months each sit right across a DST change.
 //
@@ -52,7 +53,7 @@ const ENABLE_KEY = 'almanacEnabled';
 
 const TICK_MS = 60_000;         // now-line refresh
 const REFETCH_TICKS = 5;        // re-fetch every 5 ticks (server caches 60 s / 120 s)
-const AGENDA_CAP = 6;
+const SCHEDULE_MIN = 180;       // schedule axis: now .. now + 3 h
 const SNR_DEBOUNCE_MS = 400;    // slider input → refetch
 const SLOTS = 48;
 const DEFAULT_SLOT_MINUTES = 30;
@@ -78,7 +79,6 @@ const runtime = {
     lastMinSnr: null,   // min_snr of the last fetch (null = any SNR)
     snrTimer: null,     // debounce timer of a Min SNR change
     snrListener: null,  // delegated document listener (replaced on re-init)
-    agendaExpanded: false,
     // Open seasonal drill-down: { band, region, qth, loading, data, error }.
     drilldown: null,
     drillAbort: null,   // AbortController of the in-flight season fetch
@@ -240,7 +240,6 @@ async function fetchAlmanac({ quiet = false } = {}) {
     runtime.lastMinSnr = minSnr;
     runtime.loading = true;
     if (qthChanged) {
-        runtime.agendaExpanded = false;
         runtime.refreshFailed = false;
         // The seasonal view belongs to the old area: close it and put the
         // (about to be dimmed) lanes back.
@@ -365,26 +364,13 @@ function offsetLabel(offsetMin) {
     return `UTC${offsetMin < 0 ? '\u2212' : '+'}${h}${m ? `:${pad2(m)}` : ''}`;
 }
 
-// The zone's short name ("CEST") when Intl has a real abbreviation (not
-// just "GMT+2"), else ''.
-function zoneAbbr(date = new Date()) {
-    try {
-        const part = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
-            .formatToParts(date).find((p) => p.type === 'timeZoneName');
-        const name = part?.value || '';
-        return /^[A-Z]{2,5}$/.test(name) && !/^(GMT|UTC)/.test(name) ? name : '';
-    } catch {
-        return '';
-    }
-}
-
-// "local time (UTC+2, CEST)", plus a note when the lanes are rounded.
-function localZoneText(date = new Date(), slotMinutes = DEFAULT_SLOT_MINUTES) {
+// Note for zones whose offset is not a whole number of slots (UTC+5:45): the
+// lanes are drawn rounded to the nearest slot; '' otherwise.
+function roundingNote(date = new Date(), slotMinutes = DEFAULT_SLOT_MINUTES) {
     const off = tzOffsetMinutes(date);
-    const abbr = zoneAbbr(date);
-    let text = `local time (${offsetLabel(off)}${abbr ? `, ${abbr}` : ''})`;
-    if (off % slotMinutes !== 0) text += `; lanes rounded to the nearest ${slotMinutes} min`;
-    return text;
+    return off % slotMinutes === 0
+        ? ''
+        : `Lanes rounded to the nearest ${slotMinutes} min (${offsetLabel(off)}).`;
 }
 
 // Local "HH:MM" of `utcMinutes` after 00:00 UTC.
@@ -549,7 +535,7 @@ function render() {
         body.innerHTML = html;
         return;
     }
-    html += agendaHtml(data);
+    html += scheduleHtml(data);
     html += lanesHtml(data, lanes);
     html += legendHtml();
     body.innerHTML = html;
@@ -587,57 +573,89 @@ function headerHtml(data) {
     const grid4 = area.grid4 || data.qth || '';
     const radius = Number(area.radius) || 0;
     const squares = Array.isArray(area.squares) ? area.squares.length : 1;
-    const days = data.window?.days || 30;
     const approx = area.approximate
         ? '<div class="almanac-approx">Approximate location: taken from the country centre. Enter a locator for your own square.</div>'
         : '';
     const sq = `${squares} ${squares === 1 ? 'square' : 'squares'}`;
-    const zone = localZoneText(new Date(), data.slot_minutes || DEFAULT_SLOT_MINUTES);
     const prelim = preliminaryText(data);
-    return `<div class="almanac-area small"><span class="almanac-area-main"><strong>${escapeHtml(grid4)}</strong>, radius ${radius} (${sq})</span>` +
-        ` <span class="text-muted">last ${days} days, times in ${escapeHtml(zone)}</span>${approx}` +
+    const rounding = roundingNote(new Date(), data.slot_minutes || DEFAULT_SLOT_MINUTES);
+    return `<div class="almanac-area small"><span class="almanac-area-main"><strong>${escapeHtml(grid4)}</strong>, radius ${radius} (${sq})</span>${approx}` +
         `<div class="almanac-snr text-muted">${escapeHtml(snrHeaderText(data))}</div>` +
+        (rounding ? `<div class="text-muted">${escapeHtml(rounding)}</div>` : '') +
         (prelim ? `<div class="almanac-preliminary">${escapeHtml(prelim)}</div>` : '') +
         '</div>';
 }
 
-function agendaHtml(data) {
+// Schedule: the usual openings now and within the next 3 h as bars on a 3 h
+// axis starting at `now`. Opacity follows n/m like the lanes; an outlined bar
+// is open now; a window that runs past the axis fades out at the right edge.
+export function scheduleHtml(data, now = new Date()) {
     const slotMinutes = data.slot_minutes || DEFAULT_SLOT_MINUTES;
-    const all = sortAgenda(Array.isArray(data.agenda) ? data.agenda : [], Number(data.now_slot) || 0);
-    let html = '<section class="almanac-agenda" aria-label="Usual openings in the next 12 hours">' +
-        '<div class="almanac-subhead">Usual openings, next 12 h</div>';
-    if (all.length === 0) {
-        return `${html}<div class="text-muted small">No usual openings in the next 12 h</div></section>`;
+    const offsetMin = tzOffsetMinutes(now);
+    const nowUtcMin = now.getUTCHours() * 60 + now.getUTCMinutes();
+    const items = [];
+    for (const e of sortAgenda(Array.isArray(data.agenda) ? data.agenda : [], Number(data.now_slot) || 0)) {
+        const ongoing = e.status === 'ongoing';
+        const startOff = ongoing ? 0 : Number(e.starts_in_min) || 0;
+        if (startOff >= SCHEDULE_MIN) continue;
+        const endOff = ongoing
+            ? (e.all_day ? SCHEDULE_MIN : mod((Number(e.start_slot) + Number(e.len_slots)) * slotMinutes - nowUtcMin, 1440))
+            : startOff + Number(e.len_slots) * slotMinutes;
+        items.push({ e, ongoing, startOff, endOff });
     }
-    const shown = runtime.agendaExpanded ? all : all.slice(0, AGENDA_CAP);
-    html += '<ul class="almanac-agenda-list">';
-    for (const e of shown) html += agendaRowHtml(e, slotMinutes, data.snr_tier);
-    html += '</ul>';
-    if (all.length > AGENDA_CAP) {
-        const label = runtime.agendaExpanded ? 'Show fewer' : `Show all (${all.length})`;
-        html += `<button type="button" class="almanac-agenda-more" aria-expanded="${runtime.agendaExpanded}">${label}</button>`;
+    let html = '<section class="almanac-schedule" aria-label="Usual openings in the next 3 hours">';
+    if (items.length === 0) {
+        return `${html}<div class="text-muted small">No usual openings in the next 3 h</div></section>`;
+    }
+    html += scheduleAxisHtml(nowUtcMin, offsetMin);
+    const groups = [
+        ['Open now, usually', items.filter((i) => i.ongoing)],
+        ['Opens within 3 h', items.filter((i) => !i.ongoing)],
+    ];
+    for (const [title, rows] of groups) {
+        if (rows.length === 0) continue;
+        html += `<div class="almanac-subhead">${title}</div><ul class="cond-sched-list">`;
+        for (const it of rows) html += scheduleRowHtml(it, slotMinutes, data.snr_tier, offsetMin);
+        html += '</ul>';
     }
     return `${html}</section>`;
 }
 
-function agendaRowHtml(e, slotMinutes, tier = null) {
+// Hour labels (local time) and 30-minute ticks along the 3 h axis.
+function scheduleAxisHtml(nowUtcMin, offsetMin) {
+    const localNow = nowUtcMin + offsetMin;
+    let marks = '';
+    for (let t = Math.ceil(localNow / 30) * 30; t <= localNow + SCHEDULE_MIN; t += 30) {
+        const left = ((t - localNow) / SCHEDULE_MIN) * 100;
+        const label = t % 60 === 0 ? `<span class="cond-sched-hour">${pad2(mod(t, 1440) / 60)}</span>` : '';
+        marks += `<span class="cond-sched-tick" style="left: ${left.toFixed(2)}%">${label}</span>`;
+    }
+    return `<div class="cond-sched-axis" aria-hidden="true"><span></span><span class="cond-sched-track">${marks}</span><span></span></div>`;
+}
+
+function scheduleRowHtml({ e, ongoing, startOff, endOff }, slotMinutes, tier, offsetMin) {
     const color = bandColor(e.band);
     const band = escapeHtml(e.band);
     const region = escapeHtml(e.region);
     const regionText = escapeHtml(regionLabel(e.region));
-    const time = e.all_day ? 'all day' : escapeHtml(localRangeLabel(e, slotMinutes));
-    const when = e.status === 'ongoing'
-        ? '<span class="almanac-when is-now">usually open now</span>'
-        : `<span class="almanac-when">${startsInLabel(e.starts_in_min)}</span>`;
-    const today = e.open_today ? '<span class="almanac-today">open today</span>' : '';
-    const utc = e.all_day ? '' : `<span class="almanac-utc text-muted">${escapeHtml(`${e.start}–${e.end} UTC`)}</span>`;
-    return `<li class="almanac-agenda-row" data-status="${escapeHtml(e.status)}" data-band="${band}" data-region="${region}">` +
-        `<span class="almanac-agenda-what"><span class="almanac-band-dot" style="background: ${color}" aria-hidden="true"></span>` +
-        `<strong>${band}</strong> to ${regionText}: usually <span class="almanac-agenda-time">${time}</span> ` +
-        `<span class="text-muted">(${e.peak_n}/${e.peak_m} days` +
-        `${e.peak_share !== null && e.peak_share !== undefined && tier !== null && tier !== undefined
-            ? ` \u00b7 ${escapeHtml(shareLabel(e.peak_share, tier))}` : ''})</span></span>` +
-        `<span class="almanac-agenda-meta">${when}${today}${utc}</span></li>`;
+    const n = Number(e.peak_n) || 0;
+    const m = Number(e.peak_m) || 0;
+    const clipped = endOff > SCHEDULE_MIN;
+    const left = (startOff / SCHEDULE_MIN) * 100;
+    const width = Math.max(1, ((Math.min(endOff, SCHEDULE_MIN) - startOff) / SCHEDULE_MIN) * 100);
+    const opacity = Math.round((0.15 + 0.85 * (m > 0 ? Math.min(1, n / m) : 0)) * 100) / 100;
+    const range = e.all_day ? 'all day' : localRangeLabel(e, slotMinutes, offsetMin);
+    const share = e.peak_share !== null && e.peak_share !== undefined && tier !== null && tier !== undefined
+        ? `, ${shareLabel(e.peak_share, tier)}` : '';
+    const title = escapeHtml(`${e.band} to ${regionLabel(e.region)}: usually ${range}` +
+        `${e.all_day ? '' : ` (${e.start}\u2013${e.end} UTC)`}, ${ongoing ? 'open now' : startsInLabel(e.starts_in_min)}, ` +
+        `opened ${n} of ${m} days${share}${e.open_today ? ', open today' : ''}`);
+    return `<li class="cond-sched-row" data-status="${escapeHtml(e.status)}" data-band="${band}" data-region="${region}" title="${title}">` +
+        `<span class="cond-sched-what"><span class="almanac-band-dot" style="background: ${color}" aria-hidden="true"></span><strong>${band}</strong> ${regionText}</span>` +
+        '<span class="cond-sched-track">' +
+        `<span class="cond-sched-bar${ongoing ? ' is-now' : ''}${clipped ? ' is-cut' : ''}" style="left: ${left.toFixed(2)}%; width: ${width.toFixed(2)}%; --band: ${color}">` +
+        `<span class="almanac-run" style="background: ${color}; opacity: ${opacity}"></span></span></span>` +
+        `<span class="cond-sched-n">${n} of ${m}</span></li>`;
 }
 
 function lanesHtml(data, lanes) {
@@ -737,7 +755,7 @@ function legendHtml(note = '') {
     return '<div class="almanac-legend small text-muted">' +
         '<span class="almanac-legend-item"><span class="almanac-legend-ramp" aria-hidden="true"></span>opened on few &rarr; most days</span>' +
         '<span class="almanac-legend-item"><span class="almanac-legend-unknown" aria-hidden="true"></span>not enough data</span>' +
-        '<span class="almanac-legend-item"><span class="almanac-legend-now" aria-hidden="true"></span>now (local time)</span>' +
+        '<span class="almanac-legend-item"><span class="almanac-legend-now" aria-hidden="true"></span>now</span>' +
         (note ? `<span class="almanac-legend-note">${escapeHtml(note)}</span>` : '') +
         '</div>';
 }
@@ -944,13 +962,6 @@ function onLanesKeydown(e) {
 }
 
 function attachHandlers(body) {
-    const more = body.querySelector('.almanac-agenda-more');
-    if (more) {
-        more.addEventListener('click', () => {
-            runtime.agendaExpanded = !runtime.agendaExpanded;
-            render();
-        });
-    }
     const lanes = body.querySelector('.almanac-lanes');
     if (!lanes) return;
     const first = lanes.querySelector('.almanac-lane');
@@ -973,7 +984,6 @@ function captureFocus(body) {
     const el = document.activeElement;
     if (!el || !body.contains(el)) return null;
     if (el.classList.contains('almanac-lane')) return { band: el.dataset.band, region: el.dataset.region };
-    if (el.classList.contains('almanac-agenda-more')) return { more: true };
     if (el.classList.contains('almanac-drill-back')) return { back: true };
     return null;
 }
@@ -981,9 +991,7 @@ function captureFocus(body) {
 function restoreFocus(body, focus) {
     if (!focus) return;
     let target = null;
-    if (focus.more) {
-        target = body.querySelector('.almanac-agenda-more');
-    } else if (focus.back) {
+    if (focus.back) {
         target = body.querySelector('.almanac-drill-back');
     } else {
         target = findLane(body, focus.band, focus.region);
@@ -1021,7 +1029,6 @@ export const __test = {
         runtime.loading = false;
         runtime.lastQth = '';
         runtime.lastMinSnr = null;
-        runtime.agendaExpanded = false;
         closeDrilldownState();
         runtime.onLayoutChange = null;
     },
