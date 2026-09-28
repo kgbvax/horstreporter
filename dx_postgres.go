@@ -107,6 +107,13 @@ func (d *regionDelta) add(o regionDelta) {
 	}
 }
 
+// spotCarriesRealSNR: DX-cluster spots carry RP 0, not a measured SNR, so
+// they count toward spot_count only (KTD13). Shared by live observe() and the
+// Almanac SNR backfill.
+func spotCarriesRealSNR(m MQTTMessage) bool {
+	return !strings.EqualFold(strings.TrimSpace(m.MD), "DXCLUSTER")
+}
+
 // observeSpot counts one spot; hasSNR is false for spots without a real SNR
 // (DX cluster), which count toward spot_count only.
 func (d *regionDelta) observeSpot(snr int, hasSNR bool) {
@@ -1073,7 +1080,7 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 	// (these only depend on m) so flushRawSpots can emit a multi-VALUES INSERT
 	// without recomputing per row and so the ingest lock critical section isn't
 	// extended by the normalization/geo work.
-	isDXCluster := strings.EqualFold(strings.TrimSpace(m.MD), "DXCLUSTER")
+	isDXCluster := !spotCarriesRealSNR(m)
 	var row rawSpotRow
 	if !isDXCluster {
 		source4 := normalizeSource4(m.SL)
@@ -2710,6 +2717,11 @@ func (s *dxPostgresStore) regionCalendarStats(ctx context.Context, daysBack int,
 // is excluded). Written once; absent while the columns are missing.
 const almanacSNRSinceKey = "almanac_snr_since_day"
 
+// almanacSNRColumnsAddedKey records the unix time the SNR columns were added
+// (live SNR counting starts there); written once, by the ALTER's process.
+// The SNR backfill uses it as the deploy day's cutoff.
+const almanacSNRColumnsAddedKey = "almanac_snr_columns_added_unix"
+
 // regionSNRColumnNames are the Almanac SNR counters of
 // dx_region_baseline_daily, in almanacSNRTierFloors order after snr_spots.
 var regionSNRColumnNames = []string{"snr_spots", "snr_ge_m20", "snr_ge_m15", "snr_ge_m10", "snr_ge_m5", "snr_ge_0"}
@@ -2744,6 +2756,7 @@ type regionSNRSchema interface {
 	columnsPresent(ctx context.Context) (int, error)
 	alterWithLockTimeout(ctx context.Context) error
 	seedSince(ctx context.Context, day int64) error
+	recordColumnsAdded(ctx context.Context, unix int64) error
 }
 
 // ensureRegionSNRColumns makes sure the SNR counter columns exist and records
@@ -2763,6 +2776,12 @@ func ensureRegionSNRColumns(ctx context.Context, db regionSNRSchema, ready *atom
 			return false
 		}
 		logInfo("almanac: added the SNR counter columns to dx_region_baseline_daily")
+		// The live SNR counters start here: the SNR backfill
+		// (almanac_snr_backfill.go) adds the deploy day's earlier spots
+		// from dx_raw_spots up to this instant.
+		if err := db.recordColumnsAdded(ctx, time.Now().Unix()); err != nil {
+			logError("almanac: recording the SNR column-add time failed (the SNR backfill then needs -almanac-snr-backfill-cutoff-unix): %v", err)
+		}
 	}
 	ready.Store(true)
 	if err := db.seedSince(ctx, today+1); err != nil {
@@ -2798,5 +2817,10 @@ func (p *pgRegionSNRSchema) alterWithLockTimeout(ctx context.Context) error {
 
 func (p *pgRegionSNRSchema) seedSince(ctx context.Context, day int64) error {
 	_, err := p.pool.Exec(ctx, almanacSNRSinceSeedSQL, almanacSNRSinceKey, fmt.Sprintf("%d", day))
+	return err
+}
+
+func (p *pgRegionSNRSchema) recordColumnsAdded(ctx context.Context, unix int64) error {
+	_, err := p.pool.Exec(ctx, almanacSNRSinceSeedSQL, almanacSNRColumnsAddedKey, fmt.Sprintf("%d", unix))
 	return err
 }

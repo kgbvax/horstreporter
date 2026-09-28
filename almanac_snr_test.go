@@ -108,6 +108,12 @@ type fakeSNRSchema struct {
 	checkErr, alterErr error
 	alters             int
 	seeded             []int64
+	addedAt            []int64
+}
+
+func (f *fakeSNRSchema) recordColumnsAdded(_ context.Context, unix int64) error {
+	f.addedAt = append(f.addedAt, unix)
+	return nil
 }
 
 func (f *fakeSNRSchema) columnsPresent(context.Context) (int, error) { return f.present, f.checkErr }
@@ -131,6 +137,9 @@ func TestEnsureRegionSNRColumns(t *testing.T) {
 		if !ensureRegionSNRColumns(ctx, db, &ready, 100) || !ready.Load() || db.alters != 0 {
 			t.Fatalf("present columns must skip the ALTER (it takes the table lock): alters=%d", db.alters)
 		}
+		if len(db.addedAt) != 0 {
+			t.Fatalf("no ALTER, no column-add time: %v", db.addedAt)
+		}
 		if len(db.seeded) != 1 || db.seeded[0] != 101 {
 			t.Fatalf("SNR start must be seeded as tomorrow: %v", db.seeded)
 		}
@@ -140,6 +149,9 @@ func TestEnsureRegionSNRColumns(t *testing.T) {
 		var ready atomic.Bool
 		if !ensureRegionSNRColumns(ctx, db, &ready, 100) || !ready.Load() || db.alters != 1 {
 			t.Fatalf("missing columns must be added once")
+		}
+		if len(db.addedAt) != 1 || db.addedAt[0] <= 0 {
+			t.Fatalf("the column-add time must be recorded (SNR backfill cutoff): %v", db.addedAt)
 		}
 	})
 	t.Run("ALTER fails: degrade", func(t *testing.T) {

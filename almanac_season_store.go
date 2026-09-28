@@ -338,42 +338,8 @@ func (p *pgAlmanacFoldStore) foldDay(ctx context.Context, day int64) (int64, err
 	if err != nil {
 		return 0, err
 	}
-	stream := almanacFoldStreamSQL
-	if almanacFoldUsesSNR(day, since, hasSince) {
-		stream = almanacFoldStreamSNRSQL
-	}
-	fold := newAlmanacDayFold(day)
-	rows, err := tx.Query(ctx, stream, day)
-	if err != nil {
+	if err := foldDayInTx(ctx, tx, day, almanacFoldUsesSNR(day, since, hasSince)); err != nil {
 		return 0, err
-	}
-	for rows.Next() {
-		var r almanacDailyRow
-		if err := rows.Scan(&r.Grid4, &r.Band, &r.Region, &r.Slot, &r.Count,
-			&r.SNR, &r.GE[0], &r.GE[1], &r.GE[2], &r.GE[3], &r.GE[4]); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		fold.add(r)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-
-	if len(fold.Segments) > 0 {
-		if err := foldSeasonRows(ctx, tx, fold); err != nil {
-			return 0, err
-		}
-		if _, err := tx.Exec(ctx, almanacFoldActivitySQL, fold.YearMonth, almanacSeasonLayerPSKR,
-			int32(fold.dayMaskBit())); err != nil {
-			return 0, err
-		}
-	}
-	if slots, totals := fold.nonZeroSlotTotals(); len(slots) > 0 {
-		if _, err := tx.Exec(ctx, almanacFoldIngestSeedSQL, day, almanacSeasonLayerPSKR, slots, totals); err != nil {
-			return 0, err
-		}
 	}
 	if _, err := tx.Exec(ctx, almanacSetWatermarkSQL, almanacFoldWatermarkKey, strconv.FormatInt(day, 10)); err != nil {
 		return 0, err
@@ -382,6 +348,75 @@ func (p *pgAlmanacFoldStore) foldDay(ctx context.Context, day int64) (int64, err
 		return 0, err
 	}
 	return day, nil
+}
+
+// foldDayInTx is the body of the fold transaction shared by foldDay and
+// refoldDay: stream the day's daily rows (with the SNR counters when
+// withSNR), rewrite the day's segment of every affected seasonal row (SET
+// semantics), OR the activity bit and raise the ingest-slot seed (GREATEST).
+// Every step is idempotent, so re-running it for a folded day is safe. The
+// caller holds the watermark row lock.
+func foldDayInTx(ctx context.Context, tx pgx.Tx, day int64, withSNR bool) error {
+	stream := almanacFoldStreamSQL
+	if withSNR {
+		stream = almanacFoldStreamSNRSQL
+	}
+	fold := newAlmanacDayFold(day)
+	rows, err := tx.Query(ctx, stream, day)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var r almanacDailyRow
+		if err := rows.Scan(&r.Grid4, &r.Band, &r.Region, &r.Slot, &r.Count,
+			&r.SNR, &r.GE[0], &r.GE[1], &r.GE[2], &r.GE[3], &r.GE[4]); err != nil {
+			rows.Close()
+			return err
+		}
+		fold.add(r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if len(fold.Segments) > 0 {
+		if err := foldSeasonRows(ctx, tx, fold); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, almanacFoldActivitySQL, fold.YearMonth, almanacSeasonLayerPSKR,
+			int32(fold.dayMaskBit())); err != nil {
+			return err
+		}
+	}
+	if slots, totals := fold.nonZeroSlotTotals(); len(slots) > 0 {
+		if _, err := tx.Exec(ctx, almanacFoldIngestSeedSQL, day, almanacSeasonLayerPSKR, slots, totals); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// refoldDay re-runs the fold transaction for an already folded day without
+// the watermark check and without moving the watermark (the SNR backfill,
+// almanac_snr_backfill.go, re-folds days whose daily rows gained SNR
+// counters). It takes the same watermark row lock as foldDay and
+// forceAdvance, so it serializes with the fold ticker.
+func (p *pgAlmanacFoldStore) refoldDay(ctx context.Context, day int64, withSNR bool) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, ok, err := readAlmanacWatermark(ctx, tx, true); err != nil {
+		return err
+	} else if !ok {
+		return errors.New("almanac watermark missing")
+	}
+	if err := foldDayInTx(ctx, tx, day, withSNR); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // almanacFoldPlanStmts run inside the fold transaction before the cursor is

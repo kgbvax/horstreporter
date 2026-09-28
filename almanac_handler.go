@@ -145,6 +145,27 @@ func (s *almanacService) entry(key string, create bool) *almanacCacheEntry {
 	return s.lru.get(key, create)
 }
 
+// purgeCaches drops every cached /api/almanac and /api/almanac/season
+// entry (the SNR backfill calls it after lowering the SNR start, which the
+// watermark-keyed caches would otherwise miss for up to their TTL).
+func (s *almanacService) purgeCaches() {
+	if s == nil {
+		return
+	}
+	// Wait out an in-flight Postgres read so it can't refill the new cache
+	// with a result read under the old SNR start.
+	s.slow.Lock()
+	defer s.slow.Unlock()
+	s.mu.Lock()
+	s.lru = newAlmanacLRU[almanacCacheEntry](almanacCacheMaxEntries)
+	s.mu.Unlock()
+	if s.season != nil {
+		s.season.mu.Lock()
+		s.season.lru = newAlmanacLRU[almanacSeasonEntry](almanacCacheMaxEntries)
+		s.season.mu.Unlock()
+	}
+}
+
 // peek returns the entry without touching recency (tests/diagnostics).
 func (s *almanacService) peek(key string) *almanacCacheEntry {
 	s.mu.Lock()

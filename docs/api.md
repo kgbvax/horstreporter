@@ -649,6 +649,18 @@ When Postgres is configured, a `postgres` block carries persistence health:
 | `late_region_drops` | live spots since start whose region-baseline keys were dropped because the spot time was outside [now − 24 h, now + 10 min] |
 | `prune_gate_fail_streak` | consecutive daily prunes that skipped `dx_region_baseline_daily` because the fold gate (watermark / forced advance) could not be evaluated; the table is never pruned ungated. Logged at ERROR from 3, then every 24. 0 = healthy |
 
+A sibling `almanac_snr_backfill` sub-object reports the one-off SNR backfill
+(`null` when `-almanac-snr-backfill=false`):
+
+| Field | Meaning |
+|---|---|
+| `enabled` | the backfill was started in this process |
+| `running` | a run is in progress (it starts 3 min after startup) |
+| `done` | dx_meta `almanac_snr_backfill_done` is set (this run or an earlier one) |
+| `days_backfilled` | days written by this run (full days + the partial deploy day) |
+| `since_day` | `almanac_snr_since_day` after a successful run (omitted until then) |
+| `last_error` / `last_error_unix` | the last failure (omitted when none); the done key stays unset and the next start retries |
+
 #### Almanac fold flags
 
 - `-almanac-fold-enable` (default `true`): fold every final day of
@@ -697,7 +709,8 @@ When Postgres is configured, a `postgres` block carries persistence health:
   PSKReporter; DX-cluster spots are counted in `spot_count` only) and the
   cumulative `snr_ge_m20`, `snr_ge_m15`, `snr_ge_m10`, `snr_ge_m5`,
   `snr_ge_0` (spots with SNR ≥ −20 … ≥ 0 dB). Written by the live ingest
-  only; the raw-spot rebuild leaves them 0.
+  and, once, for the days before the SNR start, by the SNR backfill (below);
+  the raw-spot rebuild leaves them 0.
 - Startup adds them when missing: one `ALTER TABLE … ADD COLUMN IF NOT
   EXISTS` for all six (metadata-only, constant default) under
   `lock_timeout = 5s`, skipped when `information_schema` already lists them.
@@ -710,6 +723,49 @@ When Postgres is configured, a `postgres` block carries persistence health:
   on, a 6-bin SNR histogram per cell (sparse encoding v2, see
   `almanac_sparse.go`); the WSPR backfill writes the same bins from
   wspr.live's `snr`.
+- dx_meta `almanac_snr_columns_added_unix`: unix time the ALTER added the
+  columns (live SNR counting starts there); written once by that start.
+
+#### Almanac SNR backfill flags
+
+- `-almanac-snr-backfill` (default `true`): one-off background job
+  (`almanac_snr_backfill.go`, 3 min after startup) that fills the SNR counters
+  for the days before `almanac_snr_since_day` from `dx_raw_spots`, then lowers
+  `almanac_snr_since_day`. Guarded by dx_meta `almanac_snr_backfill_done`;
+  `false` skips it.
+  - **Rows:** only `source_type = 'mqtt'` (PSKReporter). They pass the live
+    gates (FT8/FT4, known band, both locators) and key emitter unchanged;
+    DX-cluster / RBN / WSPR rows are never read. The live 24 h late-spot
+    clamp is not applied, and every counter is capped at the row's
+    `spot_count`. `spot_count` itself is never touched.
+  - **Range:** every UTC day before the deploy day that `dx_raw_spots` covers
+    completely (`min(spot_time)` ≤ the day's start) is SET (idempotent), plus
+    the deploy day (`almanac_snr_since_day − 1`) for spots before the cutoff,
+    ADDed to the live counters exactly once. When the deploy day itself is
+    not fully covered, nothing is backfilled.
+  - **Writes:** batched, keys in a fixed order, keys without SNR skipped.
+    Each batch is its own transaction: COPY its keys into a temp table, then
+    `UPDATE … FROM`, pinned to a primary-key nested loop. SET batches (past
+    days) hold 20 000 keys under `statement_timeout 30s` / `lock_timeout 5s`.
+    ADD batches (deploy day, whose rows the live flush upserts) hold 5 000
+    keys under `10s` / `2s`. A lock timeout backs off (1 s, 2 s, … 6
+    attempts). Each ADD batch advances dx_meta
+    `almanac_snr_backfill_partial_progress` in its own transaction, so a
+    retry resumes after the last committed batch and never adds twice; the
+    last one sets `almanac_snr_backfill_partial_done`. Keys missing in
+    `dx_region_baseline_daily` are skipped and counted in the log. 200 ms
+    pause between batches, 5 s between days.
+  - **Re-fold:** days the fold watermark has passed are re-folded with SNR
+    (same transaction as the fold, watermark unchanged). The since-day moves
+    down (never up) and the done key is set together, under the watermark
+    lock. On any failure the log shows an ERROR, the done key stays unset,
+    the since-day is unchanged, and the next start retries.
+- `-almanac-snr-backfill-cutoff-unix` (default `0` = dx_meta
+  `almanac_snr_columns_added_unix`): unix time live SNR counting started
+  (end of the partial deploy day's window). Must lie inside the deploy day.
+  The prod deploy that added the columns predates that dx_meta key and needs
+  `-almanac-snr-backfill-cutoff-unix 1790609737` (2026-09-28 15:35:37 UTC);
+  without a cutoff the run fails and retries at the next start.
 
 ## Removed features
 

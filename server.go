@@ -694,6 +694,7 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 			BaselineFlushLastOKUnix: baseOK,
 			BaselineFlushFailStreak: baseStreak,
 			AlmanacFold:             almanacFoldStats(dxBaseline.Store()),
+			AlmanacSNRBackfill:      almanacSNRBackfillState.stats(),
 		}
 	}
 
@@ -801,6 +802,9 @@ type postgresStatsBlock struct {
 	BaselineFlushFailStreak int64 `json:"baseline_flush_fail_streak"`
 	// AlmanacFold is the Almanac seasonal-record fold health (U3).
 	AlmanacFold *almanacFoldStatsBlock `json:"almanac_fold"`
+	// AlmanacSNRBackfill is the one-off SNR backfill's status (null when
+	// -almanac-snr-backfill=false).
+	AlmanacSNRBackfill *almanacSNRBackfillStatsBlock `json:"almanac_snr_backfill"`
 }
 
 // almanacFoldStatsBlock is postgres.almanac_fold in /api/stats. A watermark

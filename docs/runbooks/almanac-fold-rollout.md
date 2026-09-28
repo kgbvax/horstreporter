@@ -332,6 +332,51 @@ roll-forward those days read "no SNR" as closed-for-floor — move
   little below `spot_count` (DX-cluster spots carry no SNR), cumulative
   counters decreasing with the tier.
 
+## 5b. SNR backfill (one-off)
+
+The deploy that added the SNR columns (2026-09-28 15:35:37 UTC, since-day
+20725) collected SNR only from then on. The next deploy runs
+`almanac_snr_backfill.go` once: the preceding days are filled from
+`dx_raw_spots` (retention ~4 days), re-folded, and `almanac_snr_since_day`
+moves down.
+
+- [ ] Add `-almanac-snr-backfill-cutoff-unix 1790609737` to prod ARGS (the
+  column-add time was not recorded in dx_meta by that deploy). It can stay:
+  it is ignored once `almanac_snr_backfill_done` is set.
+- [ ] Before the deploy, note the coverage:
+  `SELECT to_timestamp(min(spot_time)) FROM dx_raw_spots WHERE source_type = 'mqtt';`
+  Every day starting on/after that instant up to 2026-09-27 is SET; the
+  2026-09-28 rows before 15:35:37 are ADDed.
+- [ ] Log (3 min after start): `almanac SNR backfill: raw PSKReporter rows
+  from …`, then one line per day (`… raw rows (… accepted), … keys (… with
+  SNR) in … batch(es) (… already committed), … rows updated, … keys missing
+  …; read …, total …`), `re-folded with SNR` for days ≤ the watermark, and
+  `almanac SNR backfill done`. `hit lock_timeout … retrying` lines are
+  expected occasionally on the deploy day (live flush contention). Any ERROR
+  `almanac SNR backfill failed` → the next start retries: SET days are
+  idempotent; the deploy day resumes after
+  `almanac_snr_backfill_partial_progress` and is never added twice.
+- [ ] Batches: past days 20 000 keys per transaction (30 s statement / 5 s
+  lock timeout); deploy day 5 000 keys (10 s / 2 s). Watch
+  `baseline_flush_fail_streak` in `/api/stats` stay 0 while it runs.
+- [ ] `/api/stats` → `postgres.almanac_snr_backfill`: `done: true`,
+  `since_day` = the earliest backfilled day, no `last_error`.
+- [ ] Verify the daily counters (each backfilled day > 0, `snr_spots` a
+  little below `spot_count`, cumulative counters decreasing with the tier):
+
+  ```sql
+  SELECT day_index, to_timestamp(day_index * 86400)::date AS day,
+         sum(spot_count) AS spots, sum(snr_spots) AS snr_spots,
+         sum(snr_ge_m20) AS ge_m20, sum(snr_ge_m10) AS ge_m10, sum(snr_ge_0) AS ge_0
+  FROM dx_region_baseline_daily
+  WHERE day_index >= (SELECT v::bigint FROM dx_meta WHERE k = 'almanac_snr_since_day')
+  GROUP BY day_index ORDER BY day_index;
+  SELECT k, v FROM dx_meta WHERE k LIKE 'almanac_snr%' ORDER BY k;
+  ```
+
+- [ ] The Almanac caches are purged after a successful run, so SNR floors
+  cover the backfilled days at once.
+
 ## 6. U2 query plans (stop condition: any read > 1.5 s)
 
 Result (prod, 2026-09-28, JO32 r=2, watermark today−2, cold): (a) seasonal 64 ms, (b) tail aggregate 368 ms, (c) tail active days 181 ms, ingest/lost < 1 ms. No single read exceeds 1.5 s. The whole cold request (typical plus today-overlay reads) landed at 1.3–1.6 s, so `almanacQueryTimeout` was raised to 4 s. The tail index is not needed.

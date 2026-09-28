@@ -520,18 +520,29 @@ func (e *DxBaselineEngine) Stats(now int64) (bucketCount, eventCount, historyMin
 	return bucketCount, eventCount, historyMinutes
 }
 
-func (e *DxBaselineEngine) Observe(m MQTTMessage) {
+// dxBaselineObserveGate is Observe's spot gate: a known band and both
+// locators present. Returns the normalized band. Shared with the Almanac SNR
+// backfill so replayed raw rows pass exactly the live gates.
+func dxBaselineObserveGate(m MQTTMessage) (string, bool) {
 	band := normalizeBand(m.B)
 	if band == "" {
+		return "", false
+	}
+	if strings.TrimSpace(m.SL) == "" || strings.TrimSpace(m.RL) == "" {
+		return "", false
+	}
+	return band, true
+}
+
+func (e *DxBaselineEngine) Observe(m MQTTMessage) {
+	band, ok := dxBaselineObserveGate(m)
+	if !ok {
 		return
 	}
 	sl := strings.ToUpper(strings.TrimSpace(m.SL))
 	rl := strings.ToUpper(strings.TrimSpace(m.RL))
 	sc := strings.ToUpper(strings.TrimSpace(m.SC))
 	rc := strings.ToUpper(strings.TrimSpace(m.RC))
-	if sl == "" || rl == "" {
-		return
-	}
 	ts := m.T
 	if ts <= 0 {
 		ts = time.Now().Unix()

@@ -291,6 +291,15 @@ func main() {
 		"Comma-separated grid4 areas (e.g. JO32) whose r=2 ring gets the Almanac WSPR layer backfilled from the wspr.live archive. Empty = off.")
 	almanacWSPRBackfillYearsFlag := flag.Int("almanac-wspr-backfill-years", 3,
 		"How many years of complete months the Almanac WSPR backfill covers (newest first; never before 2008-03).")
+	// Almanac SNR backfill (almanac_snr_backfill.go): one-off, guarded by
+	// dx_meta almanac_snr_backfill_done. The cutoff (the SNR columns' add
+	// time) is recorded in dx_meta by the ALTER; the deploy that added the
+	// columns before that record existed (prod) needs it passed explicitly:
+	// -almanac-snr-backfill-cutoff-unix 1790609737 (2026-09-28 15:35:37 UTC).
+	almanacSNRBackfillFlag := flag.Bool("almanac-snr-backfill", true,
+		"One-off: backfill the Almanac SNR counters of dx_region_baseline_daily from dx_raw_spots for the days before the SNR collection start, re-fold them and lower almanac_snr_since_day (false: skip).")
+	almanacSNRBackfillCutoffFlag := flag.Int64("almanac-snr-backfill-cutoff-unix", 0,
+		"Unix time the SNR columns were added (live SNR counting start) for the SNR backfill's partial deploy day; 0 = dx_meta almanac_snr_columns_added_unix. Prod: 1790609737.")
 	proplabSWEnableFlag := flag.Bool("proplab-sw-enable", false, "Enable space-weather index series ingest (NOAA SWPC kp/F10.7/xray/OVATION; consumed by pathscope)")
 	opModeAgentURLFlag := flag.String("opmode-agent-url", "", "Deprecated and ignored: backend never proxies to local operator agent")
 	pushEnableFlag := flag.Bool("push-enable", false, "Enable Web Push notification channel for surge alerts (requires VAPID keys via -push-vapid-private-key/-push-vapid-public-key or PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
@@ -427,6 +436,10 @@ func main() {
 				almanacAreas, *almanacWSPRBackfillYearsFlag)
 			if *almanacFoldEnableFlag {
 				startAlmanacFold(st, *almanacDiskPathFlag, almanacAreas)
+			}
+			// One-off SNR backfill (background, after a start delay).
+			if *almanacSNRBackfillFlag {
+				startAlmanacSNRBackfill(st, *almanacSNRBackfillCutoffFlag)
 			}
 		}
 		// Wire the WSPR climatology to the same Postgres pool and ensure the
