@@ -901,6 +901,30 @@ func TestBaselineFlushStmtsIncludeIngestTotals(t *testing.T) {
 // SQL shape guards (the SQL mirrors fakeAlmanacFoldStore)
 // ---------------------------------------------------------------------------
 
+// Parameters in an INSERT ... SELECT list are typed text unless cast; prod
+// rejected the uncast upsert with SQLSTATE 42804 (2026-09-28). Every
+// SELECT-list / cursor parameter must carry an explicit cast.
+func TestAlmanacFoldSQLParamsCast(t *testing.T) {
+	for name, sql := range map[string]string{
+		"upsert":   almanacFoldUpsertSQL,
+		"activity": almanacFoldActivitySQL,
+		"seed":     almanacFoldIngestSeedSQL,
+		"lost":     almanacRecordLostSQL,
+		"declare":  almanacFoldDeclareSQL,
+	} {
+		for i := 1; i <= 4; i++ {
+			p := fmt.Sprintf("$%d", i)
+			idx := strings.Index(sql, p)
+			if idx < 0 {
+				continue
+			}
+			if !strings.HasPrefix(sql[idx+len(p):], "::") {
+				t.Errorf("%s: %s must carry an explicit ::type cast: %q", name, p, sql)
+			}
+		}
+	}
+}
+
 func TestAlmanacFoldSQLShape(t *testing.T) {
 	if !strings.Contains(almanacFoldUpsertSQL, "SET counts = EXCLUDED.counts") {
 		t.Fatalf("season upsert must store the re-encoded row (SET semantics): %q", almanacFoldUpsertSQL)

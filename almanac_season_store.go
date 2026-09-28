@@ -172,7 +172,7 @@ const (
 		SELECT c.grid4, c.band, c.region, c.counts
 		FROM almanac_season_counts c
 		JOIN almanac_fold_seg s ON s.grid4 = c.grid4 AND s.band = c.band AND s.region = c.region
-		WHERE c.year_month = $1 AND c.layer = $2`
+		WHERE c.year_month = $1::integer AND c.layer = $2::text`
 	almanacFoldFetchSQL = `FETCH 4096 FROM almanac_fold_cur`
 	almanacFoldCloseSQL = `CLOSE almanac_fold_cur`
 
@@ -182,7 +182,7 @@ const (
 	// unchanged row is not rewritten.
 	almanacFoldUpsertSQL = `
 		INSERT INTO almanac_season_counts AS c (grid4, band, region, year_month, layer, counts)
-		SELECT n.grid4, n.band, n.region, $1, $2, n.counts
+		SELECT n.grid4, n.band, n.region, $1::integer, $2::text, n.counts
 		FROM almanac_fold_new n
 		ON CONFLICT (grid4, band, region, year_month, layer)
 		DO UPDATE SET counts = EXCLUDED.counts
@@ -191,7 +191,7 @@ const (
 	// $1 year_month, $2 layer, $3 the day's mask bit. OR is idempotent.
 	almanacFoldActivitySQL = `
 		INSERT INTO almanac_area_activity AS a (grid4, band, year_month, layer, day_mask)
-		SELECT DISTINCT s.grid4, s.band, $1, $2, $3::integer
+		SELECT DISTINCT s.grid4, s.band, $1::integer, $2::text, $3::integer
 		FROM almanac_fold_seg s
 		ON CONFLICT (grid4, band, year_month, layer)
 		DO UPDATE SET day_mask = a.day_mask | EXCLUDED.day_mask`
@@ -202,7 +202,7 @@ const (
 	// never lowers a flush-maintained total.
 	almanacFoldIngestSeedSQL = `
 		INSERT INTO almanac_ingest_slots AS i (day_index, slot_of_day, layer, spot_total)
-		SELECT $1, u.slot, $2, u.total
+		SELECT $1::bigint, u.slot, $2::text, u.total
 		FROM unnest($3::integer[], $4::bigint[]) AS u(slot, total)
 		ON CONFLICT (day_index, slot_of_day, layer)
 		DO UPDATE SET spot_total = GREATEST(i.spot_total, EXCLUDED.spot_total)`
@@ -214,7 +214,7 @@ const (
 
 	almanacRecordLostSQL = `
 		INSERT INTO almanac_lost_days (day_index, reason, recorded_at)
-		SELECT d, $2, $3 FROM unnest($1::bigint[]) AS d
+		SELECT d, $2::text, $3::bigint FROM unnest($1::bigint[]) AS d
 		ON CONFLICT (day_index) DO NOTHING`
 )
 

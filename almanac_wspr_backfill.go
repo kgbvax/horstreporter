@@ -691,11 +691,11 @@ func (p *pgAlmanacWSPRBackfillStore) commitMonth(ctx context.Context, m *almanac
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, err := tx.Exec(ctx, `DELETE FROM almanac_season_counts WHERE layer = $1 AND year_month = $2 AND grid4 = ANY($3)`,
+	if _, err := tx.Exec(ctx, `DELETE FROM almanac_season_counts WHERE layer = $1 AND year_month = $2 AND grid4 = ANY($3::text[])`,
 		almanacSeasonLayerWSPR, m.YearMonth, m.Ring); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM almanac_area_activity WHERE layer = $1 AND year_month = $2 AND grid4 = ANY($3)`,
+	if _, err := tx.Exec(ctx, `DELETE FROM almanac_area_activity WHERE layer = $1 AND year_month = $2 AND grid4 = ANY($3::text[])`,
 		almanacSeasonLayerWSPR, m.YearMonth, m.Ring); err != nil {
 		return err
 	}
