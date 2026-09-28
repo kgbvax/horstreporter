@@ -409,6 +409,13 @@ func main() {
 		if st := dxBaseline.Store(); st != nil && *almanacFoldEnableFlag {
 			startAlmanacFold(st, *almanacDiskPathFlag)
 		}
+		// /api/almanac reader (U2). Resolvers are read per request, so the
+		// QRZ resolver wired later is picked up.
+		if st := dxBaseline.Store(); st != nil {
+			almanacSvc = startAlmanacService(st, dxBaseline.resolveAlmanacArea)
+			// WSPR archive backfill (U5): no-op unless -almanac-wspr-backfill-areas is set.
+			startAlmanacWSPRBackfill(context.Background(), st, *wsprEndpoint, *almanacDiskPathFlag)
+		}
 		// Wire the WSPR climatology to the same Postgres pool and ensure the
 		// wspr_region_baseline_daily table exists.
 		wsprClimatology.SetStore(dxBaseline.Store())
@@ -648,6 +655,9 @@ func main() {
 	// Unified multi-source contract (prop_intel_v2.go). v1 above stays frozen
 	// for horstapp compatibility.
 	appMux.HandleFunc("/api/prop_intel/v2", propIntelV2Handler)
+	// QTH propagation Almanac (U2): 30-day "opened N of M days" lanes + agenda.
+	// 503 without Postgres.
+	appMux.HandleFunc("/api/almanac", almanacHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
 	appMux.HandleFunc("/api/history", historyHandler)
 	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)

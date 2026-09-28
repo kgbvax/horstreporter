@@ -338,6 +338,78 @@ region):
 - Atypical cells fan out Web Push like v1 (adapted to the v1 push payload;
   push labels are unchanged).
 
+### `GET /api/almanac` — QTH propagation Almanac (30-day "opened N of M days")
+
+For the operator's area: per band, far-end region and 30-min UTC slot, on how
+many of the last 30 complete UTC days the slot was open (`n`) out of the days
+it could be observed (`m`), plus an agenda of openings that are usual now or
+in the next 12 h. Source: PSKReporter FT8/FT4 + DX-cluster spots with
+locators (the region baseline); the WSPR backfill layer never enters this
+view. Days ≤ the fold watermark come from the seasonal record, later days
+from `dx_region_baseline_daily`, in one read-only REPEATABLE READ
+transaction (each day counted once).
+
+Params: `qth` (or `callsign` / `locator`, see Conventions). A 6/8-char
+locator is truncated to its grid4; a callsign resolves via QRZ, falling back
+to the DXCC centroid (`area.approximate: true`).
+
+Status: `400` missing or invalid qth · `404` callsign that cannot be located ·
+`503` no Postgres, read over the 1.5 s budget, or a failed read in the last
+30 s (negative cache; `Retry-After: 30`).
+
+Caching (keyed by the centre grid4, LRU of 256): the typical part (lanes,
+radius) is kept 6 h, or until the fold watermark changes or the UTC day rolls;
+the today overlay (`open_today`) is re-read after 120 s. Served with
+`Cache-Control: max-age=60`.
+
+Response:
+```
+{
+  "qth": "JO32AB",
+  "area": {"grid4": "JO32", "source": "locator", "approximate": false,
+           "radius": 1, "squares": ["JN41", "JN42", "…"]},
+  "window": {"start_day": "2026-09-15", "end_day": "2026-10-14", "days": 30,
+             "start_day_index": 20711, "end_day_index": 20740},
+  "slot_minutes": 30, "m_min": 10, "k": 2, "usually_share": 0.5,
+  "watermark_day": 20738, "now_slot": 25,
+  "generated_at": 1792067400, "today_as_of": 1792067400,
+  "lanes": [
+    {"band": "20m", "region": "NA", "n": [0, 0, …48], "m": [30, 30, …48],
+     "open_today": false}
+  ],
+  "agenda": [
+    {"band": "20m", "region": "NA", "start_slot": 26, "len_slots": 10,
+     "start": "13:00", "end": "18:00", "crosses_midnight": false,
+     "all_day": false, "status": "upcoming", "starts_in_min": 30,
+     "peak_slot": 27, "peak_n": 24, "peak_m": 30, "open_today": false}
+  ]
+}
+```
+
+- Slot `s` covers `s*30 … s*30+30` minutes after 00:00 UTC. All times UTC.
+- `m[s]`: window days on which slot `s` was *alive* (ingest total > 0 and
+  ≥ 10% of that slot's 30-day median; lost days never count) and the area was
+  *active* on the band (≥ 1 spot to any region, its own included, in slot `s`
+  or `s+1`). A quiet night therefore reads unknown, not closed. `m` is a
+  band-level quantity, repeated in every region lane of the band.
+- `n[s]`: of those days, how many had ≥ `k` spots on the band to the region in
+  slot `s`, summed across the area's squares. Days without spots count as
+  closed (never skipped).
+- A cell with `m[s] < m_min` is "not enough data" — distinct from closed.
+- `area.radius`: rings around the centre square the area was widened to
+  (0–2): the smallest radius at which more than half of the in-scope bands
+  (160–10 m) have ≥ `m_min` active days. `squares` lists them.
+- Lanes: every region for each band with at least one observed slot; bands
+  never active in the area are omitted.
+- `agenda`: windows of slots with `n/m ≥ usually_share` (known cells only),
+  single-slot gaps bridged, crossing midnight allowed. Listed when `ongoing`
+  (contains now) or `upcoming` within 12 h (`starts_in_min`); ongoing first,
+  then by start. `end` is exclusive. `peak_*` is the window's best slot.
+- `open_today`: the current or previous slot today already reached `k`
+  within the same squares (from the unfolded daily tail).
+- `watermark_day`: fold watermark (UTC day index) the lanes were read at;
+  `-1` when the fold has never run.
+
 ### `GET /api/push/vapid-public-key` — Web Push public key
 
 Returns the server's VAPID public key (base64url) for the browser
@@ -465,6 +537,28 @@ When Postgres is configured, a `postgres` block carries persistence health:
   (statfs) before the prune — on prod, the Postgres data directory. Above 80%
   used the grace period is skipped. Fail-safe: an unset, missing or
   unreadable path counts as over 80%, i.e. no grace.
+- `-almanac-wspr-backfill-areas` (default empty = off): comma-separated grid4
+  areas, e.g. `JO32`. For each area, the r=2 ring (5×5 grid4s) gets the `wspr`
+  layer of the Almanac seasonal record, backfilled from the wspr.live archive.
+  - **Coverage:** complete months only, newest first. It never touches the
+    current month and never goes before 2008-03.
+  - **Requests:** each UTC day makes two aggregate GETs, a ring aggregate and a
+    global per-slot count (used for the WSPR ingest-alive totals). Requests are
+    paced at about 17/min; wspr.live allows 20.
+  - **Failures:** exponential backoff from 15 s, and the run aborts after 3
+    consecutive failures. The last error is stored in dx_meta
+    `almanac_wspr_backfill_last_error`.
+  - **Commits:** each month commits in one transaction that replaces the WSPR
+    layer for (ring grid4s, month), so a re-run never double-counts.
+  - **Resume:** progress is kept in dx_meta
+    `almanac_wspr_backfill_done_<AREA>_<yyyymm>` and
+    `almanac_wspr_ingest_done_<yyyymm>`, so a restart resumes where it stopped.
+  - **Disk guard:** it refuses to start, and stops before the next month, when
+    the `-almanac-disk-path` disk is over 80% full or the probe fails.
+  - It is never triggered by a visitor. It uses `-wspr-endpoint` as the base
+    URL.
+- `-almanac-wspr-backfill-years` (default 3): how many years of complete months
+  to backfill, never earlier than 2008-03.
 
 ## Removed features
 

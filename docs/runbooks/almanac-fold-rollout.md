@@ -243,3 +243,91 @@ up to 64 days per tick, which covers the whole ~33-day backlog.
 Set `-almanac-fold-enable=false` in `ARGS` and redeploy. The fold stops and
 the `dx_region_baseline_daily` prune is ungated again. The new tables stay;
 never drop them and never make them UNLOGGED.
+
+## 6. U2 query plans (stop condition: any read > 1.5 s)
+
+Status: **pending** — must be run on prod (prod-sized tables); not runnable
+from a dev checkout. Verification Contract "Query plans" for unit U2
+(`/api/almanac`, `almanac_store.go`). Run each statement twice: once cold
+(right after a Postgres restart, or at least on a key not read recently) and
+once warm. Record `Execution Time` and `Buffers` for both. If any statement
+exceeds 1.5 s, stop (Goal Capsule stop condition) and budget the
+`scripts/migrate_*.sql` CONCURRENTLY tail index only then.
+
+Parameters for JO32 at r=2 (all 25 squares with their ring levels, in the
+order the reader sends them; day bounds computed in the shell, never
+`extract()`):
+
+```bash
+TODAY=$(( $(date -u +%s) / 86400 ))
+START=$(( TODAY - 30 )); END=$(( TODAY - 1 ))
+W=$(sudo -u postgres psql dxdata -Atc "SELECT v FROM dx_meta WHERE k = 'almanac_fold_watermark_day'")
+YM1=$(date -u -d @$(( START * 86400 )) +%Y%m); YM2=$(date -u -d @$(( W * 86400 )) +%Y%m)
+echo "today=$TODAY start=$START end=$END W=$W months=$YM1,$YM2"
+sudo -u postgres psql dxdata -v today=$TODAY -v start=$START -v end=$END -v w=$W \
+  -v months="{$YM1,$YM2}" \
+  -v grids='{JO10,JO11,JO12,JO13,JO14,JO20,JO21,JO22,JO23,JO24,JO30,JO31,JO32,JO33,JO34,JO40,JO41,JO42,JO43,JO44,JO50,JO51,JO52,JO53,JO54}' \
+  -v rings='{2,2,2,2,2,2,1,1,1,2,2,1,0,1,2,2,1,1,1,2,2,2,2,2,2}' \
+  -v bands='{160m,80m,60m,40m,30m,20m,17m,15m,12m,10m}'
+```
+
+The reader runs these in one `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY`
+transaction; EXPLAIN them the same way:
+
+```sql
+BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+
+-- (a) Aggregated seasonal read (days ≤ W; packed rows unpacked in Go).
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT grid4, band, region, year_month, counts
+FROM almanac_season_counts
+WHERE grid4 = ANY(:'grids'::text[])
+  AND band = ANY(:'bands'::text[])
+  AND year_month = ANY(:'months'::int[])
+  AND layer = 'pskr';
+
+-- (b) Tail aggregate (days > W, summed per ring level). Also the today
+--     overlay refresh, with :start replaced by :today - 1.
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT r.ring, d.band, d.region, d.day_index, d.slot_of_day, SUM(d.spot_count)::bigint
+FROM dx_region_baseline_daily d
+JOIN unnest(:'grids'::text[], :'rings'::int[]) AS r(grid4, ring) ON d.target_grid4 = r.grid4
+WHERE d.band = ANY(:'bands'::text[])
+  AND d.day_index > :w
+  AND d.day_index BETWEEN :start AND :today
+GROUP BY r.ring, d.band, d.region, d.day_index, d.slot_of_day;
+
+-- (c) Tail active days (widening masks).
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT DISTINCT target_grid4, band, day_index
+FROM dx_region_baseline_daily
+WHERE target_grid4 = ANY(:'grids'::text[])
+  AND band = ANY(:'bands'::text[])
+  AND day_index > :w
+  AND day_index BETWEEN :start AND :end
+  AND spot_count > 0;
+
+-- (d) Ingest totals and lost days (small; PK range scans).
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT day_index, slot_of_day, spot_total FROM almanac_ingest_slots
+WHERE layer = 'pskr' AND day_index BETWEEN :start AND :today;
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT day_index FROM almanac_lost_days WHERE day_index BETWEEN :start AND :end;
+
+ROLLBACK;
+```
+
+If the window spans three months (e.g. 30 days ending 1 March), add the middle
+month to `months`.
+
+Record:
+
+| Query | cold ms | warm ms | shared hit / read | plan node (index used) |
+|---|---|---|---|---|
+| (a) seasonal | | | | |
+| (b) tail aggregate | | | | |
+| (c) tail active days | | | | |
+| (d) ingest + lost | | | | |
+
+Then the end-to-end check: `time curl -s "http://127.0.0.1:<port>/api/almanac?qth=JO32" | jq '.area, (.lanes | length), .agenda[0]'`
+— populated arrays, and a second call within 120 s served from cache.
