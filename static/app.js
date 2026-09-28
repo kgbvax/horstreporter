@@ -6,6 +6,7 @@ import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzi
 import { initUI, attachUITooltipEvents } from './ui.js';
 import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
 import { initWsprMatrix, updateWsprMatrix, clearDrillDown, updateDrillDownButton } from './wspr-matrix.js';
+import { initAlmanac } from './almanac.js';
 import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { initPushUI } from './push.js';
@@ -1303,6 +1304,13 @@ if (captureConfig?.enabled) {
             // it no longer changes the map container's box, so invalidateSize is
             // not needed (unlike band-lab, which is docked in-flow). The azimuth
             // canvas display-swaps with #map and may need a re-render.
+            if (isAzimuthEnabled()) scheduleRender();
+        },
+    });
+    // Almanac (usual openings from the operator's area): floating overlay like
+    // the Propagation panel, so only the azimuth canvas may need a re-render.
+    initAlmanac({
+        onLayoutChange: () => {
             if (isAzimuthEnabled()) scheduleRender();
         },
     });

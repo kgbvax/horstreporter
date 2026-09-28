@@ -551,3 +551,215 @@ func TestPropIntelSummaryHandlerCache(t *testing.T) {
 		t.Errorf("recomputed grid = %+v, want one 40m cell (new history)", sum.Grid)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// U6: optional almanac field on /api/prop_intel/summary (R17, KTD10)
+// ---------------------------------------------------------------------------
+
+// withAlmanacSvc installs svc as the process-wide Almanac service for the
+// test and restores the previous one afterwards.
+func withAlmanacSvc(t *testing.T, svc *almanacService) {
+	t.Helper()
+	prev := almanacSvc
+	almanacSvc = svc
+	t.Cleanup(func() { almanacSvc = prev })
+}
+
+func summaryBody(t *testing.T, query string) (*httptest.ResponseRecorder, map[string]json.RawMessage) {
+	t.Helper()
+	resetPropIntelSummaryCache()
+	rr := httptest.NewRecorder()
+	propIntelSummaryHandler(rr, httptest.NewRequest("GET", "/api/prop_intel/summary?"+query, nil))
+	if rr.Code != 200 {
+		t.Fatalf("status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(rr.Body.Bytes(), &m); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return rr, m
+}
+
+// TestPropIntelSummaryAlmanacWarm: with a warm Almanac cache for the
+// requested QTH the summary carries the structured entries and the one-line
+// text, served without any store read.
+func TestPropIntelSummaryAlmanacWarm(t *testing.T) {
+	now := time.Now().Unix()
+	setHubHistory(t, []MQTTMessage{makeWSPRSpot(now-60, "20m", "JO62", "JO31", 5, 43)})
+	f := populatedAggWorld()
+	svc, _, _ := newTestAlmanacService(f)
+	if _, err := svc.get("JO32", -1); err != nil {
+		t.Fatalf("warm-up get: %v", err)
+	}
+	withAlmanacSvc(t, svc)
+	before := f.txCalls
+
+	rr, m := summaryBody(t, "qth=JO32ab")
+	if f.txCalls != before {
+		t.Fatalf("summary request ran %d store read(s); want none", f.txCalls-before)
+	}
+	if got := rr.Header().Get("Cache-Control"); got != "max-age=60" {
+		t.Errorf("Cache-Control = %q, want max-age=60", got)
+	}
+	raw, ok := m["almanac"]
+	if !ok {
+		t.Fatalf("almanac field missing: %s", rr.Body.String())
+	}
+	var al propIntelSummaryAlmanac
+	if err := json.Unmarshal(raw, &al); err != nil {
+		t.Fatalf("decode almanac: %v", err)
+	}
+	if al.Grid4 != "JO32" || al.Approximate {
+		t.Errorf("area = %q approx=%v, want JO32 exact", al.Grid4, al.Approximate)
+	}
+	if len(al.Entries) == 0 || len(al.Entries) > propIntelSummaryAlmanacMaxEntries {
+		t.Fatalf("entries = %+v, want 1..%d", al.Entries, propIntelSummaryAlmanacMaxEntries)
+	}
+	e := al.Entries[0]
+	// aggTestNow is 12:30 UTC; 20m NA is usual in slots 26..35 (13:00-18:00).
+	if e.Band != "20m" || e.Region != "NA" || e.Start != "13:00" || e.End != "18:00" ||
+		e.Status != "upcoming" || e.StartsInMin != 30 || e.M == 0 || e.N == 0 {
+		t.Errorf("entry[0] = %+v", e)
+	}
+	if al.Text != "Next: 20m NA ~13:00" {
+		t.Errorf("text = %q", al.Text)
+	}
+}
+
+// TestPropIntelSummaryAlmanacCold: a cold (or absent) Almanac cache omits
+// the field, leaves the body otherwise identical, and never reads the store.
+func TestPropIntelSummaryAlmanacCold(t *testing.T) {
+	now := time.Now().Unix()
+	setHubHistory(t, []MQTTMessage{makeWSPRSpot(now-60, "20m", "JO62", "JO31", 5, 43)})
+
+	withAlmanacSvc(t, nil)
+	_, base := summaryBody(t, "qth=JO32")
+
+	f := populatedAggWorld()
+	svc, _, _ := newTestAlmanacService(f)
+	withAlmanacSvc(t, svc)
+	rr, cold := summaryBody(t, "qth=JO32")
+	if f.txCalls != 0 {
+		t.Fatalf("cold summary ran %d store read(s); want none", f.txCalls)
+	}
+	if _, ok := cold["almanac"]; ok {
+		t.Fatalf("almanac present on cold cache: %s", rr.Body.String())
+	}
+	delete(base, "now")
+	delete(cold, "now")
+	if len(base) != len(cold) {
+		t.Fatalf("keys differ: base=%d cold=%d", len(base), len(cold))
+	}
+	for k, v := range base {
+		if string(cold[k]) != string(v) {
+			t.Errorf("field %q differs: %s vs %s", k, v, cold[k])
+		}
+	}
+	if got := rr.Header().Get("Cache-Control"); got != "max-age=60" {
+		t.Errorf("Cache-Control = %q, want max-age=60", got)
+	}
+
+	// An uncached callsign must not trigger resolution (no QRZ on this path).
+	_, callsign := summaryBody(t, "qth=DL1ABC")
+	if _, ok := callsign["almanac"]; ok {
+		t.Fatalf("almanac present for unresolved callsign")
+	}
+	if f.txCalls != 0 {
+		t.Fatalf("callsign summary ran a store read")
+	}
+}
+
+// TestPropIntelSummaryAlmanacCachedCallsign: a callsign QTH uses only an
+// already-cached area resolution.
+func TestPropIntelSummaryAlmanacCachedCallsign(t *testing.T) {
+	now := time.Now().Unix()
+	setHubHistory(t, []MQTTMessage{makeWSPRSpot(now-60, "20m", "JO62", "JO31", 5, 43)})
+	f := populatedAggWorld()
+	svc, _, _ := newTestAlmanacService(f)
+	if _, err := svc.get("JO32", -1); err != nil {
+		t.Fatalf("warm-up get: %v", err)
+	}
+	withAlmanacSvc(t, svc)
+
+	prev := dxBaseline
+	t.Cleanup(func() { dxBaseline = prev })
+	dxBaseline = newDxBaselineEngine("")
+	cache := newAlmanacAreaCache()
+	cache.entries["DL1ABC"] = almanacAreaCacheEntry{
+		area:    almanacArea{Grid4: "JO32", Source: qthSourceQRZ},
+		expires: time.Now().Add(time.Hour),
+	}
+	dxBaseline.almanacAreas = cache
+
+	_, m := summaryBody(t, "qth=dl1abc")
+	if _, ok := m["almanac"]; !ok {
+		t.Fatalf("almanac missing for cached callsign")
+	}
+}
+
+func TestPropIntelSummaryAlmanacText(t *testing.T) {
+	cases := []struct {
+		agenda []almanacAgendaEntry
+		want   string
+	}{
+		{nil, "Nothing usually open in the next 12 h"},
+		{[]almanacAgendaEntry{
+			{Band: "20m", Region: "NA", Status: "ongoing"},
+			{Band: "17m", Region: "AS", Status: "ongoing"},
+			{Band: "40m", Region: "OC", Status: "upcoming", Start: "21:00", StartsInMin: 90},
+			{Band: "30m", Region: "SA", Status: "upcoming", Start: "22:00", StartsInMin: 150},
+		}, "Now usually: 20m NA, 17m AS. Next: 40m OC ~21:00"},
+		{[]almanacAgendaEntry{
+			{Band: "20m", Region: "NA", Status: "ongoing"},
+			{Band: "20m", Region: "NA", Status: "ongoing"},
+		}, "Now usually: 20m NA"},
+	}
+	for _, c := range cases {
+		if got := propIntelSummaryAlmanacText(c.agenda); got != c.want {
+			t.Errorf("text(%v) = %q, want %q", c.agenda, got, c.want)
+		}
+	}
+}
+
+// TestPropIntelSummaryAlmanacDataPoor: a warm cache for an area where no
+// lane slot reaches m_min (all "not enough data", or no lanes) omits the
+// field, so the widget never reports a data-poor area as closed.
+func TestPropIntelSummaryAlmanacDataPoor(t *testing.T) {
+	now := time.Now().Unix()
+	setHubHistory(t, []MQTTMessage{makeWSPRSpot(now-60, "20m", "JO62", "JO31", 5, 43)})
+
+	cases := map[string]func() *fakeAggStore{
+		"no lanes": newAggWorld,
+		"all unknown": func() *fakeAggStore {
+			f := newAggWorld()
+			win := almanacWindowFor(aggTestNow.Unix())
+			// Active on fewer than M_min days: every cell is "unknown".
+			f.activeAllBands("JO32", win.Today-(almanacMinActiveDays30-2), win.Today, allSlots())
+			return f
+		},
+	}
+	for name, mk := range cases {
+		t.Run(name, func(t *testing.T) {
+			svc, _, _ := newTestAlmanacService(mk())
+			if _, err := svc.get("JO32", -1); err != nil {
+				t.Fatalf("warm-up get: %v", err)
+			}
+			area, ok := almanacSummaryArea("JO32")
+			if !ok {
+				t.Fatalf("area unresolved")
+			}
+			resp, ok := svc.warm(area)
+			if !ok || resp == nil {
+				t.Fatalf("cache not warm; the test must exercise the warm path")
+			}
+			if almanacResponseHasKnownSlot(resp) {
+				t.Fatalf("fixture has a known slot; want data-poor")
+			}
+			withAlmanacSvc(t, svc)
+			rr, m := summaryBody(t, "qth=JO32")
+			if _, ok := m["almanac"]; ok {
+				t.Fatalf("almanac present for data-poor area: %s", rr.Body.String())
+			}
+		})
+	}
+}

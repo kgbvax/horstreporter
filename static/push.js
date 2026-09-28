@@ -22,13 +22,10 @@
 // browsers without Web Push.
 
 const SW_PATH = '/sw.js?v=1';
-import { WSPR_REGIONS } from './utils.js';
+import { WSPR_REGIONS, WSPR_REGION_NAMES } from './utils.js';
 const PUSH_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
 const PUSH_REGIONS = WSPR_REGIONS;
-const PUSH_REGION_NAMES = {
-    EU: 'Europe', NA: 'North America', SA: 'South America', AF: 'Africa', AS: 'Asia',
-    JA: 'Japan', OC: 'Oceania', VK: 'Australia', KH6: 'Hawaii', CAR: 'Caribbean', AN: 'Antarctica',
-};
+const PUSH_REGION_NAMES = WSPR_REGION_NAMES;
 
 function isPushSupported() {
     return ('serviceWorker' in navigator) && ('PushManager' in window);

@@ -280,6 +280,26 @@ func main() {
 	// 35d covers the 30-day regionCalendarStats / WsprRegionCalendarStats lookback
 	// (propIntelRegionBaselineDaysBack = dxlensRegionStatsLookbackDays = 30) with headroom.
 	dxRegionBaselineRetentionDaysFlag := flag.Int("dx-region-baseline-retention-days", 35, "Delete dx_region_baseline_daily / wspr_region_baseline_daily rows older than this many day_index days (0 disables retention).")
+	// Almanac seasonal record (U3): folds final days of dx_region_baseline_daily
+	// into the permanent packed record and gates that table's prune by the fold
+	// watermark. Runs on its own ticker, independent of the retention flag.
+	almanacFoldEnableFlag := flag.Bool("almanac-fold-enable", true, "Fold final days of dx_region_baseline_daily into the permanent Almanac seasonal record and gate that table's retention prune by the fold watermark (false: no fold, prune ungated).")
+	almanacDiskPathFlag := flag.String("almanac-disk-path", "", "Filesystem path whose disk usage gates the Almanac prune grace period (prod: the Postgres data directory). Unset or unreadable counts as over 80% full: the 7-day grace is skipped.")
+	// Almanac WSPR archive backfill (U5); the parsed areas also gate the
+	// drill-down's WSPR layer and are pre-warmed after each fold.
+	almanacWSPRBackfillAreasFlag := flag.String("almanac-wspr-backfill-areas", "",
+		"Comma-separated grid4 areas (e.g. JO32) whose r=2 ring gets the Almanac WSPR layer backfilled from the wspr.live archive. Empty = off.")
+	almanacWSPRBackfillYearsFlag := flag.Int("almanac-wspr-backfill-years", 3,
+		"How many years of complete months the Almanac WSPR backfill covers (newest first; never before 2008-03).")
+	// Almanac SNR backfill (almanac_snr_backfill.go): one-off, guarded by
+	// dx_meta almanac_snr_backfill_done. The cutoff (the SNR columns' add
+	// time) is recorded in dx_meta by the ALTER; the deploy that added the
+	// columns before that record existed (prod) needs it passed explicitly:
+	// -almanac-snr-backfill-cutoff-unix 1790609737 (2026-09-28 15:35:37 UTC).
+	almanacSNRBackfillFlag := flag.Bool("almanac-snr-backfill", true,
+		"One-off: backfill the Almanac SNR counters of dx_region_baseline_daily from dx_raw_spots for the days before the SNR collection start, re-fold them and lower almanac_snr_since_day (false: skip).")
+	almanacSNRBackfillCutoffFlag := flag.Int64("almanac-snr-backfill-cutoff-unix", 0,
+		"Unix time the SNR columns were added (live SNR counting start) for the SNR backfill's partial deploy day; 0 = dx_meta almanac_snr_columns_added_unix. Prod: 1790609737.")
 	proplabSWEnableFlag := flag.Bool("proplab-sw-enable", false, "Enable space-weather index series ingest (NOAA SWPC kp/F10.7/xray/OVATION; consumed by pathscope)")
 	opModeAgentURLFlag := flag.String("opmode-agent-url", "", "Deprecated and ignored: backend never proxies to local operator agent")
 	pushEnableFlag := flag.Bool("push-enable", false, "Enable Web Push notification channel for surge alerts (requires VAPID keys via -push-vapid-private-key/-push-vapid-public-key or PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
@@ -401,6 +421,27 @@ func main() {
 		logInfo("DX postgres init failed (dsn=%s, fail-fast=false). Continuing with in-memory fallback: %v", maskDSN(dxPostgresDSNResolved), err)
 	} else {
 		logInfo("DX postgres initialized (dsn=%s)", maskDSN(dxPostgresDSNResolved))
+		// /api/almanac reader (U2), started before the fold so the fold's
+		// post-run pre-warm sees almanacSvc (happens-before). Resolvers are read per request, so the
+		// QRZ resolver wired later is picked up.
+		if st := dxBaseline.Store(); st != nil {
+			almanacAreas, err := parseAlmanacWSPRBackfillAreas(*almanacWSPRBackfillAreasFlag)
+			if err != nil {
+				logError("almanac WSPR backfill disabled: %v", err)
+				almanacAreas = nil
+			}
+			almanacSvc = startAlmanacService(st, dxBaseline.resolveAlmanacArea, almanacAreas)
+			// WSPR archive backfill (U5): no-op unless -almanac-wspr-backfill-areas is set.
+			startAlmanacWSPRBackfill(context.Background(), st, *wsprEndpoint, *almanacDiskPathFlag,
+				almanacAreas, *almanacWSPRBackfillYearsFlag)
+			if *almanacFoldEnableFlag {
+				startAlmanacFold(st, *almanacDiskPathFlag, almanacAreas)
+			}
+			// One-off SNR backfill (background, after a start delay).
+			if *almanacSNRBackfillFlag {
+				startAlmanacSNRBackfill(st, *almanacSNRBackfillCutoffFlag)
+			}
+		}
 		// Wire the WSPR climatology to the same Postgres pool and ensure the
 		// wspr_region_baseline_daily table exists.
 		wsprClimatology.SetStore(dxBaseline.Store())
@@ -640,6 +681,11 @@ func main() {
 	// Unified multi-source contract (prop_intel_v2.go). v1 above stays frozen
 	// for horstapp compatibility.
 	appMux.HandleFunc("/api/prop_intel/v2", propIntelV2Handler)
+	// QTH propagation Almanac (U2): 30-day "opened N of M days" lanes + agenda.
+	// 503 without Postgres.
+	appMux.HandleFunc("/api/almanac", almanacHandler)
+	// Seasonal month × hour drill-down (U4) for one band + region.
+	appMux.HandleFunc("/api/almanac/season", almanacSeasonHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
 	appMux.HandleFunc("/api/history", historyHandler)
 	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)

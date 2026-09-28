@@ -69,7 +69,7 @@ func TestMergePendingBackMergesOnce(t *testing.T) {
 	// int64 wrap — the corrupted dx_baseline_cluster rows seen on prod.
 	s := &dxPostgresStore{
 		pendingGlobal:  make(map[baselineGlobalKey]baselineDelta),
-		pendingRegion:  make(map[dxPulseRegionBaselineDailyKey]int64),
+		pendingRegion:  make(map[dxPulseRegionBaselineDailyKey]regionDelta),
 		pendingCluster: make(map[clusterBaselineKey]baselineDelta),
 	}
 	gk := baselineGlobalKey{Band: "40m", SlotOfDay: 39}
@@ -78,7 +78,7 @@ func TestMergePendingBackMergesOnce(t *testing.T) {
 
 	s.mergePendingBack(
 		map[baselineGlobalKey]baselineDelta{gk: {Count: 3}},
-		map[dxPulseRegionBaselineDailyKey]int64{rk: 5},
+		map[dxPulseRegionBaselineDailyKey]regionDelta{rk: {Count: 5, SNR: 4, GE: [almanacSNRTiers]int64{4, 3, 2, 1, 1}}},
 		map[clusterBaselineKey]baselineDelta{ck: {Count: 7}},
 	)
 	if got := s.pendingCluster[ck].Count; got != 7 {
@@ -87,8 +87,8 @@ func TestMergePendingBackMergesOnce(t *testing.T) {
 	if got := s.pendingGlobal[gk].Count; got != 3 {
 		t.Fatalf("global delta = %d, want 3", got)
 	}
-	if got := s.pendingRegion[rk]; got != 5 {
-		t.Fatalf("region delta = %d, want 5", got)
+	if got := s.pendingRegion[rk]; got != (regionDelta{Count: 5, SNR: 4, GE: [almanacSNRTiers]int64{4, 3, 2, 1, 1}}) {
+		t.Fatalf("region delta = %+v, want count 5 with its SNR counters", got)
 	}
 	if s.pendingCount != 3 {
 		t.Fatalf("pendingCount = %d, want 3 (one per requeued entry)", s.pendingCount)
@@ -97,11 +97,15 @@ func TestMergePendingBackMergesOnce(t *testing.T) {
 	// A second failed flush requeues the same deltas again (once).
 	s.mergePendingBack(
 		map[baselineGlobalKey]baselineDelta{gk: {Count: 3}},
-		map[dxPulseRegionBaselineDailyKey]int64{rk: 5},
+		map[dxPulseRegionBaselineDailyKey]regionDelta{rk: {Count: 5, SNR: 4, GE: [almanacSNRTiers]int64{4, 3, 2, 1, 1}}},
 		map[clusterBaselineKey]baselineDelta{ck: {Count: 7}},
 	)
 	if got := s.pendingCluster[ck].Count; got != 14 {
 		t.Fatalf("cluster delta after two requeues = %d, want 14", got)
+	}
+	// Region deltas merge by summing every counter (count, snr, tiers).
+	if got := s.pendingRegion[rk]; got != (regionDelta{Count: 10, SNR: 8, GE: [almanacSNRTiers]int64{8, 6, 4, 2, 2}}) {
+		t.Fatalf("region delta after two requeues = %+v", got)
 	}
 }
 
@@ -707,5 +711,65 @@ func TestPlausibleBaselinePairGuard(t *testing.T) {
 	}
 	if sumPairs([]baselinePair{{Count: 5}, {Count: maxPlausibleBaselineCount * 2}, {Count: 3}}) != 8 {
 		t.Fatalf("sumPairs must skip implausible pairs")
+	}
+}
+
+func TestInitSchemaStmtsAlmanacTables(t *testing.T) {
+	// Almanac seasonal record (U3): the three tables plus the lost-days log are
+	// always created, LOGGED (never UNLOGGED: they are never pruned and can't be
+	// rebuilt), and initSchema adds no new index on dx_region_baseline_daily.
+	stmts := initSchemaStmts()
+	want := map[string]bool{
+		"CREATE TABLE IF NOT EXISTS almanac_season_counts": false,
+		"CREATE TABLE IF NOT EXISTS almanac_area_activity": false,
+		"CREATE TABLE IF NOT EXISTS almanac_ingest_slots":  false,
+		"CREATE TABLE IF NOT EXISTS almanac_lost_days":     false,
+	}
+	dailyIndexes := 0
+	for _, q := range stmts {
+		for prefix := range want {
+			if strings.Contains(q, prefix) {
+				want[prefix] = true
+				if strings.Contains(strings.ToUpper(q), "UNLOGGED") {
+					t.Fatalf("almanac table must be LOGGED: %q", q)
+				}
+			}
+		}
+		if strings.Contains(q, "CREATE INDEX") && strings.Contains(q, "ON dx_region_baseline_daily") {
+			dailyIndexes++
+		}
+		if strings.Contains(q, "almanac_season_counts") && strings.Contains(q, "CREATE TABLE") {
+			if !strings.Contains(q, "counts BYTEA NOT NULL") || !strings.Contains(q, "fillfactor = 70") ||
+				!strings.Contains(q, "PRIMARY KEY (grid4, band, region, year_month, layer)") ||
+				strings.Contains(q, "toast_tuple_target") {
+				t.Fatalf("almanac_season_counts DDL drifted: %q", q)
+			}
+		}
+	}
+	for prefix, ok := range want {
+		if !ok {
+			t.Fatalf("missing from initSchemaStmts: %s", prefix)
+		}
+	}
+	if dailyIndexes != 1 {
+		t.Fatalf("dx_region_baseline_daily indexes in initSchema = %d, want only the existing day_index index", dailyIndexes)
+	}
+	var heapVac bool
+	for _, m := range almanacSeasonMaintenanceStmts() {
+		// Sparse rows stay far below the TOAST threshold: no lz4 column
+		// compression and no toast_tuple_target (only a RESET of it).
+		if strings.Contains(m[1], "COMPRESSION") || strings.Contains(m[1], "toast_tuple_target =") ||
+			strings.Contains(m[1], "toast.autovacuum") {
+			t.Fatalf("maintenance stmt still tunes TOAST/compression for the sparse format: %q", m[1])
+		}
+		if strings.Contains(m[1], "autovacuum_vacuum_scale_factor") {
+			heapVac = true
+		}
+		if strings.Contains(strings.ToUpper(m[1]), "UNLOGGED") {
+			t.Fatalf("maintenance stmt must never switch to UNLOGGED: %q", m[1])
+		}
+	}
+	if !heapVac {
+		t.Fatalf("optional maintenance must tune heap autovacuum for almanac_season_counts")
 	}
 }

@@ -101,6 +101,18 @@ The short-term direction of a band's recent activity — rising, falling, or sta
 ### Hot bands
 A recommender that surfaces a few bands worth attention right now for the QTH, each tagged by why: a "surprise" opening on a normally quiet band, a "dx_surge" of unusually long paths, or a "rising" trend. Bands the operator is already on are suppressed.
 
+### Almanac
+The planned from-your-QTH view of *typical* propagation. For each region and band, it shows the Slot-of-day windows in which the path was usually open, expressed as "opened N of M days". It also shows how those windows shift month by month. It describes what is usual, not what is happening now, so it is distinct from the live DX Potential Score and the prop_intel nowcast. "P(open)" is not used for it, because that name belongs to the nowcast.
+
+### Opened N of M days
+The Almanac statistic. A slot is *open* on a day when it reaches a fixed spot floor between the QTH's area and the region. M counts the days on which the QTH's area was active on that band. A cell with too few active days reads as "not enough data", never as "closed". With an SNR floor (the Min SNR slider, snapped to a 5 dB tier from −20 to 0 dB) only spots at or above the floor count toward the spot floor, and days before SNR data was collected drop out of both N and M, so they read as unknown rather than closed.
+
+### SNR share
+For an Almanac slot with an SNR floor: of all spots with a real SNR report over the slot's observed days, the share that reached the floor, pooled across days rather than averaged per day. DX-cluster spots carry no SNR and are left out. It says how reliably the path carried a signal strong enough for the chosen mode, beyond whether it opened at all.
+
+### Seasonal record
+The permanent per-area, month × slot × band × region counts that the Almanac's seasonal view reads. Each day is folded in before the daily region baseline prunes it. A WSPR-archive layer, kept separate and labelled, can backfill it.
+
 ## Time navigation
 
 ### Session Ring

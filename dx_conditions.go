@@ -147,6 +147,9 @@ type DxBaselineEngine struct {
 	// ctyResolver provides DXCC entity centroids (lat/lon) as a last-resort
 	// cluster derivation when QRZ has no locator for a callsign QTH.
 	ctyResolver *cty.Resolver
+	// almanacAreas caches Almanac QTH → area resolutions (lazily created by
+	// resolveAlmanacArea, guarded by mu for the pointer only).
+	almanacAreas *almanacAreaCache
 }
 
 type dxBandCondition struct {
@@ -517,18 +520,29 @@ func (e *DxBaselineEngine) Stats(now int64) (bucketCount, eventCount, historyMin
 	return bucketCount, eventCount, historyMinutes
 }
 
-func (e *DxBaselineEngine) Observe(m MQTTMessage) {
+// dxBaselineObserveGate is Observe's spot gate: a known band and both
+// locators present. Returns the normalized band. Shared with the Almanac SNR
+// backfill so replayed raw rows pass exactly the live gates.
+func dxBaselineObserveGate(m MQTTMessage) (string, bool) {
 	band := normalizeBand(m.B)
 	if band == "" {
+		return "", false
+	}
+	if strings.TrimSpace(m.SL) == "" || strings.TrimSpace(m.RL) == "" {
+		return "", false
+	}
+	return band, true
+}
+
+func (e *DxBaselineEngine) Observe(m MQTTMessage) {
+	band, ok := dxBaselineObserveGate(m)
+	if !ok {
 		return
 	}
 	sl := strings.ToUpper(strings.TrimSpace(m.SL))
 	rl := strings.ToUpper(strings.TrimSpace(m.RL))
 	sc := strings.ToUpper(strings.TrimSpace(m.SC))
 	rc := strings.ToUpper(strings.TrimSpace(m.RC))
-	if sl == "" || rl == "" {
-		return
-	}
 	ts := m.T
 	if ts <= 0 {
 		ts = time.Now().Unix()
@@ -801,33 +815,59 @@ func (e *DxBaselineEngine) deriveOperatorCluster(qth string) string {
 	if qth == "" {
 		return ""
 	}
-	// Locator QTH: derive directly.
-	if isLocator(qth) {
-		if anchor, ok := locatorClusterAnchor(qth); ok {
-			return anchor
-		}
-		return ""
-	}
-	// Callsign QTH: try QRZ, then cty.dat centroid.
 	e.mu.RLock()
 	qrz := e.callsignResolver
 	ctyRes := e.ctyResolver
 	e.mu.RUnlock()
+	loc, _, ok := resolveQTHLocator(qth, qrz, ctyRes)
+	if !ok {
+		return ""
+	}
+	if anchor, ok := locatorClusterAnchor(loc); ok {
+		return anchor
+	}
+	return ""
+}
+
+// qthLocationSource records how a QTH was turned into a locator: given
+// directly, looked up in QRZ, or approximated by the DXCC entity centroid.
+type qthLocationSource string
+
+const (
+	qthSourceLocator qthLocationSource = "locator"
+	qthSourceQRZ     qthLocationSource = "qrz"
+	qthSourceDXCC    qthLocationSource = "dxcc"
+)
+
+// resolveQTHLocator is the shared QTH → locator resolution used by the
+// cluster baseline (deriveOperatorCluster) and the Almanac area resolver.
+// Resolution order:
+//  1. qth is a locator (isLocator) → returned unchanged, source=locator.
+//  2. QRZ lookup yields a valid locator → that locator, source=qrz.
+//  3. cty.dat entity with a non-zero centroid → its 4-char square, source=dxcc.
+//  4. otherwise ok=false.
+//
+// No normalization is applied here; callers own that. qrz and ctyRes may be nil.
+func resolveQTHLocator(qth string, qrz CallsignLocatorResolver, ctyRes *cty.Resolver) (loc string, source qthLocationSource, ok bool) {
+	if qth == "" {
+		return "", "", false
+	}
+	if isLocator(qth) {
+		return qth, qthSourceLocator, true
+	}
 	if qrz != nil {
-		if info, err := qrz.LookupInfo(qth); err == nil && info.Locator != "" {
-			if anchor, ok := locatorClusterAnchor(info.Locator); ok {
-				return anchor
-			}
+		if info, err := qrz.LookupInfo(qth); err == nil && isLocator(info.Locator) {
+			return info.Locator, qthSourceQRZ, true
 		}
 	}
 	if ctyRes != nil {
 		if ent, _, ok := ctyRes.Resolve(qth); ok && ent.Lat != 0 && ent.Lon != 0 {
-			if anchor, ok := locatorClusterAnchor(latLngToLocator(ent.Lat, ent.Lon, 4)); ok {
-				return anchor
+			if l := latLngToLocator(ent.Lat, ent.Lon, 4); isLocator(l) {
+				return l, qthSourceDXCC, true
 			}
 		}
 	}
-	return ""
+	return "", "", false
 }
 
 func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, cwMinDb int, history []MQTTMessage, now int64) dxConditionsResponse {

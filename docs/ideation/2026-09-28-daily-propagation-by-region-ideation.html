@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: Daily propagation by region from your QTH</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1d2127; --muted: #5a626d; --line: #dfe2e6;
+    --card: #ffffff; --accent: #1f5fae; --accent-soft: #e8f0fa; --accent-text: #174a88;
+    --warn-soft: #fbf1e3; --warn-text: #7a4b0f; --ok-soft: #e7f4ec; --ok-text: #1f5c35;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15181c; --fg: #e3e6ea; --muted: #a0a8b3; --line: #2c3239;
+      --card: #1c2025; --accent: #6ea8ec; --accent-soft: #1d2a3a; --accent-text: #a9ccf5;
+      --warn-soft: #33281a; --warn-text: #efc58d; --ok-soft: #1a2e22; --ok-text: #9fd8b2;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15.5px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
+  main { max-width: 900px; margin-inline: auto; padding: 2.5rem 1.25rem 4rem; }
+  p, li, dd { max-width: 72ch; }
+  h1 { font-size: 1.75rem; line-height: 1.25; margin: .2rem 0 .6rem; }
+  h2 { font-size: 1.3rem; margin: 2.6rem 0 .8rem; padding-bottom: .3rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1.1rem; margin: 0 0 .5rem; }
+  strong { color: inherit; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: var(--accent-text);
+    padding: .05em .35em; border-radius: 4px; }
+  a { color: var(--accent); }
+  .eyebrow { font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .meta { display: flex; flex-wrap: wrap; gap: .4rem 1.4rem; font-size: .9rem; color: var(--muted); margin: 0; }
+  .meta dt { display: inline; font-weight: 600; color: var(--fg); }
+  .meta dd { display: inline; margin: 0 0 0 .3rem; }
+  .meta div { white-space: nowrap; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: .6rem; margin: 1.4rem 0 0; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .8rem; }
+  .stat b { display: block; font-size: 1.35rem; }
+  .stat span { font-size: .8rem; color: var(--muted); }
+  .answer { background: var(--accent-soft); color: var(--fg); border-radius: 10px; padding: 1rem 1.2rem; margin-top: 1.4rem; }
+  .answer .eyebrow { color: var(--accent-text); }
+  .jump { columns: 2; padding-left: 1.2rem; font-size: .95rem; }
+  article.idea { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1.2rem 1.3rem; margin: 1.1rem 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: .35rem; margin: .1rem 0 .8rem; }
+  .chip { font-size: .76rem; padding: .12rem .55rem; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+  .chip.id { background: var(--accent-soft); color: var(--accent-text); border-color: transparent; font-weight: 600; }
+  dl.fields { margin: 0; }
+  dl.fields dt { font-size: .75rem; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin-top: .7rem; }
+  dl.fields dd { margin: .15rem 0 0; }
+  figure { margin: 1rem 0 .2rem; }
+  figure svg { width: 100%; height: auto; display: block; }
+  figcaption { font-size: .82rem; color: var(--muted); margin-top: .3rem; }
+  svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: var(--fg); }
+  svg .mut { fill: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th, td { text-align: left; vertical-align: top; padding: .45rem .5rem; border-bottom: 1px solid var(--line); }
+  th { font-size: .75rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .callout { background: var(--warn-soft); color: var(--warn-text); border-radius: 10px; padding: .9rem 1.1rem; margin: 1rem 0; }
+  .callout p { margin: .3rem 0; color: var(--warn-text); }
+  footer.composition-signal { margin-top: 3rem; font-size: .8rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: .8rem; }
+  @media (max-width: 640px) { .stats { grid-template-columns: repeat(2, 1fr); } .jump { columns: 1; } }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <div class="eyebrow">Ideation</div>
+  <h1>Ideation: Daily propagation by region from your QTH</h1>
+  <dl class="meta">
+    <div><dt>date</dt><dd><time datetime="2026-09-28">2026-09-28</time></dd></div>
+    <div><dt>topic</dt><dd>daily-propagation-by-region</dd></div>
+    <div><dt>mode</dt><dd>repo-grounded</dd></div>
+  </dl>
+  <dl class="meta" style="margin-top:.4rem">
+    <div style="white-space:normal"><dt>focus</dt><dd>Which regions are usually available from a location at what time of day, and how to compute and present it.</dd></div>
+  </dl>
+  <div class="stats">
+    <div class="stat"><b>36</b><span>raw ideas from 5 frames</span></div>
+    <div class="stat"><b>21</b><span>after dedupe + 2 combinations</span></div>
+    <div class="stat"><b>7</b><span>ranked survivors</span></div>
+    <div class="stat"><b>5 / 5</b><span>topic axes covered</span></div>
+  </div>
+  <section class="answer">
+    <div class="eyebrow">Short answer</div>
+    <p>Most of the data already exists. Every FT8 spot is written into <code>dx_region_baseline_daily</code>, keyed by the observer grid4, band, 30-minute UTC slot, far-end region and day. That table is already a per-QTH record of "which region, which half-hour", but three things are wrong with how it is used today:</p>
+    <ul>
+      <li>every reader sums the QTH away, so the results are global;</li>
+      <li>the statistic is spot volume rather than "how often was it open";</li>
+      <li>the history is deleted after 35 days, so seasons never build up.</li>
+    </ul>
+    <p>Fix those three, and "usually open" becomes a from-your-QTH number such as <em>opened 22 of 30 days</em>. That number can be presented in three ways: as a time layer on the existing Propagation matrix, as a plain-language agenda of upcoming openings, and as the honest baseline behind the existing "unusual" glyph.</p>
+  </section>
+</header>
+
+<section id="grounding-context">
+  <h2>Grounding Context</h2>
+  <h3>Codebase Context</h3>
+  <ul>
+    <li><strong>Per-QTH data exists.</strong> <code>dx_region_baseline_daily(target_grid4, band, slot_of_day, region, day_index, spot_count)</code> (<code>dx_postgres.go:483-499</code>) gets two rows per FT8 spot, sender-grid→receiver-region and receiver-grid→sender-region (<code>dx_postgres.go:866-879</code>). Slots are 48 UTC half-hours (<code>dx_conditions.go:2319</code>). Regions are 11 hand-drawn boxes: EU NA SA AF AS OC AN JA VK KH6 CAR (<code>dx_regions.go</code>).</li>
+    <li><strong>But every reader is global.</strong> <code>regionCalendarStats</code> "Aggregates across all target_grid4s" (<code>dx_postgres.go:2391</code>). It feeds prop_intel v1, and DXLens <code>region_calendar</code> (<code>dxlens_mount.go:418</code>) calls it with no QTH, although that endpoint accepts a <code>qth</code> parameter.</li>
+    <li><strong>The statistic is activity, not openness.</strong> Percentiles cover active days only: "days with zero activity are not synthesised" (<code>dx_postgres.go:2374-2375</code>). Counts are biased toward regions with many reporters (EU/NA). The table has no distinct-station, SNR or direction columns.</li>
+    <li><strong>Short memory.</strong> Region tables are pruned at 35 days, because older rows are "dead weight" (<code>dx_conditions.go:474-476</code>). Raw spots are kept for 4 days (<code>main.go:278</code>). Seasonal history is thrown away and cannot be rebuilt locally.</li>
+    <li><strong>The live nowcast is from your QTH, the baseline is not.</strong> prop_intel v2 filters the nowcast to your QTH but compares it against <code>prop_region_baseline_daily</code>, which has no QTH column (<code>prop_intel_v2.go:280</code>, <code>prop_baseline.go:400</code>).</li>
+    <li><strong>Surfaces.</strong> <code>static/wspr-matrix.js</code> is the from-your-QTH band × region matrix, showing now only, with an anomaly glyph. horstapp widgets read <code>/api/prop_intel/summary</code>. DXLens region × slot calendar is the closest existing "usually at hour" view. <code>timeline.js</code> replays about 4 days.</li>
+    <li><strong>Constraints.</strong> Single binary. No per-spot or path link scoring in horstreporter (that belongs to horstprop). Views are always from your QTH. Prod has 3.7 GB RAM and 75 GB disk, with repeated disk-full outages. No emojis. Use the canonical band palette.</li>
+  </ul>
+  <h3>External context</h3>
+  <ul>
+    <li>VOACAP Online's Propagation Wheel is a 24-hour polar clock coloured by REL, which is a probability rather than a signal level. Its "Best FREQ" view lists the top 3 bands per hour. Both are monthly-median models, and scripted access is prohibited.</li>
+    <li>HamSCI work on RBN and WSPR finds that spot counts mix propagation with human activity. It suggests de-biasing with active-receiver denominators. Lo et al. 2022 found greyline clustering, which argues for a solar-time axis.</li>
+    <li>No public tool offers an empirical "typical openings from my grid, by hour". PSKReporter history is collected forward-only, so retained aggregates are scarce. wspr.live holds the full multi-year WSPR archive in ClickHouse.</li>
+    <li>Useful analogies: Google Maps Popular Times (a typical curve with a live bar), climate normals, tide tables (a daily cycle that drifts with the season), and airline on-time percentages.</li>
+  </ul>
+  <h3>Past learnings</h3>
+  <p>The learnings search was interrupted and did not return. Background from project notes: the Propagation Lab and Reachability views were removed on 2026-08-04, but the cell-bucket and space-weather plumbing was kept. The Band Stats "vs own normal" label shipped in Sep 2026.</p>
+</section>
+
+<section id="topic-axes">
+  <h2>Topic Axes</h2>
+  <ol>
+    <li>Data foundation: what to persist and for how long</li>
+    <li>The statistic: what "usually open" means</li>
+    <li>Time framing: UTC, local or solar time, and seasons</li>
+    <li>Presentation surfaces: web views, maps, widgets</li>
+    <li>Live vs typical: combining the typical picture with now</li>
+  </ol>
+</section>
+
+<section id="ranked-ideas">
+  <h2>Ranked Ideas</h2>
+  <ul class="jump">
+    <li><a href="#i1">1. A from-your-QTH "opened N of 30 days" statistic</a></li>
+    <li><a href="#i2">2. Fold before prune: a permanent seasonal ledger</a></li>
+    <li><a href="#i3">3. "Typical at hour" layer on the Propagation matrix</a></li>
+    <li><a href="#i4">4. Openings agenda: the system reads the chart for you</a></li>
+    <li><a href="#i5">5. Make "unusual" mean unusual for you</a></li>
+    <li><a href="#i6">6. Solar-anchored time axis</a></li>
+    <li><a href="#i7">7. Beam-heading wheel instead of continent boxes</a></li>
+  </ul>
+
+  <article class="idea" id="i1">
+    <div class="chips"><span class="chip id">1</span><span class="chip">Axis: The statistic</span><span class="chip">Confidence 85%</span><span class="chip">Complexity Medium</span></div>
+    <h3>1. A from-your-QTH "opened N of 30 days" statistic</h3>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>Add one reader over <code>dx_region_baseline_daily</code> that filters to the operator's grid4. When that grid is sparse, widen outward ring by ring (own grid4, then neighbours, then field) until there are enough sample days, and report the radius used. Change the output from spot-count percentiles to <strong>P(open)</strong>: the share of days in the window on which the (band, region, slot) cell crossed a floor of at least k spots. Days with no spots count as zeros. The result is a band × region × 48-slot grid of honest probabilities, for example "VK on 20 m, 07:00 UTC: 22/30 days". Every surface below consumes this grid.</dd>
+      <dt>Basis</dt>
+      <dd><code>direct:</code> The reader comment says it "Aggregates across all target_grid4s (i.e. global view across observers)" (<code>dx_postgres.go:2391</code>). Percentiles "describe 'active days'" because zero days are not synthesised (<code>dx_postgres.go:2374-2375</code>). The PK already leads with <code>(target_grid4, band, …)</code>, so a ring filter can use it.<br><code>external:</code> VOACAP's REL is a probability for the same reason. Airlines publish on-time percentages, not passenger counts.</dd>
+      <dt>Rationale</dt>
+      <dd>This is the one change every other idea depends on. The per-QTH rows are already written, but nothing reads them per QTH. A bounded 0–1 number also stays comparable between EU, with its many skimmers, and VK, with few, in a way raw counts do not.</dd>
+      <dt>Downsides</dt>
+      <dd>The floor is a crude "k spots" rule on FT8 counts. A floor on distinct stations, SNR or direction would need new columns written at ingest, and none of that can be backfilled because raw spots last 4 days. Row volume per grid4 on prod has not been measured. The DXLens <code>region_calendar</code> snapshot must be switched to this reader as well, or it stays global.</dd>
+    </dl>
+    <figure>
+      <svg viewBox="0 0 720 210" role="img" aria-label="Before and after: global spot counts versus from-QTH open-day fraction">
+        <text x="10" y="18" font-size="13" font-weight="600">Today: p50 spot count, all observers summed</text>
+        <text x="380" y="18" font-size="13" font-weight="600">Proposed: opened N of 30 days, from JO62 ring</text>
+        <g font-size="11">
+          <text x="10" y="50" class="mut">EU</text><text x="10" y="80" class="mut">NA</text><text x="10" y="110" class="mut">JA</text><text x="10" y="140" class="mut">VK</text>
+          <rect x="40" y="38" width="300" height="18" rx="3" fill="#1f5fae" opacity=".95"/><text x="46" y="51" font-size="11" style="fill:#fff">1840 spots</text>
+          <rect x="40" y="68" width="160" height="18" rx="3" fill="#1f5fae" opacity=".8"/><text x="46" y="81" font-size="11" style="fill:#fff">960</text>
+          <rect x="40" y="98" width="40" height="18" rx="3" fill="#1f5fae" opacity=".6"/><text x="86" y="111" font-size="11">210</text>
+          <rect x="40" y="128" width="12" height="18" rx="3" fill="#1f5fae" opacity=".5"/><text x="58" y="141" font-size="11">44</text>
+          <text x="380" y="50" class="mut">EU</text><text x="380" y="80" class="mut">NA</text><text x="380" y="110" class="mut">JA</text><text x="380" y="140" class="mut">VK</text>
+          <rect x="410" y="38" width="290" height="18" rx="3" fill="#2e8b57" opacity=".95"/><text x="416" y="51" font-size="11" style="fill:#fff">29/30</text>
+          <rect x="410" y="68" width="203" height="18" rx="3" fill="#2e8b57" opacity=".85"/><text x="416" y="81" font-size="11" style="fill:#fff">21/30</text>
+          <rect x="410" y="98" width="174" height="18" rx="3" fill="#2e8b57" opacity=".75"/><text x="416" y="111" font-size="11" style="fill:#fff">18/30</text>
+          <rect x="410" y="128" width="213" height="18" rx="3" fill="#2e8b57" opacity=".85"/><text x="416" y="141" font-size="11" style="fill:#fff">22/30</text>
+        </g>
+        <text x="10" y="180" font-size="11" class="mut">Volume ranks regions by reporter density.</text>
+        <text x="380" y="180" font-size="11" class="mut">Frequency answers "is it usually open at this hour?"</text>
+        <text x="10" y="198" font-size="10" class="mut">Illustrative numbers, 20 m, 07:00 UTC slot.</text>
+      </svg>
+      <figcaption>Illustrative: the same slot read as volume and as frequency.</figcaption>
+    </figure>
+  </article>
+
+  <article class="idea" id="i2">
+    <div class="chips"><span class="chip id">2</span><span class="chip">Axis: Data foundation</span><span class="chip">Confidence 80%</span><span class="chip">Complexity Low</span></div>
+    <h3>2. Fold before prune: a permanent seasonal ledger</h3>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>Before the 35-day prune deletes daily rows, fold each expiring day into a small table that is never pruned. Key it by (grid4 or cluster anchor, band, month, slot, region) and store <code>days_open</code>, <code>days_observed</code> and <code>sum_count</code>. The daily table stays a 35-day working set, and the ledger becomes the seasonal climatology: "usually open in December", not only "in the last 30 days". A possible follow-on is a rate-limited, resumable backfill from the wspr.live archive for the operator's grid ring, stored as a separate <code>source='wspr'</code> layer. That would give the view seasonal depth on day one.</dd>
+      <dt>Basis</dt>
+      <dd><code>direct:</code> The prune comment says the reader "only ever queries a ~30-day window, so older rows are dead weight" (<code>dx_conditions.go:474-476</code>). The default is 35 days (<code>main.go:282</code>).<br><code>external:</code> PSKReporter history is collected forward-only (Ham-Stats), so every pruned day is gone for good. wspr.live keeps multi-year WSPR history.<br><code>reasoned:</code> About 12 × 48 × 11 × ~6 rows per active anchor per year, which is trivial next to the raw-spot volume behind the disk-full outages.</dd>
+      <dt>Rationale</dt>
+      <dd>The value grows every month it runs, and it is the cheapest change with the longest payoff. Starting it now is what makes seasonal answers possible next year. Each week it is postponed loses data permanently.</dd>
+      <dt>Downsides</dt>
+      <dd><code>days_open</code> fixes the floor at fold time, and changing the floor later is not retroactive. Keeping <code>sum_count</code> as well gives some room to re-derive. WSPR backfill is beacon data with about 15% overlap with PSKReporter. It must stay a separate layer and needs a check of wspr.live fair-use terms.</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="i3">
+    <div class="chips"><span class="chip id">3</span><span class="chip">Axis: Presentation surfaces</span><span class="chip">Confidence 80%</span><span class="chip">Complexity Medium</span></div>
+    <h3>3. "Typical at hour" layer on the Propagation matrix</h3>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>Add a <em>Typical</em> mode to the band × region matrix in <code>wspr-matrix.js</code>, which is already from your QTH, keyboard-navigable and consistent with the app's visual style. In that mode each chip shows P(open) for a chosen hour, with a 24-hour scrubber under the grid that defaults to now. A single-band variant flips the axes to region × 24 h, a heatmap that answers "which regions, at what time" directly. Another option is a rise/peak/set curve per region, as in an astronomy observing planner. Add the next-few-hours typical values to <code>/api/prop_intel/summary</code> so the horstapp widgets get them for free.</dd>
+      <dt>Basis</dt>
+      <dd><code>direct:</code> <code>wspr-matrix.js</code> is the from-your-QTH band × region surface (reads <code>/api/prop_intel/v2</code>), and horstapp mirrors its visual language and consumes the summary endpoint.<br><code>external:</code> the VOACAP Propagation Wheel and Best FREQ per hour, Google Maps Popular Times, and Staralt-style observing planners.</dd>
+      <dt>Rationale</dt>
+      <dd>This uses the user's own question shape, region by time, on a surface people already know. It adds a time axis rather than a new visual system, so the phone widgets inherit it.</dd>
+      <dt>Downsides</dt>
+      <dd>A per-QTH typical layer multiplies cache keys on the 60-second-cached summary endpoint and needs bounded caching. Choosing among the heatmap, the planner curves and the scrubbed matrix is a design decision for brainstorming.</dd>
+    </dl>
+    <figure>
+      <svg viewBox="0 0 720 200" role="img" aria-label="Sketch of a region by hour-of-day heatmap for one band with a now marker">
+        <text x="10" y="16" font-size="12" font-weight="600">20 m from JO62: region × UTC hour, shaded by P(open)</text>
+        <g font-size="11" class="mut">
+          <text x="10" y="44">EU</text><text x="10" y="70">NA</text><text x="10" y="96">SA</text><text x="10" y="122">JA</text><text x="10" y="148">VK</text>
+          <text x="46" y="176">00</text><text x="206" y="176">06</text><text x="366" y="176">12</text><text x="526" y="176">18</text><text x="676" y="176">23</text>
+        </g>
+        <g>
+          <rect x="44" y="32" width="160" height="18" fill="#1f5fae" opacity=".25"/><rect x="204" y="32" width="400" height="18" fill="#1f5fae" opacity=".9"/><rect x="604" y="32" width="96" height="18" fill="#1f5fae" opacity=".4"/>
+          <rect x="44" y="58" width="220" height="18" fill="#1f5fae" opacity=".15"/><rect x="264" y="58" width="100" height="18" fill="#1f5fae" opacity=".35"/><rect x="364" y="58" width="260" height="18" fill="#1f5fae" opacity=".85"/><rect x="624" y="58" width="76" height="18" fill="#1f5fae" opacity=".45"/>
+          <rect x="44" y="84" width="420" height="18" fill="#1f5fae" opacity=".1"/><rect x="464" y="84" width="180" height="18" fill="#1f5fae" opacity=".7"/><rect x="644" y="84" width="56" height="18" fill="#1f5fae" opacity=".3"/>
+          <rect x="44" y="110" width="80" height="18" fill="#1f5fae" opacity=".15"/><rect x="124" y="110" width="140" height="18" fill="#1f5fae" opacity=".75"/><rect x="264" y="110" width="436" height="18" fill="#1f5fae" opacity=".1"/>
+          <rect x="44" y="136" width="130" height="18" fill="#1f5fae" opacity=".1"/><rect x="174" y="136" width="90" height="18" fill="#1f5fae" opacity=".7"/><rect x="264" y="136" width="300" height="18" fill="#1f5fae" opacity=".1"/><rect x="564" y="136" width="70" height="18" fill="#1f5fae" opacity=".45"/><rect x="634" y="136" width="66" height="18" fill="#1f5fae" opacity=".1"/>
+        </g>
+        <line x1="484" y1="26" x2="484" y2="160" stroke="#c0392b" stroke-width="2"/>
+        <text x="490" y="24" font-size="11" style="fill:#c0392b">now</text>
+      </svg>
+      <figcaption>Directional sketch of the single-band flip. The shape of the day is visible at a glance, and the now line ties it to the live matrix.</figcaption>
+    </figure>
+  </article>
+
+  <article class="idea" id="i4">
+    <div class="chips"><span class="chip id">4</span><span class="chip">Axis: Presentation surfaces</span><span class="chip">Confidence 75%</span><span class="chip">Complexity Medium</span></div>
+    <h3>4. Openings agenda: the system reads the chart for you</h3>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>Run-length encode each region's high-P(open) slots into windows and present them as a ranked list for the next few hours, for example: "17 m AS: usually opens ~14:30 UTC (22/30 days)", "40 m JA: 20:30–22:00, usually". Show it combined with the live state: "already open today" or "not yet". The same list is a one-line horstapp widget ("Now usually: 20 m NA, 17 m AS. Next: 40 m JA ~21:00") and a 48-hour contest-weekend strip. The heatmap from idea 3 becomes the drill-down.</dd>
+      <dt>Basis</dt>
+      <dd><code>external:</code> VOACAP "Best FREQ" top bands per hour. Tide tables: people plan around times, not curves.<br><code>reasoned:</code> The user asked "which regions at what time", which is an agenda question. A 48 × 11 grid leaves the operator to extract the windows themselves. The summary endpoint and widgets already exist to carry a text answer.</dd>
+      <dt>Rationale</dt>
+      <dd>This answers in the shape the question was asked and fits on a lock screen. Of all the ideas, it is the most likely to change when someone actually turns the rig on.</dd>
+      <dt>Downsides</dt>
+      <dd>Resolution is 30-minute slots. Minute-level claims such as "opened 25 min early" cannot be made from the typical data, so the list must speak in windows, not minutes. Thresholds for "usually" need tuning so the list is neither empty nor noisy.</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="i5">
+    <div class="chips"><span class="chip id">5</span><span class="chip">Axis: Live vs typical</span><span class="chip">Confidence 85%</span><span class="chip">Complexity Low</span></div>
+    <h3>5. Make "unusual" mean unusual for you</h3>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>prop_intel v2 filters the live nowcast to your QTH but compares it against a baseline with no QTH, so the anomaly glyph compares from-here against from-everywhere. Once idea 1 exists, swap the FT8/pskr baseline to the per-QTH P(open) and phrase deviations the Popular Times way: "10 m to SA: usually closed now, open today". The typical data then shows up on the surface users already watch, without a separate view.</dd>
+      <dt>Basis</dt>
+      <dd><code>direct:</code> <code>prop_intel_v2.go:280</code> loads <code>propBaseline.RegionCalendarStats(...)</code>, keyed on band, source, region and slot with no QTH. <code>prop_region_baseline_daily</code> has no QTH column (<code>prop_baseline.go:400</code>).<br><code>external:</code> Google Maps Popular Times, "busier than usual".</dd>
+      <dt>Rationale</dt>
+      <dd>It fixes a quiet correctness issue in the product's most visible "compared to usual" signal, and it is small once the reader exists.</dd>
+      <dt>Downsides</dt>
+      <dd>A per-QTH baseline only exists for pskr. The rbn, wspr and dxcluster sources in v2 stay global until their tables gain a QTH key. v2 already runs under a 1.5-second timeout with a negative cache, so the new read path needs a latency check on prod.</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="i6">
+    <div class="chips"><span class="chip id">6</span><span class="chip">Axis: Time framing</span><span class="chip">Confidence 65%</span><span class="chip">Complexity Medium</span></div>
+    <h3>6. Solar-anchored time axis</h3>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>Keep storing UTC slots, but at read time re-bin each (day, slot) against sunrise and sunset at the QTH and, optionally, at the region centroid. Show "NA on 40 m: ~40 min after your sunset", and convert back to a UTC time only for today's readout. Greyline openings that a 30-day UTC average smears across 2–3 slots line up again. It is also what lets the monthly ledger in idea 2 be compared across seasons.</dd>
+      <dt>Basis</dt>
+      <dd><code>direct:</code> <code>utcSlotOfDay</code> bins fixed UTC half-hours (<code>dx_conditions.go:2319</code>). <code>day_index</code>, slot and grid4 are all stored, so solar time can be derived with no schema change.<br><code>external:</code> Lo et al. 2022, greyline clustering in WSPR links.<br><code>reasoned:</code> Around the equinoxes at 50°N, sunrise moves about 1.5–2 minutes a day, so roughly an hour over a 30-day window. That is longer than a typical greyline opening.</dd>
+      <dt>Rationale</dt>
+      <dd>This makes the most valuable openings, low-band greyline and dawn paths to JA/VK, visible instead of averaged away. It adds no storage.</dd>
+      <dt>Downsides</dt>
+      <dd>The benefit is a hypothesis. Plotting a few known paths against UTC and against sunset-offset would settle it cheaply before building. Regions are wide boxes, so the "region centroid sunrise" is a rough stand-in.</dd>
+    </dl>
+    <figure>
+      <svg viewBox="0 0 720 150" role="img" aria-label="UTC binning smears a greyline opening; solar binning keeps it sharp">
+        <text x="10" y="18" font-size="12" font-weight="600">Same 30 days, 80 m to NA</text>
+        <text x="10" y="52" font-size="11" class="mut">UTC slots</text>
+        <rect x="110" y="40" width="40" height="18" fill="#1f5fae" opacity=".25"/><rect x="150" y="40" width="40" height="18" fill="#1f5fae" opacity=".4"/><rect x="190" y="40" width="40" height="18" fill="#1f5fae" opacity=".45"/><rect x="230" y="40" width="40" height="18" fill="#1f5fae" opacity=".35"/><rect x="270" y="40" width="40" height="18" fill="#1f5fae" opacity=".2"/>
+        <text x="330" y="53" font-size="11" class="mut">spread over 2.5 h, never looks "usual"</text>
+        <text x="10" y="102" font-size="11" class="mut">sunset-offset</text>
+        <rect x="110" y="90" width="40" height="18" fill="#1f5fae" opacity=".08"/><rect x="150" y="90" width="40" height="18" fill="#1f5fae" opacity=".15"/><rect x="190" y="90" width="40" height="18" fill="#1f5fae" opacity=".95"/><rect x="230" y="90" width="40" height="18" fill="#1f5fae" opacity=".2"/><rect x="270" y="90" width="40" height="18" fill="#1f5fae" opacity=".08"/>
+        <text x="330" y="103" font-size="11" class="mut">one sharp window: 26/30 days at sunset +30 min</text>
+        <text x="10" y="138" font-size="10" class="mut">Illustrative.</text>
+      </svg>
+      <figcaption>Illustrative contrast. The opening follows the terminator, not the clock.</figcaption>
+    </figure>
+  </article>
+
+  <article class="idea" id="i7">
+    <div class="chips"><span class="chip id">7</span><span class="chip">Axis: Presentation surfaces</span><span class="chip">Confidence 55%</span><span class="chip">Complexity High</span></div>
+    <h3>7. Beam-heading wheel instead of continent boxes</h3>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>Continents are the wrong unit for a from-here question. "NA" covers W1 at 6,000 km and W6 at 9,000 km, and they open hours apart. At write time both locators are known, so also key the typical data by a QTH-relative sector, for example 16 azimuth sectors × 3 distance rings. Draw it as a 24-hour polar wheel: angle is bearing, colour is P(open), with an hour scrubber. This is the empirical counterpart of VOACAP's Propagation Wheel, and it maps directly onto the azimuthal view and the rotator.</dd>
+      <dt>Basis</dt>
+      <dd><code>direct:</code> The 11 regions are fixed lat/lng boxes independent of the observer (<code>dx_regions.go</code>). The writer has both <code>senderLoc</code> and <code>receiverLoc</code> in hand (<code>dx_postgres.go:854-855</code>).<br><code>external:</code> the VOACAP Propagation Wheel.<br><code>reasoned:</code> Operators with a rotator decide by heading, not by continent. Aggregate per-sector conditions stay on the conditions side of the horstprop scoring boundary.</dd>
+      <dt>Rationale</dt>
+      <dd>It turns "usually open" into something the operator can act on directly ("point 300° at 22 UTC"), and it fixes the coarse-region blur.</dd>
+      <dt>Downsides</dt>
+      <dd>It needs a new key and more rows: a schema change, plus disk sizing on a tight prod box. Sectors are relative to the grid, so pooling across neighbouring grids (idea 1) becomes harder. It is best done after ideas 1 and 2 have proven the approach.</dd>
+    </dl>
+  </article>
+</section>
+
+<section id="rejection-summary">
+  <h2>Rejection Summary</h2>
+  <table>
+    <thead><tr><th>#</th><th>Idea</th><th>Reason Rejected</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Tri-state open / closed / nobody-on using the global table as listener denominator</td><td>Basis weak: <code>prop_region_baseline_daily</code> counts spots touching a region, not active listeners, and it is a different (multi-source, global) population.</td></tr>
+      <tr><td>2</td><td>Steady-reporter panel (compute only from consistently active stations)</td><td>Needs callsign identity, which only lives in 4-day raw spots. A per-reporter table is costly on prod disk.</td></tr>
+      <tr><td>3</td><td>64/512-bit open-day bitmaps per cell</td><td>Duplicates idea 2 with a harder trade-off: freezes the floor and drops counts. Premature optimisation next to a small monthly ledger.</td></tr>
+      <tr><td>4</td><td>Double-plotted actogram (days × slots)</td><td>Day-level rows exist for only 35 days, and the idea 2 fold removes day granularity. Worth revisiting as a 35-day diagnostic.</td></tr>
+      <tr><td>5</td><td>Analog-day forecast conditioned on Kp / F10.7</td><td>Too few analog days per space-weather bin with 35 days of history. Revisit once the idea 2 ledger has a season or two.</td></tr>
+      <tr><td>6</td><td>Persistence + 27-day solar-rotation blend</td><td>Cheap but expected gain is small. 27-day recurrence mainly affects geomagnetic disturbance.</td></tr>
+      <tr><td>7</td><td>Split "where you are heard" vs "what you hear"</td><td>Valid and verified (no direction column), but a schema change with lower value than ideas 1–2. Candidate refinement once idea 1 exists.</td></tr>
+      <tr><td>8</td><td>Departure board: "opened 25 min early today"</td><td>Basis refuted: typical data is in 30-minute slots, so minute timing cannot be measured. The countdown half lives in idea 4.</td></tr>
+      <tr><td>9</td><td>48-hour contest planner with actual-vs-typical overlay</td><td>The overlay only works within timeline.js's ~4-day raw window. The planner strip is folded into idea 4.</td></tr>
+      <tr><td>10</td><td>Astronomy-style rise/transit/set chart</td><td>Same data and purpose as idea 3. Kept there as a chart-style option.</td></tr>
+      <tr><td>11</td><td>wspr.live backfill as a standalone idea</td><td>Merged into idea 2 as its follow-on.</td></tr>
+      <tr><td>12</td><td>"Opening almanac" combination (reader + statistic + denominator + ledger)</td><td>Equals ideas 1 + 2. The weak denominator part was dropped.</td></tr>
+      <tr><td>13</td><td>"Tide table for your QTH" combination (agenda + departure board + solar axis)</td><td>Rested on the refuted minute-timing claim. Reframed as ideas 4 + 6.</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <div class="eyebrow" style="color:inherit">Caveats that apply to every idea</div>
+    <p>"Open" is inferred from FT8 spot counts biased by reporter density. Floors based on distinct stations, SNR or direction all need new columns, and none can be backfilled.</p>
+    <p>Seasonal answers only accumulate going forward from when the fold in idea 2 lands, apart from WSPR backfill. Size new tables against actual prod row counts before shipping.</p>
+  </div>
+</section>
+
+<footer class="composition-signal">Composed <time datetime="2026-09-28">2026-09-28</time> by ce-ideate from the user prompt: "understanding of daily propagation changes: which regions are usually available from a location at what time of day".</footer>
+</main>
+</body>
+</html>

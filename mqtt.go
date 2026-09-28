@@ -132,8 +132,7 @@ func ingestPSKRMessage(topic string, payload []byte) {
 	m.SL = strings.ToUpper(strings.TrimSpace(m.SL))
 	m.RL = strings.ToUpper(strings.TrimSpace(m.RL))
 
-	mode := m.MD
-	if mode == "FT8" || mode == "FT4" {
+	if pskrModeFeedsBaseline(m.MD) {
 		if m.T == 0 {
 			m.T = time.Now().Unix()
 		}
@@ -143,6 +142,14 @@ func ingestPSKRMessage(topic string, payload []byte) {
 		}
 		hub.broadcastMsg(m)
 	}
+}
+
+// pskrModeFeedsBaseline is the PSKReporter ingest mode gate: only FT8/FT4
+// spots (mode already upper-cased) reach the baseline engine and the hub.
+// Shared with the Almanac SNR backfill (almanac_snr_backfill.go), which
+// replays dx_raw_spots rows through the same gates.
+func pskrModeFeedsBaseline(mode string) bool {
+	return mode == "FT8" || mode == "FT4"
 }
 
 // fastParseMinimalPSKR parses exactly the shape {"t":<int>,"rp":<int>} — keys

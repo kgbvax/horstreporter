@@ -758,6 +758,9 @@ type propIntelSummaryResponse struct {
 	HeadlineKind string              `json:"headline_kind"`
 	TopBands     []propIntelTopBand  `json:"top_bands"`
 	Grid         []propIntelGridCell `json:"grid"`
+	// Almanac is the optional "usually open now / next" glance for the QTH
+	// (U6, KTD10): served only from a warm Almanac cache, omitted when cold.
+	Almanac *propIntelSummaryAlmanac `json:"almanac,omitempty"`
 }
 
 // propIntelTopBand aggregates one band's cells for the widget band list.
@@ -981,6 +984,8 @@ func propIntelSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	resp = resp.applyFromHere(p.fromHere)
 
 	sum := propIntelSummarize(resp)
+	// Warm-cache only: never reads Postgres or calls QRZ (KTD10).
+	sum.Almanac = propIntelSummaryAlmanacFor(p.qth)
 	body, err := json.Marshal(sum)
 	if err != nil {
 		propIntelAccounting.errors.Add(1)

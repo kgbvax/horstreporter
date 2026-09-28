@@ -693,6 +693,8 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 			RawFlushFailStreak:      rawStreak,
 			BaselineFlushLastOKUnix: baseOK,
 			BaselineFlushFailStreak: baseStreak,
+			AlmanacFold:             almanacFoldStats(dxBaseline.Store()),
+			AlmanacSNRBackfill:      almanacSNRBackfillState.stats(),
 		}
 	}
 
@@ -798,6 +800,51 @@ type postgresStatsBlock struct {
 	RawFlushFailStreak      int64 `json:"raw_flush_fail_streak"`
 	BaselineFlushLastOKUnix int64 `json:"baseline_flush_last_ok_unix"`
 	BaselineFlushFailStreak int64 `json:"baseline_flush_fail_streak"`
+	// AlmanacFold is the Almanac seasonal-record fold health (U3).
+	AlmanacFold *almanacFoldStatsBlock `json:"almanac_fold"`
+	// AlmanacSNRBackfill is the one-off SNR backfill's status (null when
+	// -almanac-snr-backfill=false).
+	AlmanacSNRBackfill *almanacSNRBackfillStatsBlock `json:"almanac_snr_backfill"`
+}
+
+// almanacFoldStatsBlock is postgres.almanac_fold in /api/stats. A watermark
+// stuck below today−2, a nonzero fail_streak or a growing lost_days means
+// seasonal history is not being preserved.
+type almanacFoldStatsBlock struct {
+	Enabled bool `json:"enabled"`
+	// WatermarkDay is the last folded UTC day_index (-1 until known);
+	// WatermarkDate is the same day as YYYY-MM-DD.
+	WatermarkDay  int64  `json:"watermark_day"`
+	WatermarkDate string `json:"watermark_date,omitempty"`
+	FailStreak    int64  `json:"fail_streak"`
+	LastOKUnix    int64  `json:"last_ok_unix"`
+	// LostDays counts rows in almanac_lost_days (days pruned unfolded).
+	LostDays int64 `json:"lost_days"`
+	// LateRegionDrops counts live spots whose region-baseline keys were
+	// dropped by the 24 h / +10 min timestamp clamp since start.
+	LateRegionDrops int64 `json:"late_region_drops"`
+	// PruneGateFailStreak counts consecutive daily prunes that skipped
+	// dx_region_baseline_daily because the fold gate could not be evaluated.
+	PruneGateFailStreak int64 `json:"prune_gate_fail_streak"`
+}
+
+func almanacFoldStats(st *dxPostgresStore) *almanacFoldStatsBlock {
+	if st == nil {
+		return nil
+	}
+	b := &almanacFoldStatsBlock{WatermarkDay: -1, LateRegionDrops: st.RegionLateDrops(), PruneGateFailStreak: st.PruneGateFailStreak()}
+	if f := st.AlmanacFolder(); f != nil {
+		h := f.health()
+		b.Enabled = true
+		b.WatermarkDay = h.WatermarkDay
+		b.FailStreak = h.FailStreak
+		b.LastOKUnix = h.LastOKUnix
+		b.LostDays = h.LostDays
+		if h.WatermarkDay >= 0 {
+			b.WatermarkDate = almanacDayString(h.WatermarkDay)
+		}
+	}
+	return b
 }
 
 type propIntelStatsBlock struct {
