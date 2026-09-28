@@ -48,7 +48,7 @@ const DEFAULT_SLOT_MINUTES = 30;
 
 const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
 
-const TOGGLE_LABELS = { show: 'Show almanac', hide: 'Hide almanac' };
+const TOGGLE_LABELS = { show: 'Show typical openings', hide: 'Hide typical openings' };
 
 const runtime = {
     enabled: false,
@@ -417,7 +417,7 @@ function render() {
     body.setAttribute('aria-busy', runtime.loading ? 'true' : 'false');
 
     if (!runtime.lastQth) {
-        body.innerHTML = message('Enter your locator to see the Almanac.');
+        body.innerHTML = message('Enter your locator to see typical openings.');
         return;
     }
     if (runtime.error) {
@@ -476,7 +476,7 @@ function errorText(err) {
     switch (err.kind) {
         case 'invalid': return 'Invalid QTH. Enter a Maidenhead locator (for example JO32) or a callsign.';
         case 'notfound': return `Could not locate ${err.qth}. Enter a locator instead.`;
-        default: return 'The Almanac is temporarily unavailable. Try again in a minute.';
+        default: return 'Typical openings are temporarily unavailable. Try again in a minute.';
     }
 }
 

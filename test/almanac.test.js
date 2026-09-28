@@ -30,7 +30,7 @@ function setupDom(qth = 'JO32') {
         <div id="map-stack">
             <div id="map-toggles"><button id="${TOGGLE_ID}"></button></div>
             <div id="${PANEL_ID}" class="almanac-window is-hidden">
-                <div class="almanac-window-header"><span id="almanac-title">Almanac</span></div>
+                <div class="almanac-window-header"><span id="almanac-title">Typical openings from your area</span></div>
                 <div id="${BODY_ID}"></div>
             </div>
         </div>
