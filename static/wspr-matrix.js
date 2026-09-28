@@ -1,6 +1,5 @@
 import { state } from './state.js';
 import { WSPR_REGIONS, bandColors, getEnabledBands, getMinSnrMode } from './utils.js';
-import { makeDraggable } from './panel-drag.js';
 import { setPanelToggleState } from './panel-toggle.js';
 import { escapeHtml } from './ui-helpers.js';
 
@@ -168,7 +167,9 @@ const runtime = {
     sources: [...DEFAULT_SOURCES],
     style: 'viridis',
     onLayoutChange: null,
-    toggleRowObserver: null,
+    // Optional extra per-band columns (see setRowExtras); the Conditions dock
+    // uses them to put verdict / count / plot in the same row as the cells.
+    rowExtras: null,
 };
 
 const TOGGLE_LABELS = { show: 'Show propagation', hide: 'Hide propagation' };
@@ -177,7 +178,7 @@ export function initWsprMatrix({ onLayoutChange } = {}) {
     runtime.onLayoutChange = onLayoutChange || null;
     const panel = document.getElementById(PANEL_ID);
     const toggle = document.getElementById(TOGGLE_ID);
-    if (!panel || !toggle) return;
+    if (!panel) return;
 
     localStorage.removeItem(LEGACY_FROM_HERE_KEY);
     localStorage.removeItem(LEGACY_PROP_MATRIX_KEY);
@@ -195,18 +196,18 @@ export function initWsprMatrix({ onLayoutChange } = {}) {
         runtime.style = storedStyle;
     }
 
-    const stored = localStorage.getItem(ENABLE_KEY);
-    if (stored === 'true') {
-        setWsprMatrixVisible(true);
-    } else {
-        setPanelToggleState(toggle, false, TOGGLE_LABELS);
+    // Standalone mode: the panel has its own toggle. Inside the Conditions
+    // dock there is none; cond-dock.js calls setWsprMatrixVisible instead.
+    if (toggle) {
+        if (localStorage.getItem(ENABLE_KEY) === 'true') {
+            setWsprMatrixVisible(true);
+        } else {
+            setPanelToggleState(toggle, false, TOGGLE_LABELS);
+        }
+        toggle.addEventListener('click', () => {
+            setWsprMatrixVisible(!runtime.enabled);
+        });
     }
-
-    observeToggleRow(panel);
-
-    toggle.addEventListener('click', () => {
-        setWsprMatrixVisible(!runtime.enabled);
-    });
 
     // Re-poll when QTH changes (band-lab.js pattern).
     const qthInput = document.getElementById('qth');
@@ -240,35 +241,16 @@ export function initWsprMatrix({ onLayoutChange } = {}) {
         if (id === 'ssb-min-db' || id === 'cw-min-db') onMinSnrChange();
     };
     document.addEventListener('change', runtime.snrThresholdListener);
-
-    makeDraggable(panel, panel.querySelector('.wspr-matrix-window-header'), 'wsprMatrixPos');
 }
 
-// The map toggle row wraps on narrow screens (longer labels, solo and
-// drill-down chips). Publish its bottom edge on the map stack so the mobile
-// panel placement (style.css) starts below it instead of covering the chips.
-function observeToggleRow(panel) {
-    const row = document.getElementById('map-toggles');
-    const host = panel.parentElement;
-    if (!row || !host || typeof ResizeObserver !== 'function') return;
-    runtime.toggleRowObserver?.disconnect();
-    const sync = () => {
-        host.style.setProperty('--map-toggles-bottom', `${row.offsetTop + row.offsetHeight}px`);
-        // Right edge, for the centred hot-band indicator's clearance.
-        host.style.setProperty('--map-toggles-right', `${row.offsetLeft + row.offsetWidth}px`);
-    };
-    runtime.toggleRowObserver = new ResizeObserver(sync);
-    runtime.toggleRowObserver.observe(row);
-    sync();
-}
-
-function setWsprMatrixVisible(visible) {
+export function setWsprMatrixVisible(visible) {
     const panel = document.getElementById(PANEL_ID);
     const toggle = document.getElementById(TOGGLE_ID);
     if (!panel) return;
+    if (runtime.enabled === visible && (panel.classList.contains('is-hidden') === !visible)) return;
     runtime.enabled = visible;
     panel.classList.toggle('is-hidden', !visible);
-    setPanelToggleState(toggle, visible, TOGGLE_LABELS);
+    if (toggle) setPanelToggleState(toggle, visible, TOGGLE_LABELS);
     localStorage.setItem(ENABLE_KEY, visible ? 'true' : 'false');
     if (runtime.onLayoutChange) runtime.onLayoutChange();
     if (visible) {
@@ -463,7 +445,7 @@ function renderMatrix() {
     // Rows follow the band rail's enabled set (when the rail is present).
     const enabled = document.querySelector('.band-enable') ? getEnabledBands() : null;
     const cells = enabled ? allCells.filter((c) => enabled.has(c.band)) : allCells;
-    if (cells.length === 0) {
+    if (cells.length === 0 && !(runtime.rowExtras && enabled && enabled.size > 0)) {
         runtime.lastRenderKey = '';
         const empty = allCells.length > 0
             ? 'No paths open on the enabled bands.'
@@ -487,7 +469,18 @@ function renderMatrix() {
         }
         matrix.get(cell.band).set(cell.region, cell);
     }
+    // With row extras (Conditions dock) every enabled band gets a row, even
+    // without a path, so the verdict / count / plot columns stay glanceable.
+    if (runtime.rowExtras && enabled) {
+        for (const band of enabled) {
+            if (!matrix.has(band) && BAND_ORDER.includes(band)) {
+                matrix.set(band, new Map());
+                activeBands.push(band);
+            }
+        }
+    }
     activeBands.sort((a, b) => BAND_ORDER.indexOf(a) - BAND_ORDER.indexOf(b));
+    const extras = runtime.rowExtras;
 
     // Fingerprint for skip-rebuild (theme included: a toggle re-shades chips;
     // drill-down included: it sets aria-selected and the tab stop; region
@@ -495,6 +488,7 @@ function renderMatrix() {
     const theme = document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
     const regionNames = (data && data.region_names) || {};
     const renderKey = `${theme}|${runtime.style}|${runtime.sources.join(',')}` +
+        `|x:${extras ? extras.key(activeBands) : ''}` +
         `|${state.drillDownBand}×${state.drillDownRegion}` +
         `|${WSPR_REGIONS.map((r) => regionNames[r] || '').join(',')}|${activeBands
         .map((b) => `${b}:${Array.from(matrix.get(b).entries()).sort().map(([r, c]) =>
@@ -507,10 +501,11 @@ function renderMatrix() {
     runtime.lastRenderKey = renderKey;
 
     const maxCount = Math.max(...cells.map((c) => c.spot_count || 0), 1);
+    const extraHead = extras ? extras.columns.map((c) => `<th scope="col" role="columnheader" class="${c.className || ''}">${c.label}</th>`).join('') : '';
 
     let html = renderSourceChips();
     html += '<table class="wspr-matrix-table" role="grid" aria-label="Propagation by band and region">' +
-        '<thead><tr role="row"><th scope="col" role="columnheader"><span class="wspr-sr-only">Band</span></th>';
+        '<thead><tr role="row"><th scope="col" role="columnheader"><span class="wspr-sr-only">Band</span></th>' + extraHead;
     for (const region of WSPR_REGIONS) {
         html += `<th scope="col" role="columnheader" title="${escapeHtml(regionNames[region] || region)}">${region}</th>`;
     }
@@ -520,6 +515,7 @@ function renderMatrix() {
         const bandMap = matrix.get(band);
         const color = bandColors[band] || bandColors.all || '#555';
         html += `<tr role="row"><th scope="row" role="rowheader" class="wspr-matrix-band" style="border-left: 3px solid ${color}">${band}</th>`;
+        if (extras) html += extras.cells(band);
         for (const region of WSPR_REGIONS) {
             const cell = bandMap.get(region);
             html += renderCell(band, region, cell, maxCount, theme, regionNames);
@@ -539,6 +535,7 @@ function renderMatrix() {
     const first = table.querySelector('.wspr-matrix-cell');
     if (drill || first) setRovingCell(drill || first);
     restoreFocus(body, focus);
+    extras?.after(body);
 }
 
 // "20m to Japan: 1,234 spots" (full region name from the payload's
@@ -777,6 +774,19 @@ export function clearDrillDown() {
     if (runtime.enabled && runtime.cache) renderMatrix();
 }
 
+// Conditions dock hooks. `extras` = { columns: [{label, className}],
+// cells(band) -> '<td>…</td>' per column, key(bands) -> string that changes
+// when the extra cells' markup would, after(body) -> draw into the fresh DOM }.
+export function setRowExtras(extras) {
+    runtime.rowExtras = extras || null;
+    runtime.lastRenderKey = '';
+}
+
+// Repaint from cache (no refetch); no-op until a payload arrived.
+export function refreshMatrix() {
+    if (runtime.enabled && runtime.cache) renderMatrix();
+}
+
 // Test hooks.
 export const __test = {
     cellInk,
@@ -806,8 +816,7 @@ export const __test = {
         runtime.sources = [...DEFAULT_SOURCES];
         runtime.style = 'viridis';
         runtime.onLayoutChange = null;
-        runtime.toggleRowObserver?.disconnect();
-        runtime.toggleRowObserver = null;
+        runtime.rowExtras = null;
     },
     invalidateCache,
     toggleSource,

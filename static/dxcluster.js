@@ -1,9 +1,8 @@
 // dxcluster.js — HorstOperator "Chase Queue" module.
 //
-// A right-docked panel of live DX-cluster spots (from /api/dxspots), each scored
-// by the local horstprop service (GET /v1/score). Auto-mode: cards are sorted by
-// live score. Self-contained — injects its own styles + toggle button; no edits
-// to app.js required. See docs/dxcluster-*.md and docs/horstprop.md.
+// Live DX-cluster spots (from /api/dxspots), each scored by the local horstprop
+// service (GET /v1/score), shown as the Chase queue tab of the Conditions dock.
+// Auto-mode: cards are sorted by live score. Injects its own styles. See docs/dxcluster-*.md and docs/horstprop.md.
 
 import { canControlRig, rigTune, operate, canLookup, enrichSpots } from './opmode.js';
 import { isChaseQueueEnabled } from './cq-flag.js';
@@ -72,9 +71,9 @@ const starSvg = (on) => `<svg viewBox="0 0 14 14"><path class="${on ? 's-on' : '
 function injectStyles() {
   if (document.getElementById('cq-styles')) return;
   const css = `
-  #chase-queue { flex: 0 0 380px; width: 380px; height: 100%; display: flex; flex-direction: column;
-    position: relative; z-index: 1001;
-    border-left: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);
+  #chase-queue { flex: 1 1 auto; min-height: 0; width: 100%; display: flex; flex-direction: column;
+    position: relative;
+    background: var(--bg-color); color: var(--text-color);
     --cq-go:#22c55e; --cq-watch:#f59e0b; --cq-wait:#64748b; --cq-atno:#f3c14b; --cq-unknown: var(--status-color);
     --cq-gold-strong:#9a7000; --cq-cc:#ffffff;
     --cq-was:#2f9e8f; --cq-pota:#3f8f4f;
@@ -85,15 +84,12 @@ function injectStyles() {
 
   /* Header: de-prioritised title row, then a separated sortable column band. */
   .cq-head { padding:7px 12px; display:flex; align-items:center; gap:8px; background:var(--bg-color); border-bottom:1px solid var(--border-color); }
-  .cq-title { font-size:.86rem; font-weight:600; color:var(--status-color); letter-spacing:.02em; }
   .cq-modes { margin-left:auto; display:flex; gap:3px; }
   .cq-mode { all:unset; cursor:pointer; box-sizing:border-box; font:700 10px/1 sans-serif; letter-spacing:.03em;
     text-transform:uppercase; color:var(--status-color); padding:4px 7px; border-radius:3px; border:1px solid var(--control-border); }
   .cq-mode:hover { color:var(--accent-strong); border-color:var(--accent); }
   /* On states (mode pills, sorted column) use the unified tint look (style.css). */
   .cq-mode.act { background:var(--accent-tint-strong); color:var(--accent-strong); border-color:var(--accent); }
-  #cq-close { border:0; background:transparent; color:var(--status-color); font-size:17px; line-height:1; cursor:pointer; padding:0 2px; }
-  #cq-close:hover { color:var(--text-color); }
   .cq-status { font:600 11px sans-serif; color:var(--cq-watch); padding:4px 12px 0; }
   .cq-status:empty { display:none; }
   /* tiny validation footer: how many spots we know vs show vs hide, by reason */
@@ -161,8 +157,6 @@ function injectStyles() {
   .cq-act:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .cq-act:disabled { opacity:.5; cursor:default; } .cq-act.busy { opacity:.6; cursor:progress; }
 
-  /* #cq-toggle uses the shared .panel-toggle pill style (style.css). */
-  @media (max-width: 820px){ #chase-queue{ position:absolute; right:0; top:0; z-index:1150; box-shadow:0 0 24px var(--shadow-color);} }
   .dx-highlight-label span { font:700 12px var(--cq-mono); color:#1c1400; background:var(--cq-atno);
     padding:1px 5px; border-radius:4px; white-space:nowrap; box-shadow:0 1px 4px rgba(0,0,0,.35); }
   `;
@@ -187,39 +181,26 @@ let dxLayerWasOn = null;
 const spotKey = (s) => `${s.dx_call}|${s.band}|${s.freq_khz}`;
 const highlightData = (s) => ({ dx_call: s.dx_call, dx_locator: s.dx_locator, band: s.band, freq_khz: s.freq_khz });
 
+// The Chase Queue is a tab of the Conditions dock (cond-dock.js): the dock owns
+// the #cond-chase host and calls window.__horstChaseQueue.setVisible when the
+// tab is selected or the dock closes.
 function mount() {
+  const host = document.getElementById('cond-chase');
+  if (!host) return false;
   injectStyles();
-
-  const toggle = document.createElement('button');
-  toggle.id = 'cq-toggle';
-  toggle.className = 'panel-toggle'; // shared pill style (see style.css)
-  toggle.textContent = 'Chase Queue';
-  // Dock the toggle into the app's existing top-right control cluster if present,
-  // otherwise float it top-right.
-  const trc = document.getElementById('top-right-controls');
-  const trcRight = trc ? (trc.style.right || '15px') : ''; // preserve original anchor
-  if (trc) {
-    trc.style.transition = 'right .2s ease';
-    trc.insertBefore(toggle, trc.firstChild);
-  } else {
-    Object.assign(toggle.style, { position: 'fixed', top: '10px', right: '12px', zIndex: '1200' });
-    document.body.appendChild(toggle);
-  }
 
   panelEl = document.createElement('aside');
   panelEl.id = 'chase-queue';
   panelEl.className = 'is-hidden';
   panelEl.innerHTML = `
     <div class="cq-head">
-      <span class="cq-title">Chase Queue</span>
       <div class="cq-modes" id="cq-modes"></div>
-      <button id="cq-close" title="Hide Chase Queue">×</button>
     </div>
     <div id="cq-status" class="cq-status"></div>
     <div class="cq-colhead is-hidden" id="cq-colhead"></div>
     <div class="cq-body" id="cq-body"><div class="cq-empty">Loading spots…</div></div>
     <div class="cq-counts" id="cq-counts" title="Spots known (from the cluster feed) vs shown, and why the rest are hidden"></div>`;
-  document.body.appendChild(panelEl);
+  host.appendChild(panelEl);
   bodyEl = panelEl.querySelector('#cq-body');
   modesEl = panelEl.querySelector('#cq-modes');
   statusEl = panelEl.querySelector('#cq-status');
@@ -227,20 +208,8 @@ function mount() {
   countsEl = panelEl.querySelector('#cq-counts');
   renderModeFilter();
 
-  const PANEL_W = 380;
-  // Docking the panel changes the map container width; nudge Leaflet (trackResize)
-  // and the azimuth canvas to re-fit so the map isn't left distorted/hidden until
-  // a manual zoom. rAF lets the flex layout settle; the timeout covers the control
-  // slide transition.
-  const reflowMap = () => {
-    const fire = () => window.dispatchEvent(new Event('resize'));
-    requestAnimationFrame(fire);
-    setTimeout(fire, 250);
-  };
   const open = () => {
     panelEl.classList.remove('is-hidden');
-    toggle.style.display = 'none';
-    if (trc) trc.style.right = (PANEL_W + 15) + 'px'; // slide app controls left, over the map
     // Reuse the existing 'DX Cluster' map layer so the listed spots are visible
     // on the map; remember its prior state to restore on close.
     const cb = document.getElementById('show-dxcluster-spots');
@@ -248,22 +217,24 @@ function mount() {
       dxLayerWasOn = cb.checked;
       if (!cb.checked) { window.__horstSetDxcluster ? window.__horstSetDxcluster(true) : (cb.checked = true, cb.dispatchEvent(new Event('change'))); }
     }
-    reflowMap();
     refresh();
   };
   const close = () => {
     panelEl.classList.add('is-hidden');
-    toggle.style.display = '';
-    if (trc) trc.style.right = trcRight; // restore original anchor (not '')
     // Clear any highlight and restore the DX Cluster layer to its prior state.
     pinned = null;
     clearChaseQueueHighlight();
     const cb = document.getElementById('show-dxcluster-spots');
     if (cb && dxLayerWasOn === false && cb.checked) { window.__horstSetDxcluster ? window.__horstSetDxcluster(false) : (cb.checked = false, cb.dispatchEvent(new Event('change'))); }
-    reflowMap();
   };
-  toggle.addEventListener('click', open);
-  panelEl.querySelector('#cq-close').addEventListener('click', close);
+  window.__horstChaseQueue = {
+    setVisible(visible) {
+      const hidden = panelEl.classList.contains('is-hidden');
+      if (visible && hidden) open();
+      else if (!visible && !hidden) close();
+    },
+  };
+  return true;
 }
 
 let hpReachable = true; // false only on a network/5xx failure (not per-spot 4xx)
@@ -601,7 +572,7 @@ async function refresh() {
 
 function init() {
   if (!CQ_ENABLED) return;
-  mount();
+  if (!mount()) return;
   refresh();
   setInterval(() => { if (!panelEl.classList.contains('is-hidden')) refresh(); }, REFRESH_MS);
 

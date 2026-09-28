@@ -70,6 +70,8 @@ vi.mock('../static/renderers.js', () => ({
     whenActiveAreaRendered: vi.fn()
 }));
 
+vi.mock('../static/cond-now.js', () => ({ initCondNow: vi.fn() }));
+vi.mock('../static/cond-dock.js', () => ({ initCondDock: vi.fn() }));
 vi.mock('../static/band-lab.js', () => ({
     initBandLab: vi.fn(),
     updateBandLab: vi.fn(),

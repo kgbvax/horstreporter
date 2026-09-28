@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { bandColors, formatNumber, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds, haversineKm, hexToRgba } from './utils.js';
+import { bandColors, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds, haversineKm, hexToRgba } from './utils.js';
 import { dashedLine, fillCircle } from './canvas-draw.js';
 import { setPanelToggleState } from './panel-toggle.js';
 
@@ -7,7 +7,6 @@ const ENABLE_KEY = 'bandLabEnabled';
 const UPDATE_THROTTLE_MS = 300;
 const DX_FETCH_INTERVAL_MS = 15000;
 const ACTIVITY_BINS = 12;
-const WINDOW_SIZE_KEY = 'bandLabWindowSize';
 const TIME_RANGE_KEY = 'bandLabTimeRangeMinutes';
 const BAND_LAB_TIME_RANGE_MINUTES = [15, 30, 60, 120];
 
@@ -54,13 +53,14 @@ const runtime = {
     dxAttemptKey: '',
     dxAttemptAt: 0,
     onLayoutChange: null,
+    // Per-update snapshot the Now rows (cond-now.js) read: grouped live spots,
+    // qth centre, shared distance cache / axis cap and the dx_conditions map.
+    rowsSnap: null,
+    rowListeners: new Set(),
     // Dirty-check state: skip the full pipeline when neither the spot set nor
     // the filters changed since the last update.
     lastSpotFingerprint: '',
-    lastFilterFingerprint: '',
-    // The band set the card DOM was last built for; the DOM (and its canvases)
-    // is only rebuilt when this changes.
-    lastBandKey: ''
+    lastFilterFingerprint: ''
 };
 
 export function initBandLab(options = {}) {
@@ -71,14 +71,18 @@ export function initBandLab(options = {}) {
     const helpToggle = document.getElementById('band-lab-legend-help-toggle');
     const helpPanel = document.getElementById('band-lab-legend-help');
     const timeRangeSelect = document.getElementById('band-lab-time-range');
-    if (!content || !windowEl) return;
+    if (!content) return;
 
     if (typeof options.onLayoutChange === 'function') {
         runtime.onLayoutChange = options.onLayoutChange;
     }
 
-    runtime.enabled = localStorage.getItem(ENABLE_KEY) === 'true';
-    setBandStatsVisible(windowEl, toggleButton, runtime.enabled);
+    // Standalone mode: the panel has its own toggle. Inside the Conditions
+    // dock there is none; cond-dock.js calls setBandLabVisible instead.
+    if (toggleButton) {
+        runtime.enabled = localStorage.getItem(ENABLE_KEY) === 'true';
+        setBandStatsVisible(windowEl, toggleButton, runtime.enabled);
+    }
 
     if (timeRangeSelect) {
         const persistedMinutes = Number(localStorage.getItem(TIME_RANGE_KEY));
@@ -89,11 +93,6 @@ export function initBandLab(options = {}) {
                 ? fallbackMinutes
                 : 15;
         timeRangeSelect.value = String(initialMinutes);
-    }
-
-    restoreWindowWidth(windowEl);
-    if (!runtime.initialized) {
-        setupWindowResize(windowEl);
     }
 
     if (!runtime.initialized) {
@@ -140,6 +139,13 @@ export function initBandLab(options = {}) {
     updateBandLab({ force: true });
 }
 
+// Dock entry point: switch the data pipeline on/off (the dock owns visibility).
+export function setBandLabVisible(visible) {
+    if (runtime.enabled === visible) return;
+    runtime.enabled = visible;
+    if (visible) updateBandLab({ force: true });
+}
+
 function onSnrControlChange(event) {
     const target = event?.target;
     if (!target) return;
@@ -149,7 +155,7 @@ function onSnrControlChange(event) {
 }
 
 function setBandStatsVisible(windowEl, toggleButton, visible) {
-    windowEl.classList.toggle('is-hidden', !visible);
+    windowEl?.classList.toggle('is-hidden', !visible);
     runtime.onLayoutChange?.();
     // Same on/off pill as the Propagation toggle: it stays visible while the
     // panel is open (the panel's own close button does the same thing).
@@ -170,8 +176,7 @@ export function updateBandLab(options = {}) {
     runtime.lastUpdateAt = now;
 
     const summaryEl = document.getElementById('band-lab-summary');
-    const cardsEl = document.getElementById('band-lab-cards');
-    if (!summaryEl || !cardsEl) return;
+    if (!summaryEl) return;
 
     const qth = String(document.getElementById('qth')?.value || '').trim().toUpperCase();
     const minutes = getBandLabLookbackMinutes();
@@ -179,8 +184,8 @@ export function updateBandLab(options = {}) {
 
     if (!qth) {
         summaryEl.innerHTML = '<div class="text-muted">Enter your locator to see band conditions.</div>';
-        cardsEl.innerHTML = '';
-        runtime.lastBandKey = '';
+        runtime.rowsSnap = null;
+        notifyRows();
         return;
     }
 
@@ -204,7 +209,7 @@ export function updateBandLab(options = {}) {
 
     // Render immediately from live spots to avoid a blank panel while dx_conditions loads.
     renderSummary(summaryEl, { loading: !hasDxForKey });
-    renderBandCards(cardsEl, grouped, qth, minutes, hasDxForKey, thresholds);
+    snapshotRows(grouped, qth, minutes, hasDxForKey, thresholds);
 
     // Refetch when the cached response is for another key OR older than the
     // fetch interval. Checking the key alone meant dx_conditions was fetched
@@ -215,7 +220,7 @@ export function updateBandLab(options = {}) {
             if (!runtime.enabled || requestSeq !== runtime.updateSeq) return;
             const ready = Boolean(runtime.dxCache) && runtime.dxCacheKey === requestKey;
             renderSummary(summaryEl);
-            renderBandCards(cardsEl, grouped, qth, minutes, ready, thresholds);
+            snapshotRows(grouped, qth, minutes, ready, thresholds);
         });
     }
     return null;
@@ -324,10 +329,6 @@ function groupSpotsByBand(spots) {
     return out;
 }
 
-function sanitizeBandId(band) {
-    return String(band || '').replace(/[^a-zA-Z0-9_-]/g, '_');
-}
-
 function renderSummary(summaryEl, options = {}) {
     if (options.loading) {
         summaryEl.innerHTML = '<div class="text-muted">Updating baseline and trend…</div>';
@@ -387,72 +388,100 @@ export function enabledBestBands(resp, enabled) {
     return { bestBands: pick(resp?.best_bands), recBands: pick(resp?.recommended_bands) };
 }
 
-function renderBandCards(cardsEl, grouped, qth, minutes, dxReady = false, thresholds = getSnrThresholdsDb()) {
-    const bands = Array.from(grouped.keys()).sort((a, b) => compareBand(a, b));
-    if (bands.length === 0) {
-        runtime.lastBandKey = '';
-        cardsEl.innerHTML = '<div class="text-muted small">No reports match current filters.</div>';
-        return;
-    }
-
+// Snapshot what the Now rows need (cond-now.js) and tell the listeners. The
+// row DOM lives in the Conditions dock; this module only supplies the data
+// and the mini plot.
+function snapshotRows(grouped, qth, minutes, dxReady, thresholds) {
     const qthCenter = getQthCenter(qth);
     // Only the response for the current qth/window: a cached one for another
-    // key would label the cards with the previous qth's verdicts until the
+    // key would label the rows with the previous qth's verdicts until the
     // fetch lands.
     const dxBands = toBandMetricMap(dxReady ? runtime.dxCache : null);
-    // Compute the qth→spot distance once and reuse it in both the axis cap and
-    // every band's scatter chart (was 2x per band per update).
+    // Compute the qth→spot distance once and reuse it in the axis cap and
+    // every band's plot.
     const distanceCache = qthCenter ? computeDistanceCache(grouped, qthCenter) : null;
-    const globalDistanceCapKm = qthCenter ? getGlobalDistanceCapKm(grouped, qthCenter, distanceCache) : null;
+    const capKm = qthCenter ? getGlobalDistanceCapKm(grouped, qthCenter, distanceCache) : null;
+    runtime.rowsSnap = { grouped, qthCenter, distanceCache, capKm, dxBands, dxReady, minutes, thresholds };
+    notifyRows();
+}
 
-    // Per-band labels depend on the fresh dx metrics, which can arrive after
-    // the cards were first rendered (updateBandLab draws once from the cached
-    // dx response, then again when the fetch resolves). Bake them only into
-    // the DOM rebuild, but recompute + patch the label text on every pass —
-    // otherwise the labels freeze next to a live verdict badge.
-    const recs = new Map(bands.map((band) => [band, bandHeadText(band, dxBands.get(band), dxReady)]));
+function notifyRows() {
+    for (const fn of runtime.rowListeners) fn();
+}
 
-    // Only rebuild the card DOM (and its <canvas> elements) when the band set
-    // changes; otherwise redraw the charts in place, reusing the canvases.
-    const bandKey = bands.join(',');
-    if (bandKey !== runtime.lastBandKey || !cardsEl.querySelector('.band-lab-card')) {
-        runtime.lastBandKey = bandKey;
-        cardsEl.innerHTML = bands.map((band) => {
-            const points = grouped.get(band) || [];
-            const safeBand = sanitizeBandId(band);
-            const count = points.length;
-            const rec = recs.get(band);
+// cond-now.js subscribes to be told when a fresh snapshot exists. Returns the
+// unsubscribe function.
+export function subscribeBandRows(fn) {
+    runtime.rowListeners.add(fn);
+    return () => runtime.rowListeners.delete(fn);
+}
 
-            return `
-                <div class="band-lab-card" style="border-left-color: ${bandColors[band] || '#999'};">
-                    <div class="band-lab-card-head">
-                        <span class="band-lab-band" data-band-label="${safeBand}">${escapeHtml(rec)}</span>
-                        <span class="band-lab-meta">${formatNumber(count)} reports</span>
-                    </div>
-                    <div class="band-lab-card-charts">
-                        <div class="band-lab-chart-block">
-                            <div class="band-lab-chart-title">Distance vs SNR</div>
-                            <canvas id="band-lab-scatter-${safeBand}" width="230" height="120"></canvas>
-                            ${qthCenter ? '' : '<div class="band-lab-chart-note">The distance plot needs a Maidenhead locator such as JO32.</div>'}
-                        </div>
-                        <div class="band-lab-chart-block">
-                            <div class="band-lab-chart-title">Reports over time + baseline</div>
-                            <canvas id="band-lab-activity-${safeBand}" width="230" height="120"></canvas>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }).join('');
+// The row model for one band: dx metrics (null until they arrive or when the
+// band is unscored), whether dx for this qth/window has landed, the live
+// report count and the window in minutes. null before the first snapshot.
+export function getBandRow(band) {
+    const snap = runtime.rowsSnap;
+    if (!snap) return null;
+    const points = snap.grouped.get(band) || [];
+    return {
+        band,
+        metrics: snap.dxBands.get(band) || null,
+        dxReady: snap.dxReady,
+        reports: points.length,
+        minutes: snap.minutes,
+    };
+}
+
+// Fixed SNR axis of the mini plot, shared by every row so rows compare.
+export const MINI_PLOT_SNR_MIN_DB = -25;
+export const MINI_PLOT_SNR_MAX_DB = 10;
+
+// Mini distance-vs-SNR plot for the Now rows: same samples and distance axis
+// as the removed per-band scatter, drawn small with no labels. The axes are
+// shared by all rows: distance 0..(p95 over all bands), SNR fixed at
+// MINI_PLOT_SNR_MIN_DB..MINI_PLOT_SNR_MAX_DB. Dashed lines are the SSB / CW
+// thresholds from Display.
+export function drawBandMiniPlot(canvas, band) {
+    const snap = runtime.rowsSnap;
+    const prepared = prepareCanvas(canvas, 96, 44);
+    if (!prepared) return;
+    const { ctx, w, h } = prepared;
+    ctx.clearRect(0, 0, w, h);
+    const pal = chartPalette();
+    const pad = { l: 2, r: 4, t: 3, b: 3 };
+    const pw = w - pad.l - pad.r;
+    const ph = h - pad.t - pad.b;
+    drawChartFrame(ctx, pad, pw, ph, pal);
+
+    const points = snap?.grouped.get(band) || [];
+    const data = snap ? computeScatterData(points, snap.qthCenter, snap.capKm, snap.distanceCache, []) : null;
+    const yOf = (snr) => {
+        const t = (Math.max(MINI_PLOT_SNR_MIN_DB, Math.min(MINI_PLOT_SNR_MAX_DB, snr)) - MINI_PLOT_SNR_MIN_DB)
+            / (MINI_PLOT_SNR_MAX_DB - MINI_PLOT_SNR_MIN_DB);
+        return pad.t + ph - t * ph;
+    };
+    for (const guide of snrGuideSpecs(snap?.thresholds || getSnrThresholdsDb())) {
+        if (guide.snr < MINI_PLOT_SNR_MIN_DB || guide.snr > MINI_PLOT_SNR_MAX_DB) continue;
+        ctx.strokeStyle = hexToRgba(guide.color, 0.85);
+        const y = yOf(guide.snr);
+        dashedLine(ctx, pad.l, y, pad.l + pw, y, [3, 3], 1);
     }
-
-    for (const band of bands) {
-        const safeBand = sanitizeBandId(band);
-        const points = grouped.get(band) || [];
-        const labelEl = cardsEl.querySelector(`[data-band-label="${safeBand}"]`);
-        if (labelEl) labelEl.textContent = recs.get(band);
-        drawActivityChart(document.getElementById(`band-lab-activity-${safeBand}`), points, dxBands.get(band), minutes);
-        drawScatterChart(document.getElementById(`band-lab-scatter-${safeBand}`), points, qthCenter, band, globalDistanceCapKm, distanceCache, thresholds);
+    if (!data) return;
+    const dot = hexToRgba(bandColors[band] || '#4f46e5', 0.55);
+    const clip = hexToRgba(bandColors[band] || '#4f46e5', 0.9);
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'right';
+    for (const sample of data.samples) {
+        const y = yOf(sample.s);
+        if (sample.clipped) {
+            ctx.fillStyle = clip;
+            ctx.fillText('›', pad.l + pw + 2, y + 3);
+            continue;
+        }
+        ctx.fillStyle = dot;
+        fillCircle(ctx, pad.l + (sample.d / data.maxDist) * pw, y, 1.6);
     }
+    ctx.textAlign = 'left';
 }
 
 // Robust axis cap for the distance axis: the p95 of every report's distance
@@ -537,141 +566,6 @@ export function computeScatterData(points, qthCenter, globalDistanceCapKm, dista
     const maxSnr = Math.max(20, ...guides, ...samples.map((s) => s.s));
     const snrRange = Math.max(10, maxSnr - minSnr);
     return { samples, maxDist, minSnr, maxSnr, snrRange };
-}
-
-function drawScatterChart(canvas, points, qthCenter, band, globalDistanceCapKm, distanceCache, thresholds) {
-    const prepared = prepareCanvas(canvas, 230, 120);
-    if (!prepared) return;
-    const { ctx, w, h } = prepared;
-
-    const pad = { l: 30, r: 10, t: 10, b: 20 };
-    const pw = w - pad.l - pad.r;
-    const ph = h - pad.t - pad.b;
-
-    ctx.clearRect(0, 0, w, h);
-    const pal = chartPalette();
-    drawChartFrame(ctx, pad, pw, ph, pal);
-
-    const guides = snrGuideSpecs(thresholds);
-    const data = computeScatterData(points, qthCenter, globalDistanceCapKm, distanceCache, guides.map((g) => g.snr));
-    if (!data) {
-        drawNoData(ctx, w, h, 'No distance data', pal);
-        return;
-    }
-    const { samples, maxDist, minSnr, maxSnr, snrRange } = data;
-
-    // Labels sit just above their line at the left edge. When the two
-    // thresholds are close enough for the labels to collide, the later one
-    // moves to the right edge.
-    const placedLabelYs = [];
-    for (const guide of guides) {
-        const y = pad.t + ph - ((guide.snr - minSnr) / snrRange) * ph;
-        if (!Number.isFinite(y) || y < pad.t || y > (pad.t + ph)) continue;
-        ctx.strokeStyle = hexToRgba(guide.color, 0.85);
-        dashedLine(ctx, pad.l, y, pad.l + pw, y, [4, 3], 1);
-
-        const labelY = Math.max(pad.t + 10, y - 2);
-        const collides = placedLabelYs.some((placedY) => Math.abs(placedY - labelY) < 11);
-        ctx.fillStyle = hexToRgba(guide.color, 0.95);
-        ctx.font = '10px sans-serif';
-        ctx.textAlign = collides ? 'right' : 'left';
-        ctx.fillText(guide.label, collides ? pad.l + pw - 3 : pad.l + 3, labelY);
-        ctx.textAlign = 'left';
-        placedLabelYs.push(labelY);
-    }
-
-    const sortedDistances = samples.map((s) => s.d).sort((a, b) => a - b);
-    const p50Dist = quantileSorted(sortedDistances, 0.5);
-    const p90Dist = quantileSorted(sortedDistances, 0.9);
-
-    if (Number.isFinite(p50Dist) && p50Dist <= maxDist) {
-        const x = pad.l + (p50Dist / maxDist) * pw;
-        ctx.strokeStyle = hexToRgba(pal.grid, 0.38);
-        dashedLine(ctx, x, pad.t, x, pad.t + ph, [2, 4], 0.9);
-    }
-
-    if (Number.isFinite(p90Dist) && p90Dist <= maxDist) {
-        const x = pad.l + (p90Dist / maxDist) * pw;
-        ctx.strokeStyle = hexToRgba(pal.grid, 0.3);
-        dashedLine(ctx, x, pad.t, x, pad.t + ph, [2, 5], 0.9);
-    }
-
-    const dotColor = hexToRgba(bandColors[band] || '#4f46e5', 0.5);
-    const clipColor = hexToRgba(bandColors[band] || '#4f46e5', 0.85);
-    ctx.font = '11px sans-serif';
-    for (const sample of samples) {
-        const y = pad.t + ph - ((sample.s - minSnr) / snrRange) * ph;
-        if (sample.clipped) {
-            // Pinned to the right edge with a chevron: still visible so the
-            // outlier isn't hidden, but it no longer stretches the distance axis.
-            ctx.fillStyle = clipColor;
-            ctx.textAlign = 'right';
-            ctx.fillText('›', pad.l + pw - 1, y + 3);
-            continue;
-        }
-        const x = pad.l + (sample.d / maxDist) * pw;
-        ctx.fillStyle = dotColor;
-        fillCircle(ctx, x, y, 2.2);
-    }
-
-    const yTicks = [maxSnr, (maxSnr + minSnr) / 2, minSnr];
-    ctx.fillStyle = hexToRgba(pal.axisText, 0.92);
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'right';
-    yTicks.forEach((tick) => {
-        const y = pad.t + ph - ((tick - minSnr) / snrRange) * ph;
-        ctx.fillText(`${Math.round(tick)}`, pad.l - 4, y + 3);
-    });
-    ctx.textAlign = 'left';
-
-    const xTicks = buildDistanceTicks(maxDist);
-    ctx.textAlign = 'center';
-    xTicks.forEach((tickKm) => {
-        const x = pad.l + (tickKm / maxDist) * pw;
-        ctx.strokeStyle = hexToRgba(pal.grid, 0.35);
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(x, pad.t + ph);
-        ctx.lineTo(x, pad.t + ph + 4);
-        ctx.stroke();
-        ctx.fillStyle = hexToRgba(pal.axisText, 0.9);
-        ctx.fillText(formatKmLabel(tickKm), x, pad.t + ph + 12);
-    });
-    ctx.textAlign = 'left';
-    ctx.fillStyle = hexToRgba(pal.axisText, 0.9);
-    ctx.fillText('SNR dB', 2, pad.t + 8);
-}
-
-function buildDistanceTicks(maxDistKm) {
-    const targetTickCount = 4;
-    const rawStep = Math.max(250, maxDistKm / targetTickCount);
-    const magnitude = 10 ** Math.floor(Math.log10(rawStep));
-    const normalized = rawStep / magnitude;
-    let step;
-    if (normalized <= 1) step = 1 * magnitude;
-    else if (normalized <= 2) step = 2 * magnitude;
-    else if (normalized <= 5) step = 5 * magnitude;
-    else step = 10 * magnitude;
-
-    const ticks = [];
-    for (let v = 0; v <= maxDistKm + 1e-6; v += step) {
-        ticks.push(v);
-    }
-    const lastTick = ticks[ticks.length - 1] || 0;
-    if (Math.abs(lastTick - maxDistKm) > step * 0.2) {
-        ticks.push(maxDistKm);
-    } else {
-        ticks[ticks.length - 1] = maxDistKm;
-    }
-    return ticks;
-}
-
-function formatKmLabel(km) {
-    const rounded = Math.round(km);
-    if (rounded >= 1000) {
-        return `${Math.round(rounded / 100) / 10}k`;
-    }
-    return String(rounded);
 }
 
 // utcSlotOfDayFromMs mirrors backend dx_conditions.go:utcSlotOfDay (a 30-min
@@ -790,114 +684,6 @@ export function computeActivityChartData(points, bandMetrics, minutes, nowMs) {
     };
 }
 
-function formatRate(rate) {
-    if (!Number.isFinite(rate) || rate <= 0) return '0';
-    if (rate >= 10) return `${rate.toFixed(0)}/min`;
-    if (rate >= 1) return `${rate.toFixed(1)}/min`;
-    return `${rate.toFixed(2)}/min`;
-}
-
-function drawActivityChart(canvas, points, bandMetrics, minutes) {
-    const prepared = prepareCanvas(canvas, 230, 120);
-    if (!prepared) return;
-    const { ctx, w, h } = prepared;
-
-    const pad = { l: 38, r: 10, t: 10, b: 20 };
-    const pw = w - pad.l - pad.r;
-    const ph = h - pad.t - pad.b;
-
-    ctx.clearRect(0, 0, w, h);
-    const pal = chartPalette();
-    drawChartFrame(ctx, pad, pw, ph, pal);
-
-    const data = computeActivityChartData(points, bandMetrics, minutes, Date.now());
-    const { binRates, baselineRatesPerBin, baselineClusterUsedPerBin, yMax } = data;
-
-    // Faint horizontal gridlines at 0, half, full.
-    ctx.strokeStyle = hexToRgba(pal.grid, 0.2);
-    ctx.lineWidth = 1;
-    for (const tick of [0, yMax / 2, yMax]) {
-        const y = pad.t + ph - (tick / yMax) * ph;
-        ctx.beginPath();
-        ctx.moveTo(pad.l, y);
-        ctx.lineTo(pad.l + pw, y);
-        ctx.stroke();
-    }
-
-    // Bars: spots/min per bin.
-    const barWidth = pw / ACTIVITY_BINS;
-    ctx.fillStyle = hexToRgba('#3b82f6', 0.6);
-    binRates.forEach((rate, i) => {
-        if (!Number.isFinite(rate) || rate <= 0) return;
-        const bh = (rate / yMax) * ph;
-        const x = pad.l + i * barWidth + 0.7;
-        const y = pad.t + ph - bh;
-        ctx.fillRect(x, y, Math.max(1, barWidth - 1.4), bh);
-    });
-
-    // Stepped baseline. Walk runs of contiguous bins that share the same slot
-    // (and thus the same baseline rate + per-bin used flag), draw each run as
-    // one horizontal segment; vertical connectors only at slot boundaries.
-    const renderBaselineSegment = (startIdx, endIdx) => {
-        const rate = baselineRatesPerBin[startIdx];
-        if (!(rate > 0)) return null;
-        const used = baselineClusterUsedPerBin[startIdx];
-        const x0 = pad.l + startIdx * barWidth;
-        const x1 = pad.l + (endIdx + 1) * barWidth;
-        const yRaw = pad.t + ph - (rate / yMax) * ph;
-        const y = Math.max(pad.t + 1, Math.min(pad.t + ph - 1, yRaw));
-        const color = used ? '#ef4444' : '#94a3b8';
-        ctx.strokeStyle = hexToRgba(color, used ? 0.95 : 0.85);
-        dashedLine(ctx, x0, y, x1, y, [4, 3], 1.2);
-        return { startIdx, endIdx, y, color, used };
-    };
-
-    let runStart = 0;
-    let lastSegment = null;
-    for (let i = 1; i <= ACTIVITY_BINS; i++) {
-        const slotChange = i === ACTIVITY_BINS
-            || baselineRatesPerBin[i] !== baselineRatesPerBin[i - 1]
-            || baselineClusterUsedPerBin[i] !== baselineClusterUsedPerBin[i - 1];
-        if (!slotChange) continue;
-        const seg = renderBaselineSegment(runStart, i - 1);
-        // Vertical connector between adjacent segments at a slot boundary.
-        if (lastSegment && seg) {
-            const xJoin = pad.l + i * barWidth;
-            ctx.strokeStyle = hexToRgba('#94a3b8', 0.55);
-            dashedLine(ctx, xJoin, lastSegment.y, xJoin, seg.y, [2, 2], 1);
-        }
-        if (seg) lastSegment = seg;
-        runStart = i;
-    }
-
-    // Single 'baseline' label, placed near the rightmost segment's y so it
-    // doesn't drift when there are slot steps.
-    if (lastSegment) {
-        ctx.fillStyle = hexToRgba(lastSegment.color, 0.95);
-        ctx.font = '10px sans-serif';
-        ctx.textAlign = 'right';
-        ctx.fillText(
-            lastSegment.used ? 'Baseline' : 'Global baseline',
-            pad.l + pw - 4,
-            Math.max(pad.t + 10, lastSegment.y - 3)
-        );
-        ctx.textAlign = 'left';
-    }
-
-    // Y-axis labels (spots/min).
-    ctx.fillStyle = hexToRgba(pal.axisText, 0.95);
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText(formatRate(yMax), pad.l - 4, pad.t + 8);
-    ctx.fillText(formatRate(yMax / 2), pad.l - 4, pad.t + (ph / 2) + 3);
-    ctx.fillText('0', pad.l - 4, pad.t + ph + 3);
-    ctx.textAlign = 'left';
-    ctx.fillText(`Last ${formatWindowMinutes(minutes)}`, pad.l, pad.t + ph + 12);
-    ctx.textAlign = 'right';
-    ctx.fillText('spots/min', pad.l + pw, pad.t + ph + 12);
-    ctx.textAlign = 'left';
-}
-
 // formatWindowMinutes renders a look-back window as "15 min" / "1 h" / "2 h".
 export function formatWindowMinutes(minutes) {
     const m = Math.max(0, Math.round(Number(minutes) || 0));
@@ -913,16 +699,6 @@ function drawChartFrame(ctx, pad, pw, ph, pal = CHART_PALETTE_LIGHT) {
     ctx.lineTo(pad.l + pw, pad.t + ph);
     ctx.lineTo(pad.l + pw, pad.t);
     ctx.stroke();
-}
-
-function drawNoData(ctx, w, h, text, pal = CHART_PALETTE_LIGHT) {
-    ctx.fillStyle = hexToRgba(pal.grid, 0.9);
-    ctx.font = '11px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, w / 2, h / 2);
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'alphabetic';
 }
 
 function toBandMetricMap(dxResp) {
@@ -1071,75 +847,6 @@ function setLegendHelpVisible(helpToggle, helpPanel, visible) {
     if (!helpToggle || !helpPanel) return;
     helpPanel.style.display = visible ? 'block' : 'none';
     helpToggle.setAttribute('aria-expanded', visible ? 'true' : 'false');
-}
-
-// Right-edge splitter: drag to resize the docked panel's width only. The width
-// lives in the --bandlab-w CSS var so the flex column re-bases instantly, and we
-// re-fit the map live via the layout-change callback.
-function setupWindowResize(windowEl) {
-    const handle = document.getElementById('band-lab-window-resize');
-    if (!handle) return;
-
-    const MIN_W = 300;
-    const maxWidth = () => Math.max(MIN_W, Math.round(window.innerWidth * 0.7));
-
-    let resizing = false;
-    let startMouseX = 0;
-    let startWidth = 0;
-    let rafPending = false;
-
-    const onMove = (e) => {
-        if (!resizing) return;
-        const next = Math.max(MIN_W, Math.min(maxWidth(), startWidth + (e.clientX - startMouseX)));
-        windowEl.style.setProperty('--bandlab-w', `${Math.round(next)}px`);
-        if (!rafPending) {
-            rafPending = true;
-            requestAnimationFrame(() => {
-                rafPending = false;
-                runtime.onLayoutChange?.();
-            });
-        }
-    };
-
-    const stopResize = () => {
-        if (!resizing) return;
-        resizing = false;
-        document.body.style.cursor = '';
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', stopResize);
-        persistWindowWidth(windowEl);
-        runtime.onLayoutChange?.();
-    };
-
-    handle.addEventListener('mousedown', (e) => {
-        if (e.button !== 0) return;
-        resizing = true;
-        startMouseX = e.clientX;
-        startWidth = windowEl.offsetWidth;
-        document.body.style.cursor = 'col-resize';
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', stopResize);
-        e.preventDefault();
-        e.stopPropagation();
-    });
-}
-
-function persistWindowWidth(windowEl) {
-    localStorage.setItem(WINDOW_SIZE_KEY, JSON.stringify({ width: windowEl.offsetWidth }));
-}
-
-function restoreWindowWidth(windowEl) {
-    const raw = localStorage.getItem(WINDOW_SIZE_KEY);
-    if (!raw) return;
-    try {
-        const parsed = JSON.parse(raw);
-        const width = Number(parsed?.width);
-        if (Number.isFinite(width) && width >= 300) {
-            windowEl.style.setProperty('--bandlab-w', `${Math.round(width)}px`);
-        }
-    } catch {
-        // ignore invalid persisted values
-    }
 }
 
 function escapeHtml(value) {

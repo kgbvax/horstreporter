@@ -8,6 +8,8 @@ import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-la
 import { initWsprMatrix, updateWsprMatrix, clearDrillDown, updateDrillDownButton } from './wspr-matrix.js';
 import { initAlmanac } from './almanac.js';
 import { initHotBandIndicator } from './hot-band-indicator.js';
+import { initCondNow } from './cond-now.js';
+import { initCondDock } from './cond-dock.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { initPushUI } from './push.js';
 import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint, whenActiveAreaRendered } from './renderers.js';
@@ -1290,27 +1292,18 @@ if (captureConfig?.enabled) {
     attachMapEvents();
     attachUITooltipEvents();
     initOpMode({ requestRender: scheduleRender });
-    initBandLab({
+    // The three panels below live inside the Conditions dock (cond-dock.js),
+    // which owns their visibility and switches their data pipelines on/off.
+    initBandLab();
+    initWsprMatrix();
+    initAlmanac();
+    initCondNow();
+    initCondDock({
         onLayoutChange: () => {
-            // Docked Band Stats panel changed the map container width; re-fit Leaflet
-            // and the azimuth canvas so tiles/centering stay correct (no overlap).
+            // The dock is an in-flow column, so opening/closing/resizing it
+            // changes the map container width; re-fit Leaflet and the azimuth
+            // canvas so tiles/centering stay correct (no overlap).
             if (map) map.invalidateSize();
-            if (isAzimuthEnabled()) scheduleRender();
-        },
-    });
-    initWsprMatrix({
-        onLayoutChange: () => {
-            // The WSPR matrix is a floating overlay inside #map-stack; toggling
-            // it no longer changes the map container's box, so invalidateSize is
-            // not needed (unlike band-lab, which is docked in-flow). The azimuth
-            // canvas display-swaps with #map and may need a re-render.
-            if (isAzimuthEnabled()) scheduleRender();
-        },
-    });
-    // Almanac (usual openings from the operator's area): floating overlay like
-    // the Propagation panel, so only the azimuth canvas may need a re-render.
-    initAlmanac({
-        onLayoutChange: () => {
             if (isAzimuthEnabled()) scheduleRender();
         },
     });
