@@ -346,9 +346,14 @@ func (p *pgAlmanacFoldStore) foldDay(ctx context.Context, day int64) (int64, err
 	return day, nil
 }
 
-// forceAdvance moves the watermark to newWatermark, recording every skipped
-// day in almanac_lost_days, in one transaction holding the watermark row lock
-// (so a concurrent fold either commits first or sees the new watermark).
+// almanacFoldPlanStmts run inside the fold transaction before the cursor is
+// declared (see foldSeasonRows).
+var almanacFoldPlanStmts = []string{
+	`ANALYZE almanac_fold_seg`,
+	`SET LOCAL cursor_tuple_fraction = 1.0`,
+	`SET LOCAL enable_nestloop = off`,
+}
+
 // foldSeasonRows writes the day's segments into almanac_season_counts inside
 // the fold transaction. The sparse encoding can't be patched in SQL, so:
 //
@@ -384,6 +389,16 @@ func foldSeasonRows(ctx context.Context, tx pgx.Tx, fold *almanacDayFold) error 
 		return err
 	}
 
+	// Pin the cursor plan. Right after a fold adds a new month's rows the
+	// season table's statistics are stale and the temp table has none, and a
+	// cursor is planned for fast-start (cursor_tuple_fraction 0.1): prod picked
+	// a nested loop that ran one FETCH for >56 s (2026-09-28) while the hash
+	// join takes ~0.3 s. SET LOCAL scopes both settings to this transaction.
+	for _, stmt := range almanacFoldPlanStmts {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(ctx, almanacFoldDeclareSQL, pgx.QueryExecModeSimpleProtocol,
 		int32(fold.YearMonth), almanacSeasonLayerPSKR); err != nil {
 		return err
@@ -450,6 +465,9 @@ func foldSeasonRows(ctx context.Context, tx pgx.Tx, fold *almanacDayFold) error 
 	return err
 }
 
+// forceAdvance moves the watermark to newWatermark, recording every skipped
+// day in almanac_lost_days, in one transaction holding the watermark row lock
+// (so a concurrent fold either commits first or sees the new watermark).
 func (p *pgAlmanacFoldStore) forceAdvance(ctx context.Context, newWatermark int64, reason string) (int64, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {

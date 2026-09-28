@@ -1107,3 +1107,14 @@ func TestAlmanacFoldStatsPruneGateStreak(t *testing.T) {
 		t.Fatalf("json = %s", raw)
 	}
 }
+
+// The fold cursor must not be left to the planner's fast-start choice: prod
+// ran one FETCH >56 s on a nested loop after a new month's first fold.
+func TestAlmanacFoldPlanPinned(t *testing.T) {
+	joined := strings.Join(almanacFoldPlanStmts, ";")
+	for _, want := range []string{"ANALYZE almanac_fold_seg", "SET LOCAL cursor_tuple_fraction = 1.0", "SET LOCAL enable_nestloop = off"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("fold plan statements missing %q: %v", want, almanacFoldPlanStmts)
+		}
+	}
+}
