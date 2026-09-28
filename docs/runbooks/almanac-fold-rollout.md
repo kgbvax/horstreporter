@@ -331,3 +331,42 @@ Record:
 
 Then the end-to-end check: `time curl -s "http://127.0.0.1:<port>/api/almanac?qth=JO32" | jq '.area, (.lanes | length), .agenda[0]'`
 — populated arrays, and a second call within 120 s served from cache.
+
+## 7. Almanac benchmark (U9)
+
+`scripts/almanac-benchmark.mjs` checks `/api/almanac` against the acceptance
+tests in `docs/reference/typical-hf-openings-jo62.md` section 3, with the plan's
+adaptations: NA judged as one region, test 8 dropped, test 7 "OC (VK)" mapped
+to the app's `VK` region, 10 m tests reported but non-gating (SFI-dependent),
+test 13 (AN) informational. The test table lives at the top of the script.
+
+It is read-only (one GET, no writes), so run it straight against prod from any
+machine, not on the box:
+
+```bash
+node scripts/almanac-benchmark.mjs https://<host> --qth JO32 --sfi <today's SFI>
+node scripts/almanac-benchmark.mjs https://<host> --qth JO32 --json > tmp/almanac-bench.json
+node scripts/almanac-benchmark.mjs --file tmp/almanac-bench-raw.json   # re-evaluate a saved /api/almanac response
+node scripts/almanac-benchmark.mjs --selftest                           # evaluator sanity check, no network
+```
+
+Per test it prints PASS / FAIL / INCONCLUSIVE, the window's median share
+(min/max) over known slots, and `n/m` per slot (`?/m` = unknown, `m < m_min`).
+INCONCLUSIVE means fewer than half the window's slots are known. "Any hour"
+rarely-tests (KH6, 160 m, AN) are judged on the max slot. Exit code: 0 when no
+gating test fails, 1 otherwise, 2 on fetch/usage error. Take the SFI from the
+same day as the run (e.g. SWPC daily F10.7); without `--sfi` it prints
+`unknown`.
+
+Tuning the KTD4 constants (`almanac_consts.go`: `almanacOpenMinSpotsPSKR` k,
+`almanacMinActiveDays30` M_min, `almanacUsuallyShare`, `almanacAliveFraction`):
+
+1. Run the benchmark on prod with the deployed defaults and keep the text output.
+2. Change one constant at a time, deploy, wait for the 6 h typical cache to
+   roll (or a watermark change), and re-run. Do not tune to force a pass: the
+   benchmark is evidence, not an oracle (test 10 JA is medium confidence;
+   observer bias makes quiet paths read low).
+3. In the PR description, paste the before/after output (or the gating summary
+   line plus the per-test lines that changed), the date, `--sfi` value, `area.radius`,
+   the window, the final constant values, and a one-line explanation for every
+   remaining FAIL or INCONCLUSIVE.
