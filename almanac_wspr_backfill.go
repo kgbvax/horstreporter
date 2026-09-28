@@ -318,7 +318,8 @@ type almanacWSPRMonth struct {
 	FirstDay  int64
 	LastDay   int64
 	// Ring is the area's r=2 grid4 set: the DELETE scope of the commit.
-	Ring     []string
+	Ring []string
+	// Counts is the dense month grid per key, sparse-encoded on commit.
 	Counts   map[almanacSegKey]*[almanacSeasonCountsLen]byte
 	Activity map[almanacGridBand]uint32
 	// IngestTotals is nil when this month's WSPR ingest totals were already
@@ -701,7 +702,7 @@ func (p *pgAlmanacWSPRBackfillStore) commitMonth(ctx context.Context, m *almanac
 	if len(m.Counts) > 0 {
 		rows := make([][]any, 0, len(m.Counts))
 		for k, c := range m.Counts {
-			rows = append(rows, []any{k.Grid4, k.Band, k.Region, int32(m.YearMonth), almanacSeasonLayerWSPR, c[:]})
+			rows = append(rows, []any{k.Grid4, k.Band, k.Region, int32(m.YearMonth), almanacSeasonLayerWSPR, almanacSparseEncode(c)})
 		}
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"almanac_season_counts"},
 			[]string{"grid4", "band", "region", "year_month", "layer", "counts"}, pgx.CopyFromRows(rows)); err != nil {

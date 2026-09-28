@@ -736,7 +736,8 @@ func TestInitSchemaStmtsAlmanacTables(t *testing.T) {
 		}
 		if strings.Contains(q, "almanac_season_counts") && strings.Contains(q, "CREATE TABLE") {
 			if !strings.Contains(q, "counts BYTEA NOT NULL") || !strings.Contains(q, "fillfactor = 70") ||
-				!strings.Contains(q, "PRIMARY KEY (grid4, band, region, year_month, layer)") {
+				!strings.Contains(q, "PRIMARY KEY (grid4, band, region, year_month, layer)") ||
+				strings.Contains(q, "toast_tuple_target") {
 				t.Fatalf("almanac_season_counts DDL drifted: %q", q)
 			}
 		}
@@ -749,19 +750,22 @@ func TestInitSchemaStmtsAlmanacTables(t *testing.T) {
 	if dailyIndexes != 1 {
 		t.Fatalf("dx_region_baseline_daily indexes in initSchema = %d, want only the existing day_index index", dailyIndexes)
 	}
-	var lz4, toastVac bool
+	var heapVac bool
 	for _, m := range almanacSeasonMaintenanceStmts() {
-		if strings.Contains(m[1], "SET COMPRESSION lz4") {
-			lz4 = true
+		// Sparse rows stay far below the TOAST threshold: no lz4 column
+		// compression and no toast_tuple_target (only a RESET of it).
+		if strings.Contains(m[1], "COMPRESSION") || strings.Contains(m[1], "toast_tuple_target =") ||
+			strings.Contains(m[1], "toast.autovacuum") {
+			t.Fatalf("maintenance stmt still tunes TOAST/compression for the sparse format: %q", m[1])
 		}
-		if strings.Contains(m[1], "toast.autovacuum_vacuum_scale_factor") {
-			toastVac = true
+		if strings.Contains(m[1], "autovacuum_vacuum_scale_factor") {
+			heapVac = true
 		}
 		if strings.Contains(strings.ToUpper(m[1]), "UNLOGGED") {
 			t.Fatalf("maintenance stmt must never switch to UNLOGGED: %q", m[1])
 		}
 	}
-	if !lz4 || !toastVac {
-		t.Fatalf("optional maintenance must set lz4 (%v) and TOAST autovacuum (%v)", lz4, toastVac)
+	if !heapVac {
+		t.Fatalf("optional maintenance must tune heap autovacuum for almanac_season_counts")
 	}
 }

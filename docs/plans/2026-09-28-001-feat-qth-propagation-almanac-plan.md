@@ -190,15 +190,17 @@ Two items are deferred to implementation:
   - M_min = 10 of 30 days for the 30-day view, and M_min = 8 days per month for the seasonal view.
   - The agenda counts a slot as "usually" open when N/M ≥ 50%. It looks 12 h ahead, bridges a 1-slot gap, and lets windows cross midnight.
   - A slot is "alive" when its ingest total is at least 10% of that slot's 30-day median.
-- **KTD5. The seasonal record is packed: one row per (grid4, band, region, year_month, layer).**
-  - `counts` is a bytea of 31 days × 48 slots, one uint8 per slot capped at 255 and laid out day-major. It gets lz4 column compression and `toast_tuple_target=128`, and the table uses `fillfactor=70` so fold updates stay HOT.
+- **KTD5. The seasonal record is sparse-encoded: one row per (grid4, band, region, year_month, layer).**
+  - `counts` holds the non-zero cells of the 31 days × 48 slots month grid (one uint8 per cell, capped at 255, day-major: `pos = (dom-1)*48 + slot`, 0..1487). Encoding (`almanac_sparse.go`, the single source of truth): a version byte `0x01`, then per non-zero cell in ascending `pos` order `uvarint(gap)` followed by one count byte (1..255), with `gap = pos - prevPos - 1` and `prevPos` starting at −1. Zero counts are never stored. Readers reject malformed rows (bad version, `pos` ≥ 1488, truncated varint, zero count), treat them as absent and log once.
+  - The encoding is the compression. Postgres only compresses a tuple once it exceeds the compile-time TOAST threshold (~2 KB); `toast_tuple_target` does not lower that gate. A dense 1488-byte value therefore stayed uncompressed: prod measured 1492 B/row, about 8.7 GB/year. The table uses `fillfactor=70` and no TOAST or compression settings.
+  - Measured on prod (2026-09): 249.6k key-months per month, with avg 94.8 non-zero cells per row (p50 8, p90 315, max 1343 of 1488). At about 2 B per cell (1 varint byte while gaps are below 128, plus the count), a row averages about 191–202 B. That gives about 1.5–1.6 GB/year including tuple overhead, fillfactor and the primary key. A one-row-per-slot design would have been 2.4–10 GB.
+  - The fold can't patch the encoding in SQL. Inside the day's transaction it COPYs the day's keys into a temp table, streams the existing rows of those keys through a cursor, replaces the day's 48-slot segment in Go (SET semantics, so a re-fold is byte-identical), and upserts the re-encoded rows with `SET counts = EXCLUDED.counts`.
   - Per-day counts are kept so neighbouring grids can be summed per day before thresholding, and so k can be retuned later.
-  - Estimated size is 0.3–0.8 GB/year. A one-row-per-slot design would have been 2.4–10 GB.
   - An **area-activity** table holds a 31-bit day mask per (grid4, band, year_month, layer).
   - An **ingest-slots** table holds a spot total per (day_index, slot, layer), in the same unit as the region-key counts (sum of `spot_count`). It is maintained incrementally inside the existing baseline flush transaction (about 17k rows/year), so no request-time query scans the daily table to decide whether ingest was alive.
     - When the fold streams a day that has no ingest-slot rows, such as the pre-deploy backlog, it seeds them from that day's per-slot sums in the same transaction.
   - All three tables are LOGGED, with a comment saying never to make them UNLOGGED.
-  - Each overlay update rewrites the whole compressed value, so TOAST churn is expected. The seasonal table gets aggressive autovacuum settings on both the table and its TOAST relation (`toast.autovacuum_vacuum_scale_factor`) in the optional maintenance statements.
+  - Each fold rewrites every affected row, so heap churn is expected. The seasonal table gets aggressive heap autovacuum settings in the optional maintenance statements.
   - New indexes go only on these new tables. Nothing is added to `dx_region_baseline_daily` from `initSchema`. If the tail query needs an index there, it ships as a `scripts/migrate_*.sql` CONCURRENTLY script.
 - **KTD6. The fold only touches final days, and it gates the prune.**
   - **When a day is final.** Day d is folded only when all of these hold:
@@ -256,7 +258,7 @@ Data flow:
 flowchart TB
   S[FT8/FT4 + DX-cluster spots] --> D[(dx_region_baseline_daily<br/>35-day working set)]
   S -->|flush tx: per-slot totals| I[(ingest-slots)]
-  D -->|fold final days, one tx each| R[(seasonal record<br/>packed 31x48 counts per month)]
+  D -->|fold final days, one tx each| R[(seasonal record<br/>sparse 31x48 counts per month)]
   D -->|fold| A[(area-activity masks)]
   W[wspr.live archive] -->|configured areas, complete months, day chunks| R
   W --> I
@@ -299,11 +301,10 @@ for each (band, region, slot):
 - Summing per-day counts across ring grids can count a spot twice when both of its ends fall inside the ring. This is rare across neighbouring squares, and the floor k absorbs it.
 - The browser timezone is good enough for the secondary local-time label.
 - The operator's own region row (EU for JO32) is kept but sorted last.
-- The prod Postgres version supports lz4 column compression (PG14+). If it doesn't, the counts are nibble-packed (744 B, capped at 15).
 
 ### Sequencing
 
-1. U3 lands and deploys first. The packed-layout sizing is measured before it, and every day of delay loses seasonal history.
+1. U3 lands and deploys first. The sparse-layout sizing is measured before it, and every day of delay loses seasonal history.
 2. U1 → U2 → U4.
 3. U5 after U3, and U6 after U2.
 4. U7 after U2, U8 after U4 and U7, and U9 after U2 and U4.
@@ -315,7 +316,7 @@ for each (band, region, slot):
 - **Ingest flush path:** each baseline flush transaction gains one small upsert for the per-slot totals.
 - **Live `observe()`:** region keys from spots more than 24 h old, or more than 10 minutes in the future, are dropped and counted. This also changes what the existing region-calendar reader (DXLens) sees. That is acceptable, because such spots are rare and are stale for any baseline. Rebuilding the baseline from raw spots is unaffected, and other baselines don't change.
 - **Prune path:** `dx_region_baseline_daily` pruning becomes gated by the fold watermark. The `wspr_` and `prop_region_baseline_daily` tables keep today's behaviour.
-- **Disk and WAL:** three new LOGGED tables (about 0.3–0.8 GB/year live). Fold WAL and TOAST churn are likely tens of MB per day; U3 measures the real figure and it replaces this estimate. The backfill adds about 3 years of one area's rows once.
+- **Disk and WAL:** three new LOGGED tables (about 1.5–1.6 GB/year live, from the prod cell counts in KTD5). Fold WAL and heap churn are likely tens of MB per day; U3 measures the real figure and it replaces this estimate. The backfill adds about 3 years of one area's rows once.
 - **Memory:** the LRU is capped at about 3 MB. Folding one day holds about 6 MB of segments. No request path holds raw rows.
 - **Public API:** two new endpoints, one additive optional field on the summary, and new `/api/stats` fields. horstapp decoders must tolerate the new field (it is optional).
 - **External load:** wspr.live receives about 2 × 30 × 36 ≈ 2,200 day-sized queries per configured area. They run sequentially under 20 requests/minute, which takes about 2 hours. Visitors generate no traffic to wspr.live.
@@ -438,8 +439,8 @@ for each (band, region, slot):
 
 **Approach:**
 - Build the three tables per KTD5.
-- Fold and prune per KTD6, one day per transaction using COPY into a temp table followed by an overlay upsert.
-- Before enabling on prod, measure the size of the packed layout with a TABLESAMPLE count of distinct (grid, band, region) per month times the estimated row size. Stop if it exceeds 2 GB/year.
+- Fold and prune per KTD6, one day per transaction using COPY into a temp table, a cursor read-modify-write of the sparse rows in Go, and an upsert of the re-encoded rows.
+- Before enabling on prod, estimate the size of the sparse layout from the number and spacing of non-zero daily rows per key-month (runbook step 1). Stop if it exceeds 2 GB/year.
 - Record one day's fold wall time and the length of the initial backlog (about 35 days).
 - Measure the WAL bytes (`pg_current_wal_lsn` difference) and the table plus TOAST size before and after one fold on prod, and after a simulated month of folds. Record the numbers and replace the System-Wide Impact estimate with them.
 
@@ -681,7 +682,7 @@ for each (band, region, slot):
 | Frontend | `npm run check` (static/ statements ≥ 53.06%) | U7, U8 |
 | Query plans | EXPLAIN (ANALYZE, BUFFERS), cold and warm, of the aggregated query and the tail query at r=2 for JO32 on a prod-sized table: each under 1.5 s | U2 |
 | Memory | `/api/almanac` at r=2 allocates under 20 MB (Go benchmark test) | U2 |
-| Storage sizing | TABLESAMPLE estimate of the packed layout ≤ 2 GB/year, measured before enabling on prod | U3 |
+| Storage sizing | Estimate of the sparse layout ≤ 2 GB/year, measured before enabling on prod | U3 |
 | Fold integrity | Per-(day, grid4) sums from seasonal match daily for 3 days, `almanac_lost_days` holds only the first partial day, the watermark sits at today−2, and fold time, backlog, WAL and TOAST churn are recorded | U3 |
 | Benchmark | `node scripts/almanac-benchmark.mjs <base-url>`: the adapted JO32 tests pass, or deviations are explained | U9 |
 
@@ -704,7 +705,7 @@ The Mercator perf gate doesn't apply unless map code is touched.
 ## Risks & Dependencies
 
 - **Disk growth on a box with three disk-full outages.**
-  - Mitigations: the packed layout (0.3–0.8 GB/year estimated), the U3 sizing gate, rows only for active cells, disk checks before the prune grace period and before the backfill, and forced pruning past the grace period.
+  - Mitigations: the sparse layout (about 1.5–1.6 GB/year from measured cell counts), the U3 sizing gate, rows only for active cells, disk checks before the prune grace period and before the backfill, and forced pruning past the grace period.
 - **Query latency and memory.**
   - Mitigations: aggregation in SQL with fixed-size results, the seasonal record serving folded days, the EXPLAIN and heap gates, the two-part cache and the negative cache.
 - **Permanent counter corruption or silent loss.**
@@ -712,7 +713,6 @@ The Mercator perf gate doesn't apply unless map code is touched.
 - **wspr.live availability.** It is volunteer-run and documents a limit of 20 requests a minute (see the header of `wspr.go`).
   - Mitigations: sequential day-sized queries paced under that limit, hourly splitting on timeout, backoff, abort after 3 failures, complete months only, and an email to the admin before the first run.
 - **Benchmark mismatch.** Windows from the propagation model differ from what FT8 actually shows. Treat the benchmark as evidence and explain deviations.
-- **Dependency:** the prod Postgres must be PG14+ for lz4. If it isn't, fall back to nibble packing (see Assumptions).
 
 ## Operational Notes
 

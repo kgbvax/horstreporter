@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"sync/atomic"
@@ -13,9 +14,11 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// In-memory model of the seasonal record. fakeAlmanacFoldStore mirrors the
-// SQL in almanac_season_store.go: foldDay overlays each 48-byte segment at
-// almanacSegmentOffset(dom) (SET semantics, like overlay(... placing ...)),
+// In-memory model of the seasonal record. fakeAlmanacFoldStore mirrors
+// foldSeasonRows in almanac_season_store.go: rows are stored sparse-encoded
+// and foldDay does the same read-modify-write per key (decode the existing
+// row — absent or malformed = empty — replace the day's 48-slot segment, SET
+// semantics, and re-encode via almanacSparseReplaceDay),
 // ORs the activity bit, raises ingest-slot totals with GREATEST, and advances
 // the watermark — all on a copy that is only committed when no step fails,
 // the way the single fold transaction behaves.
@@ -120,14 +123,9 @@ func (f *fakeAlmanacFoldStore) foldDay(_ context.Context, day int64) (int64, err
 	for _, r := range f.daily[day] {
 		fold.add(r)
 	}
-	off := almanacSegmentOffset(fold.DayOfMonth)
 	for k, seg := range fold.Segments {
 		sk := fakeSeasonKey{k.Grid4, k.Band, k.Region, fold.YearMonth}
-		row, ok := tx.counts[sk]
-		if !ok {
-			row = make([]byte, almanacSeasonCountsLen)
-		}
-		copy(row[off:off+almanacSeasonSlotsPerDay], seg[:])
+		row, _ := almanacSparseReplaceDay(tx.counts[sk], fold.DayOfMonth, seg)
 		tx.counts[sk] = row
 	}
 	if day == f.failDay {
@@ -329,10 +327,7 @@ func TestAlmanacFoldWritesSegmentAndAdvancesWatermark(t *testing.T) {
 		}
 	}
 	ym, dom := almanacYearMonthDOM(d)
-	row := st.state.counts[fakeSeasonKey{"JO32", "20m", "NA", ym}]
-	if len(row) != almanacSeasonCountsLen {
-		t.Fatalf("counts row len = %d", len(row))
-	}
+	row := decodeFoldRow(t, st.state.counts[fakeSeasonKey{"JO32", "20m", "NA", ym}])
 	lo, hi := (dom-1)*48, dom*48
 	for i, b := range row {
 		inSeg := i >= lo && i < hi
@@ -400,6 +395,81 @@ func TestAlmanacFoldTwiceIsByteIdentical(t *testing.T) {
 	}
 }
 
+// decodeFoldRow decodes a stored sparse row into the dense month grid.
+func decodeFoldRow(t *testing.T, enc []byte) *[almanacSeasonCountsLen]byte {
+	t.Helper()
+	var dense [almanacSeasonCountsLen]byte
+	if err := almanacSparseDecode(enc, &dense); err != nil {
+		t.Fatalf("stored row does not decode: %v", err)
+	}
+	return &dense
+}
+
+func TestAlmanacFoldOverwritesDaySegmentKeepsOtherDays(t *testing.T) {
+	today := almanacTestToday()
+	d2 := today - 2
+	d1 := today - 3
+	ym1, dom1 := almanacYearMonthDOM(d1)
+	ym2, dom2 := almanacYearMonthDOM(d2)
+	if ym1 != ym2 {
+		t.Skip("fixture days straddle a month")
+	}
+	key := fakeSeasonKey{"JO32", "20m", "NA", ym2}
+	st := newFakeAlmanacFoldStore()
+	st.state.watermark, st.state.hasWatermark = d1-1, true
+	// An existing row with data on another day of the month (first and last
+	// positions too) and stale data on d2's own segment.
+	var pre [almanacSeasonCountsLen]byte
+	pre[0], pre[almanacSeasonCountsLen-1] = 3, 4
+	pre[almanacSegmentOffset(dom2)+5] = 99 // stale: must be replaced, not added to
+	pre[almanacSegmentOffset(dom2)+47] = 7 // stale: absent from the new segment → zero
+	st.state.counts[key] = almanacSparseEncode(&pre)
+
+	st.daily[d1] = []almanacDailyRow{dailyRow("JO32", "20m", "NA", 10, 2)}
+	st.daily[d2] = []almanacDailyRow{dailyRow("JO32", "20m", "NA", 5, 6), dailyRow("JO32", "20m", "NA", 6, 1)}
+	f := newTestAlmanacFolder(st, finalFlush(today))
+	if err := f.runOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := decodeFoldRow(t, st.state.counts[key])
+	want := pre
+	want[almanacSegmentOffset(dom1)+10] = 2
+	want[almanacSegmentOffset(dom2)+5] = 6
+	want[almanacSegmentOffset(dom2)+6] = 1
+	want[almanacSegmentOffset(dom2)+47] = 0
+	if *got != want {
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("pos %d = %d, want %d", i, got[i], want[i])
+			}
+		}
+		t.FailNow()
+	}
+	// The stored bytes are exactly the canonical encoding.
+	if !bytes.Equal(st.state.counts[key], almanacSparseEncode(&want)) {
+		t.Fatalf("stored row is not the canonical encoding")
+	}
+}
+
+func TestAlmanacFoldMalformedRowTreatedAsAbsent(t *testing.T) {
+	today := almanacTestToday()
+	d := today - 2
+	ym, dom := almanacYearMonthDOM(d)
+	key := fakeSeasonKey{"JO32", "20m", "NA", ym}
+	st := newFakeAlmanacFoldStore()
+	st.state.watermark, st.state.hasWatermark = d-1, true
+	st.state.counts[key] = []byte{0x7f, 0x00, 0x05} // bad version
+	st.daily[d] = []almanacDailyRow{dailyRow("JO32", "20m", "NA", 9, 3)}
+	if _, err := st.foldDay(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	var want [almanacSeasonCountsLen]byte
+	want[almanacSegmentOffset(dom)+9] = 3
+	if *decodeFoldRow(t, st.state.counts[key]) != want {
+		t.Fatalf("malformed row not replaced by the fresh segment")
+	}
+}
+
 func TestAlmanacFoldRespectsFinality(t *testing.T) {
 	today := almanacTestToday()
 	d := today - 2
@@ -448,9 +518,9 @@ func TestAlmanacFoldMidTransactionFailure(t *testing.T) {
 		t.Fatalf("watermark = %d, want %d (unchanged by the failed day)", st.state.watermark, today-4)
 	}
 	ym, dom := almanacYearMonthDOM(today - 3)
-	row := st.state.counts[fakeSeasonKey{"JO32", "20m", "NA", ym}]
+	enc := st.state.counts[fakeSeasonKey{"JO32", "20m", "NA", ym}]
 	off := almanacSegmentOffset(dom)
-	if row != nil && row[off+36] != 0 {
+	if enc != nil && decodeFoldRow(t, enc)[off+36] != 0 {
 		t.Fatalf("failed day left bytes behind")
 	}
 	if h := f.health(); h.FailStreak != 1 {
@@ -832,11 +902,18 @@ func TestBaselineFlushStmtsIncludeIngestTotals(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAlmanacFoldSQLShape(t *testing.T) {
-	if !strings.Contains(almanacFoldOverlaySQL, "overlay(") || !strings.Contains(almanacFoldOverlaySQL, "placing") {
-		t.Fatalf("season upsert must overlay the day segment (SET semantics): %q", almanacFoldOverlaySQL)
+	if !strings.Contains(almanacFoldUpsertSQL, "SET counts = EXCLUDED.counts") {
+		t.Fatalf("season upsert must store the re-encoded row (SET semantics): %q", almanacFoldUpsertSQL)
 	}
-	if strings.Contains(almanacFoldOverlaySQL, "counts +") || strings.Contains(almanacFoldOverlaySQL, "+ EXCLUDED") {
-		t.Fatalf("season upsert must never add counts (re-folds would double-apply)")
+	if strings.Contains(almanacFoldUpsertSQL, "counts +") || strings.Contains(almanacFoldUpsertSQL, "+ EXCLUDED") ||
+		strings.Contains(almanacFoldUpsertSQL, "overlay(") {
+		t.Fatalf("season upsert must never add or patch counts in SQL (sparse rows are merged in Go)")
+	}
+	if !strings.Contains(almanacFoldDeclareSQL, "JOIN almanac_fold_seg") || !strings.Contains(almanacFoldDeclareSQL, "CURSOR") {
+		t.Fatalf("existing rows must be streamed through a cursor joined on the day's keys: %q", almanacFoldDeclareSQL)
+	}
+	if want := fmt.Sprintf("FETCH %d ", almanacFoldFetchBatch); !strings.HasPrefix(almanacFoldFetchSQL, want) {
+		t.Fatalf("fetch batch drifted from almanacFoldFetchBatch: %q", almanacFoldFetchSQL)
 	}
 	if !strings.Contains(almanacFoldActivitySQL, "day_mask | EXCLUDED.day_mask") {
 		t.Fatalf("activity upsert must OR the mask: %q", almanacFoldActivitySQL)

@@ -11,8 +11,10 @@ import (
 
 // ---------------------------------------------------------------------------
 // In-memory model of the U2 read transaction. fakeAggStore mirrors the SQL in
-// almanac_store.go: seasonal rows are packed 31×48 uint8 per (grid4, band,
-// region, year_month, layer) exactly like almanac_season_counts; daily rows
+// almanac_store.go: seasonal rows are kept as the dense 31×48 uint8 month
+// grid per (grid4, band, region, year_month, layer) for easy fixtures and
+// handed to the reader sparse-encoded, exactly as almanac_season_counts
+// stores them (almanac_sparse.go); daily rows
 // are dx_region_baseline_daily (no layer column: PSKR/cluster only); the tail
 // aggregate sums across ring grids grouped by ring level like the SQL JOIN on
 // unnest(grids, rings). afterWatermark lets a test commit a "fold" between
@@ -159,7 +161,7 @@ func (t *fakeAggTx) seasonCounts(_ context.Context, grids, bands []string, month
 			okMonth = okMonth || m == k.YM
 		}
 		if okMonth {
-			fn(k.Grid, k.Band, k.Region, k.YM, c)
+			fn(k.Grid, k.Band, k.Region, k.YM, almanacSparseEncode((*[almanacSeasonCountsLen]byte)(c)))
 		}
 	}
 	return nil
@@ -660,7 +662,7 @@ func denseAggStore() *fakeAggStore {
 			for _, r := range regions {
 				for d := win.Start - 5; d <= win.Today; d++ {
 					if d <= f.wm {
-						// Fill whole packed rows cheaply.
+						// Fill whole (dense) month grids cheaply.
 						ym, _ := almanacYearMonthDOM(d)
 						k := aggSeasonKey{g, b, r, ym, almanacSeasonLayerPSKR}
 						if f.season[k] == nil {

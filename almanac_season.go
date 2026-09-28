@@ -38,8 +38,9 @@ import (
 // the squares at ring level ≤ that radius; a season cache entry is dropped
 // when the landing radius changes, so lanes and drill-down always agree.
 //
-// The packed 31×48 rows are fetched for all regions of the band (activity is
-// "to any region") and reduced in Go into fixed per-month arrays; at most
+// The sparse seasonal rows (almanac_sparse.go) are fetched for all regions of
+// the band (activity is "to any region") and decoded in Go into fixed
+// per-month arrays, visiting only non-zero cells; at most
 // squares(≤25) × 11 regions × 60 months × 2 layers rows are streamed.
 
 var almanacMonthNames = [12]string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
@@ -132,38 +133,39 @@ func (a *almanacSeasonAccum) addSlot(layer string, day int64, slot int, reg stri
 	}
 }
 
-// seasonRow returns a seasonCounts callback for layer that unpacks the days
-// ≤ maxDay (and ≤ yesterday, as addSlot) of each row. The row's month
-// accumulator is created on its first non-zero byte, so a month exists only
-// if it has data.
+// seasonRow returns a seasonCounts callback for layer that decodes the days
+// ≤ maxDay (and ≤ yesterday, as addSlot) of each sparse row, visiting only
+// its non-zero cells. The row's month accumulator is created on its first
+// counted cell, so a month exists only if it has data. A malformed row is
+// treated as absent.
 func (a *almanacSeasonAccum) seasonRow(layer string, maxDay int64) func(grid, band, reg string, ym int, counts []byte) {
-	return func(_, _, reg string, ym int, counts []byte) {
+	return func(grid, band, reg string, ym int, counts []byte) {
 		first := almanacYMFirstDay(ym)
 		days := almanacYMDays(ym)
 		monthYM, _ := almanacYearMonthDOM(first) // == ym for a valid ym
 		target := reg == a.region
-		lastDay := min(maxDay, a.yesterday)
+		// Last counted day of month (1-based), clamped to the month length.
+		lastDOM := min(int64(days), min(maxDay, a.yesterday)-first+1)
+		if lastDOM < 1 {
+			return
+		}
+		limit := int(lastDOM) * almanacSlotsPerDay // pos < limit
 		var m *almanacSeasonMonthAcc
-		for dom := 1; dom <= days; dom++ {
-			if first+int64(dom-1) > lastDay {
-				break // days ascend
+		err := almanacSparseEach(counts, func(pos, v int) {
+			if pos >= limit {
+				return
 			}
-			off := almanacSegmentOffset(dom)
-			if off+almanacSlotsPerDay > len(counts) {
-				break
+			if m == nil {
+				m = a.month(layer, monthYM, true)
 			}
-			for s, v := range counts[off : off+almanacSlotsPerDay] {
-				if v == 0 {
-					continue
-				}
-				if m == nil {
-					m = a.month(layer, monthYM, true)
-				}
-				m.act[dom-1][s] = true
-				if target {
-					satAdd16(&m.cnt[dom-1][s], int64(v))
-				}
+			d, s := pos/almanacSlotsPerDay, pos%almanacSlotsPerDay
+			m.act[d][s] = true
+			if target {
+				satAdd16(&m.cnt[d][s], int64(v))
 			}
+		})
+		if err != nil {
+			almanacSparseMalformed("almanac season read", grid, band, reg, ym, err)
 		}
 	}
 }

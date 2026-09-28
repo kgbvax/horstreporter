@@ -211,7 +211,7 @@ func (s *wsprFakeStore) commitMonth(ctx context.Context, m *almanacWSPRMonth) er
 		}
 	}
 	for k, v := range m.Counts {
-		s.counts[wsprFakeSeasonKey{k.Grid4, k.Band, k.Region, m.YearMonth, almanacSeasonLayerWSPR}] = append([]byte(nil), v[:]...)
+		s.counts[wsprFakeSeasonKey{k.Grid4, k.Band, k.Region, m.YearMonth, almanacSeasonLayerWSPR}] = almanacSparseEncode(v)
 	}
 	for k, v := range m.Activity {
 		s.activity[wsprFakeActivityKey{k.Grid, k.Band, m.YearMonth, almanacSeasonLayerWSPR}] = v
@@ -284,9 +284,33 @@ func (h *wsprHarness) markDoneExcept(area string, keep int) {
 	}
 }
 
+// wsprSeg returns the decoded dense month grid of a stored row (nil when
+// absent).
 func wsprSeg(t *testing.T, store *wsprFakeStore, grid4, band, region string, ym int) []byte {
 	t.Helper()
-	return store.counts[wsprFakeSeasonKey{grid4, band, region, ym, almanacSeasonLayerWSPR}]
+	enc, ok := store.counts[wsprFakeSeasonKey{grid4, band, region, ym, almanacSeasonLayerWSPR}]
+	if !ok {
+		return nil
+	}
+	return wsprDecode(t, enc)
+}
+
+func wsprDecode(t *testing.T, enc []byte) []byte {
+	t.Helper()
+	var dense [almanacSeasonCountsLen]byte
+	if err := almanacSparseDecode(enc, &dense); err != nil {
+		t.Fatalf("stored WSPR row does not decode: %v", err)
+	}
+	return dense[:]
+}
+
+// wsprFill is a sparse row with every cell set to v.
+func wsprFill(v byte) []byte {
+	var dense [almanacSeasonCountsLen]byte
+	for i := range dense {
+		dense[i] = v
+	}
+	return almanacSparseEncode(&dense)
 }
 
 // wsprAugRows is a fixed per-day data set for August 2026 used by several
@@ -397,7 +421,8 @@ func TestAlmanacWSPRBackfillBothOrientationsAndBands(t *testing.T) {
 		t.Fatalf("(JO22,40m,JA) slot 22 = %v, want 4", seg)
 	}
 	// Band 14 maps to 20m; 2400 and 13 are dropped (no slot-23 counts anywhere).
-	for k, v := range h.store.counts {
+	for k, enc := range h.store.counts {
+		v := wsprDecode(t, enc)
 		if k.Band != "20m" && k.Band != "40m" {
 			t.Fatalf("unexpected band row %+v", k)
 		}
@@ -518,10 +543,10 @@ func TestAlmanacWSPRBackfillRerunAfterAbortIsByteIdentical(t *testing.T) {
 	// A row from an earlier ring configuration / earlier data: same ring grid,
 	// same month, a region the new data does not produce.
 	stale := wsprFakeSeasonKey{"JO33", "80m", "SA", wsprTestMonth, almanacSeasonLayerWSPR}
-	h.store.counts[stale] = bytes.Repeat([]byte{9}, almanacSeasonCountsLen)
+	h.store.counts[stale] = wsprFill(9)
 	// The PSKR layer is never touched by the WSPR backfill.
 	pskr := wsprFakeSeasonKey{"JO32", "20m", "NA", wsprTestMonth, almanacSeasonLayerPSKR}
-	h.store.counts[pskr] = bytes.Repeat([]byte{1}, almanacSeasonCountsLen)
+	h.store.counts[pskr] = wsprFill(1)
 
 	// First attempt: the service dies mid-month (from request 20 on).
 	h.stub.fail = func(r wsprStubRequest, n int) (int, string, bool) {

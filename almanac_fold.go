@@ -8,7 +8,8 @@ import (
 
 // almanac_fold.go drives the Almanac fold (plan U3, KTD6): every final day of
 // dx_region_baseline_daily is folded, one day per transaction, into the
-// packed seasonal record (almanac_season_store.go), and the fold watermark
+// sparse seasonal record (almanac_season_store.go, encoding in
+// almanac_sparse.go), and the fold watermark
 // gates the daily table's retention prune so no day is pruned unfolded
 // unless the grace period has run out or the disk is full.
 
@@ -134,8 +135,8 @@ func almanacYearMonthDOM(day int64) (int, int) {
 	return t.Year()*100 + int(t.Month()), t.Day()
 }
 
-// almanacSegmentOffset is the 0-based byte offset of day-of-month dom in the
-// packed counts: [(dom−1)*48, dom*48).
+// almanacSegmentOffset is the 0-based position of day-of-month dom's first
+// slot in the logical 31×48 month grid: [(dom−1)*48, dom*48).
 func almanacSegmentOffset(dom int) int { return (dom - 1) * almanacSeasonSlotsPerDay }
 
 // almanacInitialWatermark: on first deploy the watermark starts at the oldest

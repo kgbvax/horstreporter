@@ -20,19 +20,14 @@ Pass them into psql as `-v today=$TODAY -v lo=$((TODAY-30))`.
 
 ## 0. Preconditions (before deploying the binary)
 
-- [ ] Postgres version and lz4 support. Record both.
+- [ ] Postgres version. Record it.
 
   ```sql
   SHOW server_version;
-  SELECT 'lz4' = ANY(enumvals) AS lz4_available
-  FROM pg_settings WHERE name = 'default_toast_compression';
   ```
 
-  If `lz4_available` is false, the optional maintenance statement
-  `ALTER ... SET COMPRESSION lz4` is skipped (logged) and pglz applies. Redo
-  step 1 with pglz in that case. If the size then exceeds the 2 GB/year stop
-  condition, stop: the plan's fallback is nibble-packing (744 B, cap 15), which
-  is not implemented.
+  Column compression (lz4/pglz) no longer matters: seasonal rows are stored
+  in a sparse encoding that stays below the TOAST threshold (see step 1).
 
 - [ ] Disk headroom: `df -h <postgres data dir>`. Record Use%. Above 80%, the
   prune grace period is skipped from the first run.
@@ -64,44 +59,69 @@ Run this before enabling the fold. It needs no new tables.
    The ×10 scale-up overstates the distinct count, so treat it as an upper
    bound.
 
-2. Compressed size of a packed row. This builds real 31×48 rows for a sample
-   of keys in a temp table and measures them. Record `avg_counts_bytes` and
-   `compression`.
+2. Sparse row size. `almanac_season_counts.counts` stores only the non-zero
+   cells of a key-month's 31×48 grid (`almanac_sparse.go`): a version byte,
+   then per cell `uvarint(gap)` + one count byte, where
+   `pos = (dom-1)*48 + slot` and `gap = pos - prevPos - 1`. A gap takes 1 byte
+   below 128 and 2 bytes otherwise (gaps are < 1488), so
+
+   `bytes/row = 1 + Σ(varint(gap) + 1) ≈ 1 + 2 × cells` (+1 per gap ≥ 128,
+   at most ~11 per row).
+
+   The size depends only on the number and spacing of non-zero daily rows per
+   key-month, so it can be computed straight from the daily table. Treat the
+   last 31 days as one key-month. Record `key_months`, `avg_cells`, the
+   percentiles and `avg_counts_bytes`.
 
    ```sql
-   CREATE TEMP TABLE almanac_size_probe (counts bytea);
-   ALTER TABLE almanac_size_probe ALTER COLUMN counts SET COMPRESSION lz4; -- skip on pglz
-   WITH keys AS (
-     SELECT DISTINCT target_grid4, band, region
-     FROM dx_region_baseline_daily TABLESAMPLE SYSTEM (1)
-     WHERE day_index >= :lo
-     LIMIT 2000
-   ), cells AS (
-     SELECT d.target_grid4, d.band, d.region,
-            (d.day_index - :lo) * 48 + d.slot_of_day AS pos,
-            LEAST(d.spot_count, 255) AS c
-     FROM keys k
-     JOIN dx_region_baseline_daily d USING (target_grid4, band, region)
-     WHERE d.day_index >= :lo AND d.day_index < :lo + 31
+   SET statement_timeout = '300s';
+   WITH cells AS (
+     SELECT target_grid4, band, region,
+            (day_index - :lo) * 48 + slot_of_day AS pos
+     FROM dx_region_baseline_daily
+     WHERE day_index >= :lo AND day_index < :lo + 31
+       AND spot_count > 0
+       -- On timeout, sample 10% of the keys (and scale key_months by 10):
+       -- AND abs(hashtext(target_grid4 || band || region)) % 10 = 0
+     GROUP BY 1, 2, 3, 4
+   ), gaps AS (
+     SELECT target_grid4, band, region,
+            pos - lag(pos, 1, -1) OVER (PARTITION BY target_grid4, band, region ORDER BY pos) - 1 AS gap
+     FROM cells
+   ), rows AS (
+     SELECT count(*) AS cells,
+            1 + sum(CASE WHEN gap < 128 THEN 2 ELSE 3 END) AS bytes
+     FROM gaps
+     GROUP BY target_grid4, band, region
    )
-   INSERT INTO almanac_size_probe
-   SELECT decode(string_agg(lpad(to_hex(COALESCE(c.c, 0)::int), 2, '0'), '' ORDER BY p), 'hex')
-   FROM keys k
-   CROSS JOIN generate_series(0, 1487) p
-   LEFT JOIN cells c
-     ON c.target_grid4 = k.target_grid4 AND c.band = k.band AND c.region = k.region AND c.pos = p
-   GROUP BY k.target_grid4, k.band, k.region;
-
-   SELECT count(*) AS sampled_rows,
-          avg(pg_column_size(counts))::int AS avg_counts_bytes,
-          max(pg_column_compression(counts)) AS compression
-   FROM almanac_size_probe;
+   SELECT count(*)                                            AS key_months,
+          round(avg(cells), 1)                                AS avg_cells,
+          percentile_disc(0.5) WITHIN GROUP (ORDER BY cells)  AS p50_cells,
+          percentile_disc(0.9) WITHIN GROUP (ORDER BY cells)  AS p90_cells,
+          max(cells)                                          AS max_cells,
+          round(avg(bytes))                                   AS avg_counts_bytes,
+          count(*) FILTER (WHERE bytes > 2000)                AS rows_over_toast
+   FROM rows;
    ```
 
-3. Estimate: `bytes/year ≈ keys_30d × 12 × (avg_counts_bytes + 80) / 0.7`,
-   where 80 B covers the tuple header and key columns and 0.7 is the
-   fillfactor. Add about 30% for the primary key index. Record the result.
-   **Stop and report if it exceeds 2 GB/year.**
+3. Estimate: `bytes/year ≈ key_months × 12 × (avg_counts_bytes + 80) / 0.7`,
+   where 80 B covers the tuple header, varlena header and key columns and 0.7
+   is the fillfactor. Add about 30% for the primary key index. Record the
+   result. **Stop and report if it exceeds 2 GB/year.**
+
+   Reference (prod, 2026-09): 249.6k key-months per month, avg 94.8 non-zero
+   cells (p50 8, p90 315, max 1343 of 1488). Sparse rows average ≈191–202 B
+   (p90 ≈631 B, max ≈2.7 KB), so `249.6k × 12 × (~200 + 80) / 0.7 × 1.3 ≈
+   1.55 GB/year`. The dense format it replaced measured 1492 B/row, ≈8.7
+   GB/year.
+
+   TOAST lesson: Postgres only attempts compression when a tuple exceeds the
+   compile-time `TOAST_TUPLE_THRESHOLD` (~2 KB). `toast_tuple_target` only
+   sets how far a tuple is shrunk once that gate has fired; it does not lower
+   the gate. The old dense 1488-byte value sat just under it, so it was never
+   compressed (lz4 or not), whatever `toast_tuple_target` said. The sparse
+   encoding does the compression itself; the rare rows over ~2 KB
+   (`rows_over_toast`) get Postgres' default compression on top.
 
 ## 2. Deploy
 
@@ -123,8 +143,8 @@ Run this before enabling the fold. It needs no new tables.
   ```
 
 - [ ] `./deploy.sh`. The new tables are created at startup. Check the
-  optional maintenance lines in `/home/hk/horst.log`: a `skipped
-  (almanac_season_counts lz4 compression)` line means pglz is in use.
+  optional maintenance lines in `/home/hk/horst.log` for `skipped
+  (almanac_season_counts ...)` lines.
 
 ## 3. First run: backlog, fold time, WAL, TOAST
 
@@ -166,10 +186,11 @@ up to 64 days per tick, which covers the whole ~33-day backlog.
   `almanac fold: day` log line). Record the WAL bytes and the size delta for
   that single day.
 
-- [ ] Month-scale churn. The backlog already overlays ~33 days into one or two
-  months, which is the "simulated month of folds". Record the TOAST size after
-  the backlog, and again after 7 days of steady folding, to see whether
-  autovacuum keeps TOAST bloat bounded:
+- [ ] Month-scale churn. The backlog already folds ~33 days into one or two
+  months, which is the "simulated month of folds". Each fold rewrites every
+  affected row (a new heap tuple per key). Record the heap size and dead
+  tuples after the backlog, and again after 7 days of steady folding, to see
+  whether autovacuum keeps heap bloat bounded (TOAST should stay near empty):
 
   ```sql
   SELECT relname, n_dead_tup, last_autovacuum
@@ -277,7 +298,7 @@ transaction; EXPLAIN them the same way:
 ```sql
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 
--- (a) Aggregated seasonal read (days ≤ W; packed rows unpacked in Go).
+-- (a) Aggregated seasonal read (days ≤ W; sparse rows decoded in Go).
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT grid4, band, region, year_month, counts
 FROM almanac_season_counts

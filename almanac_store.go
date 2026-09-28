@@ -14,11 +14,13 @@ import (
 // All logic (the ≤ W / > W split included) lives in almanacAccum
 // (almanac.go); the in-memory model is fakeAggStore in almanac_test.go.
 //
-// Aggregation choice (KTD2 allows it): the packed 31×48 bytea is fetched and
-// unpacked in Go rather than in SQL. Unpacking in SQL needs get_byte() per
-// (row, day, slot) — ~7 M calls at r=2 — while the fetch is at most
-// 25 grids × 10 bands × 11 regions × 3 months ≈ 8k rows of ≤1.5 KB, streamed
-// row by row into fixed-size accumulators via RawValues (no per-row copy).
+// Aggregation choice (KTD2 allows it): the sparse seasonal rows
+// (almanac_sparse.go: version byte + uvarint gap/count pairs of the non-zero
+// cells of the 31×48 month grid) are fetched and decoded in Go rather than
+// in SQL, which has no cheap way to walk the varint stream. The fetch is at
+// most 25 grids × 10 bands × 11 regions × 3 months ≈ 8k rows (≈2 B per
+// non-zero cell), streamed row by row into fixed-size accumulators via
+// RawValues (no per-row copy); decoding visits only non-zero cells.
 // The daily-table tail is still aggregated in SQL (summed per ring level).
 // Heap per request stays ≈3 MB at r=2 (TestAlmanacHeapUnder20MB).
 //
@@ -27,7 +29,8 @@ import (
 // with their EXPLAIN commands, in docs/runbooks/almanac-fold-rollout.md.
 
 // almanacReadTx is one consistent read of the Almanac inputs. Callbacks run
-// synchronously per row; byte slices are only valid during the call.
+// synchronously per row; byte slices are only valid during the call. Season
+// counts are passed through in their stored sparse encoding.
 type almanacReadTx interface {
 	watermark(ctx context.Context) (int64, bool, error)
 	seasonCounts(ctx context.Context, grids, bands []string, months []int, layer string,

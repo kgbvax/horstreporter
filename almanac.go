@@ -214,8 +214,9 @@ func (a *almanacAccum) actIdx(level, b, di, s int) int {
 	return (((level*nb+b)*almanacAccumDays)+di)*almanacSlotsPerDay + s
 }
 
-// addSeasonRow unpacks one almanac_season_counts row (31×48 day-major uint8)
-// for the window days ≤ W in its month. counts is only read during the call.
+// addSeasonRow decodes one sparse almanac_season_counts row (almanac_sparse.go)
+// for the window days ≤ W in its month, visiting only its non-zero cells. A
+// malformed row is treated as absent. counts is only read during the call.
 func (a *almanacAccum) addSeasonRow(grid, band, reg string, ym int, counts []byte) {
 	gi, ok := a.gridIdx[grid]
 	if !ok {
@@ -227,32 +228,37 @@ func (a *almanacAccum) addSeasonRow(grid, band, reg string, ym int, counts []byt
 	}
 	ri, hasRegion := a.regIdx[reg]
 	level := int(a.rings[gi])
+	// domDi[dom−1] = window day index + 1 for the days ≤ W of this month
+	// (0 = not in the window or already in the daily tail).
+	var domDi [almanacSeasonDaysPerMonth]int8
+	inWindow := false
 	for di := 0; di < almanacWindowDays; di++ {
 		if a.win.Start+int64(di) > a.wm {
 			break // days ascend: everything later belongs to the tail
 		}
-		if a.dayYM[di] != ym {
-			continue
+		if a.dayYM[di] == ym {
+			domDi[a.dayDOM[di]-1] = int8(di + 1)
+			inWindow = true
 		}
-		off := almanacSegmentOffset(a.dayDOM[di])
-		if off+almanacSlotsPerDay > len(counts) {
-			continue
+	}
+	if !inWindow {
+		return
+	}
+	mask := &a.dayMasks[gi*len(almanacInScopeBands)+bi]
+	err := almanacSparseEach(counts, func(pos, v int) {
+		di := int(domDi[pos/almanacSlotsPerDay]) - 1
+		if di < 0 {
+			return
 		}
-		seg := counts[off : off+almanacSlotsPerDay]
-		any := false
-		for s, v := range seg {
-			if v == 0 {
-				continue
-			}
-			any = true
-			satAdd16(&a.act[a.actIdx(level, bi, di, s)], int64(v))
-			if hasRegion {
-				satAdd16(&a.counts[a.countIdx(level, bi, ri, di, s)], int64(v))
-			}
+		s := pos % almanacSlotsPerDay
+		satAdd16(&a.act[a.actIdx(level, bi, di, s)], int64(v))
+		if hasRegion {
+			satAdd16(&a.counts[a.countIdx(level, bi, ri, di, s)], int64(v))
 		}
-		if any {
-			a.dayMasks[gi*len(almanacInScopeBands)+bi] |= 1 << uint(di)
-		}
+		*mask |= 1 << uint(di)
+	})
+	if err != nil {
+		almanacSparseMalformed("almanac read", grid, band, reg, ym, err)
 	}
 }
 

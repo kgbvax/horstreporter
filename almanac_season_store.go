@@ -16,7 +16,7 @@ import (
 // almanac_season_store.go owns the Almanac seasonal record (plan U3, KTD5):
 // three LOGGED tables that preserve every final day of
 // dx_region_baseline_daily before the retention prune removes it, plus the
-// fold transaction SQL. The fold driver and its pure decision logic live in
+// fold transaction SQL. The counts encoding lives in almanac_sparse.go. The fold driver and its pure decision logic live in
 // almanac_fold.go.
 //
 // NEVER make these tables UNLOGGED: they are never pruned and cannot be
@@ -28,11 +28,15 @@ const (
 
 	almanacSeasonSlotsPerDay  = 48
 	almanacSeasonDaysPerMonth = 31
-	// almanacSeasonCountsLen is the packed counts bytea length: 31 days × 48
-	// slots, one uint8 per slot (capped at 255), day-major.
+	// almanacSeasonCountsLen is the logical month grid: 31 days × 48 slots,
+	// one uint8 per cell (capped at 255), day-major (pos = (dom−1)*48 +
+	// slot). It is stored sparse (almanac_sparse.go), not as a dense bytea.
 	almanacSeasonCountsLen = almanacSeasonDaysPerMonth * almanacSeasonSlotsPerDay
 
 	almanacFoldWatermarkKey = "almanac_fold_watermark_day"
+	// almanacFoldFetchBatch is the cursor batch size of the fold's
+	// read-modify-write (must match almanacFoldFetchSQL).
+	almanacFoldFetchBatch = 4096
 
 	almanacLostReasonInitial     = "initial_partial"
 	almanacLostReasonForcedPrune = "forced_prune"
@@ -44,10 +48,12 @@ const (
 func almanacSeasonSchemaStmts() []string {
 	return []string{
 		// Seasonal record: one row per (grid4, band, far-end region, month,
-		// layer). counts = 31×48 uint8 day-major; day d of the month occupies
-		// bytes [(d-1)*48, d*48). fillfactor keeps fold overlays HOT;
-		// toast_tuple_target makes the ~1.5 KB value compress (lz4 is set in
-		// the optional maintenance statements: PG14+ only).
+		// layer). counts is the sparse encoding of the 31×48 day-major uint8
+		// month grid (almanac_sparse.go: version byte + uvarint gap / count
+		// pairs, ≈2 B per non-zero cell). Rows stay well under the ~2 KB TOAST
+		// threshold, so Postgres never compresses them: the encoding itself
+		// is the compression. fillfactor leaves room for the daily fold
+		// rewrites to stay HOT.
 		// LOGGED on purpose — never UNLOGGED.
 		`CREATE TABLE IF NOT EXISTS almanac_season_counts (
 			grid4 TEXT NOT NULL,
@@ -57,7 +63,7 @@ func almanacSeasonSchemaStmts() []string {
 			layer TEXT NOT NULL,
 			counts BYTEA NOT NULL,
 			PRIMARY KEY (grid4, band, region, year_month, layer)
-		) WITH (fillfactor = 70, toast_tuple_target = 128);`,
+		) WITH (fillfactor = 70);`,
 		// Area activity: bit (day_of_month-1) set when grid4 had any spot on
 		// band that day (to any region, its own included). LOGGED — never
 		// UNLOGGED.
@@ -94,25 +100,24 @@ func almanacSeasonSchemaStmts() []string {
 func almanacSeasonMaintenanceStmts() [][2]string {
 	return [][2]string{
 		{
-			// PG14+ with lz4 support. On older servers this fails and the
-			// default pglz applies (see the plan's nibble-packing fallback).
-			"almanac_season_counts lz4 compression",
-			`ALTER TABLE almanac_season_counts ALTER COLUMN counts SET COMPRESSION lz4;`,
+			"almanac_season_counts fillfactor",
+			`ALTER TABLE almanac_season_counts SET (fillfactor = 70);`,
 		},
 		{
-			"almanac_season_counts fillfactor/toast target",
-			`ALTER TABLE almanac_season_counts SET (fillfactor = 70, toast_tuple_target = 128);`,
+			// Drops the toast_tuple_target = 128 of the earlier dense format
+			// from tables created before the sparse encoding (sparse rows
+			// are stored inline; the setting is meaningless). No-op otherwise.
+			"almanac_season_counts reset toast target",
+			`ALTER TABLE almanac_season_counts RESET (toast_tuple_target);`,
 		},
 		{
-			// Every fold overlay rewrites the whole compressed value, so the
-			// heap and its TOAST relation churn: vacuum both aggressively.
+			// Every fold rewrites the day's rows (a new tuple version per
+			// affected key): vacuum the heap aggressively.
 			"tune autovacuum almanac_season_counts",
 			`ALTER TABLE almanac_season_counts SET (
 				autovacuum_vacuum_scale_factor = 0.02,
 				autovacuum_vacuum_threshold = 5000,
-				autovacuum_analyze_scale_factor = 0.02,
-				toast.autovacuum_vacuum_scale_factor = 0.02,
-				toast.autovacuum_vacuum_threshold = 5000
+				autovacuum_analyze_scale_factor = 0.02
 			);`,
 		},
 	}
@@ -139,23 +144,49 @@ const (
 		FROM dx_region_baseline_daily
 		WHERE day_index = $1`
 
+	// The day's affected (grid4, band, region) keys. Drives the read of the
+	// existing rows and the activity upsert.
 	almanacFoldTempTableSQL = `
 		CREATE TEMP TABLE IF NOT EXISTS almanac_fold_seg (
 			grid4 TEXT NOT NULL,
 			band TEXT NOT NULL,
-			region TEXT NOT NULL,
-			seg BYTEA NOT NULL
+			region TEXT NOT NULL
 		) ON COMMIT DROP`
 
-	// $1 year_month, $2 layer, $3 zero-filled counts, $4 1-based byte offset
-	// of the day's segment. SET semantics: the segment replaces the day's 48
-	// bytes, so re-folding the same day is byte-identical.
-	almanacFoldOverlaySQL = `
+	// The re-encoded rows (merged existing + fresh) for the final upsert.
+	almanacFoldNewTableSQL = `
+		CREATE TEMP TABLE IF NOT EXISTS almanac_fold_new (
+			grid4 TEXT NOT NULL,
+			band TEXT NOT NULL,
+			region TEXT NOT NULL,
+			counts BYTEA NOT NULL
+		) ON COMMIT DROP`
+
+	// $1 year_month, $2 layer. Cursor over the existing seasonal rows of the
+	// day's keys, fetched in almanacFoldFetchBatch batches so memory stays
+	// bounded (a day is ~100k–125k keys). Run in the simple protocol (pgx
+	// interpolates the parameters client-side): DECLARE/FETCH are utility
+	// statements.
+	almanacFoldDeclareSQL = `
+		DECLARE almanac_fold_cur NO SCROLL CURSOR FOR
+		SELECT c.grid4, c.band, c.region, c.counts
+		FROM almanac_season_counts c
+		JOIN almanac_fold_seg s ON s.grid4 = c.grid4 AND s.band = c.band AND s.region = c.region
+		WHERE c.year_month = $1 AND c.layer = $2`
+	almanacFoldFetchSQL = `FETCH 4096 FROM almanac_fold_cur`
+	almanacFoldCloseSQL = `CLOSE almanac_fold_cur`
+
+	// $1 year_month, $2 layer. The Go side already replaced the day's
+	// segment (SET semantics, almanacSparseReplaceDay), so the upsert simply
+	// stores the new encoding; re-folding a day is byte-identical and an
+	// unchanged row is not rewritten.
+	almanacFoldUpsertSQL = `
 		INSERT INTO almanac_season_counts AS c (grid4, band, region, year_month, layer, counts)
-		SELECT s.grid4, s.band, s.region, $1, $2, overlay($3::bytea placing s.seg from $4 for 48)
-		FROM almanac_fold_seg s
+		SELECT n.grid4, n.band, n.region, $1, $2, n.counts
+		FROM almanac_fold_new n
 		ON CONFLICT (grid4, band, region, year_month, layer)
-		DO UPDATE SET counts = overlay(c.counts placing substring(EXCLUDED.counts from $4 for 48) from $4 for 48)`
+		DO UPDATE SET counts = EXCLUDED.counts
+		WHERE c.counts IS DISTINCT FROM EXCLUDED.counts`
 
 	// $1 year_month, $2 layer, $3 the day's mask bit. OR is idempotent.
 	almanacFoldActivitySQL = `
@@ -293,26 +324,7 @@ func (p *pgAlmanacFoldStore) foldDay(ctx context.Context, day int64) (int64, err
 	}
 
 	if len(fold.Segments) > 0 {
-		if _, err := tx.Exec(ctx, almanacFoldTempTableSQL); err != nil {
-			return 0, err
-		}
-		// Stream the segments straight from the map (no [][]any copy).
-		next, stop := iter.Pull2(maps.All(fold.Segments))
-		_, err := tx.CopyFrom(ctx, pgx.Identifier{"almanac_fold_seg"},
-			[]string{"grid4", "band", "region", "seg"}, pgx.CopyFromFunc(func() ([]any, error) {
-				k, seg, ok := next()
-				if !ok {
-					return nil, nil
-				}
-				return []any{k.Grid4, k.Band, k.Region, seg[:]}, nil
-			}))
-		stop()
-		if err != nil {
-			return 0, err
-		}
-		offset1 := almanacSegmentOffset(fold.DayOfMonth) + 1
-		if _, err := tx.Exec(ctx, almanacFoldOverlaySQL, fold.YearMonth, almanacSeasonLayerPSKR,
-			make([]byte, almanacSeasonCountsLen), offset1); err != nil {
+		if err := foldSeasonRows(ctx, tx, fold); err != nil {
 			return 0, err
 		}
 		if _, err := tx.Exec(ctx, almanacFoldActivitySQL, fold.YearMonth, almanacSeasonLayerPSKR,
@@ -337,6 +349,107 @@ func (p *pgAlmanacFoldStore) foldDay(ctx context.Context, day int64) (int64, err
 // forceAdvance moves the watermark to newWatermark, recording every skipped
 // day in almanac_lost_days, in one transaction holding the watermark row lock
 // (so a concurrent fold either commits first or sees the new watermark).
+// foldSeasonRows writes the day's segments into almanac_season_counts inside
+// the fold transaction. The sparse encoding can't be patched in SQL, so:
+//
+//  1. COPY the day's keys into almanac_fold_seg;
+//  2. stream the existing rows of those keys through a cursor in batches,
+//     replace the day's 48-slot segment in Go (almanacSparseReplaceDay) and
+//     COPY each re-encoded batch into almanac_fold_new;
+//  3. COPY fresh encodings for the keys that had no row yet;
+//  4. upsert almanac_fold_new with SET counts = EXCLUDED.counts.
+//
+// Merged keys are removed from fold.Segments as they are written, so the
+// map shrinks while the cursor drains (activity is derived from
+// almanac_fold_seg, the ingest seed from fold.SlotTotals).
+func foldSeasonRows(ctx context.Context, tx pgx.Tx, fold *almanacDayFold) error {
+	if _, err := tx.Exec(ctx, almanacFoldTempTableSQL); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, almanacFoldNewTableSQL); err != nil {
+		return err
+	}
+	// Stream the keys straight from the map (no [][]any copy).
+	next, stop := iter.Pull2(maps.All(fold.Segments))
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"almanac_fold_seg"},
+		[]string{"grid4", "band", "region"}, pgx.CopyFromFunc(func() ([]any, error) {
+			k, _, ok := next()
+			if !ok {
+				return nil, nil
+			}
+			return []any{k.Grid4, k.Band, k.Region}, nil
+		}))
+	stop()
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, almanacFoldDeclareSQL, pgx.QueryExecModeSimpleProtocol,
+		int32(fold.YearMonth), almanacSeasonLayerPSKR); err != nil {
+		return err
+	}
+	newCols := []string{"grid4", "band", "region", "counts"}
+	batch := make([][]any, 0, almanacFoldFetchBatch)
+	for {
+		batch = batch[:0]
+		rows, err := tx.Query(ctx, almanacFoldFetchSQL, pgx.QueryExecModeSimpleProtocol)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var (
+				k   almanacSegKey
+				old []byte
+			)
+			if err := rows.Scan(&k.Grid4, &k.Band, &k.Region, &old); err != nil {
+				rows.Close()
+				return err
+			}
+			seg, ok := fold.Segments[k]
+			if !ok {
+				continue // cannot happen: the cursor joins the day's keys
+			}
+			enc, derr := almanacSparseReplaceDay(old, fold.DayOfMonth, seg)
+			if derr != nil {
+				almanacSparseMalformed("almanac fold", k.Grid4, k.Band, k.Region, fold.YearMonth, derr)
+			}
+			delete(fold.Segments, k)
+			batch = append(batch, []any{k.Grid4, k.Band, k.Region, enc})
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"almanac_fold_new"}, newCols, pgx.CopyFromRows(batch)); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, almanacFoldCloseSQL, pgx.QueryExecModeSimpleProtocol); err != nil {
+		return err
+	}
+
+	// Keys without an existing row: fresh encodings, streamed.
+	next, stop = iter.Pull2(maps.All(fold.Segments))
+	_, err = tx.CopyFrom(ctx, pgx.Identifier{"almanac_fold_new"}, newCols,
+		pgx.CopyFromFunc(func() ([]any, error) {
+			k, seg, ok := next()
+			if !ok {
+				return nil, nil
+			}
+			enc, _ := almanacSparseReplaceDay(nil, fold.DayOfMonth, seg)
+			return []any{k.Grid4, k.Band, k.Region, enc}, nil
+		}))
+	stop()
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, almanacFoldUpsertSQL, int32(fold.YearMonth), almanacSeasonLayerPSKR)
+	return err
+}
+
 func (p *pgAlmanacFoldStore) forceAdvance(ctx context.Context, newWatermark int64, reason string) (int64, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
