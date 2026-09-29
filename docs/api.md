@@ -549,6 +549,9 @@ Response:
   `snr_since`, not lost, ingest-alive in at least one slot) and its own effective `m_min` =
   `min(8, max(2, snr_days))`, plus `preliminary: true` when that is below 8;
   the top-level `preliminary: true` flags that some month is preliminary.
+  With a floor, WSPR months are left out (no comparable SNR); the top-level
+  `wspr_hidden: true` (omitted when false) says a WSPR backfill covers this area
+  but the floor hides it, and the UI shows a note.
   The top-level `m_min` stays 8.
 
 ### `GET /api/push/vapid-public-key` — Web Push public key
