@@ -99,7 +99,7 @@ function installLocalStorageMock() {
 // Drawing through the real module with a recording canvas context: every
 // dashed stroke is recorded with the y it was drawn at.
 function makeRecordingContext() {
-    const target = { dashedYs: [], dots: 0, dash: [], lastY: 0 };
+    const target = { dashedYs: [], dots: 0, dotFills: [], dash: [], lastY: 0 };
     return new Proxy(target, {
         get(obj, prop) {
             if (prop === 'setLineDash') return (d) => { obj.dash = d; };
@@ -107,8 +107,8 @@ function makeRecordingContext() {
             if (prop === 'stroke') {
                 return () => { if (obj.dash.length) obj.dashedYs.push(obj.lastY); };
             }
-            if (prop === 'arc') return () => { obj.dots += 1; };
-            if (prop === 'clearRect') return () => { obj.dashedYs.length = 0; obj.dots = 0; };
+            if (prop === 'arc') return () => { obj.dots += 1; obj.dotFills.push(obj.fillStyle); };
+            if (prop === 'clearRect') return () => { obj.dashedYs.length = 0; obj.dots = 0; obj.dotFills.length = 0; };
             if (prop in obj) return obj[prop];
             return () => {};
         },
@@ -144,31 +144,16 @@ function guideYs() {
 }
 
 describe('miniSnrAxis', () => {
-    afterEach(() => { document.body.innerHTML = ''; });
     const grouped = (...snrs) => new Map([['20m', snrs.map((snr) => ({ snr }))]]);
 
-    it('spans -25..+10 dB without a floor', () => {
-        document.body.innerHTML = '<input type="radio" name="min-snr" value="none" checked>';
-        expect(miniSnrAxis(grouped(-20, 4), { ssbMinDb: 0, cwMinDb: -15 })).toEqual({ lo: -25, hi: 10 });
+    it('spans -25..+10 dB whatever the filter', () => {
+        expect(miniSnrAxis(grouped(-20, 4))).toEqual({ lo: -25, hi: 10 });
+        expect(miniSnrAxis(new Map())).toEqual({ lo: -25, hi: 10 });
     });
 
     it('raises the top to the strongest report, rounded to 5 dB and capped at 30', () => {
-        document.body.innerHTML = '<input type="radio" name="min-snr" value="none" checked>';
-        expect(miniSnrAxis(grouped(17), {}).hi).toBe(20);
-        expect(miniSnrAxis(grouped(44), {}).hi).toBe(30);
-    });
-
-    it('starts just under the active floor, since nothing lies below it', () => {
-        document.body.innerHTML = '<input type="radio" name="min-snr" value="ssb" checked>';
-        expect(miniSnrAxis(grouped(3), { ssbMinDb: 0, cwMinDb: -15 })).toEqual({ lo: -5, hi: 10 }); // floor - 3, widened to the 15 dB minimum range
-        document.body.innerHTML = '<input type="radio" name="min-snr" value="cw" checked>';
-        expect(miniSnrAxis(grouped(3), { ssbMinDb: 0, cwMinDb: -15 })).toEqual({ lo: -18, hi: 10 });
-    });
-
-    it('keeps at least 15 dB of range for a floor near the top', () => {
-        document.body.innerHTML = '<input type="radio" name="min-snr" value="ssb" checked>';
-        const { lo, hi } = miniSnrAxis(grouped(3), { ssbMinDb: 9, cwMinDb: -15 });
-        expect(hi - lo).toBeGreaterThanOrEqual(15);
+        expect(miniSnrAxis(grouped(17)).hi).toBe(20);
+        expect(miniSnrAxis(grouped(44)).hi).toBe(30);
     });
 });
 
@@ -275,5 +260,26 @@ describe('Mini plot guides', () => {
         setBandLabVisible(false);
         expect(getBandRow('20m')).toBe(null);
         expect(getBandNormalRate('20m')).toBe(null);
+    });
+
+    it('draws the same reports whatever the filter and grays those below the floor', async () => {
+        // No floor: every report in the band color.
+        start({ ssb: 0, cw: -15 });
+        const fills = () => document.getElementById('mini').__ctx.dotFills;
+        expect(fills()).toHaveLength(2);
+        expect(new Set(fills()).size).toBe(1);
+        const bandColored = fills()[0];
+
+        // SSB floor at 0 dB: the -8 dB and -16 dB reports fall below it. Same
+        // dots, same places, but the ones below the floor are gray.
+        document.querySelector('input[name="min-snr"]').insertAdjacentHTML('afterend', '<input type="radio" name="min-snr" value="ssb" checked>');
+        document.querySelector('input[value="none"]').checked = false;
+        const slider = document.getElementById('ssb-min-db');
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(300);
+        expect(fills()).toHaveLength(2);
+        // Paris (+4 dB) stays in the band color, Moscow (-16 dB) is gray.
+        expect(fills().filter((f) => f === bandColored)).toHaveLength(1);
+        expect(fills().filter((f) => f !== bandColored)).toHaveLength(1);
     });
 });
