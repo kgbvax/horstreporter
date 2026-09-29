@@ -770,6 +770,7 @@ function legendHtml(note = '') {
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const LAYER_LABELS = { pskr: 'PSKR', wspr: 'WSPR' };
+const WSPR_HIDDEN_NOTE = 'WSPR history for this area is hidden by the minimum SNR selection (WSPR has no comparable SNR floor). Choose All spots to see it.';
 const LAYER_NOTE = 'WSPR and PSKR months come from different networks and are not directly comparable.';
 
 function drillErrorText(kind) {
@@ -793,6 +794,9 @@ function drilldownHtml(dd) {
         html += `<div class="almanac-message text-muted small" role="alert">${escapeHtml(drillErrorText(dd.error))}</div>`;
     } else if (dd.data) {
         html += monthsHtml(dd);
+        if (dd.data.wspr_hidden) {
+            html += `<div class="almanac-message text-muted small">${escapeHtml(WSPR_HIDDEN_NOTE)}</div>`;
+        }
         html += legendHtml(LAYER_NOTE);
     }
     return `${html}</section>`;

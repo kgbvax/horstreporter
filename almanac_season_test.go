@@ -398,3 +398,32 @@ func TestAlmanacSeasonWSPRGatedByConfiguredAreas(t *testing.T) {
 		}
 	}
 }
+
+// TestAlmanacSeasonWSPRHiddenBySNRFloor: an SNR floor keeps WSPR months out
+// (KTD13) and says so via WSPRHidden, only where a backfill covers the area.
+func TestAlmanacSeasonWSPRHiddenBySNRFloor(t *testing.T) {
+	f := newFakeAggStore(aggToday() - 3)
+	f.wsprDays("JO32", "20m", "NA", seasonDay(2025, 9, 1), seasonDay(2025, 9, 30), 26, 1)
+	cov := almanacWSPRCoverage([]string{"JO32"})
+	for name, c := range map[string]struct {
+		tier int
+		cov  map[string]bool
+		want bool
+	}{
+		"floor, covered":     {0, cov, true},
+		"no floor, covered":  {-1, cov, false},
+		"floor, not covered": {0, nil, false},
+		"no floor, no cover": {-1, nil, false},
+	} {
+		s, err := readAlmanacSeason(context.Background(), f, "JO32", almanacMaxWidenRadius, "20m", "NA", aggTestNow, c.cov, c.tier)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if s.WSPRHidden != c.want {
+			t.Errorf("%s: WSPRHidden = %v, want %v", name, s.WSPRHidden, c.want)
+		}
+		if got := buildAlmanacSeasonResponse("JO32", almanacArea{}, s, nil).WSPRHidden; got != c.want {
+			t.Errorf("%s: response wspr_hidden = %v, want %v", name, got, c.want)
+		}
+	}
+}

@@ -85,6 +85,9 @@ type almanacSeason struct {
 	Tier        int
 	SNRSince    int64
 	HasSNRSince bool
+	// WSPRHidden: a WSPR backfill covers this area but the SNR floor keeps
+	// its months out of the view.
+	WSPRHidden bool
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +388,9 @@ func readAlmanacSeason(ctx context.Context, st almanacReadStore, centre string, 
 		Radius: radius, Squares: squares, Watermark: -1, Today: today, Tier: tier,
 	}
 	// The WSPR fallback is used without an SNR floor only (KTD13).
-	wsprOK := tier < 0 && almanacWSPRCovered(squares, wsprCoverage)
+	wsprCovered := almanacWSPRCovered(squares, wsprCoverage)
+	wsprOK := tier < 0 && wsprCovered
+	res.WSPRHidden = tier >= 0 && wsprCovered
 	acc := &almanacSeasonAccum{region: region, yesterday: yesterday, layers: map[string]map[int]*almanacSeasonMonthAcc{}, tier: tier}
 	bands := []string{band}
 
@@ -605,6 +610,8 @@ type almanacSeasonResponse struct {
 	WatermarkDay int64           `json:"watermark_day"`
 	// Preliminary: some shown month uses a preliminary (SNR floor) M_min.
 	Preliminary bool `json:"preliminary,omitempty"`
+	// WSPRHidden: WSPR months exist for this area but the SNR floor hides them.
+	WSPRHidden bool `json:"wspr_hidden,omitempty"`
 	almanacSNRInfo
 	Months []almanacSeasonMonthJSON `json:"months"`
 }
@@ -624,6 +631,7 @@ func buildAlmanacSeasonResponse(qth string, area almanacArea, res *almanacSeason
 		K:              map[string]int{almanacSeasonLayerPSKR: almanacOpenMinSpotsPSKR, almanacSeasonLayerWSPR: almanacOpenMinSpotsWSPR},
 		ThroughDay:     almanacDayString(res.Today - 1),
 		WatermarkDay:   res.Watermark,
+		WSPRHidden:     res.WSPRHidden,
 		almanacSNRInfo: newAlmanacSNRInfo(minSNR, res.Tier, res.SNRSince, res.HasSNRSince),
 		Months:         make([]almanacSeasonMonthJSON, 0, len(res.Months)),
 	}

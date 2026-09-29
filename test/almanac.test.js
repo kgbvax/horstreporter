@@ -661,6 +661,18 @@ describe('almanac seasonal drill-down (U8)', () => {
         expect(body().querySelector('.almanac-drill .almanac-legend').textContent).toMatch(/not directly comparable/i);
     });
 
+    it('shows a note when the SNR floor hides WSPR months (wspr_hidden)', async () => {
+        routeFetch({ season: { ...makeSeason(), wspr_hidden: true } });
+        await openOC();
+        expect(body().querySelector('.almanac-drill').textContent).toMatch(/WSPR history for this area is hidden by the minimum SNR selection/);
+    });
+
+    it('shows no hidden-WSPR note without wspr_hidden', async () => {
+        routeFetch();
+        await openOC();
+        expect(body().querySelector('.almanac-drill').textContent).not.toMatch(/hidden by the minimum SNR/);
+    });
+
     it('an empty month renders "not collected yet"', async () => {
         routeFetch();
         await openOC();
