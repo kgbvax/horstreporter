@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { buildGlobalDecision, initBandLab, updateBandLab } from '../static/band-lab.js';
+import { buildGlobalDecision, initBandLab, setBandLabVisible, updateBandLab } from '../static/band-lab.js';
 import { state } from '../static/state.js';
 
 const GOOD = { label: 'Good: worth turning the radio on', className: 'is-go' };
@@ -55,14 +55,10 @@ function installLocalStorageMock() {
 // Rendering the summary through the real module: DOM fixture + mocked fetch.
 function mountFixture(qth) {
     document.body.innerHTML = `
-        <div id="band-lab-window" class="band-lab-window is-hidden">
-            <select id="band-lab-time-range"><option value="15">15 min</option></select>
-            <div id="band-lab-content">
-                <div id="band-lab-summary"></div>
-                <div id="band-lab-cards"></div>
-            </div>
+        <select id="band-lab-time-range"><option value="15">15 min</option></select>
+        <div id="band-lab-content">
+            <div id="band-lab-summary"></div>
         </div>
-        <button id="band-stats-toggle" type="button">Band stats</button>
         <input id="qth" value="${qth}">
         <div id="band-container">
             <input type="checkbox" class="band-enable" value="20m" checked>
@@ -82,13 +78,13 @@ describe('Band stats summary', () => {
 
     beforeEach(() => {
         installLocalStorageMock();
-        localStorage.setItem('bandLabEnabled', 'true');
         state.liveSpots = [];
         vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
         vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => payload })));
     });
 
     afterEach(() => {
+        setBandLabVisible(false);
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
@@ -107,6 +103,7 @@ describe('Band stats summary', () => {
         };
         mountFixture('JO62');
         initBandLab();
+        setBandLabVisible(true);
         await flushMicrotasks();
 
         const summary = document.getElementById('band-lab-summary');
@@ -131,6 +128,7 @@ describe('Band stats summary', () => {
         };
         mountFixture('JO63');
         initBandLab();
+        setBandLabVisible(true);
         await flushMicrotasks();
 
         const summary = document.getElementById('band-lab-summary');
@@ -142,6 +140,7 @@ describe('Band stats summary', () => {
 
     it('asks for a locator when none is set', () => {
         mountFixture('');
+        setBandLabVisible(true);
         updateBandLab({ force: true });
         expect(document.getElementById('band-lab-summary').textContent).toBe('Enter your locator to see band conditions.');
     });
