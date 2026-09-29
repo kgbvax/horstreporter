@@ -189,11 +189,7 @@ func historyClientFilter(r *http.Request) *Client {
 	qth, surroundings := resolveQTHQuery(r)
 	client := &Client{}
 	if qth != "" {
-		if surroundings && isLocator(qth) {
-			client.qthSet = getSurroundingSquares(qth)
-		} else {
-			client.qthSet = []string{qth}
-		}
+		client.qthSet = qthSquares(qth, surroundings)
 	}
 	if rings := parseIntDefault(r.URL.Query().Get("rings"), 0); rings > 0 && isLocator(qth) {
 		if rings > maxAreaRings {

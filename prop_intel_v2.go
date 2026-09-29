@@ -86,10 +86,13 @@ type propIntelV2Cell struct {
 
 // propIntelV2Response is the JSON envelope for /api/prop_intel/v2.
 type propIntelV2Response struct {
-	QTH      string `json:"qth"`
-	Minutes  int    `json:"minutes"`
-	Now      int64  `json:"now"`
-	FromHere bool   `json:"from_here"`
+	// Area is the live area the cells are scoped to; present only when the
+	// request asked for one (rings=auto or rings=N).
+	Area     *liveArea `json:"area,omitempty"`
+	QTH      string    `json:"qth"`
+	Minutes  int       `json:"minutes"`
+	Now      int64     `json:"now"`
+	FromHere bool      `json:"from_here"`
 	// SourcesRequested echoes the resolved source selection (public names,
 	// canonical order).
 	SourcesRequested []string          `json:"sources_requested"`
@@ -129,6 +132,13 @@ type propIntelV2Acc struct {
 // landed". v1 calls this with receiverSide="sc" (WSPR convention), which is
 // byte-identical to the inline logic it replaces.
 func resolvePropIntelRemoteEnd(m MQTTMessage, qthSet []string, receiverSide string) (remoteLocator, remoteCall string, matchedEnd bool) {
+	return resolvePropIntelRemoteEndArea(m, qthSet, nil, receiverSide)
+}
+
+// resolvePropIntelRemoteEndArea is resolvePropIntelRemoteEnd with an optional
+// wide live area: when set, an end matches if its square lies in the block
+// (an O(1) test instead of one prefix test per square; qthSet is ignored).
+func resolvePropIntelRemoteEndArea(m MQTTMessage, qthSet []string, area *liveArea, receiverSide string) (remoteLocator, remoteCall string, matchedEnd bool) {
 	sl := strings.ToUpper(strings.TrimSpace(m.SL))
 	rl := strings.ToUpper(strings.TrimSpace(m.RL))
 	sc := strings.ToUpper(strings.TrimSpace(m.SC))
@@ -137,6 +147,16 @@ func resolvePropIntelRemoteEnd(m MQTTMessage, qthSet []string, receiverSide stri
 	recvLoc, recvCall, otherLoc, otherCall := sl, sc, rl, rc
 	if receiverSide == "rc" {
 		recvLoc, recvCall, otherLoc, otherCall = rl, rc, sl, sc
+	}
+
+	if area != nil {
+		if area.contains(recvLoc) {
+			return otherLoc, otherCall, true
+		}
+		if area.contains(otherLoc) {
+			return recvLoc, recvCall, true
+		}
+		return recvLoc, recvCall, false
 	}
 
 	for _, t := range qthSet {
@@ -163,12 +183,23 @@ var propIntelV2 = &propIntelV2Engine{}
 // QTH, history window, and requested sources. Mirrors v1 Evaluate's
 // windowing/rising/atypical math, generalized per source profile.
 func (e *propIntelV2Engine) EvaluateV2(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64) propIntelV2Response {
+	return e.EvaluateV2Area(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, nil)
+}
+
+// EvaluateV2Area is EvaluateV2 scoped to a live area (nil: the own square, or
+// the 3×3 block with surroundings). As in EvaluateArea an area of radius ≤ 1 is
+// that legacy block and only labels the response; radius ≥ 2 matches by
+// square distance. Surge detection (atypical) is skipped for a widened area:
+// the climatology it compares against is not scaled to a widened block, so its
+// larger live counts would read as surges.
+func (e *propIntelV2Engine) EvaluateV2Area(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea) propIntelV2Response {
 	qth = normalizeQTHToken(qth)
 	if len(profiles) == 0 {
 		profiles = propIntelSourceProfiles
 	}
 
 	resp := propIntelV2Response{
+		Area:        area,
 		QTH:         qth,
 		Minutes:     minutes,
 		Now:         now,
@@ -186,10 +217,14 @@ func (e *propIntelV2Engine) EvaluateV2(qth string, surroundings bool, minutes in
 		return resp
 	}
 
-	qthSet := []string{qth}
-	if surroundings && isLocator(qth) {
-		qthSet = getSurroundingSquares(qth)
+	var matchArea *liveArea
+	if area != nil && area.Radius > 1 {
+		matchArea = area
 	}
+	if area != nil && matchArea == nil {
+		surroundings = area.Radius == 1
+	}
+	qthSet := qthSquares(qth, surroundings)
 
 	cutoff := now - int64(minutes)*60
 	midpoint := cutoff + (now-cutoff)/2
@@ -222,7 +257,7 @@ func (e *propIntelV2Engine) EvaluateV2(qth string, surroundings bool, minutes in
 			continue
 		}
 
-		remoteLocator, _, matchedEnd := resolvePropIntelRemoteEnd(m, qthSet, prof.ReceiverSide)
+		remoteLocator, _, matchedEnd := resolvePropIntelRemoteEndArea(m, qthSet, matchArea, prof.ReceiverSide)
 		if remoteLocator == "" || !isLocator(remoteLocator) {
 			continue
 		}
@@ -346,8 +381,9 @@ func (e *propIntelV2Engine) EvaluateV2(qth string, surroundings bool, minutes in
 			sc.Rising = true
 		}
 
-		// Atypical z-score against this source's climatology.
-		if base, ok := clim[climKey{ck.band, ck.source, ck.region, slot}]; ok {
+		// Atypical z-score against this source's climatology (not for a
+		// widened area, see EvaluateV2Area).
+		if base, ok := clim[climKey{ck.band, ck.source, ck.region, slot}]; ok && (area == nil || !area.Widened) {
 			sc.SampleDays = base.SampleDays
 			if base.StdDev > 0 && base.SampleDays >= propIntelMinSampleDays {
 				liveRate := float64(acc.spotCount) * (30.0 / float64(minutes))
@@ -477,10 +513,11 @@ func propIntelV2Handler(w http.ResponseWriter, r *http.Request) {
 	profiles := parseSourcesParam(r)
 
 	now := time.Now().Unix()
+	area := liveAreaForRequest(r, p.qth, p.surroundings, now)
 	historyCopy, release := snapshotPropIntelHistory(now, p.minutes)
 	defer release()
 
-	resp := propIntelV2.EvaluateV2(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold)
+	resp := propIntelV2.EvaluateV2Area(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area)
 	resp = resp.applyFromHere(p.fromHere)
 
 	// Push fan-out: adapt v2 cells to the v1 push payload (push.go consumes

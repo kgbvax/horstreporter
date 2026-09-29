@@ -1,5 +1,6 @@
 import { setRowExtras, refreshMatrix } from './wspr-matrix.js';
-import { getBandRow, getBandNormalRate, subscribeBandRows, drawBandMiniPlot } from './band-lab.js';
+import { getBandRow, getBandNormalRate, subscribeBandRows, drawBandMiniPlot, getLiveArea } from './band-lab.js';
+import { areaSummary, bandAreaTag } from './live-area.js';
 import { escapeHtml } from './ui-helpers.js';
 
 // cond-now.js — the "Now" view of the Conditions dock. One table row per
@@ -30,6 +31,8 @@ export function verdictText(row) {
     if (word) parts.push(word);
     const reach = String(m.reach_level || '');
     if (reach === 'longer' || reach === 'shorter') parts.push(`${reach} reach`);
+    const tag = bandAreaTag(m);
+    if (tag) parts.push(tag);
     return parts.join(', ');
 }
 
@@ -85,6 +88,16 @@ const extras = {
 
 let unsubscribe = null;
 
+// The one-line note above the table when the area was widened around a sparse
+// home square. Hidden otherwise.
+function renderAreaLine() {
+    const el = document.getElementById('cond-area');
+    if (!el) return;
+    const text = areaSummary(getLiveArea());
+    el.textContent = text;
+    el.hidden = !text;
+}
+
 // onRailChange: called when a band's normal rate (the rail sparkline's dashed
 // line) changed, so the rail can redraw.
 export function initCondNow({ onRailChange } = {}) {
@@ -92,7 +105,9 @@ export function initCondNow({ onRailChange } = {}) {
     unsubscribe?.();
     const railKeyNow = () => RAIL_BANDS.map((b) => getBandNormalRate(b) ?? '').join('|');
     let railKey = railKeyNow();
+    renderAreaLine();
     unsubscribe = subscribeBandRows(() => {
+        renderAreaLine();
         refreshMatrix();
         drawPlots();
         const key = railKeyNow();

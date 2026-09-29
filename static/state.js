@@ -22,4 +22,7 @@ export const state = {
     // When the SNR threshold or band set changes, we still restart but preserve
     // existing data so the map doesn't flash empty. null = no active stream.
     streamedFilter: null,
+    // Live area the current stream delivers (live-area.js parseAreaPayload):
+    // set by the stream's `area` event; null before the first one.
+    liveArea: null,
 };

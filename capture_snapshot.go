@@ -62,11 +62,7 @@ func captureSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 		includeWspr = strings.EqualFold(raw, "true") || raw == "1"
 	}
 
-	qthSet := []string{qth}
-	if surroundings && isLocator(qth) {
-		qthSet = getSurroundingSquares(qth)
-	}
-	client := &Client{qthSet: qthSet}
+	client := &Client{qthSet: qthSquares(qth, surroundings)}
 
 	cutoff := snapshotAt - int64(windowMinutes*60)
 

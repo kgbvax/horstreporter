@@ -20,6 +20,7 @@ import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePl
 import { updateAfterglow, notifyMapMoved, hideAfterglow } from './afterglow.js';
 import { GRAYLINE_BUCKET_MS, setDataNowMs, clearDataNowOverride } from './data-now.js';
 import { sessionRing } from './session-ring.js';
+import { parseAreaPayload, areaCohortChanged } from './live-area.js';
 import { STREAM_STATUS_TEXT, setStreamStatus, spotCountText, liveForText, connectingText, serverErrorText, timeTravelErrorText } from './stream-status.js';
 
 // --- Azimuth Zoom State ---
@@ -1853,6 +1854,8 @@ function startLiveStream(preserveData = false) {
     if (document.getElementById('surroundings')?.checked) {
         params.append('surroundings', 'true');
     }
+    // Let the server widen the area around a sparse home square (live_area.go).
+    params.append('rings', 'auto');
 
     // Server-side band/SNR filter: tell the backend which spots the client will
     // actually display so it can avoid sending the rest over the wire.
@@ -1979,6 +1982,17 @@ function startLiveStream(preserveData = false) {
         setStreamStatus({ message: serverErrorText(e.data), tone: 'danger' });
         setFaviconColor(FAVICON.error);
         if (btnSubmit) setSubmitMode(btnSubmit, 'go');
+    });
+
+    // The block of squares this stream delivers (rings=auto). A different block
+    // for the same station means the ring's earlier windows were delivered under
+    // another cohort, so they must not be vouched for (same rule as a filter
+    // change); mid-timeline the ring keeps serving what it has.
+    state.eventSource.addEventListener('area', (e) => {
+        const area = parseAreaPayload(e.data);
+        if (!area) return;
+        if (areaCohortChanged(state.liveArea, area) && !isTimelineActive()) sessionRing.clear();
+        state.liveArea = area;
     });
 
     state.eventSource.addEventListener('history_end', () => {

@@ -18,8 +18,15 @@ const (
 	almanacPreliminaryMinActiveDays = 2
 
 	// almanacWidenBandShare: the area stops widening at the smallest radius
-	// where STRICTLY MORE than this share of the in-scope bands meet M_min.
+	// where STRICTLY MORE than this share of the in-scope bands have at least
+	// almanacWidenMinKnownSlots known slots.
 	almanacWidenBandShare = 0.5
+	// almanacWidenMinKnownSlots: a band counts toward widening at a radius when
+	// at least this many of its 30-min slots are known, i.e. reach M_min alive,
+	// area-active days (8 slots = 4 h). Days-with-any-spot is not enough: a
+	// sparse square passes that test while every slot still reads "not enough
+	// data".
+	almanacWidenMinKnownSlots = 8
 	// almanacMaxWidenRadius caps widening (rings around the centre grid4).
 	almanacMaxWidenRadius = 2
 

@@ -345,6 +345,76 @@ describe('app.js session ring feed (U2)', () => {
         expect(sessionRing.stats().count).toBe(1);
     });
 
+    it('asks the server for an adaptive area', async () => {
+        document.getElementById('qth').value = 'W1AW';
+        await importAppFresh();
+        const es = await startStream();
+        expect(new URL(es.url, 'http://x').searchParams.get('rings')).toBe('auto');
+    });
+
+    // The server announces the block of squares it delivers (rings=auto). A
+    // different block for the same station makes the ring's earlier windows
+    // foreign, exactly like a filter change.
+    describe('area event', () => {
+        const fire = (es, name, data) => {
+            const call = es.addEventListener.mock.calls.find((c) => c[0] === name);
+            expect(call, `no ${name} listener`).toBeTruthy();
+            call[1]({ data: typeof data === 'string' ? data : JSON.stringify(data) });
+        };
+        const area = (radius, centre = 'FN76') => ({ centre, base_radius: 0, radius, widened: radius > 0 });
+
+        it('stores the area and keeps the ring while the block is unchanged', async () => {
+            document.getElementById('qth').value = 'W1AW';
+            const { state, sessionRing } = await importAppFresh();
+            const es = await startStream();
+
+            fire(es, 'area', area(2));
+            expect(state.liveArea).toEqual({ centre: 'FN76', baseRadius: 0, radius: 2, widened: true });
+            deliverFrame(es, makeSpot(30));
+            expect(sessionRing.stats().count).toBe(1);
+
+            // A reconnect announces the same block again: nothing is dropped.
+            fire(es, 'area', area(2));
+            expect(sessionRing.stats().count).toBe(1);
+        });
+
+        it('clears the ring when the block changes for the same station', async () => {
+            document.getElementById('qth').value = 'W1AW';
+            const { state, sessionRing } = await importAppFresh();
+            const es = await startStream();
+
+            fire(es, 'area', area(1));
+            deliverFrame(es, makeSpot(30));
+            expect(sessionRing.stats().count).toBe(1);
+
+            fire(es, 'area', area(2));
+            expect(sessionRing.stats().count).toBe(0);
+            expect(state.liveArea.radius).toBe(2);
+        });
+
+        it('does not clear the ring mid-timeline', async () => {
+            document.getElementById('qth').value = 'W1AW';
+            const { sessionRing } = await importAppFresh();
+            const es = await startStream();
+
+            fire(es, 'area', area(1));
+            deliverFrame(es, makeSpot(30));
+            timelineMock.timelineActive = true;
+            fire(es, 'area', area(2));
+            expect(sessionRing.stats().count).toBe(1);
+            timelineMock.timelineActive = false;
+        });
+
+        it('ignores a malformed area event', async () => {
+            document.getElementById('qth').value = 'W1AW';
+            const { state } = await importAppFresh();
+            const es = await startStream();
+            fire(es, 'area', 'not json');
+            fire(es, 'area', { centre: 'FN76' });
+            expect(state.liveArea).toBeNull();
+        });
+    });
+
     it('frames still feed the ring while the timeline is active (feed independent of the render gate)', async () => {
         document.getElementById('qth').value = 'W1AW';
         const { sessionRing } = await importAppFresh();

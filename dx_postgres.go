@@ -1734,8 +1734,9 @@ func appendTargetArms(arms []string, args []any, idx int, locators, calls []stri
 
 // activityByBinForTargets returns raw spots/min per (band, time-bin) over the
 // selected `minutes` window, target-filtered the same way the live stream
-// matches (callsign or locator prefix — a 6-char target like JO62QM matches
-// locators extending it, mirroring strings.HasPrefix in extractMatchedBandEvent).
+// matches (callsign or locator prefix, mirroring strings.HasPrefix in
+// extractMatchedBandEvent). Callers pass qthSquares(), so locator targets are
+// 4-char squares; a longer target would still match locators extending it.
 // This is the Postgres-backed source for the Band Stats "Reports over time"
 // chart bars.
 //

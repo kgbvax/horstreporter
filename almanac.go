@@ -118,7 +118,6 @@ func almanacRingSquares(centre string) ([]string, []int32) {
 //
 //	counts[level][band][region][day][slot]  uint16, saturating
 //	act[level][band][day][slot]             uint16 spot sum to ANY region
-//	dayMasks[grid][band]                    active-day bits (window days)
 //	ingest[day][slot], lost[day]
 //
 // Seasonal rows contribute only days ≤ W and tail rows only days > W, where
@@ -137,11 +136,10 @@ type almanacAccum struct {
 	dayYM   [almanacAccumDays]int
 	dayDOM  [almanacAccumDays]int
 
-	counts   []uint16
-	act      []uint16
-	dayMasks []uint64
-	ingest   [almanacAccumDays][almanacSlotsPerDay]int64
-	lost     [almanacAccumDays]bool
+	counts []uint16
+	act    []uint16
+	ingest [almanacAccumDays][almanacSlotsPerDay]int64
+	lost   [almanacAccumDays]bool
 
 	// SNR floor (KTD13): tier is the almanacSNRTierFloors index, -1 = any
 	// SNR. With a tier, ge holds the spots with SNR ≥ floor and snrN the
@@ -177,7 +175,6 @@ func newAlmanacAccum(centre string, win almanacWindow, tier int) *almanacAccum {
 	nb, nr := len(almanacInScopeBands), len(a.regions)
 	a.counts = make([]uint16, almanacLevels*nb*nr*almanacAccumDays*almanacSlotsPerDay)
 	a.act = make([]uint16, almanacLevels*nb*almanacAccumDays*almanacSlotsPerDay)
-	a.dayMasks = make([]uint64, len(a.squares)*nb)
 	if tier >= 0 {
 		a.ge = make([]uint16, len(a.counts))
 		a.snrN = make([]uint16, len(a.counts))
@@ -333,7 +330,6 @@ func (a *almanacAccum) addSeasonRow(grid, band, reg string, ym int, counts []byt
 	if !inWindow {
 		return
 	}
-	mask := &a.dayMasks[gi*len(almanacInScopeBands)+bi]
 	err := almanacSparseEachCell(counts, func(pos, v int, h *almanacSNRHist) {
 		di := int(domDi[pos/almanacSlotsPerDay]) - 1
 		if di < 0 {
@@ -349,7 +345,6 @@ func (a *almanacAccum) addSeasonRow(grid, band, reg string, ym int, counts []byt
 				satAdd16(&a.snrN[ci], int64(h.total()))
 			}
 		}
-		*mask |= 1 << uint(di)
 	})
 	if err != nil {
 		almanacSparseMalformed("almanac read", grid, band, reg, ym, err)
@@ -379,22 +374,6 @@ func (a *almanacAccum) addTailRow(level int, band, reg string, day int64, slot i
 	}
 }
 
-// addTailActive marks (grid, band) active on a tail day (widening masks).
-func (a *almanacAccum) addTailActive(grid, band string, day int64) {
-	if day <= a.wm || day < a.win.Start || day > a.win.End {
-		return
-	}
-	gi, ok := a.gridIdx[grid]
-	if !ok {
-		return
-	}
-	bi, ok := almanacBandIndex[band]
-	if !ok {
-		return
-	}
-	a.dayMasks[gi*len(almanacInScopeBands)+bi] |= 1 << uint(day-a.win.Start)
-}
-
 func (a *almanacAccum) addIngest(day int64, slot int, total int64) {
 	if day < a.win.Start || day > a.win.Today || slot < 0 || slot >= almanacSlotsPerDay {
 		return
@@ -406,20 +385,6 @@ func (a *almanacAccum) addLost(day int64) {
 	if day >= a.win.Start && day <= a.win.Today {
 		a.lost[day-a.win.Start] = true
 	}
-}
-
-// masks returns the per-(grid4, band) active-day masks for U1's widening.
-func (a *almanacAccum) masks() map[almanacGridBand]uint64 {
-	nb := len(almanacInScopeBands)
-	out := make(map[almanacGridBand]uint64, len(a.squares)*nb)
-	for gi, sq := range a.squares {
-		for bi, b := range almanacInScopeBands {
-			if m := a.dayMasks[gi*nb+bi]; m != 0 {
-				out[almanacGridBand{Grid: sq, Band: b}] = m
-			}
-		}
-	}
-	return out
 }
 
 // almanacAliveMedian sorts vals (non-empty) in place and returns their
@@ -555,11 +520,11 @@ func (t *almanacTypical) mMin() int {
 	return t.MMin
 }
 
-// computeAlmanacTypical picks the radius from the active-day masks (U1) and
+// computeAlmanacTypical picks the radius from per-slot knownness (U1) and
 // computes the lanes at that radius. The radius always uses the all-SNR
 // activity at the full M_min, so floored and any-SNR views share it.
 func computeAlmanacTypical(a *almanacAccum) *almanacTypical {
-	radius, squares := chooseAlmanacRadius(a.centre, a.masks(), almanacMinActiveDays30)
+	radius, squares := chooseAlmanacRadius(a.centre, a.knownSlotCounts(almanacMinActiveDays30), almanacWidenMinKnownSlots)
 	mMin := a.mMin()
 	snrDays := 0
 	if a.tier >= 0 {
@@ -584,6 +549,60 @@ func computeAlmanacTypical(a *almanacAccum) *almanacTypical {
 	}
 }
 
+// activeSlotDays marks, for band bi at the given ring radius, the (day, slot)
+// pairs that count toward M: the slot is ingest-alive and the area (rings
+// 0…radius) had a spot on the band, to any region, in that slot or the next.
+// It is tier-agnostic; cells() layers the SNR-collection rule on top. any is
+// true when at least one pair is marked.
+func (a *almanacAccum) activeSlotDays(bi, radius int, alive *[almanacWindowDays][almanacSlotsPerDay]bool) (ok [almanacWindowDays][almanacSlotsPerDay]bool, any bool) {
+	var actSum [almanacAccumDays][almanacSlotsPerDay]bool
+	for di := 0; di < almanacAccumDays; di++ {
+		for s := 0; s < almanacSlotsPerDay; s++ {
+			var sum int
+			for lv := 0; lv <= radius; lv++ {
+				sum += int(a.act[a.actIdx(lv, bi, di, s)])
+			}
+			actSum[di][s] = sum > 0
+		}
+	}
+	for di := 0; di < almanacWindowDays; di++ {
+		for s := 0; s < almanacSlotsPerDay; s++ {
+			ok[di][s] = alive[di][s] && almanacActiveOrNext(&actSum[di], &actSum[di+1], s)
+			any = any || ok[di][s]
+		}
+	}
+	return ok, any
+}
+
+// knownSlotCounts is the widening input: for each ring radius 0…max and each
+// in-scope band, how many of the 48 slots are known, i.e. have at least mMin
+// alive, area-active days. That is the exact condition under which a lane
+// shows a slot instead of "not enough data", so the radius is picked on what
+// the panel can actually display. (The old test counted active days at any
+// time of day, which a sparse square passes while every slot stays unknown.)
+func (a *almanacAccum) knownSlotCounts(mMin int) [almanacLevels][]int {
+	var out [almanacLevels][]int
+	alive := almanacAliveMask(&a.ingest, &a.lost)
+	for r := 0; r < almanacLevels; r++ {
+		out[r] = make([]int, len(almanacInScopeBands))
+		for bi := range almanacInScopeBands {
+			ok, _ := a.activeSlotDays(bi, r, &alive)
+			for s := 0; s < almanacSlotsPerDay; s++ {
+				days := 0
+				for di := 0; di < almanacWindowDays; di++ {
+					if ok[di][s] {
+						days++
+					}
+				}
+				if days >= mMin {
+					out[r][bi]++
+				}
+			}
+		}
+	}
+	return out
+}
+
 // cells computes N/M per (band, region, slot) at radius (levels 0…radius).
 // Bands with no active slot at all are omitted; every region of an active
 // band gets a lane, so never-reached regions read "closed" (R2). mMin is
@@ -595,34 +614,22 @@ func (a *almanacAccum) cells(radius, mMin int) []almanacLane {
 	alive := almanacAliveMask(&a.ingest, &a.lost)
 	open := a.openCounts()
 	var lanes []almanacLane
-	var actSum [almanacAccumDays][almanacSlotsPerDay]bool
-	var ok [almanacWindowDays][almanacSlotsPerDay]bool
 	for bi, band := range almanacInScopeBands {
-		for di := 0; di < almanacAccumDays; di++ {
-			for s := 0; s < almanacSlotsPerDay; s++ {
-				var sum int
-				for lv := 0; lv <= radius; lv++ {
-					sum += int(a.act[a.actIdx(lv, bi, di, s)])
-				}
-				actSum[di][s] = sum > 0
-			}
-		}
-		var m [almanacSlotsPerDay]uint8
+		active, anyActive := a.activeSlotDays(bi, radius, &alive)
 		// anyActive lists the band whatever the SNR floor, so days without
 		// SNR data read as "not enough data" instead of dropping the band.
-		anyActive := false
+		if !anyActive {
+			continue
+		}
+		ok := active
+		var m [almanacSlotsPerDay]uint8
 		for di := 0; di < almanacWindowDays; di++ {
 			for s := 0; s < almanacSlotsPerDay; s++ {
-				ok[di][s] = alive[di][s] && almanacActiveOrNext(&actSum[di], &actSum[di+1], s)
-				anyActive = anyActive || ok[di][s]
 				ok[di][s] = ok[di][s] && (a.tier < 0 || a.snrKnown(di))
 				if ok[di][s] {
 					m[s]++
 				}
 			}
-		}
-		if !anyActive {
-			continue
 		}
 		for ri, reg := range a.regions {
 			l := almanacLane{Band: band, Region: reg, M: m, MMin: uint8(mMin)}

@@ -94,6 +94,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `spot.go` — spot model, matching/locator utilities
 - `server.go` — HTTP handlers
 - `dx_conditions.go` — DX baseline scoring engine
+- `live_area.go` — adaptive live area (`rings=auto`): widens a sparse home square ring by ring, cached per grid4, shared by stream / dx_conditions / hot_bands / prop_intel v2
 - `dx_postgres.go` — Postgres persistence for raw spots and baseline
 - `dxcluster.go` — optional DX cluster TCP ingest
 - `rbn.go` — optional RBN (Reverse Beacon Network) CW/RTTY raw telnet ingest; `source_type='rbn'`, activity + live only (kept out of the FT8-SNR baseline)
@@ -129,7 +130,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 
 Canonical reference: `docs/api.md` (includes response shapes, caches, and explicit exclusions).
 
-- `GET /api/stream` — SSE; params: `qth`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `qth`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed)
+- `GET /api/stream` — SSE; params: `qth`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `qth`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed; `rings=auto` widens a sparse home square server-side, see `live_area.go`, and is what the web app sends to all four live endpoints). A locator `qth` is matched at its 4-char square.
 - `GET /api/dx_conditions` — DX score/conditions per band; params: `qth`, `minutes`, `surroundings`, `cw_min_db`
 - `GET /api/prop_intel` — WSPR propagation-intelligence nowcast per (band × region); params: `qth`, `minutes`, `surroundings`, `cw_min_db`, `surge_threshold`, `from_here`. Sibling summary endpoint `GET /api/prop_intel/summary` (60s cached) feeds the mobile app's home-screen widgets
 - `GET /api/stats` — active connections, history size/minutes

@@ -345,6 +345,8 @@ async function pollMatrix(force) {
     params.set('minutes', '15');
     params.set('surroundings', 'true');
     params.set('from_here', 'true');
+    // The server widens a sparse home block (live_area.go) so the matrix has cells.
+    params.set('rings', 'auto');
     params.set('sources', runtime.sources.join(','));
     if (minSnrMode === 'ssb') params.set('ssb_min_db', ssbMinDb);
     if (minSnrMode === 'cw') params.set('cw_min_db', cwMinDb);

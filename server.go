@@ -284,29 +284,22 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	historySeconds := int64(minutes * 60)
 
-	var qthSet []string
-	if surroundings && isLocator(qth) {
-		qthSet = getSurroundingSquares(qth)
-	} else {
-		qthSet = []string{qth}
-	}
+	qthSet := qthSquares(qth, surroundings)
 
 	client := &Client{
 		qthSet: qthSet,
 		send:   make(chan Spot, 10000), // Buffer to handle initial history dump
 	}
 
-	// Optional configurable "area of interest": rings>0 with a locator qth
-	// matches any sender/receiver within `rings` grid-squares of the qth,
-	// for region feeds (e.g. horstprop). Read-only; default behaviour unchanged.
-	if rings := parseIntDefault(r.URL.Query().Get("rings"), 0); rings > 0 && isLocator(qth) {
-		if rings > maxAreaRings {
-			rings = maxAreaRings
-		}
-		if cx, cy, ok := locatorSquareXY(qth); ok {
-			client.areaActive = true
-			client.areaX, client.areaY, client.areaRings = cx, cy, rings
-		}
+	// Optional configurable "area of interest": rings=N (>0) with a locator
+	// qth matches any sender/receiver within N grid-squares of the qth, for
+	// region feeds (e.g. horstprop); rings=auto lets the server widen the
+	// block until enough bands carry a full sample (live_area.go). Read-only;
+	// default behaviour unchanged. The area is announced as an `area` event.
+	area := liveAreaForRequest(r, qth, surroundings, time.Now().Unix())
+	if area != nil {
+		client.areaActive = true
+		client.areaX, client.areaY, client.areaRings = area.x, area.y, area.Radius
 	}
 
 	filter := newStreamClientFilter(r)
@@ -377,6 +370,10 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		defer gz.Close()
 	}
 
+	if area != nil {
+		b, _ := json.Marshal(area)
+		fmt.Fprintf(writer, "event: area\ndata: %s\n\n", string(b))
+	}
 	for _, spot := range historySpots {
 		b, _ := json.Marshal(toStreamSpot(spot))
 		fmt.Fprintf(writer, "data: %s\n\n", string(b))
@@ -568,12 +565,7 @@ func buildSquareDetailsResponse(qth string, surroundings bool, locator string, m
 		return resp
 	}
 
-	qthSet := []string{qth}
-	if surroundings && isLocator(qth) {
-		qthSet = getSurroundingSquares(qth)
-	}
-
-	client := &Client{qthSet: qthSet}
+	client := &Client{qthSet: qthSquares(qth, surroundings)}
 	cutoff := now - int64(minutes*60)
 	seenPairs := make(map[string]struct{})
 	var sumSNR int
@@ -896,6 +888,7 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().Unix()
 
+	area := liveAreaForRequest(r, qth, surroundings, now)
 	historyCopy, releaseHistory := snapshotHubHistoryWindow(now, minutes)
 	defer releaseHistory()
 
@@ -917,7 +910,7 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dxBaseline != nil {
-		resp = dxBaseline.Evaluate(qth, surroundings, minutes, cwMinDb, historyCopy, now)
+		resp = dxBaseline.EvaluateArea(qth, surroundings, minutes, cwMinDb, historyCopy, now, area)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -952,6 +945,7 @@ func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().Unix()
 
+	area := liveAreaForRequest(r, qth, surroundings, now)
 	historyCopy, releaseHistory := snapshotHubHistoryWindow(now, minutes)
 	defer releaseHistory()
 
@@ -965,7 +959,7 @@ func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dxBaseline != nil {
-		resp = dxBaseline.HotBands(qth, surroundings, minutes, cwMinDb, currentBand, historyCopy, now)
+		resp = dxBaseline.HotBandsArea(qth, surroundings, minutes, cwMinDb, currentBand, historyCopy, now, area)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -2,6 +2,7 @@ import { state } from './state.js';
 import { bandColors, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds, haversineKm, hexToRgba } from './utils.js';
 import { dashedLine, fillCircle } from './canvas-draw.js';
 import { setPanelToggleState } from './panel-toggle.js';
+import { parseAreaPayload } from './live-area.js';
 
 const ENABLE_KEY = 'bandLabEnabled';
 const UPDATE_THROTTLE_MS = 300;
@@ -411,7 +412,8 @@ function snapshotRows(grouped, plotGrouped, qth, minutes, dxReady, thresholds) {
     // every band's plot.
     const distanceCache = qthCenter ? computeDistanceCache(plotGrouped, qthCenter) : null;
     const capKm = qthCenter ? getGlobalDistanceCapKm(plotGrouped, qthCenter, distanceCache) : null;
-    runtime.rowsSnap = { grouped, plotGrouped, qthCenter, distanceCache, capKm, dxBands, dxReady, minutes, thresholds, snrAxis: miniSnrAxis(plotGrouped) };
+    const area = dxReady ? parseAreaPayload(runtime.dxCache?.area) : null;
+    runtime.rowsSnap = { grouped, plotGrouped, qthCenter, distanceCache, capKm, dxBands, dxReady, area, minutes, thresholds, snrAxis: miniSnrAxis(plotGrouped) };
     notifyRows();
 }
 
@@ -424,6 +426,12 @@ function notifyRows() {
 export function subscribeBandRows(fn) {
     runtime.rowListeners.add(fn);
     return () => runtime.rowListeners.delete(fn);
+}
+
+// The live area the rows were computed over (live-area.js), or null before the
+// first dx_conditions answer for this qth/window or when none was reported.
+export function getLiveArea() {
+    return runtime.rowsSnap?.area ?? null;
 }
 
 // The row model for one band: dx metrics (null until they arrive or when the
@@ -936,6 +944,7 @@ async function ensureDxConditions(qth, minutes, surroundings) {
             params.set('qth', qth);
             params.set('minutes', String(minutes));
             if (surroundings) params.set('surroundings', 'true');
+            params.set('rings', 'auto');
 
             const response = await fetch(`/api/dx_conditions?${params.toString()}`, { signal: controller.signal });
             if (!response.ok) throw new Error(`dx_conditions HTTP ${response.status}`);

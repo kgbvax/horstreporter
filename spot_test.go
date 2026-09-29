@@ -1,8 +1,57 @@
 package main
 
 import (
+	"reflect"
+	"sort"
 	"testing"
 )
+
+func TestQthSquares(t *testing.T) {
+	sorted := func(s []string) []string {
+		out := append([]string(nil), s...)
+		sort.Strings(out)
+		return out
+	}
+	t.Run("6-char locator matches its whole square", func(t *testing.T) {
+		if got := qthSquares("FN76OJ", false); !reflect.DeepEqual(got, []string{"FN76"}) {
+			t.Fatalf("got %v, want [FN76]", got)
+		}
+	})
+	t.Run("surroundings gives the 3x3 block", func(t *testing.T) {
+		got := sorted(qthSquares("FN76OJ", true))
+		want := sorted([]string{"FN65", "FN66", "FN67", "FN75", "FN76", "FN77", "FN85", "FN86", "FN87"})
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+	t.Run("callsign is passed through", func(t *testing.T) {
+		for _, surroundings := range []bool{false, true} {
+			if got := qthSquares("VE9CF", surroundings); !reflect.DeepEqual(got, []string{"VE9CF"}) {
+				t.Fatalf("surroundings=%v: got %v, want [VE9CF]", surroundings, got)
+			}
+		}
+	})
+}
+
+// A 6-char QTH used to match only spots in that exact subsquare, so a sparse
+// operator saw nothing. Through qthSquares it matches the whole 4-char square.
+func TestSixCharQthMatchesWholeSquare(t *testing.T) {
+	m := MQTTMessage{B: "20m", SC: "K1ABC", SL: "FN76AB", RC: "DL1XYZ", RL: "JO32AB", RP: -10}
+	client := &Client{qthSet: qthSquares("FN76OJ", false)}
+	if _, ok := matchAndCreateSpot(client, m, m.T); !ok {
+		t.Fatal("spot from FN76AB must match qth FN76OJ")
+	}
+	ev, ok := extractMatchedBandEvent(m, qthSquares("FN76OJ", false))
+	if !ok {
+		t.Fatal("extractMatchedBandEvent must match qth FN76OJ at grid4")
+	}
+	if ev.band != "20m" {
+		t.Fatalf("band = %q", ev.band)
+	}
+	if _, ok := extractMatchedBandEvent(m, qthSquares("FN31PR", false)); ok {
+		t.Fatal("spot from FN76 must not match qth FN31PR")
+	}
+}
 
 // TestLatLngToLocatorFieldPrecision pins the 2-char (field) output, which is
 // correct across the whole grid including clamping at the edges.

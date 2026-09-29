@@ -43,8 +43,6 @@ type almanacReadTx interface {
 	// and the spots with SNR ≥ almanacSNRTierFloors[tier] (0 otherwise).
 	tailCounts(ctx context.Context, grids []string, rings []int32, bands []string, afterDay, fromDay, toDay int64, tier int,
 		fn func(ring int, band, region string, day int64, slot int, count, snr, ge int64)) error
-	tailActiveDays(ctx context.Context, grids, bands []string, afterDay, fromDay, toDay int64,
-		fn func(grid, band string, day int64)) error
 	ingestSlots(ctx context.Context, layer string, fromDay, toDay int64, fn func(day int64, slot int, total int64)) error
 	lostDays(ctx context.Context, fromDay, toDay int64, fn func(day int64)) error
 }
@@ -81,9 +79,6 @@ func readAlmanacAccum(ctx context.Context, st almanacReadStore, centre string, w
 			}
 		}
 		if err := tx.tailCounts(ctx, acc.squares, acc.rings, bands, acc.tailAfter(), win.Start, win.Today, acc.tier, acc.addTailRow); err != nil {
-			return err
-		}
-		if err := tx.tailActiveDays(ctx, acc.squares, bands, acc.tailAfter(), win.Start, win.End, acc.addTailActive); err != nil {
 			return err
 		}
 		if err := tx.ingestSlots(ctx, almanacSeasonLayerPSKR, win.Start, win.Today, acc.addIngest); err != nil {
@@ -125,16 +120,6 @@ const (
 		  AND d.day_index > $4
 		  AND d.day_index BETWEEN $5 AND $6
 		GROUP BY r.ring, d.band, d.region, d.day_index, d.slot_of_day`
-
-	// $1 grids, $2 bands, $3 watermark (exclusive), $4/$5 day bounds.
-	almanacTailActiveDaysSQL = `
-		SELECT DISTINCT target_grid4, band, day_index
-		FROM dx_region_baseline_daily
-		WHERE target_grid4 = ANY($1::text[])
-		  AND band = ANY($2::text[])
-		  AND day_index > $3
-		  AND day_index BETWEEN $4 AND $5
-		  AND spot_count > 0`
 
 	almanacIngestSlotsReadSQL = `
 		SELECT day_index, slot_of_day, spot_total
@@ -248,26 +233,6 @@ func (t *pgAlmanacReadTx) tailCounts(ctx context.Context, grids []string, rings 
 			return err
 		}
 		fn(int(ring), band, reg, day, int(slot), count, n, g)
-	}
-	return rows.Err()
-}
-
-func (t *pgAlmanacReadTx) tailActiveDays(ctx context.Context, grids, bands []string, afterDay, fromDay, toDay int64,
-	fn func(grid, band string, day int64)) error {
-	rows, err := t.tx.Query(ctx, almanacTailActiveDaysSQL, grids, bands, afterDay, fromDay, toDay)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var (
-		grid, band string
-		day        int64
-	)
-	for rows.Next() {
-		if err := rows.Scan(&grid, &band, &day); err != nil {
-			return err
-		}
-		fn(grid, band, day)
 	}
 	return rows.Err()
 }

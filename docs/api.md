@@ -36,12 +36,30 @@ Related contracts documented elsewhere:
   `qth` | `callsign` | `locator` query params (checked in that order).
   Values are uppercased. A callsign needs a locator enrichment to resolve to
   coordinates. Where required, a missing/unresolvable qth → `400`.
+  A locator qth is matched at its 4-char square: `FN76OJ` and `FN76` select the
+  same reports (the full locator is only used for map centre and distances).
+  Callsign qths are matched as given.
   (The QTH is the operator's own station, the point-of-view for all analysis;
   the older `target` param name is no longer accepted.)
 - **`minutes`**: window size in minutes; invalid or ≤ 0 resets to the
   default; capped at a per-endpoint maximum.
 - **`surroundings`**: `"true"` expands a locator qth to the 3×3 block of
   grid squares around it.
+- **`rings`** (live views: `/api/stream`, `/api/dx_conditions`,
+  `/api/hot_bands`, `/api/prop_intel/v2`): the area of interest around a locator
+  qth, as a block of grid squares. An integer `0..30` is a fixed radius (rings
+  around the home square; 0 = off). `auto` lets the server widen the block, ring
+  by ring up to 3 rings (7×7 squares), until at least 3 bands have 25 or more
+  reports in the last 20 minutes; the base is the own square, or the 3×3 block
+  with `surroundings`. A dense area stays at its base, so `rings=auto` changes
+  nothing there. The decision is cached per (grid4, base) for 10 minutes and
+  shared by all four endpoints, and is not made while the in-memory history
+  does not cover its 20-minute window (right after a restart) or the whole
+  7×7 block holds fewer than 25 reports. Callsign qths are never widened.
+  The response says what was used, see below.
+  `area` (dx_conditions, hot_bands, prop_intel/v2 responses; the `area` stream
+  event): `{"centre":"FN76","base_radius":0,"radius":2,"widened":true}`,
+  present only when the request carried `rings`.
 
 ## Core endpoints
 
@@ -50,8 +68,13 @@ Related contracts documented elsewhere:
 Server-sent events: initial history dump, then live spots.
 
 Params: `qth` (required), `minutes` (default 15, max 60), `surroundings`,
-`rings` (int, 0..30 — area-of-interest: any sender/receiver within N grid
-squares of a locator qth; 0 disables; used by horstprop's region feed).
+`rings` (int 0..30, or `auto`; see Conventions — area-of-interest: any
+sender/receiver within N grid squares of a locator qth; 0 disables; used by
+horstprop's region feed, and `auto` by the web app).
+
+With `rings`, the first frame is `event: area` carrying the `area` object above
+(before the history dump, and again after every reconnect). Without `rings`
+the stream is unchanged.
 
 Response `text/event-stream`, CORS `*`. Frames:
 
@@ -110,6 +133,12 @@ normal (`activity_ratio`, `activity_level` =
 (`baseline_p90_distance_km`, `reach_ratio`, `reach_level` =
 `longer`|`typical`|`shorter`, omitted when unsupported).
 
+Params also: `rings` (see Conventions). The response then carries `area`, and a
+band gets `area_widened: true` when it only has a full sample (25 links)
+because the area was widened. The baseline tiers are unaffected (the cluster
+stays the baseline unit). For radius ≥ 2, `activity_by_bin` is binned from the
+live history (at most its retention) instead of Postgres.
+
 `activity_ratio` compares like with like: spots with an end in the operator's
 6×6-square cluster, counted the way the cluster baseline is written (per end,
 all SNR, FT8/FT4/DX-cluster only, no dedup), over the live-history span (≤ 60
@@ -154,6 +183,7 @@ baseline_activity, activity_ratio, activity_level?, sustained_bins, p90_distance
 baseline_p90_distance_km?, distance_ratio?, trend, trend_delta, status}]}`.
 `activity_level` is present only when `activity_ratio` is the like-for-like
 regional ratio from `/api/dx_conditions` (then it reads as "× normal").
+Also `rings` (see Conventions); the response then carries `area`.
 
 ### `GET /api/prop_intel` — propagation intelligence nowcast (v1, frozen)
 
@@ -327,6 +357,11 @@ Params: v1's (`qth` required, `surroundings`, `minutes`, `surge_threshold`,
   given values, clamped ssb −10..30 / cw −40..20. Absent (and for `wspr`'s
   budget model and `dxcluster`'s presence rule) the profile floors apply.
 
+- `rings`: see Conventions. `from_here` is then true for a path with an end
+  anywhere in the area, and the response carries `area`. `atypical` is omitted
+  while the area is widened (the climatology is not scaled to a wider block, so
+  its larger live counts would read as surges); surge push fan-out follows.
+
 - `sources`: source selection, CSV or repeated (`?sources=wspr,pskr` or
   `?sources=wspr&sources=rbn`). Public names: `wspr` (WSPR beacons),
   `pskr` (PSKReporter FT8/FT4), `rbn` (RBN CW/RTTY skimmers),
@@ -443,7 +478,11 @@ Response:
 - A cell with `m[s] < m_min` is "not enough data" — distinct from closed.
 - `area.radius`: rings around the centre square the area was widened to
   (0–2): the smallest radius at which more than half of the in-scope bands
-  (160–10 m) have ≥ `m_min` active days. `squares` lists them.
+  (160–10 m) have at least 8 known slots (4 h), a slot being known when it has
+  `m_min` alive, area-active days, exactly the condition under which a lane
+  shows it instead of "not enough data". (Counting days with any spot at any
+  time of day let a sparse square pass while its lanes stayed unknown.)
+  `squares` lists them.
 - Lanes: every region for each band with at least one observed slot; bands
   never active in the area are omitted.
 - `agenda`: windows of slots with `n/m ≥ usually_share` (known cells only),
