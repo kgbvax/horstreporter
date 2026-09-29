@@ -66,6 +66,8 @@ function drawPlots(body = document.getElementById('wspr-matrix-body')) {
 
 const extras = {
     columns: COLUMNS,
+    // Antarctica adds a mostly empty column; the Now table leaves it out.
+    hiddenRegions: ['AN'],
     // Band \n verdict \n reports / normal, stacked in the row header so the
     // table stays narrow. Empty lines are left out.
     rowHeader(band) {

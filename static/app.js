@@ -34,6 +34,11 @@ let suppressAzimuthClickUntil = 0;
 let hotBandIndicator = null;
 let horstKevin = null;
 const HORST_KEVIN_ENABLED = true;
+// Time travel (timeline.js) is hidden for now: no sidebar option, and a saved
+// timeline URL is not restored, so the timeline bar never opens. Opt back in with
+// ?timetravel=1 or localStorage 'showTimeTravel'='1'.
+const TIME_TRAVEL_ENABLED = new URLSearchParams(location.search).has('timetravel') ||
+    localStorage.getItem('showTimeTravel') === '1';
 
 // Tab favicon status dot. Same semantics as the --status-* tokens in style.css
 // (live = brand teal, waiting = amber, error = danger fill); the tab bar is
@@ -2375,12 +2380,17 @@ function maybeRestoreTimelineFromURL() {
         if (isTimelineActive()) void seek(tl.t1);
     });
 }
-setTimeout(maybeRestoreTimelineFromURL, 1200);
+if (TIME_TRAVEL_ENABLED) setTimeout(maybeRestoreTimelineFromURL, 1200);
 
 // Sidebar entry point: Time Travel button (1h default; presets inside the bar).
-document.getElementById('btn-timeline')?.addEventListener('click', () => {
-    void startTimelineMode(60 * 60);
-});
+if (TIME_TRAVEL_ENABLED) {
+    const option = document.getElementById('time-travel-option');
+    option?.classList.remove('d-none');
+    option?.classList.add('d-flex');
+    document.getElementById('btn-timeline')?.addEventListener('click', () => {
+        void startTimelineMode(60 * 60);
+    });
+}
 
 // Fallback pass in case autostart check happened before submit wiring was ready.
 maybeAutoStartSavedQth();

@@ -909,6 +909,7 @@ describe('wspr-matrix row extras (Conditions dock)', () => {
         cells: (band) => `<td class="x-cell" data-band="${band}">v-${band}</td>`,
         rowHeader: (band) => `<span class="x-line">h-${band}</span>`,
         key: (bands) => bands.join(','),
+        hiddenRegions: ['AN'],
         after,
     });
 
@@ -941,6 +942,11 @@ describe('wspr-matrix row extras (Conditions dock)', () => {
         expect(rows).toEqual(['40m', '20m']);
         expect(body.querySelectorAll('.x-cell')).toHaveLength(2);
         expect(body.querySelector('thead .x-head').textContent).toBe('Activity');
+        // Hidden regions get neither a heading nor a cell.
+        const heads = Array.from(body.querySelectorAll('thead th')).map((th) => th.textContent);
+        expect(heads).toContain('EU');
+        expect(heads).not.toContain('AN');
+        expect(body.querySelectorAll('tbody tr:first-child td.wspr-matrix-cell-empty, tbody tr:first-child td.wspr-matrix-cell')).toHaveLength(10);
         // The header lines stack inside the row header, under the band name.
         expect(body.querySelector('tbody tr th').textContent).toBe('40mh-40m');
         expect(after).toHaveBeenCalledWith(body);
