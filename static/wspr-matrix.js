@@ -622,7 +622,7 @@ function renderCell(band, region, cell, maxCount, theme, regionNames = runtime.c
     const selected = state.drillDownBand === band && state.drillDownRegion === region;
     const label = escapeHtml(cellLabel(band, region, cell, regionNames));
     const title = escapeHtml(titleParts.join('\n'));
-    return `<td role="gridcell" class="wspr-matrix-cell" style="${styleAttr}" title="${title}" aria-label="${label}" aria-selected="${selected}" tabindex="-1" data-band="${band}" data-region="${region}">${cell.spot_count}${badges}${atypicalMark}</td>`;
+    return `<td role="gridcell" class="wspr-matrix-cell" style="${styleAttr}" title="${title}" aria-label="${label}" aria-selected="${selected}" tabindex="-1" data-band="${band}" data-region="${region}">${runtime.rowExtras?.hideCounts ? '' : cell.spot_count}${badges}${atypicalMark}</td>`;
 }
 
 function legendHtml(theme = currentTheme()) {
@@ -794,7 +794,9 @@ export function clearDrillDown() {
 // cells(band) -> '<td>…</td>' per column, optional rowHeader(band) -> HTML
 // stacked under the band name in the row header, key(bands) -> string that
 // changes when the extra markup would, after(body) -> draw into the fresh DOM,
-// optional hiddenRegions -> region codes left out of the table }.
+// optional hiddenRegions -> region codes left out of the table, optional
+// hideCounts -> cells show colour and badges only (the count stays in the
+// tooltip and the accessible name) }.
 export function setRowExtras(extras) {
     runtime.rowExtras = extras || null;
     runtime.lastRenderKey = '';

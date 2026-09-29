@@ -68,6 +68,9 @@ const extras = {
     columns: COLUMNS,
     // Antarctica adds a mostly empty column; the Now table leaves it out.
     hiddenRegions: ['AN'],
+    // The exact spot counts make the cells hard to read at a glance; the colour
+    // carries the amount, the count stays in each cell's tooltip.
+    hideCounts: true,
     // Band \n verdict \n reports / normal, stacked in the row header so the
     // table stays narrow. Empty lines are left out.
     rowHeader(band) {
