@@ -1,6 +1,5 @@
 import { state } from './state.js';
 import { WSPR_REGIONS, bandColors, getMinSnrMode, regionForLocator, regionLabel } from './utils.js';
-import { setPanelToggleState } from './panel-toggle.js';
 import { escapeHtml } from './ui-helpers.js';
 
 // almanac.js — the Almanac panel (plan 2026-09-28-001, U7): which regions are
@@ -47,9 +46,7 @@ import { escapeHtml } from './ui-helpers.js';
 // (PSKR, or the backfilled WSPR layer). Back, Escape or a QTH change close it.
 
 const PANEL_ID = 'almanac-window';
-const TOGGLE_ID = 'almanac-toggle';
 const BODY_ID = 'almanac-body';
-const ENABLE_KEY = 'almanacEnabled';
 
 const TICK_MS = 60_000;         // now-line refresh
 const REFETCH_TICKS = 5;        // re-fetch every 5 ticks (server caches 60 s / 120 s)
@@ -62,8 +59,6 @@ const DEFAULT_SLOT_MINUTES = 30;
 const FULL_M_MIN = 10;
 
 const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
-
-const TOGGLE_LABELS = { show: 'Show typical openings', hide: 'Hide typical openings' };
 
 const runtime = {
     enabled: false,
@@ -83,25 +78,11 @@ const runtime = {
     drilldown: null,
     drillAbort: null,   // AbortController of the in-flight season fetch
     drillToken: 0,      // request token: a late season response is dropped
-    onLayoutChange: null,
 };
 
-export function initAlmanac({ onLayoutChange } = {}) {
-    runtime.onLayoutChange = onLayoutChange || null;
+export function initAlmanac() {
     const panel = document.getElementById(PANEL_ID);
-    const toggle = document.getElementById(TOGGLE_ID);
     if (!panel) return;
-
-    // Standalone mode: the panel has its own toggle. Inside the Conditions
-    // dock there is none; cond-dock.js calls setAlmanacVisible instead.
-    if (toggle) {
-        if (localStorage.getItem(ENABLE_KEY) === 'true') {
-            setAlmanacVisible(true);
-        } else {
-            setPanelToggleState(toggle, false, TOGGLE_LABELS);
-        }
-        toggle.addEventListener('click', () => setAlmanacVisible(!runtime.enabled));
-    }
 
     // Refetch when the QTH changed: on #qth change, and on #fetch-form submit
     // (Enter in the field can submit before a change event fires). The form's
@@ -127,16 +108,13 @@ export function initAlmanac({ onLayoutChange } = {}) {
     document.addEventListener('input', runtime.snrListener);
 }
 
+// Dock entry point: the Conditions dock owns visibility (cond-dock.js).
 export function setAlmanacVisible(visible) {
     const panel = document.getElementById(PANEL_ID);
-    const toggle = document.getElementById(TOGGLE_ID);
     if (!panel) return;
     if (runtime.enabled === visible && panel.classList.contains('is-hidden') === !visible) return;
     runtime.enabled = visible;
     panel.classList.toggle('is-hidden', !visible);
-    if (toggle) setPanelToggleState(toggle, visible, TOGGLE_LABELS);
-    localStorage.setItem(ENABLE_KEY, visible ? 'true' : 'false');
-    if (runtime.onLayoutChange) runtime.onLayoutChange();
     if (visible) startTimer(); else stopTimer();
 }
 
@@ -1040,11 +1018,8 @@ export const __test = {
         runtime.lastQth = '';
         runtime.lastMinSnr = null;
         closeDrilldownState();
-        runtime.onLayoutChange = null;
     },
     PANEL_ID,
-    TOGGLE_ID,
     BODY_ID,
-    ENABLE_KEY,
     SNR_DEBOUNCE_MS,
 };

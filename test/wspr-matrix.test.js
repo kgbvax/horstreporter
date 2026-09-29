@@ -25,9 +25,7 @@ const {
     clearDrillDown,
     updateDrillDownButton,
     PANEL_ID,
-    TOGGLE_ID,
     BODY_ID,
-    ENABLE_KEY,
     SOURCES_KEY,
 } = __test;
 
@@ -222,7 +220,6 @@ function setupDom() {
         </div>
         <input type="range" id="ssb-min-db" min="-10" max="30" value="0" />
         <input type="range" id="cw-min-db" min="-30" max="0" value="-15" />
-        <button id="${TOGGLE_ID}"></button>
         <button id="drill-down-clear" style="display: none;"></button>
         <div id="${PANEL_ID}" class="wspr-matrix-window is-hidden">
             <div class="wspr-matrix-window-header">
@@ -275,50 +272,29 @@ describe('wspr-matrix (Propagation) panel', () => {
         vi.restoreAllMocks();
     });
 
-    it('toggle button shows/hides the panel and persists state to localStorage', async () => {
+    it('setWsprMatrixVisible shows/hides the panel and starts/stops polling', async () => {
         mockFetch({ cells: [] });
         initWsprMatrix();
-
         const panel = document.getElementById(PANEL_ID);
-        const toggle = document.getElementById(TOGGLE_ID);
         expect(panel.classList.contains('is-hidden')).toBe(true);
-        expect(store.getItem(ENABLE_KEY)).toBe(null);
+        expect(global.fetch).not.toHaveBeenCalled();
 
-        expect(toggle.getAttribute('aria-pressed')).toBe('false');
-        expect(toggle.title).toBe('Show propagation');
-
-        toggle.click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
         expect(panel.classList.contains('is-hidden')).toBe(false);
-        expect(store.getItem(ENABLE_KEY)).toBe('true');
-        expect(toggle.classList.contains('is-active')).toBe(true);
-        expect(toggle.getAttribute('aria-pressed')).toBe('true');
-        expect(toggle.title).toBe('Hide propagation');
-        // The toggle stays visible while the panel is open.
-        expect(toggle.style.display).toBe('');
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+        expect(runtime.pollTimer).not.toBeNull();
 
-        toggle.click();
+        setWsprMatrixVisible(false);
         expect(panel.classList.contains('is-hidden')).toBe(true);
-        expect(store.getItem(ENABLE_KEY)).toBe('false');
-        expect(toggle.classList.contains('is-active')).toBe(false);
-        expect(toggle.getAttribute('aria-pressed')).toBe('false');
-        expect(toggle.title).toBe('Show propagation');
-    });
-
-    it('a stored open state restores the pressed toggle', () => {
-        mockFetch({ cells: [] });
-        store.setItem(ENABLE_KEY, 'true');
-        initWsprMatrix();
-        const toggle = document.getElementById(TOGGLE_ID);
-        expect(toggle.getAttribute('aria-pressed')).toBe('true');
-        expect(toggle.title).toBe('Hide propagation');
+        expect(runtime.pollTimer).toBeNull();
     });
 
     it('asks for a locator when none is set', async () => {
         mockFetch({ cells: [] });
         document.getElementById('qth').value = '';
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
         expect(document.getElementById(BODY_ID).textContent).toBe('Enter your locator to see propagation.');
         expect(global.fetch).not.toHaveBeenCalled();
@@ -328,7 +304,7 @@ describe('wspr-matrix (Propagation) panel', () => {
         vi.spyOn(console, 'warn').mockImplementation(() => {});
         mockFetch({}, false);
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
         expect(document.getElementById(BODY_ID).textContent).toBe('Propagation data unavailable.');
     });
@@ -336,7 +312,7 @@ describe('wspr-matrix (Propagation) panel', () => {
     it('labels the source and color scale chips as separate groups', async () => {
         mockFetch({ cells: [] });
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
         const groups = Array.from(document.querySelectorAll('.wspr-src-chips [role="group"]'));
         expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['Sources', 'Color scale']);
@@ -359,14 +335,14 @@ describe('wspr-matrix (Propagation) panel', () => {
         });
 
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
         expect(global.fetch).toHaveBeenCalledTimes(1);
         expect(runtime.pollTimer).not.toBeNull();
         expect(runtime.abortController).not.toBeNull();
 
         const inFlightController = runtime.abortController;
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(false);
         expect(runtime.pollTimer).toBeNull();
         expect(runtime.abortController).toBeNull();
         expect(inFlightController.signal.aborted).toBe(true);
@@ -379,7 +355,7 @@ describe('wspr-matrix (Propagation) panel', () => {
             return { ok: true, status: 200, json: async () => ({ cells: [] }) };
         });
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
         expect(calls.length).toBe(1);
         expect(calls[0]).toContain('/api/prop_intel/v2?');
@@ -395,7 +371,7 @@ describe('wspr-matrix (Propagation) panel', () => {
             return { ok: true, status: 200, json: async () => ({ cells: [] }) };
         });
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
         expect(calls.length).toBe(1);
 
@@ -413,7 +389,7 @@ describe('wspr-matrix (Propagation) panel', () => {
         });
 
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
         expect(calls.length).toBe(1);
         expect(calls[0]).toContain('qth=JO32');
@@ -433,7 +409,7 @@ describe('wspr-matrix (Propagation) panel', () => {
             return { ok: true, status: 200, json: async () => ({ cells: [] }) };
         });
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
 
         toggleSource('rbn');
@@ -453,7 +429,7 @@ describe('wspr-matrix (Propagation) panel', () => {
             return { ok: true, status: 200, json: async () => ({ cells: [] }) };
         });
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
         expect(calls[0]).toContain('sources=wspr%2Cpskr%2Crbn');
         expect(calls[0]).not.toContain('dxcluster');
@@ -490,7 +466,7 @@ describe('wspr-matrix (Propagation) panel', () => {
             return { ok: true, status: 200, json: async () => ({ cells: [] }) };
         });
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
         expect(calls[0]).not.toContain('cw_min_db');
         expect(calls[0]).not.toContain('ssb_min_db');
@@ -515,7 +491,7 @@ describe('wspr-matrix (Propagation) panel', () => {
             return { ok: true, status: 200, json: async () => ({ cells: [] }) };
         });
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
 
         document.querySelector('input[name="min-snr"][value="cw"]').click();
@@ -563,7 +539,7 @@ describe('wspr-matrix (Propagation) panel', () => {
             cells: [makeCell({ band: '20m', region: 'EU' }), makeCell({ band: '2m', region: 'EU' })],
         });
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
 
         const rows = Array.from(document.querySelectorAll('.wspr-matrix-band')).map((td) => td.textContent);
@@ -575,7 +551,7 @@ describe('wspr-matrix (Propagation) panel', () => {
             <input type="checkbox" class="band-enable" value="2m" />`);
         mockFetch({ cells: [makeCell({ band: '2m', region: 'EU' })] });
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
 
         expect(document.querySelector('.wspr-matrix-band')).toBeNull();
@@ -587,7 +563,7 @@ describe('wspr-matrix (Propagation) panel', () => {
             cells: [makeCell({ band: '20m', region: 'EU' })],
         });
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
 
         const cell = document.querySelector('.wspr-matrix-cell');
@@ -659,7 +635,7 @@ describe('wspr-matrix keyboard grid', () => {
     async function openWith(data) {
         mockFetch(data);
         initWsprMatrix();
-        document.getElementById(TOGGLE_ID).click();
+        setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
     }
 
@@ -931,6 +907,7 @@ describe('wspr-matrix row extras (Conditions dock)', () => {
     const extras = () => ({
         columns: [{ label: 'Activity', className: 'x-head' }],
         cells: (band) => `<td class="x-cell" data-band="${band}">v-${band}</td>`,
+        rowHeader: (band) => `<span class="x-line">h-${band}</span>`,
         key: (bands) => bands.join(','),
         after,
     });
@@ -950,8 +927,7 @@ describe('wspr-matrix row extras (Conditions dock)', () => {
         vi.restoreAllMocks();
     });
 
-    it('drives visibility without a toggle and adds a row per enabled band', async () => {
-        document.getElementById(TOGGLE_ID).remove();
+    it('adds a row per enabled band, also without a path', async () => {
         mockFetch({ cells: [makeCell({ band: '20m', region: 'EU' })], region_names: {} });
         initWsprMatrix();
         setRowExtras(extras());
@@ -961,10 +937,12 @@ describe('wspr-matrix row extras (Conditions dock)', () => {
         const body = document.getElementById(BODY_ID);
         expect(document.getElementById(PANEL_ID).classList.contains('is-hidden')).toBe(false);
         // 40m has no path but is enabled: it still gets a row with its extras.
-        const rows = Array.from(body.querySelectorAll('tbody tr')).map((tr) => tr.querySelector('th').textContent);
+        const rows = Array.from(body.querySelectorAll('tbody tr')).map((tr) => tr.querySelector('th').firstChild.textContent);
         expect(rows).toEqual(['40m', '20m']);
         expect(body.querySelectorAll('.x-cell')).toHaveLength(2);
         expect(body.querySelector('thead .x-head').textContent).toBe('Activity');
+        // The header lines stack inside the row header, under the band name.
+        expect(body.querySelector('tbody tr th').textContent).toBe('40mh-40m');
         expect(after).toHaveBeenCalledWith(body);
     });
 

@@ -1,9 +1,7 @@
 import { state } from './state.js';
 import { bandColors, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds, haversineKm, hexToRgba } from './utils.js';
 import { dashedLine, fillCircle } from './canvas-draw.js';
-import { setPanelToggleState } from './panel-toggle.js';
 
-const ENABLE_KEY = 'bandLabEnabled';
 const UPDATE_THROTTLE_MS = 300;
 const DX_FETCH_INTERVAL_MS = 15000;
 const ACTIVITY_BINS = 12;
@@ -52,7 +50,6 @@ const runtime = {
     // retried once per fetch interval rather than on every spot update.
     dxAttemptKey: '',
     dxAttemptAt: 0,
-    onLayoutChange: null,
     // Per-update snapshot the Now rows (cond-now.js) read: grouped live spots,
     // qth centre, shared distance cache / axis cap and the dx_conditions map.
     rowsSnap: null,
@@ -63,26 +60,12 @@ const runtime = {
     lastFilterFingerprint: ''
 };
 
-export function initBandLab(options = {}) {
-    const toggleButton = document.getElementById('band-stats-toggle');
+export function initBandLab() {
     const content = document.getElementById('band-lab-content');
-    const windowEl = document.getElementById('band-lab-window');
-    const closeBtn = document.getElementById('band-lab-window-close');
     const helpToggle = document.getElementById('band-lab-legend-help-toggle');
     const helpPanel = document.getElementById('band-lab-legend-help');
     const timeRangeSelect = document.getElementById('band-lab-time-range');
     if (!content) return;
-
-    if (typeof options.onLayoutChange === 'function') {
-        runtime.onLayoutChange = options.onLayoutChange;
-    }
-
-    // Standalone mode: the panel has its own toggle. Inside the Conditions
-    // dock there is none; cond-dock.js calls setBandLabVisible instead.
-    if (toggleButton) {
-        runtime.enabled = localStorage.getItem(ENABLE_KEY) === 'true';
-        setBandStatsVisible(windowEl, toggleButton, runtime.enabled);
-    }
 
     if (timeRangeSelect) {
         const persistedMinutes = Number(localStorage.getItem(TIME_RANGE_KEY));
@@ -96,20 +79,6 @@ export function initBandLab(options = {}) {
     }
 
     if (!runtime.initialized) {
-        toggleButton?.addEventListener('click', () => {
-            runtime.enabled = !runtime.enabled;
-            localStorage.setItem(ENABLE_KEY, runtime.enabled ? 'true' : 'false');
-            setBandStatsVisible(windowEl, toggleButton, runtime.enabled);
-            updateBandLab({ force: true });
-        });
-
-        closeBtn?.addEventListener('click', () => {
-            runtime.enabled = false;
-            localStorage.setItem(ENABLE_KEY, 'false');
-            setBandStatsVisible(windowEl, toggleButton, runtime.enabled);
-            setLegendHelpVisible(helpToggle, helpPanel, false);
-        });
-
         helpToggle?.addEventListener('click', (e) => {
             e.stopPropagation();
             const expanded = helpToggle.getAttribute('aria-expanded') === 'true';
@@ -159,14 +128,6 @@ function onSnrControlChange(event) {
     if (target.id === 'ssb-min-db' || target.id === 'cw-min-db' || target.name === 'min-snr') {
         updateBandLab();
     }
-}
-
-function setBandStatsVisible(windowEl, toggleButton, visible) {
-    windowEl?.classList.toggle('is-hidden', !visible);
-    runtime.onLayoutChange?.();
-    // Same on/off pill as the Propagation toggle: it stays visible while the
-    // panel is open (the panel's own close button does the same thing).
-    setPanelToggleState(toggleButton, visible, { show: 'Show band stats', hide: 'Hide band stats' });
 }
 
 export function updateBandLab(options = {}) {

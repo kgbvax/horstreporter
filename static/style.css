@@ -1211,17 +1211,15 @@ body[data-theme="dark"] .wspr-matrix-cell {
     /* Even rows: tall enough for a cell's count plus two stacked badges. */
     height: 60px;
 }
-.cond-cell-verdict,
-.cond-cell-pair {
-    padding: 0 6px;
+.cond-band-verdict,
+.cond-band-pair {
+    display: block;
+    font-weight: 400;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
 }
-.cond-cell-verdict {
-    text-align: left;
-}
-.cond-cell-pair {
-    text-align: right;
+.cond-band-pair {
+    color: color-mix(in srgb, var(--text-color) 70%, transparent);
 }
 .cond-cell-plot {
     padding: 2px 4px;
