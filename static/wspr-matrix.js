@@ -460,6 +460,8 @@ function renderMatrix() {
     }
     activeBands.sort((a, b) => BAND_ORDER.indexOf(a) - BAND_ORDER.indexOf(b));
     const extras = runtime.rowExtras;
+    const hidden = new Set(extras?.hiddenRegions || []);
+    const regions = WSPR_REGIONS.filter((r) => !hidden.has(r));
 
     // Fingerprint for skip-rebuild (theme included: a toggle re-shades chips;
     // drill-down included: it sets aria-selected and the tab stop; region
@@ -485,7 +487,7 @@ function renderMatrix() {
     let html = renderSourceChips();
     html += '<table class="wspr-matrix-table" role="grid" aria-label="Propagation by band and region">' +
         '<thead><tr role="row"><th scope="col" role="columnheader"><span class="wspr-sr-only">Band</span></th>' + extraHead;
-    for (const region of WSPR_REGIONS) {
+    for (const region of regions) {
         html += `<th scope="col" role="columnheader" title="${escapeHtml(regionNames[region] || region)}">${region}</th>`;
     }
     html += '</tr></thead><tbody>';
@@ -495,7 +497,7 @@ function renderMatrix() {
         const color = bandColors[band] || bandColors.all || '#555';
         html += `<tr role="row"><th scope="row" role="rowheader" class="wspr-matrix-band" style="border-left: 3px solid ${color}">${band}${extras?.rowHeader ? extras.rowHeader(band) : ''}</th>`;
         if (extras) html += extras.cells(band);
-        for (const region of WSPR_REGIONS) {
+        for (const region of regions) {
             const cell = bandMap.get(region);
             html += renderCell(band, region, cell, maxCount, theme, regionNames);
         }
@@ -756,7 +758,8 @@ export function clearDrillDown() {
 // Conditions dock hooks. `extras` = { columns: [{label, className}],
 // cells(band) -> '<td>…</td>' per column, optional rowHeader(band) -> HTML
 // stacked under the band name in the row header, key(bands) -> string that
-// changes when the extra markup would, after(body) -> draw into the fresh DOM }.
+// changes when the extra markup would, after(body) -> draw into the fresh DOM,
+// optional hiddenRegions -> region codes left out of the table }.
 export function setRowExtras(extras) {
     runtime.rowExtras = extras || null;
     runtime.lastRenderKey = '';

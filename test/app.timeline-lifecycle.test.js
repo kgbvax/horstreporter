@@ -184,7 +184,7 @@ function setupDom() {
 
         <button id="btn-geo" type="button"></button>
         <button id="btn-submit" type="button" data-mode="go" title="Go" aria-label="Go"></button>
-        <button id="btn-timeline" type="button"></button>
+        <div id="time-travel-option" class="flex-column w-100 d-none"><button id="btn-timeline" type="button"></button></div>
 
         <button id="band-solo-clear" type="button"><span class="band-solo-name"></span></button>
         <div id="stream-status"></div>
@@ -295,6 +295,7 @@ describe('app.js timeline lifecycle (U4)', () => {
         azimuthEnabled = false;
         installLocalStorageMock();
         localStorage.clear();
+        localStorage.setItem('showTimeTravel', '1'); // time travel is opt-in
         setupDom();
         window.history.replaceState({}, '', '/');
 
@@ -312,6 +313,24 @@ describe('app.js timeline lifecycle (U4)', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('time travel is hidden and inert unless opted in', async () => {
+        localStorage.removeItem('showTimeTravel');
+        await importAppFresh();
+        const option = document.getElementById('time-travel-option');
+        expect(option.classList.contains('d-none')).toBe(true);
+        document.getElementById('btn-timeline').click();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(timelineMock.timelineActive).toBe(false);
+    });
+
+    it('opting in shows the option', async () => {
+        await importAppFresh();
+        const option = document.getElementById('time-travel-option');
+        expect(option.classList.contains('d-none')).toBe(false);
+        expect(option.classList.contains('d-flex')).toBe(true);
     });
 
     it('entering keeps the SSE open, liveSpots intact, and later frames still land in the ring', async () => {
@@ -798,6 +817,7 @@ describe('app.js data-now clock (U5)', () => {
         azimuthEnabled = false;
         installLocalStorageMock();
         localStorage.clear();
+        localStorage.setItem('showTimeTravel', '1'); // time travel is opt-in
         setupDom();
         window.history.replaceState({}, '', '/');
 

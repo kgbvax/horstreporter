@@ -1206,6 +1206,18 @@ body[data-theme="dark"] .wspr-matrix-cell {
 }
 .cond-now-matrix .wspr-matrix-table {
     width: 100%;
+    /* A small gap between the region columns. */
+    border-collapse: separate;
+    border-spacing: 3px 0;
+}
+/* Headings and the band label one point larger than the table text; the
+   verdict and reports / normal lines under the band keep the table size. */
+.cond-now-matrix .wspr-matrix-table th {
+    font-size: calc(0.72rem + 1px);
+}
+.cond-now-matrix .cond-band-verdict,
+.cond-now-matrix .cond-band-pair {
+    font-size: 0.72rem;
 }
 .cond-now-matrix .wspr-matrix-table tbody tr {
     /* Even rows: tall enough for a cell's count plus two stacked badges. */
