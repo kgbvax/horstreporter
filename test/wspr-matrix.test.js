@@ -961,6 +961,23 @@ describe('wspr-matrix row extras (Conditions dock)', () => {
         expect(document.querySelectorAll('#wspr-matrix-body tbody tr')).toHaveLength(2);
     });
 
+    it('hideCounts leaves the number out of the cell but keeps it in the tooltip and name', async () => {
+        mockFetch({ cells: [makeCell({ band: '20m', region: 'EU', spot_count: 1234 })], region_names: {} });
+        initWsprMatrix();
+        setRowExtras({ ...extras(), hideCounts: true });
+        setWsprMatrixVisible(true);
+        await new Promise((r) => setTimeout(r, 0));
+        const cell = document.querySelector('#wspr-matrix-body .wspr-matrix-cell');
+        expect(cell.textContent).not.toContain('1234');
+        expect(cell.querySelector('.wspr-badge')).not.toBeNull();
+        expect(cell.getAttribute('title')).toContain('1,234 spots');
+        expect(cell.getAttribute('aria-label')).toContain('1,234 spots');
+        // Without the option the count is shown.
+        setRowExtras(extras());
+        refreshMatrix();
+        expect(document.querySelector('#wspr-matrix-body .wspr-matrix-cell').textContent).toContain('1234');
+    });
+
     it('rebuilds only when the extras key changes', async () => {
         mockFetch({ cells: [makeCell({ band: '20m', region: 'EU' })] });
         initWsprMatrix();
