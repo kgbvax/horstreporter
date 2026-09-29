@@ -493,7 +493,7 @@ function renderMatrix() {
     for (const band of activeBands) {
         const bandMap = matrix.get(band);
         const color = bandColors[band] || bandColors.all || '#555';
-        html += `<tr role="row"><th scope="row" role="rowheader" class="wspr-matrix-band" style="border-left: 3px solid ${color}">${band}</th>`;
+        html += `<tr role="row"><th scope="row" role="rowheader" class="wspr-matrix-band" style="border-left: 3px solid ${color}">${band}${extras?.rowHeader ? extras.rowHeader(band) : ''}</th>`;
         if (extras) html += extras.cells(band);
         for (const region of WSPR_REGIONS) {
             const cell = bandMap.get(region);
@@ -754,8 +754,9 @@ export function clearDrillDown() {
 }
 
 // Conditions dock hooks. `extras` = { columns: [{label, className}],
-// cells(band) -> '<td>…</td>' per column, key(bands) -> string that changes
-// when the extra cells' markup would, after(body) -> draw into the fresh DOM }.
+// cells(band) -> '<td>…</td>' per column, optional rowHeader(band) -> HTML
+// stacked under the band name in the row header, key(bands) -> string that
+// changes when the extra markup would, after(body) -> draw into the fresh DOM }.
 export function setRowExtras(extras) {
     runtime.rowExtras = extras || null;
     runtime.lastRenderKey = '';

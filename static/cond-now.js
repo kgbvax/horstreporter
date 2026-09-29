@@ -3,9 +3,10 @@ import { getBandRow, getBandNormalRate, subscribeBandRows, drawBandMiniPlot } fr
 import { escapeHtml } from './ui-helpers.js';
 
 // cond-now.js — the "Now" view of the Conditions dock. One table row per
-// enabled band: verdict, reports / normal, the mini distance-vs-SNR plot and
-// the Propagation matrix cells. The matrix table is owned by wspr-matrix.js;
-// this module adds the three leading columns through its row-extras hook and
+// enabled band: the band with its verdict and reports / normal stacked in the
+// row header, the mini distance-vs-SNR plot and the Propagation matrix cells.
+// The matrix table is owned by wspr-matrix.js; this module adds the header
+// lines and the plot column through its row-extras hook and
 // takes the numbers from band-lab.js (dx_conditions + live spots).
 
 // Backend activity_level → the word shown in the row. "normal" is blank on
@@ -48,8 +49,6 @@ export function reportsPair(row) {
 const RAIL_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m'];
 
 const COLUMNS = [
-    { label: 'Activity', className: 'cond-col-verdict' },
-    { label: 'Reports / normal', className: 'cond-col-pair' },
     { label: 'Distance / SNR', className: 'cond-col-plot' },
 ];
 
@@ -67,11 +66,15 @@ function drawPlots(body = document.getElementById('wspr-matrix-body')) {
 
 const extras = {
     columns: COLUMNS,
-    cells(band) {
+    // Band \n verdict \n reports / normal, stacked in the row header so the
+    // table stays narrow. Empty lines are left out.
+    rowHeader(band) {
         const { verdict, pair } = bandTexts(band);
-        return `<td class="cond-cell-verdict" data-band="${band}">${escapeHtml(verdict)}</td>` +
-            `<td class="cond-cell-pair" data-band="${band}">${escapeHtml(pair)}</td>` +
-            `<td class="cond-cell-plot"><canvas class="cond-mini" data-band="${band}" width="96" height="44" aria-hidden="true"></canvas></td>`;
+        return (verdict ? `<span class="cond-band-verdict">${escapeHtml(verdict)}</span>` : '') +
+            (pair ? `<span class="cond-band-pair">${escapeHtml(pair)}</span>` : '');
+    },
+    cells(band) {
+        return `<td class="cond-cell-plot"><canvas class="cond-mini" data-band="${band}" width="96" height="44" aria-hidden="true"></canvas></td>`;
     },
     // Changes when the text cells would; the plots redraw without a rebuild.
     key(bands) {

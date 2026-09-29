@@ -907,6 +907,7 @@ describe('wspr-matrix row extras (Conditions dock)', () => {
     const extras = () => ({
         columns: [{ label: 'Activity', className: 'x-head' }],
         cells: (band) => `<td class="x-cell" data-band="${band}">v-${band}</td>`,
+        rowHeader: (band) => `<span class="x-line">h-${band}</span>`,
         key: (bands) => bands.join(','),
         after,
     });
@@ -936,10 +937,12 @@ describe('wspr-matrix row extras (Conditions dock)', () => {
         const body = document.getElementById(BODY_ID);
         expect(document.getElementById(PANEL_ID).classList.contains('is-hidden')).toBe(false);
         // 40m has no path but is enabled: it still gets a row with its extras.
-        const rows = Array.from(body.querySelectorAll('tbody tr')).map((tr) => tr.querySelector('th').textContent);
+        const rows = Array.from(body.querySelectorAll('tbody tr')).map((tr) => tr.querySelector('th').firstChild.textContent);
         expect(rows).toEqual(['40m', '20m']);
         expect(body.querySelectorAll('.x-cell')).toHaveLength(2);
         expect(body.querySelector('thead .x-head').textContent).toBe('Activity');
+        // The header lines stack inside the row header, under the band name.
+        expect(body.querySelector('tbody tr th').textContent).toBe('40mh-40m');
         expect(after).toHaveBeenCalledWith(body);
     });
 
