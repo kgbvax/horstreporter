@@ -1207,6 +1207,10 @@ body[data-theme="dark"] .wspr-matrix-cell {
 .cond-now-matrix .wspr-matrix-table {
     width: 100%;
 }
+.cond-now-matrix .wspr-matrix-table tbody tr {
+    /* Even rows: tall enough for a cell's count plus two stacked badges. */
+    height: 60px;
+}
 .cond-cell-verdict,
 .cond-cell-pair {
     padding: 0 6px;
