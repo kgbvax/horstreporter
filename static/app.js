@@ -33,9 +33,7 @@ const MAX_LIVE_SPOTS = 20000;
 let suppressAzimuthClickUntil = 0;
 let hotBandIndicator = null;
 let horstKevin = null;
-// Horst-Kevin mascot temporarily disabled (to be revised). Set true to re-enable;
-// the #horst-kevin element in index.html is also hidden via inline display:none.
-const HORST_KEVIN_ENABLED = false;
+const HORST_KEVIN_ENABLED = true;
 
 // Tab favicon status dot. Same semantics as the --status-* tokens in style.css
 // (live = brand teal, waiting = amber, error = danger fill); the tab bar is
