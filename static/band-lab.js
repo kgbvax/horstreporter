@@ -408,7 +408,7 @@ function snapshotRows(grouped, qth, minutes, dxReady, thresholds) {
     // every band's plot.
     const distanceCache = qthCenter ? computeDistanceCache(grouped, qthCenter) : null;
     const capKm = qthCenter ? getGlobalDistanceCapKm(grouped, qthCenter, distanceCache) : null;
-    runtime.rowsSnap = { grouped, qthCenter, distanceCache, capKm, dxBands, dxReady, minutes, thresholds };
+    runtime.rowsSnap = { grouped, qthCenter, distanceCache, capKm, dxBands, dxReady, minutes, thresholds, snrAxis: miniSnrAxis(grouped, thresholds) };
     notifyRows();
 }
 
@@ -454,15 +454,32 @@ export function getBandNormalRate(band) {
     return rate > 0 ? rate : null;
 }
 
-// Fixed SNR axis of the mini plot, shared by every row so rows compare.
-export const MINI_PLOT_SNR_MIN_DB = -25;
-export const MINI_PLOT_SNR_MAX_DB = 10;
+// SNR axis of the mini plot, shared by every row so rows compare. The bottom
+// follows the Display floor (spots below it are filtered out, so the space
+// under it would be empty); without a floor it is -25 dB. The top is +10 dB, or
+// the strongest report of any band rounded up to 5 dB (max +30), so strong
+// reports do not pile up on the top edge.
+export function miniSnrAxis(grouped, thresholds = getSnrThresholdsDb()) {
+    const mode = getMinSnrMode();
+    let hi = 10;
+    for (const points of grouped.values()) {
+        for (const point of points) {
+            const snr = Number(point?.snr);
+            if (Number.isFinite(snr) && snr > hi) hi = snr;
+        }
+    }
+    hi = Math.min(30, Math.ceil(hi / 5) * 5);
+    const floor = mode === 'ssb' ? thresholds.ssbMinDb : mode === 'cw' ? thresholds.cwMinDb : null;
+    let lo = Number.isFinite(floor) ? floor - 3 : -25;
+    lo = Math.min(lo, hi - 15);
+    return { lo, hi };
+}
 
 // Mini distance-vs-SNR plot for the Now rows: same samples and distance axis
 // as the removed per-band scatter, drawn small with no labels. The axes are
-// shared by all rows: distance 0..(p95 over all bands), SNR fixed at
-// MINI_PLOT_SNR_MIN_DB..MINI_PLOT_SNR_MAX_DB. Dashed lines are the SSB / CW
-// thresholds from Display.
+// shared by all rows: distance 0..(p95 over all bands) on a square-root scale
+// (so the many short paths do not crowd the left edge), SNR per miniSnrAxis.
+// Dashed lines are the SSB / CW thresholds from Display.
 export function drawBandMiniPlot(canvas, band) {
     const snap = runtime.rowsSnap;
     const prepared = prepareCanvas(canvas, 96, 44);
@@ -477,13 +494,13 @@ export function drawBandMiniPlot(canvas, band) {
 
     const points = snap?.grouped.get(band) || [];
     const data = snap ? computeScatterData(points, snap.qthCenter, snap.capKm, snap.distanceCache, []) : null;
+    const axis = snap?.snrAxis || { lo: -25, hi: 10 };
     const yOf = (snr) => {
-        const t = (Math.max(MINI_PLOT_SNR_MIN_DB, Math.min(MINI_PLOT_SNR_MAX_DB, snr)) - MINI_PLOT_SNR_MIN_DB)
-            / (MINI_PLOT_SNR_MAX_DB - MINI_PLOT_SNR_MIN_DB);
+        const t = (Math.max(axis.lo, Math.min(axis.hi, snr)) - axis.lo) / (axis.hi - axis.lo);
         return pad.t + ph - t * ph;
     };
     for (const guide of snrGuideSpecs(snap?.thresholds || getSnrThresholdsDb())) {
-        if (guide.snr < MINI_PLOT_SNR_MIN_DB || guide.snr > MINI_PLOT_SNR_MAX_DB) continue;
+        if (guide.snr < axis.lo || guide.snr > axis.hi) continue;
         ctx.strokeStyle = hexToRgba(guide.color, 0.85);
         const y = yOf(guide.snr);
         dashedLine(ctx, pad.l, y, pad.l + pw, y, [3, 3], 1);
@@ -501,7 +518,7 @@ export function drawBandMiniPlot(canvas, band) {
             continue;
         }
         ctx.fillStyle = dot;
-        fillCircle(ctx, pad.l + (sample.d / data.maxDist) * pw, y, 1.6);
+        fillCircle(ctx, pad.l + Math.sqrt(sample.d / data.maxDist) * pw, y, 1.6);
     }
     ctx.textAlign = 'left';
 }

@@ -321,7 +321,13 @@ describe('almanac panel (U7)', () => {
             const host = render([agendaEntry({ starts_in_min: 240 })]);
             expect(host.textContent).toContain('No usual openings in the next 3 h');
             expect(host.querySelector('.cond-sched-row')).toBeNull();
-            expect(render([]).textContent).toContain('No usual openings in the next 3 h');
+            expect(render([]).textContent).toBe('No usual openings in the next 3 h');
+            // With a later opening, the empty state names the next one.
+            const later = render([
+                agendaEntry({ band: '20m', region: 'NA', starts_in_min: 400 }),
+                agendaEntry({ band: '40m', region: 'EU', starts_in_min: 328 }),
+            ]);
+            expect(later.textContent).toContain('No usual openings in the next 3 h. Next: 40m EU - Europe, in 5 h 28 min');
         });
 
         it('an all-day window fills the axis and says so in its title', () => {

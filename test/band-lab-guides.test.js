@@ -10,6 +10,7 @@ import {
     drawBandMiniPlot,
     getBandNormalRate,
     getBandRow,
+    miniSnrAxis,
 } from '../static/band-lab.js';
 import { state } from '../static/state.js';
 
@@ -141,6 +142,35 @@ const yOfSnr = (snr) => 3 + 38 - ((snr + 25) / 35) * 38;
 function guideYs() {
     return document.getElementById('mini').__ctx.dashedYs;
 }
+
+describe('miniSnrAxis', () => {
+    afterEach(() => { document.body.innerHTML = ''; });
+    const grouped = (...snrs) => new Map([['20m', snrs.map((snr) => ({ snr }))]]);
+
+    it('spans -25..+10 dB without a floor', () => {
+        document.body.innerHTML = '<input type="radio" name="min-snr" value="none" checked>';
+        expect(miniSnrAxis(grouped(-20, 4), { ssbMinDb: 0, cwMinDb: -15 })).toEqual({ lo: -25, hi: 10 });
+    });
+
+    it('raises the top to the strongest report, rounded to 5 dB and capped at 30', () => {
+        document.body.innerHTML = '<input type="radio" name="min-snr" value="none" checked>';
+        expect(miniSnrAxis(grouped(17), {}).hi).toBe(20);
+        expect(miniSnrAxis(grouped(44), {}).hi).toBe(30);
+    });
+
+    it('starts just under the active floor, since nothing lies below it', () => {
+        document.body.innerHTML = '<input type="radio" name="min-snr" value="ssb" checked>';
+        expect(miniSnrAxis(grouped(3), { ssbMinDb: 0, cwMinDb: -15 })).toEqual({ lo: -5, hi: 10 }); // floor - 3, widened to the 15 dB minimum range
+        document.body.innerHTML = '<input type="radio" name="min-snr" value="cw" checked>';
+        expect(miniSnrAxis(grouped(3), { ssbMinDb: 0, cwMinDb: -15 })).toEqual({ lo: -18, hi: 10 });
+    });
+
+    it('keeps at least 15 dB of range for a floor near the top', () => {
+        document.body.innerHTML = '<input type="radio" name="min-snr" value="ssb" checked>';
+        const { lo, hi } = miniSnrAxis(grouped(3), { ssbMinDb: 9, cwMinDb: -15 });
+        expect(hi - lo).toBeGreaterThanOrEqual(15);
+    });
+});
 
 describe('Mini plot guides', () => {
     let unsubscribe;

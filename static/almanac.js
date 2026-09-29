@@ -605,7 +605,13 @@ export function scheduleHtml(data, now = new Date()) {
     }
     let html = '<section class="almanac-schedule" aria-label="Usual openings in the next 3 hours">';
     if (items.length === 0) {
-        return `${html}<div class="text-muted small">No usual openings in the next 3 h</div></section>`;
+        // Say when the next one is, so an empty schedule is not a dead end
+        // (e.g. a strict SNR floor leaves nothing open for hours).
+        const next = (Array.isArray(data.agenda) ? data.agenda : [])
+            .filter((e) => e.status !== 'ongoing' && Number(e.starts_in_min) >= SCHEDULE_MIN)
+            .sort((a, b) => a.starts_in_min - b.starts_in_min)[0];
+        const hint = next ? `. Next: ${escapeHtml(next.band)} ${escapeHtml(regionLabel(next.region))}, ${startsInLabel(next.starts_in_min)}` : '';
+        return `${html}<div class="text-muted small">No usual openings in the next 3 h${hint}</div></section>`;
     }
     html += scheduleAxisHtml(nowUtcMin, offsetMin);
     const groups = [
