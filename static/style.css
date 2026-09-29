@@ -1576,6 +1576,20 @@ body[data-theme="dark"] .band-row {
     background-color: var(--hot-band-bg-strong, rgba(85, 85, 85, 0.28));
 }
 
+/* Horst-Kevin at the bottom of the sidebar: pushed down when the controls are
+   short, scrolls with them when they are long. Decorative. */
+.sidebar-hk {
+    margin-top: auto;
+    padding-top: 16px;
+    text-align: center;
+}
+.sidebar-hk img {
+    display: inline-block;
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--btn-radius, 8px);
+}
+
 /* ── Horst-Kevin: the band-heckling dragon ─────────────────────────────── */
 .hk-stage {
     --hk-accent: #2ecc71;
