@@ -1451,6 +1451,9 @@ document.getElementById('theme-toggle')?.addEventListener('click', () => {
         void syncMercatorOverlays(true);
     }
     if (isAzimuthEnabled()) scheduleRender();
+    // Heat chips use a ramp per theme; re-shade from cache without waiting
+    // for the next poll (the render key includes the theme).
+    updateWsprMatrix();
 });
 
 document.getElementById('hide-sidebar')?.addEventListener('click', () => {

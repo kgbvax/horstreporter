@@ -7,9 +7,12 @@ import { escapeHtml } from './ui-helpers.js';
 // RBN, DX cluster). Polls /api/prop_intel/v2 (the multi-source contract;
 // v1 stays frozen for the horstapp widgets). Renders per-cell activity as a
 // heatmap colormap — switchable between viridis and inferno (chip row) —
-// where the anomaly is a glyph: up-chevrons on viridis, an amber warning
-// ring on inferno (tmp/prop-vis-round3.html, decision 02: one-channel fill
-// + glyph). Both looks keep SSB/CW flags and the rising slope.
+// where the anomaly is a glyph: up-chevrons on viridis, a warning ring on
+// inferno (tmp/prop-vis-round3.html, decision 02: one-channel fill + glyph).
+// Both looks keep SSB/CW flags and the rising slope. Each look has a ramp per
+// theme: the reference colormaps on the dark theme (chips brighten with
+// activity), page-anchored reversals on the light theme (chips darken with
+// activity) — see rampStops().
 // The SSB/CW open floors follow the global "Min SNR" control: the panel
 // passes ssb_min_db/cw_min_db from #ssb-min-db/#cw-min-db so a stricter
 // min-SNR raises the open thresholds here too (backend v2 overrides).
@@ -61,16 +64,40 @@ const ALL_SOURCES = SOURCES.map((s) => s.key);
 const DEFAULT_SOURCES = ['wspr', 'pskr', 'rbn'];
 
 // Switchable fill "look" (tmp/prop-vis-round3.html, decision 02: one-channel
-// fill + glyph). Both styles are data-colored heatmaps — identical in both
-// themes, only the numeral ink flips.
+// fill + glyph). Both styles are data-colored heatmaps; the ramp direction
+// follows the theme (see rampStops) and the numeral ink flips per chip.
 const STYLES = [
     { key: 'viridis', label: 'Viridis', title: 'Viridis colors, surges shown as chevrons' },
     { key: 'inferno', label: 'Inferno', title: 'Inferno colors, surges shown as rings' },
 ];
 const ALL_STYLES = STYLES.map((s) => s.key);
-// 9-stop perceptually-uniform maps (matplotlib reference samples).
+// Dark theme: 9-stop perceptually-uniform maps (matplotlib reference
+// samples), sparse → peak. Their dark low end sinks into the dark panel and
+// the bright high end stands off it, so visual weight tracks activity.
 const VIRIDIS_STOPS = ['#440154', '#482677', '#3f4788', '#31688e', '#26828e', '#1f9e89', '#35b779', '#6ece58', '#fde725'];
 const INFERNO_STOPS = ['#000004', '#1b0c41', '#4a0c6b', '#781c6d', '#a52c60', '#cf4446', '#ed6925', '#fb9b06', '#fcffa4'];
+// Light theme: the same colormaps reversed so lightness runs page-white →
+// dark (a sequential ramp on a light surface must darken with magnitude; the
+// reference direction puts the heaviest, near-black chip on the *least*
+// active path). The three sparse stops are the reversed map's bright end
+// blended toward the page (30/55/78% and 65/62/85% of the reference color)
+// so 1-2 spots read as a faint tint instead of saturated yellow / cream, and
+// inferno drops its #000004 tail so the peak is deep purple, not black. Hue
+// order is unchanged, so both looks stay recognisable across themes.
+const VIRIDIS_LIGHT_STOPS = ['#fef8be', '#afe4a3', '#61c796', '#1f9e89', '#26828e', '#31688e', '#3f4788', '#482677', '#440154'];
+const INFERNO_LIGHT_STOPS = ['#fdffc4', '#fdc165', '#f08046', '#cf4446', '#a52c60', '#781c6d', '#4a0c6b', '#1b0c41'];
+
+// Current theme as the render sees it (body[data-theme], 'light' unless dark).
+function currentTheme() {
+    return document.body?.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+}
+
+// Stop table for a look in a theme (unknown/legacy keys — e.g. a stored
+// 'aqua' — fall back to the viridis default).
+function rampStops(style, theme) {
+    if (theme === 'dark') return style === 'inferno' ? INFERNO_STOPS : VIRIDIS_STOPS;
+    return style === 'inferno' ? INFERNO_LIGHT_STOPS : VIRIDIS_LIGHT_STOPS;
+}
 
 function hexToRgb(h) {
     return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
@@ -88,10 +115,9 @@ function rampAt(stops, t) {
     return a.map((v, k) => Math.round(v + (b[k] - v) * f));
 }
 
-// Per-style chip fill (unknown/legacy keys — e.g. a stored 'aqua' — fall back
-// to the viridis default).
-function styleFill(style, intensity) {
-    return style === 'inferno' ? rampAt(INFERNO_STOPS, intensity) : rampAt(VIRIDIS_STOPS, intensity);
+// Per-style, per-theme chip fill.
+function styleFill(style, intensity, theme = currentTheme()) {
+    return rampAt(rampStops(style, theme), intensity);
 }
 
 // Numerals flip ink at the luminance where white/black cross (~0.179); pure
@@ -136,11 +162,19 @@ function chevronGlyph(strong, ink) {
     return `<span class="wspr-chev">${svgs}</span>`;
 }
 
+// Inferno surge ring. Dark theme: amber, which stands off the dark and red
+// shades that dominate that ramp. Light theme: the chip's own numeral ink —
+// the light ramp runs cream → orange → red, where amber vanishes, and the
+// ink is AA-safe on every shade by construction (see cellInk).
 const RING_COLOR = '#f5b83d';
 
-function ringShadow(strong) {
+function ringColor(theme, ink) {
+    return theme === 'dark' ? RING_COLOR : ink;
+}
+
+function ringShadow(strong, color = RING_COLOR) {
     const w = strong ? 3 : 2;
-    return `inset 0 0 0 ${w}px ${RING_COLOR}`;
+    return `inset 0 0 0 ${w}px ${color}`;
 }
 
 // Mode badge shows only the top mode: SSB beats CW (if SSB is open, phone
@@ -466,7 +500,7 @@ function renderMatrix() {
     // Fingerprint for skip-rebuild (theme included: a toggle re-shades chips;
     // drill-down included: it sets aria-selected and the tab stop; region
     // names included: they are in the cell names).
-    const theme = document.body.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    const theme = currentTheme();
     const regionNames = (data && data.region_names) || {};
     const renderKey = `${theme}|${runtime.style}|${runtime.sources.join(',')}` +
         `|x:${extras ? extras.key(activeBands) : ''}` +
@@ -504,7 +538,7 @@ function renderMatrix() {
         html += '</tr>';
     }
     html += '</tbody></table>';
-    html += legendHtml();
+    html += legendHtml(theme);
 
     const focus = captureFocus(body);
     body.innerHTML = html;
@@ -546,6 +580,9 @@ function renderCell(band, region, cell, maxCount, theme, regionNames = runtime.c
     }
     const style = runtime.style;
     const intensity = Math.min(1, cell.spot_count / maxCount);
+    const bgRgb = styleFill(style, intensity, theme);
+    const bg = `rgb(${bgRgb.join(', ')})`;
+    const ink = cellInk(bgRgb);
     let badges = topModeBadges(cell);
     if (cell.rising) badges += '<span class="wspr-badge wspr-badge-rising">&uarr;</span>';
     let atypicalMark = '';
@@ -560,9 +597,9 @@ function renderCell(band, region, cell, maxCount, theme, regionNames = runtime.c
         // The v2 backend only flags surges, so glyphs only point up.
         const strong = surgeStrength(cell) === 2;
         if (style === 'inferno') {
-            ring = ringShadow(strong);
+            ring = ringShadow(strong, ringColor(theme, ink));
         } else {
-            atypicalMark = `<span title="${tip}">${chevronGlyph(strong, '__INK__')}</span>`;
+            atypicalMark = `<span title="${tip}">${chevronGlyph(strong, ink)}</span>`;
         }
     }
     const titleParts = [pathSummary(band, region, cell, regionNames)];
@@ -581,10 +618,6 @@ function renderCell(band, region, cell, maxCount, theme, regionNames = runtime.c
             titleParts.push(line);
         }
     }
-    const bgRgb = styleFill(style, intensity);
-    const bg = `rgb(${bgRgb.join(', ')})`;
-    const ink = cellInk(bgRgb);
-    atypicalMark = atypicalMark.replace('__INK__', ink);
     const styleAttr = `background: ${bg}; color: ${ink}${ring ? `; box-shadow: ${ring}` : ''}`;
     const selected = state.drillDownBand === band && state.drillDownRegion === region;
     const label = escapeHtml(cellLabel(band, region, cell, regionNames));
@@ -592,9 +625,11 @@ function renderCell(band, region, cell, maxCount, theme, regionNames = runtime.c
     return `<td role="gridcell" class="wspr-matrix-cell" style="${styleAttr}" title="${title}" aria-label="${label}" aria-selected="${selected}" tabindex="-1" data-band="${band}" data-region="${region}">${cell.spot_count}${badges}${atypicalMark}</td>`;
 }
 
-function legendHtml() {
+function legendHtml(theme = currentTheme()) {
     const style = runtime.style;
-    const stops = style === 'inferno' ? INFERNO_STOPS : VIRIDIS_STOPS;
+    const stops = rampStops(style, theme);
+    // The ring swatch's border follows the theme in style.css (amber on dark,
+    // currentColor on light — the same ink rule the chips use).
     const anomaly = style === 'inferno'
         ? '<span class="wspr-ring-swatch"></span>=surge ring (thicker = strong / multi-source)'
         : `<span class="wspr-chev">${chevSvg('currentColor')}</span>=surge <span class="wspr-chev">${chevSvg('currentColor')}${chevSvg('currentColor')}</span>=strong / multi-source`;
@@ -781,12 +816,18 @@ export const __test = {
     toggleDrillDown,
     styleFill,
     rampAt,
+    rampStops,
+    legendHtml,
     surgeStrength,
     chevronGlyph,
     ringShadow,
+    ringColor,
     setStyle,
     VIRIDIS_STOPS,
     INFERNO_STOPS,
+    VIRIDIS_LIGHT_STOPS,
+    INFERNO_LIGHT_STOPS,
+    RING_COLOR,
     STYLES,
     runtime,
     reset() {
