@@ -448,6 +448,7 @@ export function updateMapVisualization(spots, maxMinutes) {
 }
 
 export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
+    lastLabelArgs = [spots, filterCtx, activeBands];
     // Item 3: use provided filterCtx or read from DOM once
     const ctx = filterCtx || buildFilterCtx();
 
@@ -473,6 +474,18 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
     // One shared scale so a 2-spot band doesn't look as busy as a 200-spot one.
     let sparkPeak = 1;
     for (const a of activity.values()) for (const v of a.line) if (v > sparkPeak) sparkPeak = v;
+    // The dashed "normal for this hour" line, in spots per bin like the trend.
+    // It joins the shared peak so it stays on the chart when activity is below it.
+    const binMinutes = (Number(document.getElementById('minutes')?.value) || 15) / SPARK_BINS;
+    const normals = new Map();
+    for (const band of enabledBands) {
+        const perMin = bandNormalRate ? bandNormalRate(band) : null;
+        if (Number.isFinite(perMin) && perMin > 0) {
+            const perBin = perMin * binMinutes;
+            normals.set(band, perBin);
+            if (perBin > sparkPeak) sparkPeak = perBin;
+        }
+    }
 
     document.querySelectorAll('.band-pill').forEach(pill => {
         const band = pill.dataset.band;
@@ -496,6 +509,18 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
         if (count) count.textContent = enabled ? (act?.count ? String(act.count) : '\u2013') : '';
         const line = pill.querySelector('.band-spark polyline');
         if (line) line.setAttribute('points', enabled && act ? sparkPoints(act.line, sparkPeak) : '');
+        const normalLine = pill.querySelector('.band-spark .spark-normal');
+        if (normalLine) {
+            const perBin = enabled ? normals.get(band) : undefined;
+            if (perBin === undefined) {
+                normalLine.setAttribute('data-off', '');
+            } else {
+                const y = sparkY(perBin, sparkPeak).toFixed(1);
+                normalLine.setAttribute('y1', y);
+                normalLine.setAttribute('y2', y);
+                normalLine.removeAttribute('data-off');
+            }
+        }
 
         // The solo button (sibling of the enable checkbox, not its parent).
         // Its name stays "Show only <band>"; the live count goes into the
@@ -565,9 +590,27 @@ function spotEpochSeconds(s) {
 
 // Polyline points for a 60x16 viewBox. Square-root scale against the busiest
 // bin across all bands keeps quiet bands visible without exaggerating them.
+function sparkY(v, peak) {
+    return 15 - Math.sqrt(v / peak) * 14;
+}
+
 function sparkPoints(bins, peak) {
     const step = 60 / (bins.length - 1);
-    return bins.map((v, i) => `${(i * step).toFixed(1)},${(15 - Math.sqrt(v / peak) * 14).toFixed(1)}`).join(' ');
+    return bins.map((v, i) => `${(i * step).toFixed(1)},${sparkY(v, peak).toFixed(1)}`).join(' ');
+}
+
+// Source of each band's normal rate (spots/min for the current time of day),
+// or null when unknown. Wired by app.js from band-lab.js; kept injectable so
+// this module does not depend on the Conditions dock.
+let bandNormalRate = null;
+export function setBandNormalRateProvider(fn) {
+    bandNormalRate = typeof fn === 'function' ? fn : null;
+}
+
+// Redraw the rail with the last inputs; used when only the normal rates changed.
+let lastLabelArgs = null;
+export function refreshBandLabels() {
+    if (lastLabelArgs) updateBandLabels(...lastLabelArgs);
 }
 
 // Aggregate filtered spots into grid squares. O(n) but cheap; the expensive

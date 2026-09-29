@@ -1,10 +1,10 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 // almanac.js (U7) — the Almanac panel: region rows of band lanes ("opened N
-// of M days" per 30-min UTC slot), a UTC now line, the agenda above the
+// of M days" per 30-min UTC slot), a UTC now line, the schedule above the
 // lanes, and the area header. Fixtures mirror the BACKEND /api/almanac JSON
 // (snake_case, see docs/api.md) so a naming mismatch surfaces here.
-import { initAlmanac, __test } from '../static/almanac.js';
+import { initAlmanac, scheduleHtml, __test } from '../static/almanac.js';
 
 const { runtime, reset, openDrilldown, PANEL_ID, TOGGLE_ID, BODY_ID, ENABLE_KEY } = __test;
 
@@ -263,64 +263,88 @@ describe('almanac panel (U7)', () => {
         expect(runtime.drilldown).toMatchObject({ band: lanes[1].dataset.band, region: lanes[1].dataset.region });
     });
 
-    describe('agenda', () => {
-        it('lists open-now first, then by start; caps at 6 with "show all"', async () => {
-            const agenda = [
-                agendaEntry({ band: '40m', region: 'NA', start: '20:00', end: '23:00', starts_in_min: 400, start_slot: 40 }),
-                agendaEntry({ band: '20m', region: 'SA', start: '14:00', end: '16:00', starts_in_min: 90, start_slot: 28 }),
-                agendaEntry({ band: '17m', region: 'AF', start: '15:00', end: '16:00', starts_in_min: 150, start_slot: 30 }),
-                agendaEntry({ band: '15m', region: 'AS', start: '16:00', end: '17:00', starts_in_min: 210, start_slot: 32 }),
-                agendaEntry({ band: '12m', region: 'OC', start: '17:00', end: '18:00', starts_in_min: 270, start_slot: 34 }),
-                agendaEntry({ band: '10m', region: 'VK', start: '18:00', end: '19:00', starts_in_min: 330, start_slot: 36 }),
-                agendaEntry({ band: '20m', region: 'JA', start: '10:00', end: '13:30', status: 'ongoing', starts_in_min: 0, start_slot: 20, open_today: true }),
-                agendaEntry({ band: '30m', region: 'EU', start: '08:00', end: '14:00', status: 'ongoing', starts_in_min: 0, start_slot: 16 }),
-            ];
-            mockFetchOnce(makePayload({ bands: ['20m'], agenda }));
-            await openPanel();
-            let rows = Array.from(body().querySelectorAll('.almanac-agenda-row'));
-            expect(rows).toHaveLength(6);
-            expect(rows[0].getAttribute('data-status')).toBe('ongoing');
-            expect(rows[1].getAttribute('data-status')).toBe('ongoing');
-            // Ongoing by start, then upcoming by start.
-            expect(rows.map((r) => `${r.dataset.band}-${r.dataset.region}`)).toEqual(
-                ['30m-EU', '20m-JA', '20m-SA', '17m-AF', '15m-AS', '12m-OC']);
-            expect(rows[1].textContent).toContain('20m to JA - Japan');
-            expect(rows[1].textContent).toContain('10:00–13:30 UTC');
-            expect(rows[1].textContent).toContain('24/30 days');
-            expect(rows[1].textContent).toMatch(/open today/i);
-            expect(rows[2].textContent).toMatch(/in 1 h 30 min/);
+    describe('schedule', () => {
+        // 12:30 UTC (slot 25), offset 0 (stubOffset(0) in beforeEach).
+        const NOW = new Date('2026-09-28T12:30:00Z');
+        const render = (agenda, extra = {}) => {
+            const host = document.createElement('div');
+            host.innerHTML = scheduleHtml({ slot_minutes: 30, now_slot: 25, agenda, ...extra }, NOW);
+            return host;
+        };
+        const ids = (host) => Array.from(host.querySelectorAll('.cond-sched-row')).map((r) => `${r.dataset.band}-${r.dataset.region}`);
 
-            const more = body().querySelector('.almanac-agenda-more');
-            expect(more.textContent).toBe('Show all (8)');
-            more.click();
-            rows = Array.from(body().querySelectorAll('.almanac-agenda-row'));
-            expect(rows).toHaveLength(8);
-            expect(body().querySelector('.almanac-agenda-more').textContent).toBe('Show fewer');
+        it('groups open-now first (longest running first), then upcoming by start; drops what starts after 3 h', () => {
+            const host = render([
+                agendaEntry({ band: '15m', region: 'AS', start_slot: 40, len_slots: 2, starts_in_min: 200 }),
+                agendaEntry({ band: '17m', region: 'AF', start_slot: 30, len_slots: 2, starts_in_min: 150 }),
+                agendaEntry({ band: '20m', region: 'SA', start_slot: 28, len_slots: 4, starts_in_min: 90 }),
+                agendaEntry({ band: '20m', region: 'JA', start_slot: 20, len_slots: 14, status: 'ongoing', starts_in_min: 0, open_today: true }),
+                agendaEntry({ band: '30m', region: 'EU', start_slot: 16, len_slots: 12, status: 'ongoing', starts_in_min: 0 }),
+            ]);
+            expect(ids(host)).toEqual(['30m-EU', '20m-JA', '20m-SA', '17m-AF']);
+            expect(Array.from(host.querySelectorAll('.almanac-subhead')).map((h) => h.textContent))
+                .toEqual(['Open now, usually', 'Opens within 3 h']);
         });
 
-        it('shows the empty-state line when nothing qualifies', async () => {
-            mockFetchOnce(makePayload({ bands: ['20m'], agenda: [] }));
-            await openPanel();
-            expect(body().querySelector('.almanac-agenda').textContent).toContain('No usual openings in the next 12 h');
-            expect(body().querySelector('.almanac-agenda-more')).toBeNull();
+        it('places bars on the 3 h axis: outlined when open now, cut when the window runs past it', () => {
+            const host = render([
+                // 08:00-14:00 UTC: 90 min left -> half the axis, not cut.
+                agendaEntry({ band: '30m', region: 'EU', start_slot: 16, len_slots: 12, status: 'ongoing', starts_in_min: 0 }),
+                // 10:00-17:00 UTC: runs past the axis.
+                agendaEntry({ band: '20m', region: 'JA', start_slot: 20, len_slots: 14, status: 'ongoing', starts_in_min: 0 }),
+                // Starts in 90 min for 2 h: right half, cut.
+                agendaEntry({ band: '20m', region: 'SA', start_slot: 28, len_slots: 4, starts_in_min: 90 }),
+            ]);
+            const bar = (id) => host.querySelector(`.cond-sched-row[data-band="${id[0]}"][data-region="${id[1]}"] .cond-sched-bar`);
+            const eu = bar(['30m', 'EU']);
+            expect(eu.classList.contains('is-now')).toBe(true);
+            expect(eu.classList.contains('is-cut')).toBe(false);
+            expect(eu.style.left).toBe('0%');
+            expect(eu.style.width).toBe('50%');
+            const ja = bar(['20m', 'JA']);
+            expect(ja.classList.contains('is-cut')).toBe(true);
+            expect(ja.style.width).toBe('100%');
+            const sa = bar(['20m', 'SA']);
+            expect(sa.classList.contains('is-now')).toBe(false);
+            expect(sa.classList.contains('is-cut')).toBe(true);
+            expect(sa.style.left).toBe('50%');
+            expect(sa.style.width).toBe('50%');
         });
 
-        it('renders a window that crosses midnight as "20:00–08:00" local, plus the UTC label', async () => {
+        it('shows "n of m" and shades the bar by n/m in the band colour', () => {
+            const host = render([agendaEntry({ band: '20m', region: 'NA', peak_n: 24, peak_m: 30, starts_in_min: 30 })]);
+            expect(host.querySelector('.cond-sched-n').textContent).toBe('24 of 30');
+            expect(host.querySelector('.cond-sched-bar .almanac-run').style.opacity).toBe('0.83');
+        });
+
+        it('says so when nothing opens in the next 3 h', () => {
+            const host = render([agendaEntry({ starts_in_min: 240 })]);
+            expect(host.textContent).toContain('No usual openings in the next 3 h');
+            expect(host.querySelector('.cond-sched-row')).toBeNull();
+            expect(render([]).textContent).toBe('No usual openings in the next 3 h');
+            // With a later opening, the empty state names the next one.
+            const later = render([
+                agendaEntry({ band: '20m', region: 'NA', starts_in_min: 400 }),
+                agendaEntry({ band: '40m', region: 'EU', starts_in_min: 328 }),
+            ]);
+            expect(later.textContent).toContain('No usual openings in the next 3 h. Next: 40m EU - Europe, in 5 h 28 min');
+        });
+
+        it('an all-day window fills the axis and says so in its title', () => {
+            const host = render([agendaEntry({ band: '40m', region: 'EU', start_slot: 0, len_slots: 48, start: '00:00', end: '00:00', all_day: true, status: 'ongoing', starts_in_min: 0 })]);
+            const bar = host.querySelector('.cond-sched-bar');
+            expect(bar.style.width).toBe('100%');
+            expect(bar.classList.contains('is-cut')).toBe(false);
+            expect(host.querySelector('.cond-sched-row').title).toContain('usually all day');
+        });
+
+        it('renders into the panel', async () => {
             mockFetchOnce(makePayload({ bands: ['40m'], agenda: [
-                agendaEntry({ band: '40m', region: 'NA', start_slot: 40, len_slots: 24, start: '20:00', end: '08:00', crosses_midnight: true }),
+                agendaEntry({ band: '40m', region: 'EU', start_slot: 0, len_slots: 48, all_day: true, status: 'ongoing', starts_in_min: 0 }),
             ] }));
             await openPanel();
-            const row = body().querySelector('.almanac-agenda-row');
-            expect(row.querySelector('.almanac-agenda-time').textContent).toBe('20:00–08:00');
-            expect(row.querySelector('.almanac-utc').textContent).toBe('20:00–08:00 UTC');
-        });
-
-        it('labels an all-day window', async () => {
-            mockFetchOnce(makePayload({ bands: ['40m'], agenda: [
-                agendaEntry({ band: '40m', region: 'EU', start_slot: 0, len_slots: 48, start: '00:00', end: '00:00', all_day: true, status: 'ongoing', starts_in_min: 0 }),
-            ] }));
-            await openPanel();
-            expect(body().querySelector('.almanac-agenda-row').textContent).toContain('all day');
+            expect(body().querySelectorAll('.almanac-schedule .cond-sched-row')).toHaveLength(1);
+            expect(body().querySelector('.almanac-agenda')).toBeNull();
         });
     });
 
@@ -929,7 +953,7 @@ describe('almanac SNR floor (KTD13)', () => {
         expect(global.fetch).toHaveBeenCalledTimes(3);
     });
 
-    it('labels the header, slot titles and agenda with the tier and share', async () => {
+    it('labels the header, slot titles and schedule with the tier and share', async () => {
         addSnrControls('cw', '-12');
         mockFetchOnce(snrPayload());
         await openPanel();
@@ -937,7 +961,7 @@ describe('almanac SNR floor (KTD13)', () => {
         expect(header).toBe('FT8/FT4 openings — spots ≥ −10 dB (slider −12 → −10 dB tier); SNR data since 2026-09-29');
         const run = body().querySelector('.almanac-lane[data-band="20m"][data-region="NA"] [data-slot="30"]');
         expect(run.getAttribute('title')).toBe('20m to NA - North America, 15:00 local: opened 18 of 26 days · 64% of spots ≥ −10 dB');
-        expect(body().querySelector('.almanac-agenda-row').textContent).toContain('(18/26 days · 64% of spots ≥ −10 dB)');
+        expect(body().querySelector('.cond-sched-row').title).toContain('opened 18 of 26 days, 64% of spots ≥ −10 dB');
     });
 
     it('any SNR: plain header and slot titles; no SNR data yet is said so', () => {
@@ -1084,7 +1108,8 @@ describe('almanac local time', () => {
         __test.render();
         // 12:30 UTC = 07:30 UTC−5 → 450 / 1440.
         expect(body().querySelector('.almanac-now').style.left).toBe('31.25%');
-        expect(body().querySelector('.almanac-legend').textContent).toMatch(/now \(local time\)/);
+        expect(body().querySelector('.almanac-legend').textContent).toContain('now');
+        expect(body().querySelector('.almanac-legend').textContent).not.toMatch(/local time/);
     });
 
     it('a non-30-minute offset rounds the lanes to the nearest slot and says so', async () => {
@@ -1105,55 +1130,49 @@ describe('almanac local time', () => {
         expect(body().querySelector('.almanac-now').style.left).toBe('77.0833%');
     });
 
-    it('header says "times in local time (UTC+2)"', async () => {
+    it('the header carries no time-zone or window qualifiers for a whole-slot offset', async () => {
         stubOffset(120);
         mockFetchOnce(makePayload({ bands: ['20m'] }));
         await openPanel();
         const head = body().querySelector('.almanac-area').textContent;
-        expect(head).toContain('times in local time (UTC+2');
-        expect(head).not.toMatch(/times UTC/);
+        expect(head).not.toMatch(/local time|last \d+ days|UTC\+2/);
         expect(head).not.toMatch(/rounded/);
     });
 
-    describe('agenda', () => {
-        it('leads with the local range and keeps UTC as the secondary label', async () => {
+    describe('schedule', () => {
+        // 12:30 UTC; CEST.
+        const NOW = new Date('2026-09-28T12:30:00Z');
+        const render = (agenda) => {
+            const host = document.createElement('div');
+            host.innerHTML = scheduleHtml({ slot_minutes: 30, now_slot: 25, agenda }, NOW);
+            return host;
+        };
+
+        it('titles a bar with the local range and keeps UTC in brackets', () => {
             stubOffset(120);
-            mockFetchOnce(makePayload({ bands: ['20m'], agenda: [
-                agendaEntry({ band: '20m', region: 'NA', start_slot: 36, len_slots: 4, start: '18:00', end: '20:00' }),
-            ] }));
-            await openPanel();
-            const row = body().querySelector('.almanac-agenda-row');
-            expect(row.querySelector('.almanac-agenda-time').textContent).toBe('20:00–22:00');
-            expect(row.querySelector('.almanac-utc').textContent).toBe('18:00–20:00 UTC');
+            const host = render([agendaEntry({ band: '20m', region: 'NA', start_slot: 36, len_slots: 4, start: '18:00', end: '20:00', starts_in_min: 90 })]);
+            const row = host.querySelector('.cond-sched-row');
+            expect(row.title).toContain('usually 20:00\u201322:00 (18:00\u201320:00 UTC), in 1 h 30 min');
             expect(row.dataset.band).toBe('20m');
         });
 
-        it('crosses midnight in local terms', async () => {
+        it('crosses midnight in local terms', () => {
             stubOffset(120);
-            mockFetchOnce(makePayload({ bands: ['40m'], agenda: [
-                // 21:00–23:00 UTC (no UTC midnight) = 23:00–01:00 CEST.
-                agendaEntry({ band: '40m', region: 'NA', start_slot: 42, len_slots: 4, start: '21:00', end: '23:00' }),
-                // 20:00–08:00 UTC (crosses UTC midnight) = 22:00–10:00 CEST.
+            const host = render([
+                // 21:00-23:00 UTC (no UTC midnight) = 23:00-01:00 CEST.
+                agendaEntry({ band: '40m', region: 'NA', start_slot: 42, len_slots: 4, start: '21:00', end: '23:00', starts_in_min: 150 }),
+                // 20:00-08:00 UTC (crosses UTC midnight) = 22:00-10:00 CEST.
                 agendaEntry({ band: '40m', region: 'SA', start_slot: 40, len_slots: 24, start: '20:00', end: '08:00', crosses_midnight: true, starts_in_min: 60 }),
-            ] }));
-            await openPanel();
-            const rows = Array.from(body().querySelectorAll('.almanac-agenda-row'));
-            const na = rows.find((r) => r.dataset.region === 'NA');
-            const sa = rows.find((r) => r.dataset.region === 'SA');
-            expect(na.querySelector('.almanac-agenda-time').textContent).toBe('23:00–01:00');
-            expect(na.querySelector('.almanac-utc').textContent).toBe('21:00–23:00 UTC');
-            expect(sa.querySelector('.almanac-agenda-time').textContent).toBe('22:00–10:00');
+            ]);
+            const title = (region) => host.querySelector(`.cond-sched-row[data-region="${region}"]`).title;
+            expect(title('NA')).toContain('usually 23:00\u201301:00 (21:00\u201323:00 UTC)');
+            expect(title('SA')).toContain('usually 22:00\u201310:00 (20:00\u201308:00 UTC)');
         });
 
-        it('all day has no UTC label', async () => {
-            stubOffset(120);
-            mockFetchOnce(makePayload({ bands: ['40m'], agenda: [
-                agendaEntry({ band: '40m', region: 'EU', start_slot: 0, len_slots: 48, start: '00:00', end: '00:00', all_day: true, status: 'ongoing', starts_in_min: 0 }),
-            ] }));
-            await openPanel();
-            const row = body().querySelector('.almanac-agenda-row');
-            expect(row.textContent).toContain('all day');
-            expect(row.querySelector('.almanac-utc')).toBeNull();
+        it('labels the axis with local hours from now', () => {
+            stubOffset(120); // now = 14:30 local; axis to 17:30
+            const host = render([agendaEntry({ starts_in_min: 30 })]);
+            expect(Array.from(host.querySelectorAll('.cond-sched-hour')).map((h) => h.textContent)).toEqual(['15', '16', '17']);
         });
     });
 

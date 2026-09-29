@@ -4,13 +4,15 @@ import { isChaseQueueEnabled } from './cq-flag.js';
 import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineLayer, syncMercatorDxccLabelLayer, setMercatorDxHighlight, clearMercatorDxHighlight } from './map.js';
 import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, getAzimuthCenter, setAzimuthEnabled, setAzimuthDragging, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled, getAzimuthLatLngFromClientPoint, getAzimuthHiddenGridSquaresCount, setAzimuthDxSpotHighlight } from './azimuth-runtime.js';
 import { initUI, attachUITooltipEvents } from './ui.js';
-import { getBandLabLookbackMinutes, initBandLab, updateBandLab } from './band-lab.js';
+import { getBandLabLookbackMinutes, getBandNormalRate, initBandLab, updateBandLab } from './band-lab.js';
 import { initWsprMatrix, updateWsprMatrix, clearDrillDown, updateDrillDownButton } from './wspr-matrix.js';
 import { initAlmanac } from './almanac.js';
 import { initHotBandIndicator } from './hot-band-indicator.js';
+import { initCondNow } from './cond-now.js';
+import { initCondDock } from './cond-dock.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { initPushUI } from './push.js';
-import { updateMapVisualization, updateBandLabels, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint, whenActiveAreaRendered } from './renderers.js';
+import { updateMapVisualization, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint, whenActiveAreaRendered } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming, icon } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
@@ -31,9 +33,7 @@ const MAX_LIVE_SPOTS = 20000;
 let suppressAzimuthClickUntil = 0;
 let hotBandIndicator = null;
 let horstKevin = null;
-// Horst-Kevin mascot temporarily disabled (to be revised). Set true to re-enable;
-// the #horst-kevin element in index.html is also hidden via inline display:none.
-const HORST_KEVIN_ENABLED = false;
+const HORST_KEVIN_ENABLED = true;
 
 // Tab favicon status dot. Same semantics as the --status-* tokens in style.css
 // (live = brand teal, waiting = amber, error = danger fill); the tab bar is
@@ -1290,27 +1290,19 @@ if (captureConfig?.enabled) {
     attachMapEvents();
     attachUITooltipEvents();
     initOpMode({ requestRender: scheduleRender });
-    initBandLab({
+    // The three panels below live inside the Conditions dock (cond-dock.js),
+    // which owns their visibility and switches their data pipelines on/off.
+    initBandLab();
+    initWsprMatrix();
+    initAlmanac();
+    setBandNormalRateProvider(getBandNormalRate);
+    initCondNow({ onRailChange: refreshBandLabels });
+    initCondDock({
         onLayoutChange: () => {
-            // Docked Band Stats panel changed the map container width; re-fit Leaflet
-            // and the azimuth canvas so tiles/centering stay correct (no overlap).
+            // The dock is an in-flow column, so opening/closing/resizing it
+            // changes the map container width; re-fit Leaflet and the azimuth
+            // canvas so tiles/centering stay correct (no overlap).
             if (map) map.invalidateSize();
-            if (isAzimuthEnabled()) scheduleRender();
-        },
-    });
-    initWsprMatrix({
-        onLayoutChange: () => {
-            // The WSPR matrix is a floating overlay inside #map-stack; toggling
-            // it no longer changes the map container's box, so invalidateSize is
-            // not needed (unlike band-lab, which is docked in-flow). The azimuth
-            // canvas display-swaps with #map and may need a re-render.
-            if (isAzimuthEnabled()) scheduleRender();
-        },
-    });
-    // Almanac (usual openings from the operator's area): floating overlay like
-    // the Propagation panel, so only the azimuth canvas may need a re-render.
-    initAlmanac({
-        onLayoutChange: () => {
             if (isAzimuthEnabled()) scheduleRender();
         },
     });

@@ -196,14 +196,27 @@ func (a *almanacAccum) snrKnown(di int) bool {
 }
 
 // snrCoveredDays counts the window days that carry SNR data: on or after
-// the SNR start, not lost, and ingest-alive in at least one slot. A lost or
-// wholly dead day (no ingest totals, e.g. an outage) can never count toward
-// M, so counting it would hold the preliminary M_min above every cell's M.
+// the SNR start, not lost, and ingest-alive in at least half of the day's
+// slots. A lost or wholly dead day (no ingest totals, e.g. an outage) can
+// never count toward M, so counting it would hold the preliminary M_min above
+// every cell's M. The same holds for a day that is only partly covered (the
+// SNR start day, or a long outage): it adds to M only in the slots it covers,
+// so counting it would leave every other slot one day short of M_min and read
+// "not enough data" exactly there.
 func (a *almanacAccum) snrCoveredDays() int {
 	alive := almanacAliveMask(&a.ingest, &a.lost)
 	n := 0
 	for di := 0; di < almanacWindowDays; di++ {
-		if a.snrKnown(di) && slices.Contains(alive[di][:], true) {
+		if !a.snrKnown(di) {
+			continue
+		}
+		slots := 0
+		for _, ok := range alive[di] {
+			if ok {
+				slots++
+			}
+		}
+		if slots >= almanacSlotsPerDay/2 {
 			n++
 		}
 	}

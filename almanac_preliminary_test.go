@@ -109,6 +109,28 @@ func TestAlmanacPreliminaryDeadDayNotCovered(t *testing.T) {
 	}
 }
 
+// The SNR start day is usually only partly covered (backfill from raw spots
+// starts mid-day). It adds to M only in the slots it covers, so it must not
+// count toward the effective M_min either: otherwise every slot before the
+// start time sits one day short (M=2 < M_min_eff=3) and reads "not enough
+// data" around the current time of day.
+func TestAlmanacPreliminaryPartialStartDayNotCovered(t *testing.T) {
+	f := prelimWorld(3)
+	start := aggToday() - 3
+	for s := 0; s < 28; s++ {
+		delete(f.ingest, aggIngestKey{start, s, almanacSeasonLayerPSKR})
+	}
+	typ := computeAggTier(t, f, 1)
+	l := findLane(t, typ, "20m", "NA")
+	if typ.SNRDays != 2 || typ.MMin != 2 || l.M[20] != 2 || l.unknown(20) || !l.usual(20) {
+		t.Fatalf("partial start day: snr_days=%d m_min=%d m=%d unknown=%v", typ.SNRDays, typ.MMin, l.M[20], l.unknown(20))
+	}
+	// A slot the start day does cover has M=3 and stays known.
+	if l.M[30] != 3 || l.unknown(30) {
+		t.Fatalf("covered slot: m=%d unknown=%v", l.M[30], l.unknown(30))
+	}
+}
+
 func TestAlmanacPreliminaryCellsAndAgenda(t *testing.T) {
 	typ := computeAggTier(t, prelimWorld(3), 1)
 	l := findLane(t, typ, "20m", "NA")

@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 
-// wspr-matrix.js imports state.js / utils.js / panel-drag.js at module load;
+// wspr-matrix.js imports state.js / utils.js at module load;
 // utils is mocked to keep the region columns and band palette test-local.
 vi.mock('../static/utils.js', () => ({
     WSPR_REGIONS: ['EU', 'NA', 'SA', 'AF', 'AS', 'JA', 'OC', 'VK', 'KH6', 'CAR', 'AN'],
@@ -12,7 +12,7 @@ vi.mock('../static/utils.js', () => ({
         .filter((cb) => cb.checked).map((cb) => cb.value)),
 }));
 
-import { initWsprMatrix, __test } from '../static/wspr-matrix.js';
+import { initWsprMatrix, setWsprMatrixVisible, setRowExtras, refreshMatrix, __test } from '../static/wspr-matrix.js';
 import { state } from '../static/state.js';
 
 const {
@@ -926,40 +926,95 @@ describe('wspr-matrix keyboard grid', () => {
     });
 });
 
-describe('wspr-matrix toggle row placement', () => {
-    afterEach(() => {
-        reset();
-        delete globalThis.ResizeObserver;
+describe('wspr-matrix row extras (Conditions dock)', () => {
+    let after;
+    const extras = () => ({
+        columns: [{ label: 'Activity', className: 'x-head' }],
+        cells: (band) => `<td class="x-cell" data-band="${band}">v-${band}</td>`,
+        key: (bands) => bands.join(','),
+        after,
     });
 
-    it('publishes the toggle row bottom edge for the mobile panel placement', () => {
+    beforeEach(() => {
         installLocalStorageMock();
-        document.body.innerHTML = `
-            <div id="map-stack">
-                <div id="map-toggles"><button id="${TOGGLE_ID}"></button></div>
-                <div id="${PANEL_ID}" class="wspr-matrix-window is-hidden">
-                    <div class="wspr-matrix-window-header"></div>
-                    <div id="${BODY_ID}"></div>
-                </div>
-            </div>`;
-        const observed = [];
-        let callback = null;
-        globalThis.ResizeObserver = class {
-            constructor(cb) { callback = cb; }
-            observe(el) { observed.push(el); }
-            disconnect() {}
-        };
-        const row = document.getElementById('map-toggles');
-        Object.defineProperty(row, 'offsetTop', { configurable: true, value: 12 });
-        Object.defineProperty(row, 'offsetHeight', { configurable: true, value: 31 });
-        initWsprMatrix();
-        const stack = document.getElementById('map-stack');
-        expect(observed).toEqual([row]);
-        expect(stack.style.getPropertyValue('--map-toggles-bottom')).toBe('43px');
+        setupDom();
+        document.body.insertAdjacentHTML('beforeend',
+            '<input type="checkbox" class="band-enable" value="20m" checked><input type="checkbox" class="band-enable" value="40m" checked>');
+        reset();
+        after = vi.fn();
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    });
 
-        // The row wraps to a second line.
-        Object.defineProperty(row, 'offsetHeight', { configurable: true, value: 68 });
-        callback();
-        expect(stack.style.getPropertyValue('--map-toggles-bottom')).toBe('80px');
+    afterEach(() => {
+        reset();
+        vi.restoreAllMocks();
+    });
+
+    it('drives visibility without a toggle and adds a row per enabled band', async () => {
+        document.getElementById(TOGGLE_ID).remove();
+        mockFetch({ cells: [makeCell({ band: '20m', region: 'EU' })], region_names: {} });
+        initWsprMatrix();
+        setRowExtras(extras());
+        setWsprMatrixVisible(true);
+        await new Promise((r) => setTimeout(r, 0));
+
+        const body = document.getElementById(BODY_ID);
+        expect(document.getElementById(PANEL_ID).classList.contains('is-hidden')).toBe(false);
+        // 40m has no path but is enabled: it still gets a row with its extras.
+        const rows = Array.from(body.querySelectorAll('tbody tr')).map((tr) => tr.querySelector('th').textContent);
+        expect(rows).toEqual(['40m', '20m']);
+        expect(body.querySelectorAll('.x-cell')).toHaveLength(2);
+        expect(body.querySelector('thead .x-head').textContent).toBe('Activity');
+        expect(after).toHaveBeenCalledWith(body);
+    });
+
+    it('renders the rows even when no path is open', async () => {
+        mockFetch({ cells: [] });
+        initWsprMatrix();
+        setRowExtras(extras());
+        setWsprMatrixVisible(true);
+        await new Promise((r) => setTimeout(r, 0));
+        expect(document.querySelectorAll('#wspr-matrix-body tbody tr')).toHaveLength(2);
+    });
+
+    it('rebuilds only when the extras key changes', async () => {
+        mockFetch({ cells: [makeCell({ band: '20m', region: 'EU' })] });
+        initWsprMatrix();
+        let tag = 'a';
+        const e = extras();
+        e.key = () => tag;
+        setRowExtras(e);
+        setWsprMatrixVisible(true);
+        await new Promise((r) => setTimeout(r, 0));
+        const first = document.querySelector('#wspr-matrix-body table');
+        refreshMatrix();
+        expect(document.querySelector('#wspr-matrix-body table')).toBe(first);
+        tag = 'b';
+        refreshMatrix();
+        expect(document.querySelector('#wspr-matrix-body table')).not.toBe(first);
+    });
+
+    it('still draws the rows when the propagation fetch fails', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        mockFetch({}, false);
+        initWsprMatrix();
+        setRowExtras(extras());
+        setWsprMatrixVisible(true);
+        await new Promise((r) => setTimeout(r, 0));
+        expect(document.querySelectorAll('#wspr-matrix-body tbody tr')).toHaveLength(2);
+        expect(document.getElementById(BODY_ID).textContent).not.toContain('unavailable');
+    });
+
+    it('refreshMatrix draws the rows before any payload, but not without a locator', () => {
+        mockFetch({ cells: [] });
+        initWsprMatrix();
+        setRowExtras(extras());
+        runtime.enabled = true;
+        document.getElementById('qth').value = '';
+        refreshMatrix();
+        expect(document.querySelectorAll('#wspr-matrix-body tbody tr')).toHaveLength(0);
+        document.getElementById('qth').value = 'JO32';
+        refreshMatrix();
+        expect(document.querySelectorAll('#wspr-matrix-body tbody tr')).toHaveLength(2);
     });
 });

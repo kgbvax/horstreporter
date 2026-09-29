@@ -116,6 +116,8 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `map.js` — Leaflet map setup + overlays
 - `ui.js` — UI helpers and control wiring
 - `state.js` — shared frontend state
+- `cond-dock.js` — the Conditions dock: one in-flow right column (Now / Typical horizons, Chase queue tab) that owns visibility and data polling of the panels it hosts; collapses to the hot-band pills plus a Conditions toggle
+- `cond-now.js` — the dock's Now rows: verdict, reports / normal and mini plot columns added to the Propagation matrix (`wspr-matrix.js` row-extras hook, numbers from `band-lab.js`)
 
 **Key architectural constraints:**
 - `hub.history` is the in-memory rolling window; changes affect all SSE client fan-out and history dumps
