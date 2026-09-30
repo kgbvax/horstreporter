@@ -34,10 +34,10 @@ const MAX_LIVE_SPOTS = 20000;
 let suppressAzimuthClickUntil = 0;
 let hotBandIndicator = null;
 let horstKevin = null;
-// Horst-Kevin (dares, grudge, panel, desktop nags) is off for the time being.
-// Flipping this is the only switch: with it off the sidebar picture stays a
-// plain decorative image and #hk-layer stays hidden.
-const HORST_KEVIN_ENABLED = false;
+// Horst-Kevin (dares, grudge, panel, desktop nags). This is the only switch:
+// with it off the sidebar picture stays a plain decorative image and
+// #hk-layer stays hidden.
+const HORST_KEVIN_ENABLED = true;
 // Time travel (timeline.js) is hidden for now: no sidebar option, and a saved
 // timeline URL is not restored, so the timeline bar never opens. Opt back in with
 // ?timetravel=1 or localStorage 'showTimeTravel'='1'.
