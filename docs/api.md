@@ -175,15 +175,56 @@ unavailable. No caching; window data from the in-memory rolling history.
 ### `GET /api/hot_bands` — unusual-activity band alerts
 
 Params: `qth` (required), `surroundings`, `minutes` (default 20,
-max 180), `cw_min_db`, `current_band`.
+max 180), `cw_min_db`, `current_band` (excluded from `recommendations`).
+Opt-in (omit all three and the response is unchanged: at most 3
+recommendations, no `holding` key):
+- `bands` — comma list of band labels (e.g. `80m,40m,30m,20m,17m,15m,12m,10m,6m`);
+  recommendations are restricted to these bands *before* the result cap, so
+  VHF/160m entries can't crowd them out. Unknown/out-of-scope labels are
+  ignored; an empty (or all-unknown) list means no filter.
+- `max` — overrides the 3-result cap, clamped to 1..12.
+- `include` — comma list of bands to report in `holding`, whether or not they
+  still qualify as a recommendation. Independent of `bands`; `current_band`
+  does not exclude from it. A listed band appears only if it is in scope and
+  present in the evaluation (had live spots in the window); a listed band
+  with no live spots is simply missing (not a zero entry), and `holding` is
+  omitted altogether when none of the listed bands qualify or no baseline
+  engine is running. Clients should read a missing band as "no activity".
 
 Response: `{…, recommendations: [{band, kind ("surprise"|"dx_surge"|"rising"),
 priority ("high"|"normal"), reason, rank_score, spots_per_minute,
 baseline_activity, activity_ratio, activity_level?, sustained_bins, p90_distance_km,
-baseline_p90_distance_km?, distance_ratio?, trend, trend_delta, status}]}`.
+baseline_p90_distance_km?, distance_ratio?, trend, trend_delta, status}],
+holding?: [{band, spots_per_minute, status, activity_level}]}`.
 `activity_level` is present only when `activity_ratio` is the like-for-like
-regional ratio from `/api/dx_conditions` (then it reads as "× normal").
-Also `rings` (see Conventions); the response then carries `area`.
+regional ratio from `/api/dx_conditions` (then it reads as "× normal"); in
+`holding` it is always the raw `/api/dx_conditions` level (incl.
+`low_sample`/`no_baseline`). Also `rings` (see Conventions); the response then
+carries `area` (with `widened` when `rings=auto` widened it).
+
+Every band must first have ≥ 2 trailing sparkline bins at ≥ 30 (of 100) and
+≥ 0.5 spots/min. Classes, first match wins:
+- `surprise` (high) — cluster baseline, ≥ 1 day of history, usual rate
+  ≤ 0.1 spots/min, `activity_ratio` ≥ 5, live p90 ≥ 800 km, and either a
+  regional ratio (`activity_level` above/normal/below) or — in the fallback
+  your-squares-vs-baseline path — a live spot count with Poisson upper tail
+  P(X ≥ count | baseline rate × live span) < 0.01.
+- `dx_surge` (normal) — cluster baseline, ≥ 1 day of history,
+  `/api/dx_conditions` `reach_level` "longer" with `reach_ratio` ≥ 1.5 and live
+  p90 ≥ 5000 km. `baseline_p90_distance_km` / `distance_ratio` are that
+  band's `baseline_p90_distance_km` / `reach_ratio`. `reach_ratio` compares a
+  distance-tier-interpolated live p90 with the baseline's, while
+  `p90_distance_km` (and the 5000 km floor) is the raw live percentile, so
+  `p90_distance_km / baseline_p90_distance_km` need not equal `distance_ratio`.
+- `rising` (normal) — trend "rising" with `trend_delta` ≥ 1.5, status
+  green/yellow, `activity_ratio` ≥ 1.5, ≥ 3 sustained bins and ≥ 1.0 spots/min.
+  `activity_ratio` needs something to compare against (a regional ratio or a
+  baseline rate > 0); a band with neither has ratio 0 and never qualifies, so
+  a slope alone never makes a band "rising".
+
+Stateless: `rising` tracks the slope and drops out once an opening plateaus,
+so clients following a band over time should `include` it and read `holding`
+rather than treat absence from `recommendations` as "closed".
 
 ### `GET /api/prop_intel` — propagation intelligence nowcast (v1, frozen)
 

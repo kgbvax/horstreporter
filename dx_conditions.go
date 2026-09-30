@@ -220,6 +220,10 @@ type dxBandCondition struct {
 	BaselineP90DistanceKm float64 `json:"baseline_p90_distance_km,omitempty"`
 	ReachRatio            float64 `json:"reach_ratio,omitempty"`
 	ReachLevel            string  `json:"reach_level,omitempty"`
+	// baselineRate is BaselineActivity before round2: at the sub-0.1/min
+	// rates the hot-bands surprise gate works with, rounding shifts the
+	// Poisson expectation by up to ~50%. Not serialized.
+	baselineRate float64
 }
 
 // Band-vs-normal classification. Thresholds are symmetric in log space
@@ -272,6 +276,10 @@ type dxConditionsResponse struct {
 	Trend                   string            `json:"trend"`
 	TrendDelta              float64           `json:"trend_delta"`
 	Bands                   []dxBandCondition `json:"bands"`
+	// liveSpanMin is the live span (minutes) every band's SpotsPerMinute was
+	// divided by. Not serialized; hot_bands reads it so its Poisson
+	// expectation covers the same minutes as CurrentLinks.
+	liveSpanMin float64
 }
 
 type bandAccumulator struct {
@@ -1048,6 +1056,7 @@ func (e *DxBaselineEngine) EvaluateArea(qth string, surroundings bool, minutes i
 		liveSpanSec += seg[1] - seg[0]
 	}
 	liveSpanMin := math.Max(1, float64(liveSpanSec)/60.0)
+	resp.liveSpanMin = liveSpanMin
 	bandAcc := make(map[string]*bandAccumulator)
 	dedupSeen := make(map[string]struct{})
 
@@ -1340,6 +1349,7 @@ func (e *DxBaselineEngine) EvaluateArea(qth string, surroundings bool, minutes i
 			MedianSnr:                 round1(medianSnr),
 			P90Snr:                    round1(p90Snr),
 			BaselineActivity:          round2(baselineActivity),
+			baselineRate:              baselineActivity,
 			ClusterBaselineUsed:       clusterBaselineUsed,
 			BaselineActivityBySlot:    roundFloats2(baselineActivityBySlot),
 			BaselineSlotUsedByCluster: baselineSlotUsedByCluster,
@@ -2325,52 +2335,10 @@ func distanceTierBounds(tier int) (lo, hi float64) {
 	}
 }
 
-// baselineP90DistanceForBand returns the tier-weighted p90 path length for a
-// band+slot, summed across all SNR tiers. Falls back from target buckets to
-// global. Used by the hot-bands recommender to detect DX surges: a band whose
-// live p90 distance is meaningfully above its historical p90 for the same
-// target and slot is open along an unusually long path.
-//
-// Tier counts are converted to a piecewise-uniform distribution over the
-// tier's [lo, hi] bound and the 90th percentile interpolated within the tier
-// where the cumulative weight crosses 0.9 of the total.
-// baselineP90DistanceForBand returns the p90 distance tier interpolation for a
-// band at the given slot, using a two-tier fallback: grid-cluster → global.
-// Returns (km, clusterUsed).
-func baselineP90DistanceForBand(global, clusterBuckets map[string]*baselineBucket, operatorCluster string, band string, hour int) (float64, bool) {
-	tierCounts := [5]int64{}
-	collectFromCluster := func() bool {
-		any := false
-		if operatorCluster == "" {
-			return false
-		}
-		for d := 0; d <= 4; d++ {
-			for s := 0; s <= 3; s++ {
-				if b := clusterBuckets[baselineClusterKey(operatorCluster, band, hour, d, s)]; b != nil && b.Count > 0 {
-					tierCounts[d] += b.Count
-					any = true
-				}
-			}
-		}
-		return any
-	}
-	collectFromGlobal := func() {
-		for d := 0; d <= 4; d++ {
-			for s := 0; s <= 3; s++ {
-				if b := global[baselineKey(band, hour, d, s)]; b != nil && b.Count > 0 {
-					tierCounts[d] += b.Count
-				}
-			}
-		}
-	}
-
-	usedCluster := collectFromCluster()
-	if !usedCluster {
-		collectFromGlobal()
-	}
-	return p90FromTierCounts(tierCounts), usedCluster
-}
-
+// p90FromTierCounts is the 90th-percentile path length of a distance-tier
+// histogram: tier counts become a piecewise-uniform distribution over each
+// tier's [lo, hi] bound and the p90 is interpolated within the tier where the
+// cumulative weight crosses 0.9 of the total.
 func p90FromTierCounts(tierCounts [5]int64) float64 {
 	var weights [5]float64
 	for d, c := range tierCounts {

@@ -541,24 +541,6 @@ func TestFlushHealthAccounting(t *testing.T) {
 	})
 }
 
-func TestBandPairsQueryArm(t *testing.T) {
-	// Only dx_baseline_global is queried (the target table was removed in v8);
-	// band/slot are the two positional parameters.
-	q, args := bandPairsQuery("20m", 39)
-	if !strings.Contains(q, "FROM dx_baseline_global") {
-		t.Fatalf("query targets the wrong table: %q", q)
-	}
-	if !strings.Contains(q, "band = $1") || !strings.Contains(q, "slot_of_day = $2") {
-		t.Fatalf("arm placeholders wrong: %q", q)
-	}
-	if strings.Contains(q, "dx_baseline_target") {
-		t.Fatalf("removed target table must not be referenced: %q", q)
-	}
-	if len(args) != 2 || args[0] != "20m" || args[1] != 39 {
-		t.Fatalf("args = %v, want [20m 39]", args)
-	}
-}
-
 // fakeBandSlotRows is a hand-rolled bandSlotRowSource feeding
 // scanBandSlotPairs in tests — no pgx pool required.
 type fakeBandSlotRows struct {

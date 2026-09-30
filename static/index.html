@@ -282,7 +282,9 @@
                 <div id="stream-status">Not connected</div>
             </div>
         </form>
-        <div class="sidebar-hk"><img src="hk.jpg" alt="" width="160" loading="lazy" decoding="async"></div>
+        <!-- Horst-Kevin's avatar. Decorative (not focusable, no hover) until
+             initHorstKevin marks it .is-live; gated by HORST_KEVIN_ENABLED in app.js. -->
+        <div class="sidebar-hk"><button type="button" class="hk-avatar" tabindex="-1" aria-hidden="true"><img src="hk.jpg" alt="" width="160" loading="lazy" decoding="async"></button></div>
     </div>
     <div id="map-stack" class="flex-grow-1 h-100 position-relative">
         <div id="map" class="w-100 h-100"></div>
@@ -322,39 +324,6 @@
         <div id="azimuth-zoom-controls" role="group" aria-label="Zoom" style="display:none">
             <button type="button" id="azimuth-zoom-in" title="Zoom in" aria-label="Zoom in" tabindex="-1">+</button>
             <button type="button" id="azimuth-zoom-out" title="Zoom out" aria-label="Zoom out" tabindex="-1">−</button>
-        </div>
-        <!-- Horst-Kevin avatar temporarily disabled; also gated off in app.js (HORST_KEVIN_ENABLED). -->
-        <div id="horst-kevin" class="hk-stage" style="display:none">
-            <button type="button" class="hk-avatar is-dormant" title="Horst-Kevin" aria-label="Horst-Kevin — band heckler">
-                <img src="hk.jpg" alt="" />
-            </button>
-            <div class="hk-bubble" hidden>
-                <span class="hk-bubble-text"></span>
-                <button type="button" class="hk-bubble-action" hidden></button>
-            </div>
-            <div class="hk-panel" hidden role="dialog" aria-label="Horst-Kevin">
-                <div class="hk-panel-head">
-                    <span>Horst-Kevin</span>
-                    <div class="hk-panel-head-actions">
-                        <label class="visually-hidden" for="hk-lang">Language / Sprache</label>
-                        <select id="hk-lang" class="hk-lang form-select form-select-sm" title="Language / Sprache">
-                            <option value="en">EN</option>
-                            <option value="de">DE</option>
-                        </select>
-                        <label class="visually-hidden" for="hk-meanness">Heckle intensity</label>
-                        <select id="hk-meanness" class="hk-meanness form-select form-select-sm" title="How mean is Horst-Kevin?">
-                            <option value="soft">Supportive</option>
-                            <option value="buzzed">In character</option>
-                            <option value="drill">Drill Sergeant</option>
-                        </select>
-                        <button type="button" class="hk-panel-close btn btn-sm btn-outline-secondary" title="Close">×</button>
-                    </div>
-                </div>
-                <div class="hk-panel-body"></div>
-                <label class="hk-panel-foot">
-                    <input type="checkbox" class="hk-desktop" /> <span class="hk-panel-foot-text">let me nag your desktop</span>
-                </label>
-            </div>
         </div>
     </div>
     <aside id="cond-dock" class="cond-dock is-hidden" aria-label="Conditions">
@@ -408,6 +377,38 @@
         </div>
         <div id="cond-chase" class="cond-pane is-hidden" role="tabpanel" aria-labelledby="cond-tab-chase"></div>
     </aside>
+    <!-- Horst-Kevin's speech bubble and panel: body-level and position: fixed so
+         the sidebar's overflow cannot clip them; anchored to the sidebar picture by
+         horst-kevin.js. Stays hidden unless HORST_KEVIN_ENABLED (app.js). -->
+    <div id="hk-layer" class="hk-layer" hidden>
+        <div class="hk-bubble" hidden>
+            <span class="hk-bubble-text"></span>
+            <button type="button" class="hk-bubble-action" hidden></button>
+        </div>
+        <div class="hk-panel" hidden role="dialog" aria-label="Horst-Kevin">
+            <div class="hk-panel-head">
+                <span>Horst-Kevin</span>
+                <div class="hk-panel-head-actions">
+                    <label class="visually-hidden" for="hk-lang">Language / Sprache</label>
+                    <select id="hk-lang" class="hk-lang form-select form-select-sm" title="Language / Sprache">
+                        <option value="en">EN</option>
+                        <option value="de">DE</option>
+                    </select>
+                    <label class="visually-hidden" for="hk-meanness">Heckle intensity</label>
+                    <select id="hk-meanness" class="hk-meanness form-select form-select-sm" title="How mean is Horst-Kevin?">
+                        <option value="soft">Supportive</option>
+                        <option value="buzzed">In character</option>
+                        <option value="drill">Drill Sergeant</option>
+                    </select>
+                    <button type="button" class="hk-panel-close btn btn-sm btn-outline-secondary" title="Close">×</button>
+                </div>
+            </div>
+            <div class="hk-panel-body"></div>
+            <label class="hk-panel-foot">
+                <input type="checkbox" class="hk-desktop" /> <span class="hk-panel-foot-text">let me nag your desktop</span>
+            </label>
+        </div>
+    </div>
     <div id="tooltip"></div>
     <div id="svelte-root"></div>
     <script src="vendor/js/leaflet.js"></script>

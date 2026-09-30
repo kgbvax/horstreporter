@@ -1,7 +1,6 @@
 package main
 
 import (
-	"math"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -227,77 +226,6 @@ func TestBaselineActivityForBandClusterFallback(t *testing.T) {
 	act, clusterUsed = baselineActivityForBand(global, cluster, "JN68", "20m", 10, 60*24*30, 60*24*30)
 	if !clusterUsed || act == 0 {
 		t.Errorf("cluster fallback: act=%v clusterUsed=%v, want cluster", act, clusterUsed)
-	}
-}
-
-// TestBaselineP90DistanceForBand unit-tests the two-tier p90 distance fallback
-// (grid-cluster → global) used by the hot-bands DX-surge detector.
-func TestBaselineP90DistanceForBand(t *testing.T) {
-	global := map[string]*baselineBucket{}
-	cluster := map[string]*baselineBucket{}
-
-	tests := []struct {
-		name          string
-		setup         func()
-		operatorClstr string
-		band          string
-		hour          int
-		wantKm        float64
-		wantCluster   bool
-	}{
-		{
-			name: "cluster bucket present wins over global",
-			setup: func() {
-				global[baselineKey("20m", 10, 0, 1)] = &baselineBucket{Count: 100}
-				cluster[baselineClusterKey("JN68", "20m", 10, 4, 0)] = &baselineBucket{Count: 100}
-			},
-			operatorClstr: "JN68", band: "20m", hour: 10,
-			wantKm: 11500, wantCluster: true, // all mass in tier 4 → its upper bound (see TestP90FromTierCounts)
-		},
-		{
-			name: "unknown cluster falls back to global",
-			setup: func() {
-				global[baselineKey("20m", 10, 0, 1)] = &baselineBucket{Count: 100}
-			},
-			operatorClstr: "ZZ99", band: "20m", hour: 10,
-			wantKm: 450, wantCluster: false,
-		},
-		{
-			name: "empty operator cluster uses global",
-			setup: func() {
-				global[baselineKey("20m", 10, 0, 1)] = &baselineBucket{Count: 100}
-			},
-			operatorClstr: "", band: "20m", hour: 10,
-			wantKm: 450, wantCluster: false,
-		},
-		{
-			name: "zero-count cluster buckets do not count as cluster data",
-			setup: func() {
-				global[baselineKey("20m", 10, 0, 1)] = &baselineBucket{Count: 100}
-				cluster[baselineClusterKey("JN68", "20m", 10, 4, 0)] = &baselineBucket{Count: 0}
-			},
-			operatorClstr: "JN68", band: "20m", hour: 10,
-			wantKm: 450, wantCluster: false,
-		},
-		{
-			name:          "no data anywhere yields zero",
-			setup:         func() {},
-			operatorClstr: "JN68", band: "20m", hour: 10,
-			wantKm: 0, wantCluster: false,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			global, cluster = map[string]*baselineBucket{}, map[string]*baselineBucket{}
-			tc.setup()
-			km, usedCluster := baselineP90DistanceForBand(global, cluster, tc.operatorClstr, tc.band, tc.hour)
-			if math.Abs(km-tc.wantKm) > 1 {
-				t.Errorf("p90 = %v, want %v", km, tc.wantKm)
-			}
-			if usedCluster != tc.wantCluster {
-				t.Errorf("clusterUsed = %v, want %v", usedCluster, tc.wantCluster)
-			}
-		})
 	}
 }
 

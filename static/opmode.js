@@ -755,6 +755,15 @@ export function getOpModeStation() {
     return { lat, lng };
 }
 
+// getRigBand returns the band the live rig is sitting on ('20m', …) while the
+// agent reports it online, else ''. Horst-Kevin counts a dare as answered when
+// the rig is on that band, even if the map focus is elsewhere.
+export function getRigBand() {
+    const rig = opModeState.liveRig;
+    if (!rig?.online) return '';
+    return freqHzToBand(rig.freqHz);
+}
+
 // canControlRig reports whether the agent has a rig backend that can tune, AND
 // the operator/server/UI permission gate is satisfied. The Chase Queue uses this
 // to decide whether to expose tune affordances.

@@ -1361,24 +1361,6 @@ func (s *dxPostgresStore) insertRawSpot(ctx context.Context, m MQTTMessage, band
 	return err
 }
 
-func (s *dxPostgresStore) bandPairs(ctx context.Context, table string, _ []string, band string, slot int) ([]baselinePair, error) {
-	q, args := bandPairsQuery(band, slot)
-	rows, err := s.pool.Query(ctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]baselinePair, 0, 24)
-	for rows.Next() {
-		var p baselinePair
-		if err := rows.Scan(&p.DistanceTier, &p.SnrTier, &p.Count); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
 // allBandBaselinePairs fetches the full baseline bucket breakdown for every band
 // and slot in two queries: target-filtered (summed across the given tokens) and
 // global. Returns indexes keyed by (band, slot) → per-(distance_tier, snr_tier)
@@ -1426,20 +1408,6 @@ func (s *dxPostgresStore) allBandBaselinePairs(operatorCluster string) (map[band
 		return nil, nil, err
 	}
 	return clusterIdx, globalIdx, nil
-}
-
-// bandPairsQuery builds the per-band baseline query and its positional args.
-// Only dx_baseline_global is queried here now (the target table was removed
-// in v8; cluster queries go through clusterBandPairs). The targets arg is
-// kept for signature stability but unused at the call site. Pure so the arm
-// can be asserted without a database.
-func bandPairsQuery(band string, slot int) (string, []any) {
-	return `
-		SELECT distance_tier, snr_tier, SUM(count)::bigint
-		FROM dx_baseline_global
-		WHERE band = $1 AND slot_of_day = $2
-		GROUP BY distance_tier, snr_tier
-	`, []any{band, slot}
 }
 
 // bandSlotRowSource is the row shape scanBandSlotPairs drains — pgx.Rows
@@ -1591,65 +1559,6 @@ func quantilesFromPairs(pairs []baselinePair) (q25, q75 float64, ok bool) {
 		}
 	}
 	return q25, q75, true
-}
-
-// baselineP90DistanceForBand returns the tier-weighted p90 path length for a
-// (band, slot), summed across all SNR tiers. Uses a two-tier fallback:
-// cluster → global. Returns (km, clusterUsed, err).
-func (s *dxPostgresStore) baselineP90DistanceForBand(operatorCluster, band string, slot int) (float64, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	var tiers [5]int64
-	usedCluster := false
-	if operatorCluster != "" {
-		clusterPairs, err := s.clusterBandPairs(ctx, operatorCluster, band, slot)
-		if err != nil {
-			return 0, false, err
-		}
-		for _, p := range clusterPairs {
-			if p.DistanceTier < 0 || p.DistanceTier > 4 || !plausibleBaselinePair(p) {
-				continue
-			}
-			tiers[p.DistanceTier] += p.Count
-			usedCluster = true
-		}
-	}
-	if !usedCluster {
-		globalPairs, err := s.bandPairs(ctx, "dx_baseline_global", nil, band, slot)
-		if err != nil {
-			return 0, false, err
-		}
-		for _, p := range globalPairs {
-			if p.DistanceTier < 0 || p.DistanceTier > 4 || !plausibleBaselinePair(p) {
-				continue
-			}
-			tiers[p.DistanceTier] += p.Count
-		}
-	}
-	return p90FromTierCounts(tiers), usedCluster, nil
-}
-
-// clusterBandPairs queries dx_baseline_cluster for a single (cluster_anchor, band, slot).
-func (s *dxPostgresStore) clusterBandPairs(ctx context.Context, clusterAnchor, band string, slot int) ([]baselinePair, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT distance_tier, snr_tier, SUM(count)::bigint
-		FROM dx_baseline_cluster
-		WHERE cluster_anchor = $1 AND band = $2 AND slot_of_day = $3
-		GROUP BY distance_tier, snr_tier
-	`, clusterAnchor, band, slot)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]baselinePair, 0, 24)
-	for rows.Next() {
-		var p baselinePair
-		if err := rows.Scan(&p.DistanceTier, &p.SnrTier, &p.Count); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
 }
 
 // locatorTargetRE matches a strict Maidenhead locator token (4–10 chars:
