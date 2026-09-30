@@ -17,6 +17,7 @@ export const STREAM_STATUS_TEXT = Object.freeze({
     ended: 'Live data stopped. The timeline shows this session only.',
     timeTravel: 'Time travel: showing past spots',
     snapshotLoading: 'Loading snapshot',
+    paused: 'Paused while this tab is hidden',
 });
 
 // "1 spot" / "1,274 spots".

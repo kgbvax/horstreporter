@@ -154,12 +154,14 @@ func isolateWSPRPoll(t *testing.T) (before [7]int64) {
 	hub.Unlock()
 	savedBaseline := dxBaseline
 	dxBaseline = nil
+	wsprSeen.reset()
 	t.Cleanup(func() {
 		hub.Lock()
 		hub.clients = savedClients
 		hub.history = savedHistory
 		hub.Unlock()
 		dxBaseline = savedBaseline
+		wsprSeen.reset()
 	})
 	a, b, c, d, e, f, g := wsprAccounting.snapshot()
 	return [7]int64{a, b, c, d, e, f, g}
@@ -411,5 +413,58 @@ func TestFetchWSPRSpotsRecoversAfterFailure(t *testing.T) {
 	defer hub.RUnlock()
 	if len(hub.history) != 2 {
 		t.Fatalf("expected the second poll to ingest 2 spots, got %d", len(hub.history))
+	}
+}
+func TestFetchWSPRSpotsDedupsOverlappingPolls(t *testing.T) {
+	before := isolateWSPRPoll(t)
+	dupBefore := wsprAccounting.duplicateRows.Load()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(wsprFixtureEnvelope))
+	}))
+	defer srv.Close()
+
+	fetchWSPRSpots(srv.Client(), srv.URL, wsprConfig{Enabled: true})
+	hub.RLock()
+	first := len(hub.history)
+	hub.RUnlock()
+	fetchWSPRSpots(srv.Client(), srv.URL, wsprConfig{Enabled: true})
+
+	hub.RLock()
+	second := len(hub.history)
+	hub.RUnlock()
+	if first == 0 || second != first {
+		t.Fatalf("history after poll 1 = %d, after poll 2 = %d; want equal and > 0", first, second)
+	}
+	_, _, rowsSeen, parsed, _, forwarded, _ := wsprDelta(wsprSnap(), before)
+	if rowsSeen != 8 {
+		t.Errorf("rowsSeen delta = %d, want 8", rowsSeen)
+	}
+	if forwarded != int64(first) || parsed < forwarded {
+		t.Errorf("parsed=%d forwarded=%d, want each spot forwarded once (%d)", parsed, forwarded, first)
+	}
+	if dup := wsprAccounting.duplicateRows.Load() - dupBefore; dup < int64(first) {
+		t.Errorf("duplicateRows delta = %d, want >= %d", dup, first)
+	}
+}
+
+func TestWSPRSeenSetPruneAndSeed(t *testing.T) {
+	set := &wsprSeenSet{m: make(map[wsprKey]int64)}
+	m := MQTTMessage{T: 1000, B: "20m", SC: "DL1ABC", RC: "K1XYZ", F: 14097.0, Source: "wspr"}
+	if !set.markNew(m, 1000) {
+		t.Fatal("first markNew should report new")
+	}
+	if set.markNew(m, 1001) {
+		t.Fatal("second markNew should report duplicate")
+	}
+	set.prune(1000 + wsprSeenTTL + 1)
+	if !set.markNew(m, 2000) {
+		t.Fatal("after prune the key should be new again")
+	}
+
+	seeded := &wsprSeenSet{m: make(map[wsprKey]int64)}
+	seeded.seedFromHistory([]MQTTMessage{m}, m.T+10)
+	if seeded.markNew(m, m.T+20) {
+		t.Fatal("seeded key should be a duplicate")
 	}
 }

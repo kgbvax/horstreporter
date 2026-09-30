@@ -25,4 +25,13 @@ export const state = {
     // Live area the current stream delivers (live-area.js parseAreaPayload):
     // set by the stream's `area` event; null before the first one.
     liveArea: null,
+    // Resume state (stream v2): id of the last event the stream delivered
+    // (`<epoch>-<seq>`), the qth/minutes/surroundings that stream was opened
+    // for, and whether the stream was closed on purpose while the tab was
+    // hidden (it reopens with `since=streamLastId` when the tab returns).
+    streamLastId: null,
+    streamedParams: null,
+    streamSuspended: false,
+    // Server answer to the last resume request ("delta" | "full" | null).
+    lastResumeMode: null,
 };

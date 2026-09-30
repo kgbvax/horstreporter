@@ -19,7 +19,8 @@ import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation
 import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL, invalidateBundles as invalidateTimelineBundles, refreshMoment as refreshTimelineMoment } from './timeline.js';
 import { updateAfterglow, notifyMapMoved, hideAfterglow } from './afterglow.js';
 import { GRAYLINE_BUCKET_MS, setDataNowMs, clearDataNowOverride } from './data-now.js';
-import { sessionRing } from './session-ring.js';
+import { sessionRing, deriveT, filterAllowed } from './session-ring.js';
+import { decodeSpotsFrame, exactSpotKey } from './stream-wire.js';
 import { parseAreaPayload, areaCohortChanged } from './live-area.js';
 import { STREAM_STATUS_TEXT, setStreamStatus, spotCountText, liveForText, connectingText, serverErrorText, timeTravelErrorText } from './stream-status.js';
 
@@ -82,6 +83,26 @@ function applyBandChange() {
     refreshBandPills();
 }
 
+// The high-volume optional sources the stream can leave out, keyed by the
+// stream's include_<name> parameter, with the checkbox that shows/hides each
+// on the map. DX cluster is deliberately not listed: its volume is tiny, and
+// its checkbox is flipped programmatically (Chase Queue) without a change
+// event, so the stream could not follow the toggle.
+const STREAM_SOURCE_TOGGLES = [
+    ['rbn', 'show-rbn-spots'],
+    ['wspr', 'show-wspr-spots'],
+];
+
+// Which optional sources the user currently shows (unchecked = the server
+// need not send them). A missing checkbox counts as shown.
+function currentIncludedSources() {
+    const out = {};
+    for (const [name, id] of STREAM_SOURCE_TOGGLES) {
+        out[name] = document.getElementById(id)?.checked !== false;
+    }
+    return out;
+}
+
 // Returns true if the current control settings (enabled bands + SNR filter)
 // differ from what the active SSE connection is already fetching. When they
 // match, a filter change can be handled purely client-side without discarding
@@ -99,7 +120,36 @@ function streamFilterNeedsReconnect() {
     if (minSnrMode !== current.minSnrMode) return true;
     if (ssbMinDb !== current.ssbMinDb) return true;
     if (cwMinDb !== current.cwMinDb) return true;
+    // Re-showing a source the stream was told to leave out needs its spots.
+    const sources = currentIncludedSources();
+    for (const [name] of STREAM_SOURCE_TOGGLES) {
+        if (sources[name] && current.sources && current.sources[name] === false) return true;
+    }
     return false;
+}
+
+// The stream filter as the session ring's slice filter understands it.
+function currentRingFilter() {
+    const minSnrMode = getMinSnrMode();
+    return {
+        enabledBands: getEnabledBands(),
+        minSnrMode,
+        ssbMinDb: parseInt(document.getElementById('ssb-min-db')?.value || '0', 10),
+        cwMinDb: parseInt(document.getElementById('cw-min-db')?.value || '-15', 10),
+    };
+}
+
+// Re-seed the (just cleared) session ring from the live list. A resuming
+// stream only sends what the client is missing, so the spots it already holds
+// must go back into the ring or the window would be left with a hole.
+function reseedRingFromLiveSpots() {
+    const filter = currentRingFilter();
+    const sources = currentIncludedSources();
+    for (const spot of state.liveSpots) {
+        const src = String(spot.sourceType || '').toLowerCase();
+        if (src && sources[src] === false) continue;
+        if (filterAllowed(spot, filter)) sessionRing.push(spot);
+    }
 }
 
 // Re-connect the live stream when band/SNR filters change ONLY if the new
@@ -141,6 +191,7 @@ function restartStreamIfSubscribed() {
     // band's spots. The new connection's dump re-seeds the recent window;
     // older windows fall through to /api/history.
     sessionRing.clear();
+    reseedRingFromLiveSpots();
     startLiveStream(true);
 }
 
@@ -724,6 +775,43 @@ function resumeFromSoftPause() {
     updateWsprMatrix();
 }
 
+// A tab hidden this long stops receiving spots: nobody is looking, and the
+// stream would keep delivering (and the page keep buffering) the whole time.
+// On return the stream reopens with since=<last id> and only the gap is sent.
+export const HIDDEN_STREAM_CLOSE_MS = 3 * 60 * 1000;
+let hiddenStreamTimer = null;
+
+function clearHiddenStreamTimer() {
+    if (hiddenStreamTimer) {
+        clearTimeout(hiddenStreamTimer);
+        hiddenStreamTimer = null;
+    }
+}
+
+function scheduleHiddenStreamClose() {
+    if (hiddenStreamTimer || !state.eventSource) return;
+    hiddenStreamTimer = setTimeout(() => {
+        hiddenStreamTimer = null;
+        // Re-check at fire time: the timeline (which keeps the ring fed by the
+        // live stream) and operator mode need the connection even when hidden.
+        if (!document.hidden || !state.eventSource || isTimelineActive() || isOpModeActive()) return;
+        state.eventSource.close();
+        state.eventSource = null;
+        if (state.renderInterval) {
+            clearInterval(state.renderInterval);
+            state.renderInterval = null;
+        }
+        state.streamSuspended = true;
+        setStreamStatus({ message: STREAM_STATUS_TEXT.paused, tone: 'warn' });
+    }, HIDDEN_STREAM_CLOSE_MS);
+}
+
+function resumeSuspendedStream() {
+    if (!state.streamSuspended) return;
+    state.streamSuspended = false;
+    startLiveStream(true);
+}
+
 function syncSoftPauseWithVisibility() {
     // Timeline gate (KTD-10): the visibility machinery owns state.softPaused
     // only in live mode. Mid-replay, hiding/refocusing the tab must not pause
@@ -732,8 +820,11 @@ function syncSoftPauseWithVisibility() {
     if (isTimelineActive()) return;
     if (document.hidden) {
         applySoftPause();
+        scheduleHiddenStreamClose();
     } else {
+        clearHiddenStreamTimer();
         resumeFromSoftPause();
+        resumeSuspendedStream();
     }
 }
 
@@ -1566,6 +1657,7 @@ document.getElementById('show-rbn-spots')?.addEventListener('change', (e) => {
         history.replaceState(null, '', url.toString());
     } catch (_) { /* location not available */ }
     scheduleRender();
+    restartStreamIfSubscribed();
 });
 
 // --- WSPR live-map toggle ----------------------------------------------------
@@ -1594,6 +1686,7 @@ document.getElementById('show-wspr-spots')?.addEventListener('change', (e) => {
         history.replaceState(null, '', url.toString());
     } catch (_) { /* location not available */ }
     scheduleRender();
+    restartStreamIfSubscribed();
 });
 
 // --- Band pill interactions (event-delegated on #band-container) ------------
@@ -1812,6 +1905,14 @@ function startLiveStream(preserveData = false) {
         lastRingQth = qth;
     }
 
+    // What the previous connection was streaming, for a cheap resume below.
+    const prevFilter = state.streamedFilter;
+    const prevParams = state.streamedParams;
+    const prevLastId = state.streamLastId;
+    const surroundingsOn = !!document.getElementById('surroundings')?.checked;
+    clearHiddenStreamTimer();
+    state.streamSuspended = false;
+
     if (state.eventSource) state.eventSource.close();
     if (state.renderInterval) clearInterval(state.renderInterval);
 
@@ -1866,6 +1967,8 @@ function startLiveStream(preserveData = false) {
     }
     // Let the server widen the area around a sparse home square (live_area.go).
     params.append('rings', 'auto');
+    // Compact v2 wire format: batched tuple frames, resume ids (stream_wire.go).
+    params.append('v', '2');
 
     // Server-side band/SNR filter: tell the backend which spots the client will
     // actually display so it can avoid sending the rest over the wire.
@@ -1887,6 +1990,39 @@ function startLiveStream(preserveData = false) {
             params.append('cw_min_db', cwMinDb);
         }
     }
+    // Sources the user has hidden are left out server-side (re-showing one
+    // restarts the stream, see streamFilterNeedsReconnect).
+    const sources = currentIncludedSources();
+    for (const [name] of STREAM_SOURCE_TOGGLES) {
+        if (!sources[name]) params.append(`include_${name}`, 'false');
+    }
+
+    // Resume instead of re-downloading the window: when this restart keeps the
+    // same qth/minutes/surroundings and we hold spots from a previous stream,
+    // ask only for what we're missing (server: decideResume in stream.go). The
+    // prev_* fields let the server also resend spots the old filter excluded.
+    const canResume = Boolean(
+        preserveData && prevLastId && prevFilter && prevParams &&
+        prevParams.qth === qth && String(prevParams.minutes) === String(minutes) &&
+        prevParams.surroundings === surroundingsOn && state.liveSpots.length > 0
+    );
+    if (canResume) {
+        params.append('since', prevLastId);
+        params.append('prev', '1');
+        if (prevFilter.bands.size) params.append('prev_enabled_bands', Array.from(prevFilter.bands).sort().join(','));
+        if (prevFilter.minSnrMode && prevFilter.minSnrMode !== 'none') {
+            params.append('prev_min_snr_mode', prevFilter.minSnrMode);
+            if (prevFilter.ssbMinDb != null) params.append('prev_ssb_min_db', prevFilter.ssbMinDb);
+            if (prevFilter.cwMinDb != null) params.append('prev_cw_min_db', prevFilter.cwMinDb);
+        }
+        for (const [name] of STREAM_SOURCE_TOGGLES) {
+            if (prevFilter.sources && prevFilter.sources[name] === false) params.append(`prev_include_${name}`, 'false');
+        }
+        if (Number.isFinite(state.liveArea?.radius)) params.append('prev_radius', state.liveArea.radius);
+    }
+    if (!canResume) state.streamLastId = null;
+    state.streamedParams = { qth, minutes, surroundings: surroundingsOn };
+
     // Remember the exact filter this connection is fetching, so later band/SNR
     // toggles can be handled client-side when the server already sends everything
     // we need.
@@ -1895,6 +2031,7 @@ function startLiveStream(preserveData = false) {
         minSnrMode,
         ssbMinDb,
         cwMinDb,
+        sources,
     };
 
     const liveTitle = liveForText(qth);
@@ -1925,21 +2062,17 @@ function startLiveStream(preserveData = false) {
         if (showBtn) showBtn.style.display = 'block';
     }
 
-    // When preserving data, seed a deduplication set from the existing spots so
-    // the new connection's history dump doesn't create stacked duplicate markers.
-    function spotKey(spot) {
-        const band = String(spot.band || '').toLowerCase();
-        const src = String(spot.sourceType || '').toLowerCase();
-        const sender = String(spot.sender || '').toUpperCase();
-        const receiver = String(spot.receiver || '').toUpperCase();
-        // Bucket age to ~5 s to tolerate timestamp drift between history dumps.
-        // Prefer the server-stamped receive age if already stamped; the prune
-        // mutates ageSeconds, so __recvAge is the stable value.
-        const age = spot.__recvAge ?? spot.ageSeconds ?? 0;
-        const ageBucket = Math.floor(age / 5);
-        return `${src}|${band}|${sender}|${receiver}|${ageBucket}|${spot.snr ?? ''}`;
-    }
-    const seenKeys = preserveData ? new Set(state.liveSpots.map(spotKey)) : null;
+    // Exact-identity dedup of spots the client already holds. The dump of a
+    // (re)connect or resume overlaps what liveSpots has (the resume overlap
+    // window, a reconnect replay, a preserveData restart), so every delivered
+    // spot is checked against this set until history_end; live spots after
+    // that cannot be duplicates. Rebuilt on every open because EventSource
+    // may reconnect on its own and replay the window.
+    const heldKey = (spot) => exactSpotKey(
+        spot,
+        Number.isFinite(spot.__recvMs) ? deriveT(spot.__recvMs, spot.__recvAge ?? spot.ageSeconds ?? 0) : 0);
+    const buildSeenKeys = () => (state.liveSpots.length > 0 ? new Set(state.liveSpots.map(heldKey)) : null);
+    let seenKeys = buildSeenKeys();
 
     state.eventSource = new EventSource(`/api/stream?${params.toString()}`);
     setFaviconColor(FAVICON.waiting);
@@ -1967,6 +2100,7 @@ function startLiveStream(preserveData = false) {
         // otherwise a reconnect paints the dump in chunks mid-stream. Harmless
         // on the initial connect (historyLoading is already true).
         historyLoading = true;
+        seenKeys = buildSeenKeys();
         showLoadingStatus(false);
         setFaviconColor(FAVICON.waiting); // until data arrives
     };
@@ -2005,27 +2139,23 @@ function startLiveStream(preserveData = false) {
         state.liveArea = area;
     });
 
-    state.eventSource.addEventListener('history_end', () => {
+    state.eventSource.addEventListener('history_end', (e) => {
         historyLoading = false;
+        seenKeys = null;
+        if (e?.lastEventId) state.streamLastId = e.lastEventId;
         showLiveStatus();
         lastStatusUpdate = Date.now();
         scheduleRender();
     });
 
-    state.eventSource.onmessage = (e) => {
+    // Adds one delivered spot to the live list and the session ring. Returns
+    // false when it was a duplicate of a spot we already hold.
+    function ingestSpot(spot) {
         totalReceived++;
 
-        let spot;
-        try {
-            spot = JSON.parse(e.data);
-        } catch (err) {
-            console.warn('Malformed spot frame, skipping:', err, e.data);
-            return;
-        }
-
         if (seenKeys) {
-            const key = spotKey(spot);
-            if (seenKeys.has(key)) return;
+            const key = exactSpotKey(spot, deriveT(Date.now(), spot.ageSeconds ?? 0));
+            if (seenKeys.has(key)) return false;
             seenKeys.add(key);
         }
 
@@ -2049,6 +2179,12 @@ function startLiveStream(preserveData = false) {
         // rejects wspr spots (reference-only; time travel skips them).
         sessionRing.push(spot);
         state.liveSpots.push(spot);
+        return true;
+    }
+
+    // Per-frame tail: status text, favicon and the render request. Runs once
+    // per delivered batch rather than once per spot.
+    function afterIngest() {
         setFaviconColor(FAVICON.live);
 
         // Throttle DOM text updates to max ~4 times a second
@@ -2067,6 +2203,43 @@ function startLiveStream(preserveData = false) {
         if (!historyLoading || preserveData) {
             scheduleRender();
         }
+    }
+
+    // v2 frames: one `spots` event per batch (see stream-wire.js).
+    state.eventSource.addEventListener('spots', (e) => {
+        const frame = decodeSpotsFrame(e.data);
+        if (!frame) {
+            console.warn('Malformed spots frame, skipping:', e.data);
+            return;
+        }
+        if (e.lastEventId) state.streamLastId = e.lastEventId;
+        let added = false;
+        for (const spot of frame.spots) {
+            if (ingestSpot(spot)) added = true;
+        }
+        if (added || frame.spots.length === 0) afterIngest();
+    });
+
+    // How the server answered a resume request ("delta" or "full"); the dedup
+    // above makes both safe, this is only kept for diagnostics.
+    state.eventSource.addEventListener('resume', (e) => {
+        try {
+            state.lastResumeMode = JSON.parse(e.data)?.mode || null;
+        } catch (_) {
+            state.lastResumeMode = null;
+        }
+    });
+
+    // v1 frames (one spot per event) stay supported.
+    state.eventSource.onmessage = (e) => {
+        let spot;
+        try {
+            spot = JSON.parse(e.data);
+        } catch (err) {
+            console.warn('Malformed spot frame, skipping:', err, e.data);
+            return;
+        }
+        if (ingestSpot(spot)) afterIngest();
     };
 
     state.eventSource.onerror = (e) => {
@@ -2205,6 +2378,10 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
             state.qthLayer = null;
         }
         state.streamedFilter = null;
+        state.streamedParams = null;
+        state.streamLastId = null;
+        state.streamSuspended = false;
+        clearHiddenStreamTimer();
 
         setSubmitMode(btnSubmit, 'go');
         setStreamStatus({ message: STREAM_STATUS_TEXT.idle });

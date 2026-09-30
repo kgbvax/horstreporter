@@ -339,6 +339,9 @@ function ringCohortSatisfies(f) {
     // threshold would exclude spots the stream delivered).
     if (f.minSnrMode === 'ssb' && f.ssbMinDb < parseInt(sf.ssbMinDb ?? '0', 10)) return false;
     if (f.minSnrMode === 'cw' && f.cwMinDb < parseInt(sf.cwMinDb ?? '-15', 10)) return false;
+    // A source the stream was told to leave out (include_rbn=false) but the UI
+    // now shows again is a widening too: the ring never received it.
+    if (sf.sources && sf.sources.rbn === false && document.getElementById('show-rbn-spots')?.checked !== false) return false;
     return true;
 }
 

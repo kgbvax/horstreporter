@@ -1,7 +1,7 @@
 package main
 
 import (
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -26,6 +26,42 @@ type Hub struct {
 	sync.RWMutex
 	clients map[*Client]bool
 	history []MQTTMessage
+	// baseSeq is the count of messages that were in history before
+	// history[0]: history[i] has sequence number baseSeq+i+1 (1-based, so a
+	// client's "last seen" of 0 means nothing seen). It lets resuming clients
+	// ask for "everything after seq N" without a per-message field.
+	baseSeq uint64
+}
+
+// hubEpoch identifies this process's sequence space. Sequence numbers restart
+// after a process restart, so resume ids carry the epoch and a mismatch falls
+// back to a full history dump.
+var hubEpoch = strconv.FormatInt(time.Now().UnixNano(), 36)
+
+// highSeqLocked is the sequence number of the newest history message (0 when
+// nothing has ever been recorded). Caller holds h's lock.
+func (h *Hub) highSeqLocked() uint64 { return h.baseSeq + uint64(len(h.history)) }
+
+// dropFrontLocked removes the n oldest history messages, keeping the
+// sequence numbers of the remainder stable. Caller holds the write lock.
+func (h *Hub) dropFrontLocked(n int) {
+	if n <= 0 {
+		return
+	}
+	if n >= len(h.history) {
+		h.baseSeq += uint64(len(h.history))
+		h.history = make([]MQTTMessage, 0)
+		return
+	}
+	h.baseSeq += uint64(n)
+	h.history = h.history[n:]
+}
+
+// replaceHistoryLocked swaps in a new history (startup backfill). The old
+// sequence range is retired so ids never repeat. Caller holds the write lock.
+func (h *Hub) replaceHistoryLocked(merged []MQTTMessage) {
+	h.baseSeq += uint64(len(h.history))
+	h.history = merged
 }
 
 var hub = &Hub{
@@ -42,6 +78,7 @@ var propBaseline *propBaselineEngine
 func (h *Hub) broadcastMsg(m MQTTMessage) {
 	h.Lock()
 	h.history = append(h.history, m)
+	seq := h.highSeqLocked()
 	propBaseline.Observe(m)
 	clients := make([]*Client, 0, len(h.clients))
 	for c := range h.clients {
@@ -52,43 +89,9 @@ func (h *Hub) broadcastMsg(m MQTTMessage) {
 	now := time.Now().Unix()
 	for _, client := range clients {
 		if spot, ok := matchAndCreateSpot(client, m, now); ok {
+			spot.Seq = seq
 			safeSend(client.send, spot)
 		}
-	}
-}
-
-// broadcastWSPRToAll sends a WSPR spot to every connected client regardless of
-// their QTH. WSPR is a global propagation reference — it shows which bands
-// have paths open right now, not just paths involving the operator's own
-// station. The client-side show-wspr-spots toggle lets users hide them.
-func (h *Hub) broadcastWSPRToAll(m MQTTMessage) {
-	h.Lock()
-	h.history = append(h.history, m)
-	propBaseline.Observe(m)
-	clients := make([]*Client, 0, len(h.clients))
-	for c := range h.clients {
-		clients = append(clients, c)
-	}
-	h.Unlock()
-
-	now := time.Now().Unix()
-	for _, client := range clients {
-		spot := Spot{
-			Lat:             0,
-			Lng:             0,
-			SNR:             m.RP,
-			AgeSeconds:      ageClamped(now, m.T),
-			Locator:         strings.ToUpper(strings.TrimSpace(m.RL)),
-			ReporterLocator: strings.ToUpper(strings.TrimSpace(m.SL)),
-			SourceType:      "wspr",
-			Band:            m.B,
-			Sender:          m.SC,
-			Receiver:        m.RC,
-		}
-		lat, lng := locatorToLatLng(spot.Locator)
-		spot.Lat = lat
-		spot.Lng = lng
-		safeSend(client.send, spot)
 	}
 }
 
