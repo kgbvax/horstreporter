@@ -46,7 +46,8 @@ function parseRgb(str) {
 }
 
 describe('wspr-matrix heat styles (viridis / inferno)', () => {
-    const { styleFill, surgeStrength, setStyle } = __test;
+    const { styleFill, rampStops, legendHtml, surgeStrength, setStyle, ringColor, RING_COLOR } = __test;
+    const { VIRIDIS_STOPS, INFERNO_STOPS, VIRIDIS_LIGHT_STOPS, INFERNO_LIGHT_STOPS } = __test;
     let store;
 
     beforeEach(() => {
@@ -56,31 +57,95 @@ describe('wspr-matrix heat styles (viridis / inferno)', () => {
         reset();
     });
 
-    it('viridis hits its reference endpoints and ignores the theme', () => {
-        expect(styleFill('viridis', 0)).toEqual([68, 1, 84]);   // #440154
-        expect(styleFill('viridis', 1)).toEqual([253, 231, 37]); // #fde725
+    it('dark theme: viridis hits its reference endpoints', () => {
+        expect(styleFill('viridis', 0, 'dark')).toEqual([68, 1, 84]);   // #440154
+        expect(styleFill('viridis', 1, 'dark')).toEqual([253, 231, 37]); // #fde725
     });
 
-    it('inferno hits its reference endpoints', () => {
-        expect(styleFill('inferno', 0)).toEqual([0, 0, 4]);        // #000004
-        expect(styleFill('inferno', 1)).toEqual([252, 255, 164]);  // #fcffa4
+    it('dark theme: inferno hits its reference endpoints', () => {
+        expect(styleFill('inferno', 0, 'dark')).toEqual([0, 0, 4]);        // #000004
+        expect(styleFill('inferno', 1, 'dark')).toEqual([252, 255, 164]);  // #fcffa4
     });
 
-    it('keeps spot-count numerals at WCAG AA across both heat ramps', () => {
+    it('light theme: both ramps start pale and end on the reference dark stop', () => {
+        // Sparse = a faint tint next to the white panel, peak = the deep end
+        // of the same colormap; inferno stops short of the #000004 tail.
+        expect(styleFill('viridis', 0, 'light')).toEqual([254, 248, 190]); // #fef8be
+        expect(styleFill('viridis', 1, 'light')).toEqual([68, 1, 84]);     // #440154
+        expect(styleFill('inferno', 0, 'light')).toEqual([253, 255, 196]); // #fdffc4
+        expect(styleFill('inferno', 1, 'light')).toEqual([27, 12, 65]);    // #1b0c41
+    });
+
+    it('theme defaults to body[data-theme] (light unless dark)', () => {
+        expect(styleFill('viridis', 0)).toEqual(styleFill('viridis', 0, 'light'));
+        document.body.setAttribute('data-theme', 'dark');
+        expect(styleFill('viridis', 0)).toEqual(styleFill('viridis', 0, 'dark'));
+    });
+
+    it('visual weight tracks activity in both themes: chips brighten on dark, darken on light', () => {
+        // Sequential ramps must be lightness-monotone in the direction that
+        // moves AWAY from the panel: dark theme low → high gets lighter, light
+        // theme low → high gets darker. A dark chip on the least active path
+        // of a white panel was the bug this guards.
         for (const style of ['viridis', 'inferno']) {
-            for (let i = 0; i <= 40; i++) {
-                const bg = styleFill(style, i / 40);
-                const ink = parseRgb(cellInk(bg));
-                const bgL = luminance(bg), inkL = luminance(ink);
-                const ratio = (Math.max(bgL, inkL) + 0.05) / (Math.min(bgL, inkL) + 0.05);
-                expect(ratio, `${style} intensity ${i / 40} on rgb(${bg})`).toBeGreaterThanOrEqual(4.5);
+            for (const theme of ['dark', 'light']) {
+                let prev = luminance(styleFill(style, 0, theme));
+                for (let i = 1; i <= 40; i++) {
+                    const l = luminance(styleFill(style, i / 40, theme));
+                    if (theme === 'dark') expect(l, `${style}/${theme} @${i / 40}`).toBeGreaterThanOrEqual(prev - 1e-9);
+                    else expect(l, `${style}/${theme} @${i / 40}`).toBeLessThanOrEqual(prev + 1e-9);
+                    prev = l;
+                }
+            }
+            // Light theme: the sparse end sits close to the white page, the
+            // peak carries real weight.
+            expect(luminance(styleFill(style, 0, 'light'))).toBeGreaterThan(0.85);
+            expect(luminance(styleFill(style, 1, 'light'))).toBeLessThan(0.05);
+        }
+    });
+
+    it('rampStops picks the theme table, unknown styles fall back to viridis', () => {
+        expect(rampStops('viridis', 'dark')).toBe(VIRIDIS_STOPS);
+        expect(rampStops('inferno', 'dark')).toBe(INFERNO_STOPS);
+        expect(rampStops('viridis', 'light')).toBe(VIRIDIS_LIGHT_STOPS);
+        expect(rampStops('inferno', 'light')).toBe(INFERNO_LIGHT_STOPS);
+        expect(rampStops('aqua', 'light')).toBe(VIRIDIS_LIGHT_STOPS);
+        expect(rampStops('aqua', 'dark')).toBe(VIRIDIS_STOPS);
+    });
+
+    it('keeps spot-count numerals at WCAG AA across both heat ramps in both themes', () => {
+        for (const style of ['viridis', 'inferno']) {
+            for (const theme of ['dark', 'light']) {
+                for (let i = 0; i <= 40; i++) {
+                    const bg = styleFill(style, i / 40, theme);
+                    const ink = parseRgb(cellInk(bg));
+                    const bgL = luminance(bg), inkL = luminance(ink);
+                    const ratio = (Math.max(bgL, inkL) + 0.05) / (Math.min(bgL, inkL) + 0.05);
+                    expect(ratio, `${style}/${theme} intensity ${i / 40} on rgb(${bg})`).toBeGreaterThanOrEqual(4.5);
+                }
             }
         }
     });
 
     it('clamps out-of-range intensities', () => {
-        expect(styleFill('viridis', -1)).toEqual(styleFill('viridis', 0));
-        expect(styleFill('inferno', 5)).toEqual(styleFill('inferno', 1));
+        for (const theme of ['dark', 'light']) {
+            expect(styleFill('viridis', -1, theme)).toEqual(styleFill('viridis', 0, theme));
+            expect(styleFill('inferno', 5, theme)).toEqual(styleFill('inferno', 1, theme));
+        }
+    });
+
+    it('legend scale follows the theme ramp', () => {
+        runtime.style = 'inferno';
+        expect(legendHtml('dark')).toContain(`linear-gradient(90deg, ${INFERNO_STOPS.join(', ')})`);
+        expect(legendHtml('light')).toContain(`linear-gradient(90deg, ${INFERNO_LIGHT_STOPS.join(', ')})`);
+        runtime.style = 'viridis';
+        expect(legendHtml('light')).toContain(`linear-gradient(90deg, ${VIRIDIS_LIGHT_STOPS.join(', ')})`);
+    });
+
+    it('ring color: amber on the dark theme, the chip ink on the light theme', () => {
+        expect(ringColor('dark', 'rgb(0, 0, 0)')).toBe(RING_COLOR);
+        expect(ringColor('light', 'rgb(0, 0, 0)')).toBe('rgb(0, 0, 0)');
+        expect(ringColor('light', 'rgb(255, 255, 255)')).toBe('rgb(255, 255, 255)');
     });
 
     it('surgeStrength: z >= 4 or >=50% source agreement is the strong mark', () => {
@@ -103,18 +168,42 @@ describe('wspr-matrix heat styles (viridis / inferno)', () => {
         expect(html).not.toContain('wspr-matrix-surge');
     });
 
-    it('inferno style: atypical renders an amber ring, thicker when strong', () => {
+    it('inferno style (dark theme): atypical renders an amber ring, thicker when strong', () => {
         runtime.style = 'inferno';
         const mild = renderCell('10m', 'CAR', makeCell({
             band: '10m', region: 'CAR', atypical: { z_score: 2.4, confidence: 0.5 },
-        }), 12, 'light');
+        }), 12, 'dark');
         expect(mild).toContain('box-shadow: inset 0 0 0 2px #f5b83d');
         const strong = renderCell('10m', 'CAR', makeCell({
             band: '10m', region: 'CAR', atypical: { z_score: 3.1, confidence: 0.9 },
             active_sources: ['wspr', 'pskr'], atypical_agreement: 1.0,
-        }), 12, 'light');
+        }), 12, 'dark');
         expect(strong).toContain('box-shadow: inset 0 0 0 3px #f5b83d');
         expect(strong).not.toContain('wspr-badge-atypical');
+    });
+
+    it('inferno style (light theme): the surge ring takes the chip ink, never amber', () => {
+        runtime.style = 'inferno';
+        // Peak chip (12 of 12): deep purple, white ink → white ring.
+        const peak = renderCell('10m', 'CAR', makeCell({
+            band: '10m', region: 'CAR', atypical: { z_score: 2.4, confidence: 0.5 },
+        }), 12, 'light');
+        expect(peak).toContain('color: rgb(255, 255, 255); box-shadow: inset 0 0 0 2px rgb(255, 255, 255)');
+        // Sparse chip (1 of 400): pale cream, black ink → black ring.
+        const sparse = renderCell('10m', 'CAR', makeCell({
+            band: '10m', region: 'CAR', spot_count: 1, atypical: { z_score: 4.2, confidence: 0.9 },
+        }), 400, 'light');
+        expect(sparse).toContain('color: rgb(0, 0, 0); box-shadow: inset 0 0 0 3px rgb(0, 0, 0)');
+        expect(sparse).not.toContain('#f5b83d');
+    });
+
+    it('viridis chevrons take the chip ink in both themes', () => {
+        runtime.style = 'viridis';
+        const cell = makeCell({ band: '10m', region: 'CAR', spot_count: 1, atypical: { z_score: 2.4, confidence: 0.5 } });
+        // 1 of 400 on the light theme: pale chip, black ink.
+        expect(renderCell('10m', 'CAR', cell, 400, 'light')).toContain('fill="rgb(0, 0, 0)"');
+        // Same cell on the dark theme: deep purple chip, white ink.
+        expect(renderCell('10m', 'CAR', cell, 400, 'dark')).toContain('fill="rgb(255, 255, 255)"');
     });
 
     it('setStyle persists, resets the render fingerprint, rejects unknown styles', () => {

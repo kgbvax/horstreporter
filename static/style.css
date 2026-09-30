@@ -642,7 +642,9 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
    near-black) barely separates from the dark panel, so the 14% ring above is
    too faint to mark the chip boundary; 45% keeps it >=3:1 against those dark
    chips (WCAG 1.4.11; brighter chips stand off the panel on their own)
-   without touching the light theme. */
+   without touching the light theme. The light theme runs the ramps the other
+   way (pale low end, see rampStops in wspr-matrix.js), so its faint chips are
+   near-white on white and the 14% ring is what draws their boundary. */
 body[data-theme="dark"] .wspr-matrix-cell {
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 45%, transparent);
 }
@@ -1009,7 +1011,9 @@ body[data-theme="dark"] .wspr-matrix-cell {
     background: var(--control-border);
 }
 /* Heat-style anomaly glyphs: stacked chevrons (viridis) and the legend's
-   ring swatch (inferno). Glyphs ride the numeral ink flip via currentColor. */
+   ring swatch (inferno). Glyphs ride the numeral ink flip via currentColor;
+   the ring is amber on the dark theme and ink-colored on the light theme
+   (wspr-matrix.js ringColor), and the swatch mirrors that. */
 .wspr-chev {
     display: inline-flex;
     flex-direction: column;
@@ -1024,8 +1028,11 @@ body[data-theme="dark"] .wspr-matrix-cell {
     width: 10px;
     height: 10px;
     border-radius: 2px;
-    border: 2px solid #f5b83d;
+    border: 2px solid currentColor;
     vertical-align: middle;
+}
+body[data-theme="dark"] .wspr-ring-swatch {
+    border-color: #f5b83d;
 }
 .wspr-sr-only {
     position: absolute;
