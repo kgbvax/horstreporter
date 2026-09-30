@@ -150,6 +150,14 @@ type streamAccountingState struct {
 	sessionsCompleted atomic.Int64
 	activeSessions    atomic.Int64
 	bytesTotal        atomic.Int64
+
+	// Wire-level counters (v1 and v2), including sessions still open.
+	bytesWire     atomic.Int64 // post-gzip bytes written to stream responses
+	historyBytes  atomic.Int64 // post-gzip bytes of the initial history dumps
+	spotsSent     atomic.Int64
+	framesFlushed atomic.Int64
+	resumeDelta   atomic.Int64
+	resumeFull    atomic.Int64
 }
 
 func (a *streamAccountingState) startSession() {
@@ -515,7 +523,7 @@ func main() {
 			logInfo("Startup spot-cache backfill failed after %d spots (last %d minutes, include_dxcluster=%v): %v", totalLoaded, backfillMinutes, includeDXCluster, backfillErr)
 		} else if totalLoaded > 0 {
 			hub.Lock()
-			hub.history = merged
+			hub.replaceHistoryLocked(merged)
 			wsprSeen.seedFromHistory(merged, time.Now().Unix())
 			hub.Unlock()
 			liveHistoryCompleteSince.Store(windowStart)
@@ -843,7 +851,7 @@ func pruneLiveHistory(now int64, retentionMinutes int) {
 
 	if keepIdx == len(hub.history) {
 		if len(hub.history) > 0 {
-			hub.history = make([]MQTTMessage, 0)
+			hub.dropFrontLocked(len(hub.history))
 		}
 		return
 	}
@@ -855,6 +863,6 @@ func pruneLiveHistory(now int64, retentionMinutes int) {
 		// ~86MB tail copy under the write lock that blocked the 20k/min ingest
 		// append path every 5 min. The backing array self-compacts on the next
 		// append-driven reallocation, so the dead prefix is reclaimed shortly.
-		hub.history = hub.history[keepIdx:]
+		hub.dropFrontLocked(keepIdx)
 	}
 }

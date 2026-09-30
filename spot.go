@@ -15,6 +15,11 @@ type Spot struct {
 	Band            string  `json:"band"`
 	Sender          string  `json:"sender"`
 	Receiver        string  `json:"receiver"`
+
+	// Stream-only bookkeeping (never serialized): the source message's unix
+	// time (exact spot time for the v2 wire) and its hub sequence number.
+	T   int64  `json:"-"`
+	Seq uint64 `json:"-"`
 }
 
 func sourceTypeForMessage(m MQTTMessage) string {
@@ -145,6 +150,7 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 		Band:            m.B,
 		Sender:          m.SC,
 		Receiver:        m.RC,
+		T:               m.T,
 	}, true
 }
 
