@@ -515,7 +515,7 @@ export function getMercatorDxccLabelsEnabled() {
 
 // locatorToLatLngJS converts a Maidenhead locator to (lat, lng).
 // Mirrors Go's spot.go:locatorToLatLng. Returns null for invalid locators.
-function locatorToLatLngJS(locator) {
+export function locatorToLatLngJS(locator) {
     if (!locator || typeof locator !== 'string') return null;
     locator = locator.toUpperCase().trim();
     if (locator.length < 2) return null;

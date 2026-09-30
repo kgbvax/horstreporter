@@ -1,15 +1,15 @@
 package main
 
 import (
-	"compress/gzip"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -221,6 +221,7 @@ type countingResponseWriter struct {
 func (w *countingResponseWriter) Write(p []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(p)
 	w.bytesWritten += int64(n)
+	streamAccounting.bytesWire.Add(int64(n))
 	return n, err
 }
 
@@ -265,147 +266,6 @@ type squareDetailsResponse struct {
 // rings) for region feeds. ~30 rings ≈ ±30° latitude — continental scale —
 // while keeping the match O(1) per spot.
 const maxAreaRings = 30
-
-func streamHandler(w http.ResponseWriter, r *http.Request) {
-	qth, surroundings := resolveQTHQuery(r)
-	minutesStr := r.URL.Query().Get("minutes")
-
-	if qth == "" {
-		http.Error(w, "qth required", http.StatusBadRequest)
-		return
-	}
-
-	minutes, err := strconv.Atoi(minutesStr)
-	if err != nil || minutes <= 0 {
-		minutes = 15
-	}
-	if minutes > 60 {
-		minutes = 60
-	}
-	historySeconds := int64(minutes * 60)
-
-	qthSet := qthSquares(qth, surroundings)
-
-	client := &Client{
-		qthSet: qthSet,
-		send:   make(chan Spot, 10000), // Buffer to handle initial history dump
-	}
-
-	// Optional configurable "area of interest": rings=N (>0) with a locator
-	// qth matches any sender/receiver within N grid-squares of the qth, for
-	// region feeds (e.g. horstprop); rings=auto lets the server widen the
-	// block until enough bands carry a full sample (live_area.go). Read-only;
-	// default behaviour unchanged. The area is announced as an `area` event.
-	area := liveAreaForRequest(r, qth, surroundings, time.Now().Unix())
-	if area != nil {
-		client.areaActive = true
-		client.areaX, client.areaY, client.areaRings = area.x, area.y, area.Radius
-	}
-
-	filter := newStreamClientFilter(r)
-
-	now := time.Now().Unix()
-	cutoff := now - historySeconds
-
-	// Add client and copy the relevant history window under the write lock.
-	// matchAndCreateSpot processing happens outside the lock so broadcastMsg
-	// is not stalled for the duration of the history scan.
-	hub.Lock()
-	if maxClients > 0 && len(hub.clients) >= maxClients {
-		hub.Unlock()
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		fmt.Fprintf(w, "event: server_error\ndata: Server is at capacity. Please try again later.\n\n")
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
-		return
-	}
-	hub.clients[client] = true
-	streamAccounting.startSession()
-	logInfo("New client stream started for qth: %v (History: %d mins)", qthSet, minutes)
-
-	idx := sort.Search(len(hub.history), func(i int) bool {
-		return hub.history[i].T >= cutoff
-	})
-	historyWindow := make([]MQTTMessage, len(hub.history)-idx)
-	copy(historyWindow, hub.history[idx:])
-	hub.Unlock()
-
-	var historySpots []Spot
-	for _, msg := range historyWindow {
-		if spot, ok := matchAndCreateSpot(client, msg, now); ok && filter.spotAllowed(spot) {
-			historySpots = append(historySpots, spot)
-		}
-	}
-
-	var cw *countingResponseWriter
-	defer func() {
-		if cw != nil {
-			streamAccounting.completeSession(cw.bytesWritten)
-		}
-		hub.Lock()
-		if _, ok := hub.clients[client]; ok {
-			delete(hub.clients, client)
-			close(client.send)
-		}
-		hub.Unlock()
-		logInfo("Client stream closed for qth: %v", qthSet)
-	}()
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	cw = &countingResponseWriter{ResponseWriter: w}
-	var writer io.Writer = cw
-	var gz *gzip.Writer
-
-	if compressStream && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-		w.Header().Set("Content-Encoding", "gzip")
-		gz = gzip.NewWriter(cw)
-		writer = gz
-		defer gz.Close()
-	}
-
-	if area != nil {
-		b, _ := json.Marshal(area)
-		fmt.Fprintf(writer, "event: area\ndata: %s\n\n", string(b))
-	}
-	for _, spot := range historySpots {
-		b, _ := json.Marshal(toStreamSpot(spot))
-		fmt.Fprintf(writer, "data: %s\n\n", string(b))
-	}
-	fmt.Fprintf(writer, "event: history_end\ndata: {}\n\n")
-
-	if gz != nil {
-		gz.Flush()
-	}
-	cw.Flush()
-
-	ctx := r.Context()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case spot, ok := <-client.send:
-			if !ok {
-				return
-			}
-			if !filter.spotAllowed(spot) {
-				continue
-			}
-			b, _ := json.Marshal(toStreamSpot(spot))
-			fmt.Fprintf(writer, "data: %s\n\n", string(b))
-			if gz != nil {
-				gz.Flush()
-			}
-			cw.Flush()
-		}
-	}
-}
 
 func squareDetailsHandler(w http.ResponseWriter, r *http.Request) {
 	qth, surroundings := resolveQTHQuery(r)
@@ -489,18 +349,60 @@ type streamClientFilter struct {
 	minSnrMode   string
 	ssbMinDb     int
 	cwMinDb      int
+	// excludeDx/excludeRBN/excludeWSPR drop whole sources (include_*=false on
+	// the stream). Zero value keeps every source.
+	excludeDx   bool
+	excludeRBN  bool
+	excludeWSPR bool
 }
 
+// newStreamClientFilter reads the band/SNR filter (shared with /api/history).
 func newStreamClientFilter(r *http.Request) streamClientFilter {
-	return streamClientFilter{
-		enabledBands: parseEnabledBands(r.URL.Query().Get("enabled_bands")),
-		minSnrMode:   strings.ToLower(strings.TrimSpace(r.URL.Query().Get("min_snr_mode"))),
-		ssbMinDb:     parseIntDefault(r.URL.Query().Get("ssb_min_db"), 0),
-		cwMinDb:      parseIntDefault(r.URL.Query().Get("cw_min_db"), -15),
+	return streamFilterFromQuery(r.URL.Query(), "", false)
+}
+
+// streamFilterFromQuery parses the filter from q, reading each parameter as
+// prefix+name (the resume protocol sends the previous filter as prev_*).
+// withSources also honours include_dxcluster/include_rbn/include_wspr.
+func streamFilterFromQuery(q url.Values, prefix string, withSources bool) streamClientFilter {
+	f := streamClientFilter{
+		enabledBands: parseEnabledBands(q.Get(prefix + "enabled_bands")),
+		minSnrMode:   strings.ToLower(strings.TrimSpace(q.Get(prefix + "min_snr_mode"))),
+		ssbMinDb:     parseIntDefault(q.Get(prefix+"ssb_min_db"), 0),
+		cwMinDb:      parseIntDefault(q.Get(prefix+"cw_min_db"), -15),
 	}
+	if withSources {
+		f.excludeDx = !parseIncludeFlag(q, prefix+"include_dxcluster")
+		f.excludeRBN = !parseIncludeFlag(q, prefix+"include_rbn")
+		f.excludeWSPR = !parseIncludeFlag(q, prefix+"include_wspr")
+	}
+	return f
+}
+
+// parseIncludeFlag reads a boolean query flag that defaults to true.
+func parseIncludeFlag(q url.Values, name string) bool {
+	raw := strings.TrimSpace(q.Get(name))
+	if raw == "" {
+		return true
+	}
+	return strings.EqualFold(raw, "true") || raw == "1"
 }
 
 func (f streamClientFilter) spotAllowed(s Spot) bool {
+	switch s.SourceType {
+	case "dxcluster":
+		if f.excludeDx {
+			return false
+		}
+	case "rbn":
+		if f.excludeRBN {
+			return false
+		}
+	case "wspr":
+		if f.excludeWSPR {
+			return false
+		}
+	}
 	if len(f.enabledBands) > 0 {
 		if _, ok := f.enabledBands[strings.ToLower(strings.TrimSpace(s.Band))]; !ok {
 			return false
@@ -725,6 +627,13 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		WsprPersisted        int64                `json:"wspr_persisted_spots"`
 		WsprForwarded        int64                `json:"wspr_live_forwarded"`
 		WsprDroppedLoc       int64                `json:"wspr_dropped_no_locator"`
+		WsprDuplicateRows    int64                `json:"wspr_duplicate_rows"`
+		StreamBytesWire      int64                `json:"stream_bytes_wire_total"`
+		StreamHistoryBytes   int64                `json:"stream_history_bytes_total"`
+		StreamSpotsSent      int64                `json:"stream_spots_sent_total"`
+		StreamFrames         int64                `json:"stream_frames_total"`
+		StreamResumeDelta    int64                `json:"stream_resume_delta_total"`
+		StreamResumeFull     int64                `json:"stream_resume_full_total"`
 		Postgres             *postgresStatsBlock  `json:"postgres,omitempty"`
 		PropIntel            *propIntelStatsBlock `json:"prop_intel"`
 		Push                 *pushStatsBlock      `json:"push"`
@@ -763,6 +672,13 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		WsprPersisted:        wsprPersisted,
 		WsprForwarded:        wsprForwarded,
 		WsprDroppedLoc:       wsprDroppedNoLoc,
+		WsprDuplicateRows:    wsprAccounting.duplicateRows.Load(),
+		StreamBytesWire:      streamAccounting.bytesWire.Load(),
+		StreamHistoryBytes:   streamAccounting.historyBytes.Load(),
+		StreamSpotsSent:      streamAccounting.spotsSent.Load(),
+		StreamFrames:         streamAccounting.framesFlushed.Load(),
+		StreamResumeDelta:    streamAccounting.resumeDelta.Load(),
+		StreamResumeFull:     streamAccounting.resumeFull.Load(),
 		Postgres:             postgres,
 		PropIntel: &propIntelStatsBlock{
 			Requests:       propIntelReqs,
@@ -990,6 +906,7 @@ func noCache(h http.Handler) http.Handler {
 // up immediately. ETags are precomputed once at startup.
 func cachedStaticHandler(staticFS fs.FS) http.Handler {
 	etags := make(map[string]string)
+	gzVariants := make(map[string]gzipStaticVariant)
 	_ = fs.WalkDir(staticFS, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
@@ -999,7 +916,13 @@ func cachedStaticHandler(staticFS fs.FS) http.Handler {
 			return nil
 		}
 		sum := sha256.Sum256(b)
-		etags["/"+p] = `"` + hex.EncodeToString(sum[:16]) + `"`
+		etag := `"` + hex.EncodeToString(sum[:16]) + `"`
+		etags["/"+p] = etag
+		if compressStream {
+			if v, ok := buildGzipStaticVariant(p, b, etag); ok {
+				gzVariants["/"+p] = v
+			}
+		}
 		return nil
 	})
 
@@ -1012,6 +935,18 @@ func cachedStaticHandler(staticFS fs.FS) http.Handler {
 		if etag, ok := etags[lookup]; ok {
 			w.Header().Set("ETag", etag)
 			w.Header().Set("Cache-Control", "no-cache")
+		}
+		if v, ok := gzVariants[lookup]; ok {
+			// Same content under two representations: tell caches.
+			w.Header().Add("Vary", "Accept-Encoding")
+			if r.Header.Get("Range") == "" && acceptsGzip(r) && (r.URL.Path == lookup || r.URL.Path == "/") {
+				w.Header().Set("ETag", v.etag)
+				w.Header().Set("Content-Type", v.contentType)
+				w.Header().Set("Content-Encoding", "gzip")
+				// ServeContent handles If-None-Match against the gz ETag.
+				http.ServeContent(w, r, lookup, time.Time{}, bytes.NewReader(v.body))
+				return
+			}
 		}
 		// http.ServeContent (used by FileServer) honors the ETag we set above for
 		// If-None-Match, returning 304 when the client's copy is current.

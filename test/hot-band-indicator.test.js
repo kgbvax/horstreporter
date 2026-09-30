@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { hexToRgba, initHotBandIndicator } from '../static/hot-band-indicator.js';
+import { resetHotBandsClient } from '../static/hot-bands-client.js';
 
 describe('hexToRgba (hot-band variant)', () => {
     it('converts ramp endpoints', () => {
@@ -52,6 +53,7 @@ describe('initHotBandIndicator pill copy', () => {
     let ctl = null;
 
     beforeEach(() => {
+        resetHotBandsClient();
         document.body.innerHTML = `
             <input type="checkbox" class="band-enable" value="20m" checked>
             <div id="hot-band-indicator" class="is-hidden"></div>

@@ -24,8 +24,15 @@ Related contracts documented elsewhere:
   (revalidate → 304).
 - **pprof**: `-pprof` flag starts a separate listener on `localhost:6060` —
   not part of this API.
-- JSON responses are pretty-indented bodies with `Content-Type:
-  application/json` (proplab endpoints add `Cache-Control: no-store`).
+- JSON responses are compact bodies with `Content-Type: application/json`
+  (proplab endpoints add `Cache-Control: no-store`).
+- With `-compress` (default on) responses are gzip-encoded for clients that
+  send `Accept-Encoding: gzip`: `/api/stream` compresses itself (sync flush per
+  batch), `/api/history` bodies are always pre-gzipped, and every other
+  compressible response of at least 1 KiB (JSON, JS, CSS, HTML) goes through a
+  middleware that adds `Vary: Accept-Encoding`. Embedded static files are
+  precompressed once at startup and served with a `…-gz"` ETag. HEAD, Range and
+  `/pathscope/` requests are never compressed.
 - There is **no auth** on any endpoint; production is a public read-only
   service. There is **no health/readiness endpoint** — `GET /api/stats` is
   the closest.
@@ -72,11 +79,28 @@ Params: `qth` (required), `minutes` (default 15, max 60), `surroundings`,
 sender/receiver within N grid squares of a locator qth; 0 disables; used by
 horstprop's region feed, and `auto` by the web app).
 
+Server-side filters (spots the client would discard are not sent):
+`enabled_bands` (CSV; empty = all), `min_snr_mode` (`"ssb"`|`"cw"`, applies to
+FT8/PSKReporter and RBN spots only), `ssb_min_db` (default 0), `cw_min_db`
+(default -15), `include_dxcluster` / `include_rbn` / `include_wspr` (default
+true; `false` drops that source — the web app sends `include_rbn` and
+`include_wspr` for sources the user has hidden).
+
+Every source is scoped to the client's area: WSPR, RBN, DX cluster and
+PSKReporter spots are only sent when the sender or receiver square is inside the
+qth (and `rings`) area. `reporterLocator` is always the receiving station's
+square (PSKReporter `RL`; DX cluster, RBN and WSPR `SL`).
+
 With `rings`, the first frame is `event: area` carrying the `area` object above
 (before the history dump, and again after every reconnect). Without `rings`
 the stream is unchanged.
 
-Response `text/event-stream`, CORS `*`. Frames:
+Response `text/event-stream`, CORS `*`. The stream is **batched**: live spots
+are coalesced and flushed at most once per second (or at 500 spots), and a
+`: hb` comment is written after 25 s idle so proxies keep the connection open.
+A failed write ends the session. Two wire formats:
+
+**v1 (default)** — one frame per spot:
 
 ```
 data: {"lat":…,"lng":…,"snr":…,"ageSeconds":…,"locator":"JO62qm", …}
@@ -86,14 +110,49 @@ data: {}
 …then live frames in the same shape…
 ```
 
-Spot fields: `lat`, `lng` float; `snr` int; `ageSeconds`; `locator`;
-`reporterLocator` (omitempty); `sourceType`
-(`""`|`"dxcluster"`|`"rbn"`|`"wspr"`); `band`; `sender`, `receiver` (only
-for DX-cluster spots).
+Spot fields: `lat`, `lng` float; `snr` int; `ageSeconds`; `locator` (the far
+end); `reporterLocator` (omitempty); `sourceType`
+(`"mqtt"`|`"dxcluster"`|`"rbn"`|`"wspr"`); `band`; `sender`, `receiver` (only
+for DX-cluster spots). v1 has no ids and no resume.
+
+**v2 (`v=2`, opt-in; used by the web app)** — compact tuples in batched frames,
+about a quarter of the v1 bytes:
+
+```
+event: area                                   (only with rings)
+event: resume  data: {"mode":"delta"} | {"mode":"full","reason":"epoch|area|bad_id"}
+event: spots   data: {"n":<server unix s>,"s":[[loc,band,snr,age,rep?,src?,snd?,rcv?],…]}
+…history in chunks of ≤1000 spots, no id…
+event: history_end   id: <epoch>-<seq>   data: {"n":…,"count":N}
+event: spots   id: <epoch>-<seq>   data: {…}                 (live batches)
+```
+
+Tuple: `age = n − spot time` (may be negative under clock skew; clamp to 0, the
+exact time is `n − age`); `src` omitted or `""` = `mqtt`, `"d"` dxcluster,
+`"r"` rbn, `"w"` wspr, anything else verbatim; `snd`/`rcv` only for
+DX-cluster spots; trailing empty elements are trimmed (so `rep` can be `""`
+when only `src` follows). `lat`/`lng` are not sent: the client derives them
+from `loc` (Maidenhead square centre, same maths as `locatorToLatLng`).
+
+**Resume (v2).** Every live batch and `history_end` carries
+`id: <epoch>-<seq>`; `seq` is the hub's monotonically increasing message
+number and `epoch` changes on every server start. A reconnect (native
+`Last-Event-ID` header, which wins) or a client-driven restart (`since=<id>`)
+gets only what came after that id, minus a 512-message overlap the client
+dedups by exact spot identity. `resume` reports `delta`, or `full` when the id
+is unusable (`epoch` = server restarted, `area` = `prev_radius` differs from
+the current area radius, `bad_id`). When the client widens its filter it also
+sends `prev=1` with the previous filter as `prev_enabled_bands`,
+`prev_min_snr_mode`, `prev_ssb_min_db`, `prev_cw_min_db`,
+`prev_include_dxcluster|rbn|wspr` and `prev_radius`; the server then also
+resends spots the previous filter excluded. A native auto-reconnect re-sends
+the original URL, so it repeats those `prev_*` params (harmless: more overlap).
+The web app closes the stream after the tab has been hidden for 3 minutes and
+reopens it with `since` when the tab returns.
 
 Overflow beyond `-max-clients` (default 150) → an `event: server_error`
 frame, not an HTTP error. With `-compress` and `Accept-Encoding: gzip` the
-stream is gzip-encoded, flushed per event.
+stream is gzip-encoded, sync-flushed per batch.
 
 ### `GET /api/capture_snapshot` — deterministic spot snapshot
 
@@ -105,7 +164,7 @@ Params: `qth` (required), `snapshot_at` (unix seconds, default now; bad
 value → 400), `minutes` (default 15, max 720), `surroundings`,
 `min_snr_mode` (`"ssb"`|`"cw"`), `ssb_min_db` (default 0), `cw_min_db`
 (default -15), `selected_band`, `enabled_bands` (CSV), `include_dxcluster`
-(default true), `include_rbn` (default true).
+(default true), `include_rbn` (default true), `include_wspr` (default true).
 
 Response: `{qth, surroundings, snapshot_at, window_minutes, generated_at,
 count, spots: [<stream spot shape>]}`.
@@ -723,7 +782,11 @@ with freq ≤ 0 skipped. Requires DX cluster ingest to be enabled.
 ### `GET /api/stats` — server counters
 
 No params. Active connections, hub history size/minutes/KB, session totals
-and byte accounting, DX baseline event counts, DX-cluster / RBN / WSPR ingest
+and byte accounting, running stream wire counters (`stream_bytes_wire_total`
+post-gzip bytes including open sessions, `stream_history_bytes_total`,
+`stream_spots_sent_total`, `stream_frames_total` flushes,
+`stream_resume_delta_total`, `stream_resume_full_total`; `wspr_duplicate_rows`
+counts overlapping-poll rows dropped at ingest), DX baseline event counts, DX-cluster / RBN / WSPR ingest
 counters, plus a `prop_intel` block (`requests`, `errors`, `surges_detected`)
 and a `push` block (`surges_detected`, `push_sent`, `push_errors`). The
 de-facto health endpoint.

@@ -263,18 +263,9 @@ function syncWsprMarkers(wsprSpots) {
         return;
     }
 
-    // Region-scope: only show WSPR paths where either end is in the
-    // operator's region (derived from the QTH locator). If the QTH is a
-    // callsign (no locator), skip the region filter and show all WSPR.
-    // regionForLocatorCached memoizes per locator (locators repeat heavily).
-    const qthEl = document.getElementById('qth');
-    const qthVal = qthEl?.value?.trim()?.toUpperCase() || '';
-    const operatorRegion = regionForLocatorCached(qthVal);
-    const scopedSpots = operatorRegion
-        ? wsprSpots.filter((s) =>
-            regionForLocatorCached(s.locator) === operatorRegion ||
-            regionForLocatorCached(s.reporterLocator) === operatorRegion)
-        : wsprSpots;
+    // The server already scopes WSPR to the operator's area (from-your-QTH
+    // only), so no client-side region filter is needed.
+    const scopedSpots = wsprSpots;
 
     // O(1) fingerprint (first/last spot) — see syncDxClusterMarkers.
     const first = scopedSpots[0];
@@ -288,6 +279,13 @@ function syncWsprMarkers(wsprSpots) {
     state.wsprLayer = L.layerGroup().addTo(map);
     incrementPerfCounter('mercator.layers.added', 1);
     renderWsprMarkers(scopedSpots);
+}
+
+// locator is the far end from the operator's side. When it equals the
+// reporter (receiver) locator the operator's area holds the transmitter.
+function wsprTxLabel(spot) {
+    if (spot.locator && spot.locator === spot.reporterLocator) return 'your area';
+    return spot.locator || '—';
 }
 
 function renderWsprMarkers(wsprSpots) {
@@ -309,7 +307,7 @@ function renderWsprMarkers(wsprSpots) {
         }).addTo(state.wsprLayer);
 
         marker.bindTooltip(
-            `<strong>WSPR beacon</strong><br>Band: ${escapeHtml(spot.band || '—')}<br>SNR: ${Number.isFinite(Number(spot.snr)) ? spot.snr + ' dB' : '—'}<br>TX: ${escapeHtml(spot.locator || '—')}<br>RX: ${escapeHtml(spot.reporterLocator || '—')}`,
+            `<strong>WSPR beacon</strong><br>Band: ${escapeHtml(spot.band || '—')}<br>SNR: ${Number.isFinite(Number(spot.snr)) ? spot.snr + ' dB' : '—'}<br>TX: ${escapeHtml(wsprTxLabel(spot))}<br>RX: ${escapeHtml(spot.reporterLocator || '—')}`,
             { direction: 'top', offset: [0, -4], opacity: 0.9, sticky: true }
         );
     });

@@ -1,4 +1,5 @@
 import { bandColors, getEnabledBands } from './utils.js';
+import { fetchHotBands, hotBandsParams } from './hot-bands-client.js';
 
 const POLL_INTERVAL_MS = 30_000;
 const STALE_TIMEOUT_MS = 2 * 60_000;
@@ -133,24 +134,19 @@ export function initHotBandIndicator({ getQth, getSurroundings, getCurrentBand, 
             return;
         }
         if (abortCtl) abortCtl.abort();
-        abortCtl = new AbortController();
+        const ctl = new AbortController();
+        abortCtl = ctl;
 
-        const params = new URLSearchParams();
-        params.set('qth', qth);
-        if (getSurroundings?.()) params.set('surroundings', 'true');
-        params.set('rings', 'auto');
-        const current = (getCurrentBand?.() || '').toLowerCase();
-        if (current && current !== 'all') params.set('current_band', current);
+        const params = hotBandsParams({ qth, surroundings: getSurroundings?.(), currentBand: getCurrentBand?.() });
 
         try {
-            const resp = await fetch(`/api/hot_bands?${params.toString()}`, { signal: abortCtl.signal });
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const data = await resp.json();
+            const data = await fetchHotBands(params);
+            if (ctl.signal.aborted) return; // superseded or stopped meanwhile
             lastRecs = Array.isArray(data?.recommendations) ? data.recommendations : [];
             lastGoodTs = Date.now();
             render();
         } catch (err) {
-            if (err.name === 'AbortError') return;
+            if (ctl.signal.aborted) return;
             console.warn('hot_bands fetch failed:', err);
             clearStale();
         }

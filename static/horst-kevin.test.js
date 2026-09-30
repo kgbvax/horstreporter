@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { resetHotBandsClient } from './hot-bands-client.js';
 import {
     TUNING,
     reduce,
@@ -502,6 +503,7 @@ describe('initHorstKevin', () => {
     let fetchMock;
     let storage;
     beforeEach(() => {
+        resetHotBandsClient(); // shared 10 s cache must not leak between tests
         storage = installLocalStorageMock();
         mountDom();
         fetchMock = vi.fn(async (url) => {

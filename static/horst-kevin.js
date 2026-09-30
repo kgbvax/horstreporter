@@ -21,6 +21,7 @@
 // counts as answered instead of as a fade.
 
 import { bandColors } from './utils.js';
+import { fetchHotBands } from './hot-bands-client.js';
 
 export const TUNING = {
     POLL_MS: 30_000,
@@ -1163,10 +1164,14 @@ export function initHorstKevin({ getQth, getSurroundings, getCurrentBand, getRig
             return;
         }
         if (abortCtl) abortCtl.abort();
-        abortCtl = new AbortController();
+        const ctl = new AbortController();
+        abortCtl = ctl;
         lastFetchAt = Date.now();
         void refreshAlmanac(qth);
 
+        // Kevin's own query (his dare set, include= for holding[], no
+        // current_band), so it no longer shares the pills' URL; the shared
+        // client still dedupes his own overlapping refresh() calls.
         const surroundings = Boolean(getSurroundings?.());
         const params = new URLSearchParams();
         params.set('qth', qth);
@@ -1178,9 +1183,8 @@ export function initHorstKevin({ getQth, getSurroundings, getCurrentBand, getRig
         if (tracked.length) params.set('include', tracked.join(','));
 
         try {
-            const resp = await fetch(`/api/hot_bands?${params.toString()}`, { signal: abortCtl.signal });
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const data = await resp.json();
+            const data = await fetchHotBands(params);
+            if (ctl.signal.aborted) return; // superseded or stopped meanwhile
             const recs = Array.isArray(data?.recommendations) ? data.recommendations : [];
             lastGoodTs = Date.now();
             step(recs, Date.now(), {
@@ -1192,7 +1196,7 @@ export function initHorstKevin({ getQth, getSurroundings, getCurrentBand, getRig
                 widened: Boolean(data?.area?.widened),
             });
         } catch (err) {
-            if (err.name === 'AbortError') return;
+            if (ctl.signal.aborted) return;
             console.warn('horst-kevin hot_bands fetch failed:', err);
             // The next good poll sees the gap and resyncs quietly.
             if (lastGoodTs > 0 && Date.now() - lastGoodTs > TUNING.STALE_TIMEOUT_MS) setMood('dormant');

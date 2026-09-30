@@ -15,6 +15,11 @@ type Spot struct {
 	Band            string  `json:"band"`
 	Sender          string  `json:"sender"`
 	Receiver        string  `json:"receiver"`
+
+	// Stream-only bookkeeping (never serialized): the source message's unix
+	// time (exact spot time for the v2 wire) and its hub sequence number.
+	T   int64  `json:"-"`
+	Seq uint64 `json:"-"`
 }
 
 func sourceTypeForMessage(m MQTTMessage) string {
@@ -30,8 +35,11 @@ func sourceTypeForMessage(m MQTTMessage) string {
 }
 
 func reporterLocatorForMessage(m MQTTMessage) string {
-	mode := strings.ToUpper(strings.TrimSpace(m.MD))
-	if mode == "DXCLUSTER" {
+	// reporterLocator is the receiving (reporting) station's square. For
+	// PSKReporter that is RL; DX cluster, RBN and WSPR use SC/SL for the
+	// reporting station (RC/RL is the station heard).
+	switch sourceTypeForMessage(m) {
+	case "dxcluster", "rbn", "wspr":
 		return strings.ToUpper(strings.TrimSpace(m.SL))
 	}
 	return strings.ToUpper(strings.TrimSpace(m.RL))
@@ -125,10 +133,7 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 	}
 
 	lat, lng := locatorToLatLng(remoteLocator)
-	age := now - m.T
-	if age < 0 {
-		age = 0
-	}
+	age := ageClamped(now, m.T)
 
 	if logLevel == "DEBUG" {
 		logDebug("QTH '%v' matched successfully! Mapped to Remote Locator: %s", client.qthSet, remoteLocator)
@@ -145,6 +150,7 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 		Band:            m.B,
 		Sender:          m.SC,
 		Receiver:        m.RC,
+		T:               m.T,
 	}, true
 }
 

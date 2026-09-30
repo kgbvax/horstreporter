@@ -141,3 +141,23 @@ func TestLatLngToLocatorHighLatitudes(t *testing.T) {
 		})
 	}
 }
+
+func TestReporterLocatorForMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		m    MQTTMessage
+		want string
+	}{
+		{"pskreporter uses RL", MQTTMessage{SL: "JO62", RL: "FN31", Source: "mqtt"}, "FN31"},
+		{"no source defaults to RL", MQTTMessage{SL: "JO62", RL: "FN31"}, "FN31"},
+		{"dxcluster uses SL", MQTTMessage{SL: "JO62", RL: "FN31", Source: "dxcluster"}, "JO62"},
+		{"legacy dxcluster MD uses SL", MQTTMessage{SL: "JO62", RL: "FN31", MD: "DXCLUSTER"}, "JO62"},
+		{"rbn uses SL", MQTTMessage{SL: "jo62", RL: "FN31", Source: "rbn"}, "JO62"},
+		{"wspr uses SL", MQTTMessage{SL: "JO62", RL: "FN31", Source: "wspr"}, "JO62"},
+	}
+	for _, c := range cases {
+		if got := reporterLocatorForMessage(c.m); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
