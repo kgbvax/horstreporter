@@ -90,7 +90,9 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 **Backend core files:**
 - `main.go` — flags, server wiring, static serving, TLS, history pruning
 - `mqtt.go` — MQTT ingest (`pskr/filter/v2/#`), topic parsing, FT8/FT4 mode filtering
-- `hub.go` — in-memory client hub + rolling spot history (fan-out to SSE clients)
+- `hub.go` — in-memory client hub + rolling spot history (fan-out to SSE clients); history messages have implicit sequence numbers (`baseSeq`, `hubEpoch`) that back stream resume
+- `stream.go` / `stream_wire.go` — `/api/stream` handler (batched flushes, heartbeat, v2 tuple frames, resume/`prev_*` delta dump)
+- `gzip.go` — gzip middleware for JSON/static responses + precompressed embedded assets
 - `spot.go` — spot model, matching/locator utilities
 - `server.go` — HTTP handlers
 - `dx_conditions.go` — DX baseline scoring engine
@@ -130,7 +132,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 
 Canonical reference: `docs/api.md` (includes response shapes, caches, and explicit exclusions).
 
-- `GET /api/stream` — SSE; params: `qth`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `qth`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed; `rings=auto` widens a sparse home square server-side, see `live_area.go`, and is what the web app sends to all four live endpoints). A locator `qth` is matched at its 4-char square.
+- `GET /api/stream` — SSE; params: `qth`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `qth`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed; `rings=auto` widens a sparse home square server-side, see `live_area.go`, and is what the web app sends to all four live endpoints). A locator `qth` is matched at its 4-char square. Also accepts `v=2` (compact batched frames + `id:` resume via `Last-Event-ID`/`since`, see `stream_wire.go`), `enabled_bands`, `min_snr_mode`/`ssb_min_db`/`cw_min_db` and `include_dxcluster|rbn|wspr`. All sources (WSPR included) are scoped to the client's area; live frames are batched (≤1 s) and heartbeat with `: hb`.
 - `GET /api/dx_conditions` — DX score/conditions per band; params: `qth`, `minutes`, `surroundings`, `cw_min_db`
 - `GET /api/prop_intel` — WSPR propagation-intelligence nowcast per (band × region); params: `qth`, `minutes`, `surroundings`, `cw_min_db`, `surge_threshold`, `from_here`. Sibling summary endpoint `GET /api/prop_intel/summary` (60s cached) feeds the mobile app's home-screen widgets
 - `GET /api/stats` — active connections, history size/minutes

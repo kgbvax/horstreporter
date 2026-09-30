@@ -30,7 +30,8 @@ const almanacWSPRUserAgent = "horstreporter/1.0 (+https://horstreporter.kgbvax.n
 //
 // Scope (reference-only): WSPR spots land in dx_raw_spots with
 // source_type='wspr' and feed the count-based activity chart and (when the
-// receiver locator is valid) the live stream. WSPR is deliberately NOT fed to
+// receiver locator is valid) the live stream, scoped to each client's area
+// like every other source (from-your-QTH only). WSPR is deliberately NOT fed to
 // DxBaselineEngine.Observe and is excluded from the FT8 conditions
 // accumulator (isNonConditionsMode) — WSPR SNR is on the same 2500 Hz scale
 // as FT8, but WSPR stations transmit at wildly varying power (0.1–100 W+),
