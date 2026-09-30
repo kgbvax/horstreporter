@@ -46,13 +46,16 @@ type hotBandRecommendation struct {
 }
 
 type hotBandsResponse struct {
-	QTH              string                  `json:"qth"`
-	Surroundings     bool                    `json:"surroundings"`
-	CurrentBand      string                  `json:"current_band"`
-	CurrentSlotOfDay int                     `json:"current_slot_of_day"`
-	GeneratedAt      int64                   `json:"generated_at"`
-	BaselineHistoryM int                     `json:"baseline_history_minutes"`
-	Recommendations  []hotBandRecommendation `json:"recommendations"`
+	QTH              string `json:"qth"`
+	Surroundings     bool   `json:"surroundings"`
+	CurrentBand      string `json:"current_band"`
+	CurrentSlotOfDay int    `json:"current_slot_of_day"`
+	GeneratedAt      int64  `json:"generated_at"`
+	BaselineHistoryM int    `json:"baseline_history_minutes"`
+	// Area is the live area the recommendations are scoped to; present only
+	// when the request asked for one (rings=auto or rings=N).
+	Area            *liveArea               `json:"area,omitempty"`
+	Recommendations []hotBandRecommendation `json:"recommendations"`
 }
 
 // HotBands evaluates the per-band conditions and returns up to
@@ -60,12 +63,18 @@ type hotBandsResponse struct {
 // rank. An empty recommendations slice is a valid response — the frontend
 // hides the indicator in that case.
 func (e *DxBaselineEngine) HotBands(qth string, surroundings bool, minutes int, cwMinDb int, currentBand string, history []MQTTMessage, now int64) hotBandsResponse {
-	cond := e.Evaluate(qth, surroundings, minutes, cwMinDb, history, now)
+	return e.HotBandsArea(qth, surroundings, minutes, cwMinDb, currentBand, history, now, nil)
+}
+
+// HotBandsArea is HotBands scoped to a live area (nil: as HotBands).
+func (e *DxBaselineEngine) HotBandsArea(qth string, surroundings bool, minutes int, cwMinDb int, currentBand string, history []MQTTMessage, now int64, area *liveArea) hotBandsResponse {
+	cond := e.EvaluateArea(qth, surroundings, minutes, cwMinDb, history, now, area)
 	currentBand = normalizeBand(currentBand)
 
 	resp := hotBandsResponse{
 		QTH:              cond.QTH,
 		Surroundings:     cond.Surroundings,
+		Area:             cond.Area,
 		CurrentBand:      currentBand,
 		CurrentSlotOfDay: cond.CurrentSlotOfDay,
 		GeneratedAt:      cond.GeneratedAt,

@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"math/bits"
 	"strings"
 	"sync"
 	"time"
@@ -13,7 +12,7 @@ import (
 
 // Almanac area resolution (plan U1, R4/R5, KTD3): turn a QTH (locator or
 // callsign) into a normalized grid4 centre plus a location source, then pick
-// the widening radius from per-(grid4, band) active-day masks.
+// the widening radius from per-slot knownness.
 
 var (
 	// errAlmanacInvalidQTH: the QTH is neither a valid Maidenhead locator nor
@@ -197,29 +196,25 @@ func (e *DxBaselineEngine) resolveAlmanacArea(qth string) (almanacArea, error) {
 	return cache.resolve(qth, qrz, ctyRes)
 }
 
-// almanacGridBand keys per-(grid4, band) data: the active-day masks, the
-// fold's active pairs and the WSPR backfill's area activity.
+// almanacGridBand keys per-(grid4, band) data: the fold's active pairs and the
+// WSPR backfill's area activity.
 type almanacGridBand struct {
 	Grid string
 	Band string
 }
 
-// almanacBandsNeeded is how many of n in-scope bands must meet M_min for a
-// radius to suffice: strictly more than almanacWidenBandShare of them.
+// almanacBandsNeeded is how many of n in-scope bands must have enough known
+// slots for a radius to suffice: strictly more than almanacWidenBandShare of
+// them.
 func almanacBandsNeeded(n int) int {
 	return int(float64(n)*almanacWidenBandShare) + 1
 }
 
-// almanacBandsMeeting counts in-scope bands whose active days, unioned (OR of
-// day masks, not summed) across squares, reach mMin.
-func almanacBandsMeeting(squares []string, masks map[almanacGridBand]uint64, mMin int) int {
+// almanacBandsKnown counts the bands with at least minSlots known slots.
+func almanacBandsKnown(known []int, minSlots int) int {
 	n := 0
-	for _, band := range almanacInScopeBands {
-		var union uint64
-		for _, sq := range squares {
-			union |= masks[almanacGridBand{Grid: sq, Band: band}]
-		}
-		if bits.OnesCount64(union) >= mMin {
+	for _, k := range known {
+		if k >= minSlots {
 			n++
 		}
 	}
@@ -227,16 +222,18 @@ func almanacBandsMeeting(squares []string, masks map[almanacGridBand]uint64, mMi
 }
 
 // chooseAlmanacRadius picks the smallest radius r in 0..almanacMaxWidenRadius
-// at which strictly more than half of the in-scope bands have at least mMin
-// active days across the (edge-clipped) ring block around center; if none
-// does, it returns the cap. masks holds per-(grid4, band) day bitmasks (bit i
-// = active on day i). center is normalized to its uppercase grid4.
-func chooseAlmanacRadius(center string, masks map[almanacGridBand]uint64, mMin int) (radius int, squares []string) {
+// at which strictly more than half of the in-scope bands have at least
+// minSlots known slots (almanacAccum.knownSlotCounts: slots a lane can show
+// rather than "not enough data") across the (edge-clipped) ring block around
+// center; if none does, it returns the cap. known[r][b] is the known-slot
+// count of in-scope band b at radius r; a missing level counts as none.
+// center is normalized to its uppercase grid4.
+func chooseAlmanacRadius(center string, known [almanacLevels][]int, minSlots int) (radius int, squares []string) {
 	c := almanacNormalizeCentre(center)
 	need := almanacBandsNeeded(len(almanacInScopeBands))
 	for r := 0; r <= almanacMaxWidenRadius; r++ {
 		squares = getSquaresWithinRings(c, r)
-		if almanacBandsMeeting(squares, masks, mMin) >= need {
+		if almanacBandsKnown(known[r], minSlots) >= need {
 			return r, squares
 		}
 	}

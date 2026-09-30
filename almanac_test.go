@@ -261,26 +261,6 @@ func (t *fakeAggTx) tailCounts(_ context.Context, grids []string, rings []int32,
 	return nil
 }
 
-func (t *fakeAggTx) tailActiveDays(_ context.Context, grids, bands []string, afterDay, fromDay, toDay int64,
-	fn func(grid, band string, day int64)) error {
-	type k struct {
-		grid, band string
-		day        int64
-	}
-	seen := map[k]bool{}
-	for dk, v := range t.f.daily {
-		if v <= 0 || dk.Day <= afterDay || dk.Day < fromDay || dk.Day > toDay ||
-			!aggContains(bands, dk.Band) || !aggContains(grids, dk.Grid) {
-			continue
-		}
-		seen[k{dk.Grid, dk.Band, dk.Day}] = true
-	}
-	for kk := range seen {
-		fn(kk.grid, kk.band, kk.day)
-	}
-	return nil
-}
-
 func (t *fakeAggTx) ingestSlots(_ context.Context, layer string, fromDay, toDay int64, fn func(day int64, slot int, total int64)) error {
 	for k, v := range t.f.ingest {
 		if k.Layer == layer && k.Day >= fromDay && k.Day <= toDay {

@@ -153,7 +153,10 @@ type DxBaselineEngine struct {
 }
 
 type dxBandCondition struct {
-	Band                      string         `json:"band"`
+	Band string `json:"band"`
+	// AreaWidened: this band only has a full sample because the live area was
+	// widened (its base block held fewer than liveAreaFullSampleLinks links).
+	AreaWidened               bool           `json:"area_widened,omitempty"`
 	Score                     float64        `json:"score"`
 	Confidence                float64        `json:"confidence"`
 	Status                    string         `json:"status"`
@@ -248,9 +251,12 @@ type dxConditionsResponse struct {
 	CurrentSlotOfDay int    `json:"current_slot_of_day"`
 	GeneratedAt      int64  `json:"generated_at"`
 	OperatorCluster  string `json:"qth_cluster,omitempty"`
-	BaselineBuckets  int    `json:"baseline_buckets"`
-	BaselineEventCnt int    `json:"baseline_event_count"`
-	BaselineHistoryM int    `json:"baseline_history_minutes"`
+	// Area is the live area the report is scoped to; present only when the
+	// request asked for one (rings=auto or rings=N).
+	Area             *liveArea `json:"area,omitempty"`
+	BaselineBuckets  int       `json:"baseline_buckets"`
+	BaselineEventCnt int       `json:"baseline_event_count"`
+	BaselineHistoryM int       `json:"baseline_history_minutes"`
 	// ClusterBaselineHistoryM is the span the cluster baseline actually covers
 	// (BaselineHistoryM × cluster coverage) — the divisor for cluster-sourced
 	// rates. Differs from BaselineHistoryM when the cluster table was rebuilt.
@@ -871,6 +877,16 @@ func resolveQTHLocator(qth string, qrz CallsignLocatorResolver, ctyRes *cty.Reso
 }
 
 func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, cwMinDb int, history []MQTTMessage, now int64) dxConditionsResponse {
+	return e.EvaluateArea(qth, surroundings, minutes, cwMinDb, history, now, nil)
+}
+
+// EvaluateArea is Evaluate scoped to a live area (nil: the own square, or the
+// 3×3 block with surroundings). An area of radius ≤ 1 is exactly that legacy
+// block, so it takes the unchanged path and only labels the response. Radius
+// ≥ 2 matches by grid-square distance (O(1) per spot instead of 25–49 prefix
+// tests) and bins the activity series from the live history instead of a
+// Postgres query with an arm per square.
+func (e *DxBaselineEngine) EvaluateArea(qth string, surroundings bool, minutes int, cwMinDb int, history []MQTTMessage, now int64, area *liveArea) dxConditionsResponse {
 	qth = normalizeQTHToken(qth)
 	if minutes <= 0 {
 		minutes = defaultDxWindowMinutes
@@ -907,10 +923,16 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 	operatorCluster := e.deriveOperatorCluster(qth)
 	resp.OperatorCluster = operatorCluster
 
-	qthSet := []string{qth}
-	if surroundings && isLocator(qth) {
-		qthSet = getSurroundingSquares(qth)
+	resp.Area = area
+	// matchArea is set only for blocks larger than the 3×3 legacy one.
+	var matchArea *liveArea
+	if area != nil && area.Radius > 1 {
+		matchArea = area
 	}
+	if area != nil && matchArea == nil {
+		surroundings = area.Radius == 1
+	}
+	qthSet := qthSquares(qth, surroundings)
 
 	e.mu.RLock()
 	st := e.store
@@ -981,7 +1003,9 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 	// or zero rows matched; the per-band loop then lazily snapshots the
 	// in-memory event ring and falls back to in-memory binning (see the loop).
 	var activityByBinMap map[string][]float64
-	if st != nil {
+	if matchArea != nil {
+		activityByBinMap = buildActivityByBinFromHistory(history, matchArea, cwMinDb, minutes, now)
+	} else if st != nil {
 		if m, err := st.activityByBinForTargets(qthSet, cwMinDb, minutes, now); err == nil {
 			activityByBinMap = m
 		} else {
@@ -1047,7 +1071,7 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 				}
 			}
 		}
-		ev, matched := extractMatchedBandEvent(m, qthSet)
+		ev, matched := extractMatchedBandEventArea(m, qthSet, matchArea)
 		if !matched {
 			continue
 		}
@@ -1222,6 +1246,11 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 		// last raw-spot flush). The ring snapshot is taken lazily here (once)
 		// so the common all-bands-present path never pays the ~ring-size copy.
 		activityByBin := activityByBinMap[band]
+		if activityByBin == nil && matchArea != nil {
+			// The area series came from this same history, so a band without
+			// one had nothing in the window: never copy the event ring for it.
+			activityByBin = make([]float64, activityBins)
+		}
 		if activityByBin == nil {
 			if st != nil && events == nil {
 				e.mu.RLock()
@@ -1286,6 +1315,7 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 
 		bands = append(bands, dxBandCondition{
 			Band:                      band,
+			AreaWidened:               area.widenedBand(band),
 			Score:                     round1(bandScore),
 			Confidence:                round1(bandConfidence),
 			Status:                    status,
@@ -1697,6 +1727,13 @@ func baselineScoreQuantilesForBand(global, clusterBuckets map[string]*baselineBu
 }
 
 func extractMatchedBandEvent(m MQTTMessage, qthSet []string) (matchedBandEvent, bool) {
+	return extractMatchedBandEventArea(m, qthSet, nil)
+}
+
+// extractMatchedBandEventArea is extractMatchedBandEvent with an optional
+// wide area: when set, an end matches if its square lies in the area block
+// (qthSet is ignored; the block contains it).
+func extractMatchedBandEventArea(m MQTTMessage, qthSet []string, area *liveArea) (matchedBandEvent, bool) {
 	band := normalizeBand(m.B)
 	if band == "" {
 		return matchedBandEvent{}, false
@@ -1711,12 +1748,17 @@ func extractMatchedBandEvent(m MQTTMessage, qthSet []string) (matchedBandEvent, 
 
 	isSender := false
 	isReceiver := false
-	for _, t := range qthSet {
-		if matchCall(sc, t) || (isLocator(t) && strings.HasPrefix(sl, t)) {
-			isSender = true
-		}
-		if matchCall(rc, t) || (isLocator(t) && strings.HasPrefix(rl, t)) {
-			isReceiver = true
+	if area != nil {
+		isSender = area.contains(sl)
+		isReceiver = area.contains(rl)
+	} else {
+		for _, t := range qthSet {
+			if matchCall(sc, t) || (isLocator(t) && strings.HasPrefix(sl, t)) {
+				isSender = true
+			}
+			if matchCall(rc, t) || (isLocator(t) && strings.HasPrefix(rl, t)) {
+				isReceiver = true
+			}
 		}
 	}
 	if !isSender && !isReceiver {
@@ -1792,8 +1834,59 @@ func normalizeSeriesTo100(series []float64) []float64 {
 // directly comparable to the baseline line. Evaluate prefers the Postgres
 // aggregate (activityByBinForTargets) and only falls back to this in-memory
 // binning from `events` when there is no store or that query failed.
+// activityBins is the number of bars in a band's activity series.
+const activityBins = 12
+
+// buildActivityByBinFromHistory is the activity series (spots/min per bin) for
+// every band at once, matched against a wide live area straight from the live
+// history. It mirrors the per-band definition the Postgres aggregate and
+// buildBandActivityByBin use (any source, ≥ cwMinDb) for the part of the
+// window the history covers; bins before that read zero.
+func buildActivityByBinFromHistory(history []MQTTMessage, area *liveArea, cwMinDb, minutes int, now int64) map[string][]float64 {
+	out := make(map[string][]float64)
+	if area == nil || minutes <= 0 {
+		return out
+	}
+	windowSec := int64(minutes) * 60
+	binSec := windowSec / activityBins
+	if binSec <= 0 {
+		return out
+	}
+	windowStart := now - windowSec
+	for i := range history {
+		m := &history[i]
+		if m.T < windowStart || m.T > now || m.RP < cwMinDb {
+			continue
+		}
+		band := normalizeBand(m.B)
+		if band == "" || !bandInScope(band) {
+			continue
+		}
+		if !area.contains(m.SL) && !area.contains(m.RL) {
+			continue
+		}
+		s := out[band]
+		if s == nil {
+			s = make([]float64, activityBins)
+			out[band] = s
+		}
+		idx := int((m.T - windowStart) / binSec)
+		if idx >= activityBins {
+			idx = activityBins - 1
+		}
+		s[idx]++
+	}
+	binMinutes := float64(binSec) / 60.0
+	for _, s := range out {
+		for i := range s {
+			s[i] /= binMinutes
+		}
+	}
+	return out
+}
+
 func buildBandActivityByBin(events []dxObservedEvent, targets []string, band string, cwMinDb int, minutes int, now int64) []float64 {
-	const bins = 12
+	const bins = activityBins
 	series := make([]float64, bins)
 	if minutes <= 0 {
 		return series

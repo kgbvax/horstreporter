@@ -8,11 +8,13 @@ vi.mock('../static/band-lab.js', () => ({
     getBandNormalRate: vi.fn(() => null),
     subscribeBandRows: vi.fn(() => () => {}),
     drawBandMiniPlot: vi.fn(),
+    getLiveArea: vi.fn(() => null),
 }));
 
 import { verdictText, reportsPair, initCondNow, __test } from '../static/cond-now.js';
 import { setRowExtras, refreshMatrix } from '../static/wspr-matrix.js';
-import { getBandRow, getBandNormalRate, subscribeBandRows, drawBandMiniPlot } from '../static/band-lab.js';
+import { getBandRow, getBandNormalRate, subscribeBandRows, drawBandMiniPlot, getLiveArea } from '../static/band-lab.js';
+import { parseAreaPayload } from '../static/live-area.js';
 
 const row = (metrics, dxReady = true) => ({ band: '20m', metrics, dxReady, reports: 5, minutes: 60 });
 
@@ -37,6 +39,12 @@ describe('verdictText', () => {
         expect(verdictText(row({ activity_level: 'above', reach_level: 'longer' }))).toBe('lively, longer reach');
         expect(verdictText(row({ activity_level: 'normal', reach_level: 'shorter' }))).toBe('shorter reach');
         expect(verdictText(row({ activity_level: 'normal', reach_level: 'typical' }))).toBe('');
+    });
+
+    it('marks a band that only has a sample through the widened area', () => {
+        expect(verdictText(row({ activity_level: 'normal', area_widened: true }))).toBe('wide area');
+        expect(verdictText(row({ activity_level: 'above', reach_level: 'longer', area_widened: true }))).toBe('lively, longer reach, wide area');
+        expect(verdictText(row({ activity_level: 'normal', area_widened: false }))).toBe('');
     });
 
     it('keeps the low sample and no baseline qualifiers', () => {
@@ -88,6 +96,26 @@ describe('row extras', () => {
         onRows();
         expect(refreshMatrix).toHaveBeenCalled();
         expect(drawBandMiniPlot).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), '17m');
+    });
+
+    it('shows the widened area above the table and hides it otherwise', () => {
+        document.body.innerHTML = '<div id="cond-area" hidden></div><div id="wspr-matrix-body"></div>';
+        const line = document.getElementById('cond-area');
+
+        getLiveArea.mockReturnValue(parseAreaPayload({ centre: 'FN76', base_radius: 0, radius: 2, widened: true }));
+        initCondNow();
+        expect(line.hidden).toBe(false);
+        expect(line.textContent).toBe('Area: 5×5 squares around FN76, widened for a fuller sample.');
+
+        // A dense area: nothing to say, so the line goes away on the next update.
+        getLiveArea.mockReturnValue(parseAreaPayload({ centre: 'JO32', base_radius: 0, radius: 0, widened: false }));
+        subscribeBandRows.mock.calls.at(-1)[0]();
+        expect(line.hidden).toBe(true);
+        expect(line.textContent).toBe('');
+
+        getLiveArea.mockReturnValue(null);
+        subscribeBandRows.mock.calls.at(-1)[0]();
+        expect(line.hidden).toBe(true);
     });
 
     it('tells the rail only when a normal rate changed', () => {

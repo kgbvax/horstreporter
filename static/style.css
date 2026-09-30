@@ -1200,6 +1200,10 @@ body[data-theme="dark"] .wspr-matrix-cell {
 .cond-now-summary {
     margin-bottom: 8px;
 }
+.cond-area {
+    margin-bottom: 6px;
+    color: color-mix(in srgb, var(--text-color) 72%, var(--bg-color));
+}
 .cond-now-matrix .wspr-matrix-body {
     padding: 0;
     overflow: visible;

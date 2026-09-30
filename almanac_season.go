@@ -43,7 +43,7 @@ import (
 //
 // Radius: the drill-down uses the landing view's radius. getSeason first
 // obtains the /api/almanac typical part for the same centre grid4 (cached,
-// KTD3 chooseAlmanacRadius over the 30-day PSKR active-day masks) and reads
+// KTD3 chooseAlmanacRadius over the 30-day PSKR per-slot knownness) and reads
 // the squares at ring level ≤ that radius; a season cache entry is dropped
 // when the landing radius changes, so lanes and drill-down always agree.
 //

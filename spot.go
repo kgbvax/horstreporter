@@ -259,6 +259,24 @@ func getSurroundingSquares(locator string) []string {
 	return getSquaresWithinRings(locator, 1)
 }
 
+// qthSquares is the one place a QTH becomes the token set spots are matched
+// against. A locator QTH is matched at its 4-char square (a 6-char "FN76OJ"
+// used to match only that subsquare through the HasPrefix tests, leaving sparse
+// operators with almost nothing); with surroundings it is the 3×3 block around
+// it. Anything else (a callsign) is matched as given. qth must already be
+// normalized (uppercase, see resolveQTHQuery/normalizeQTHToken); the caller
+// keeps the full locator for map centre and distances.
+func qthSquares(qth string, surroundings bool) []string {
+	if !isLocator(qth) {
+		return []string{qth}
+	}
+	rings := 0
+	if surroundings {
+		rings = 1
+	}
+	return getSquaresWithinRings(qth[:4], rings)
+}
+
 func absInt(v int) int {
 	if v < 0 {
 		return -v

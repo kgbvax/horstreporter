@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -160,13 +161,17 @@ func TestAlmanacAreaCacheTTL(t *testing.T) {
 
 // --- widening ---
 
-func fullMask(days int) uint64 { return (uint64(1) << uint(days)) - 1 }
-
-// setBands marks the first n in-scope bands of grid as active on `days` days.
-func setBands(m map[almanacGridBand]uint64, grid string, n int, mask uint64) {
-	for i := 0; i < n && i < len(almanacInScopeBands); i++ {
-		m[almanacGridBand{Grid: grid, Band: almanacInScopeBands[i]}] |= mask
+// levels builds chooseAlmanacRadius input where each radius r has the first
+// nBands[r] in-scope bands at `slots` known slots and the rest at none.
+func levels(slots int, nBands [almanacLevels]int) [almanacLevels][]int {
+	var k [almanacLevels][]int
+	for r := range k {
+		k[r] = make([]int, len(almanacInScopeBands))
+		for b := 0; b < nBands[r] && b < len(k[r]); b++ {
+			k[r][b] = slots
+		}
 	}
+	return k
 }
 
 func TestAlmanacInScopeBandsExclude6m(t *testing.T) {
@@ -181,129 +186,148 @@ func TestAlmanacInScopeBandsExclude6m(t *testing.T) {
 }
 
 func TestChooseAlmanacRadius(t *testing.T) {
-	full := fullMask(almanacMinActiveDays30)
-	need := almanacBandsNeeded(len(almanacInScopeBands))
+	all := len(almanacInScopeBands)
+	need := almanacBandsNeeded(all)
+	min := almanacWidenMinKnownSlots
 
 	t.Run("r0 sufficient", func(t *testing.T) {
-		m := map[almanacGridBand]uint64{}
-		setBands(m, "JO32", len(almanacInScopeBands), full)
-		r, sq := chooseAlmanacRadius("JO32", m, almanacMinActiveDays30)
+		r, sq := chooseAlmanacRadius("JO32", levels(min, [almanacLevels]int{all, all, all}), min)
 		if r != 0 || len(sq) != 1 || sq[0] != "JO32" {
 			t.Errorf("r=%d squares=%v, want 0 [JO32]", r, sq)
 		}
 	})
 
 	t.Run("r1 when centre thin", func(t *testing.T) {
-		m := map[almanacGridBand]uint64{}
-		setBands(m, "JO32", len(almanacInScopeBands), 1) // 1 day only
-		setBands(m, "JO33", len(almanacInScopeBands), full)
-		r, sq := chooseAlmanacRadius("JO32", m, almanacMinActiveDays30)
+		r, sq := chooseAlmanacRadius("JO32", levels(min, [almanacLevels]int{0, all, all}), min)
 		if r != 1 || len(sq) != 9 {
 			t.Errorf("r=%d len=%d, want 1/9", r, len(sq))
 		}
 	})
 
-	t.Run("days union across squares, not summed", func(t *testing.T) {
-		// Centre and neighbour both active on the SAME 5 days: union = 5 < 10
-		// at every radius, so it caps at 2. Summing would falsely give 10.
-		m := map[almanacGridBand]uint64{}
-		setBands(m, "JO32", len(almanacInScopeBands), fullMask(5))
-		setBands(m, "JO33", len(almanacInScopeBands), fullMask(5))
-		if r, _ := chooseAlmanacRadius("JO32", m, almanacMinActiveDays30); r != almanacMaxWidenRadius {
-			t.Errorf("r=%d, want cap %d", r, almanacMaxWidenRadius)
-		}
-		// Disjoint days in two squares union to 10 → r=1.
-		m2 := map[almanacGridBand]uint64{}
-		setBands(m2, "JO32", len(almanacInScopeBands), fullMask(5))
-		setBands(m2, "JO33", len(almanacInScopeBands), fullMask(10)&^fullMask(5))
-		if r, _ := chooseAlmanacRadius("JO32", m2, almanacMinActiveDays30); r != 1 {
-			t.Errorf("disjoint union r=%d, want 1", r)
-		}
-	})
-
-	t.Run("r2 via ring-2 square", func(t *testing.T) {
-		m := map[almanacGridBand]uint64{}
-		setBands(m, "JO34", len(almanacInScopeBands), full) // 2 squares north
-		r, sq := chooseAlmanacRadius("JO32", m, almanacMinActiveDays30)
+	t.Run("r2 via the outer ring", func(t *testing.T) {
+		r, sq := chooseAlmanacRadius("JO32", levels(min, [almanacLevels]int{0, 0, all}), min)
 		if r != 2 || len(sq) != 25 {
 			t.Errorf("r=%d len=%d, want 2/25", r, len(sq))
 		}
 	})
 
 	t.Run("nothing sufficient caps at 2", func(t *testing.T) {
-		r, sq := chooseAlmanacRadius("JO32", map[almanacGridBand]uint64{}, almanacMinActiveDays30)
+		r, sq := chooseAlmanacRadius("JO32", [almanacLevels][]int{}, min)
 		if r != almanacMaxWidenRadius || len(sq) != 25 {
 			t.Errorf("empty: r=%d len=%d, want 2/25", r, len(sq))
 		}
-		r, _ = chooseAlmanacRadius("JO32", nil, almanacMinActiveDays30)
+		r, _ = chooseAlmanacRadius("JO32", levels(min-1, [almanacLevels]int{all, all, all}), min)
 		if r != almanacMaxWidenRadius {
-			t.Errorf("nil masks: r=%d, want 2", r)
+			t.Errorf("one slot short everywhere: r=%d, want cap", r)
 		}
 	})
 
 	t.Run("boundary: exactly half widens, one more keeps", func(t *testing.T) {
-		if need != len(almanacInScopeBands)/2+1 {
-			t.Fatalf("bands needed = %d, want strictly more than half (%d)", need, len(almanacInScopeBands)/2+1)
+		if need != all/2+1 {
+			t.Fatalf("bands needed = %d, want strictly more than half (%d)", need, all/2+1)
 		}
-		half := len(almanacInScopeBands) / 2
-		m := map[almanacGridBand]uint64{}
-		setBands(m, "JO32", half, full)
-		setBands(m, "JO33", len(almanacInScopeBands), full)
-		if r, _ := chooseAlmanacRadius("JO32", m, almanacMinActiveDays30); r != 1 {
-			t.Errorf("exactly half (%d) meeting M_min: r=%d, want widen to 1", half, r)
+		half := all / 2
+		if r, _ := chooseAlmanacRadius("JO32", levels(min, [almanacLevels]int{half, all, all}), min); r != 1 {
+			t.Errorf("exactly half (%d) known: r=%d, want widen to 1", half, r)
 		}
-		setBands(m, "JO32", half+1, full)
-		if r, _ := chooseAlmanacRadius("JO32", m, almanacMinActiveDays30); r != 0 {
-			t.Errorf("half+1 (%d) meeting M_min: r=%d, want 0", half+1, r)
+		if r, _ := chooseAlmanacRadius("JO32", levels(min, [almanacLevels]int{half + 1, all, all}), min); r != 0 {
+			t.Errorf("half+1 (%d) known: r=%d, want 0", half+1, r)
 		}
 	})
 
-	t.Run("M_min boundary and out-of-scope bands", func(t *testing.T) {
-		m := map[almanacGridBand]uint64{}
-		setBands(m, "JO32", len(almanacInScopeBands), fullMask(almanacMinActiveDays30-1))
-		m[almanacGridBand{Grid: "JO32", Band: "6m"}] = full
-		m[almanacGridBand{Grid: "JO32", Band: "2m"}] = full
-		if r, _ := chooseAlmanacRadius("JO32", m, almanacMinActiveDays30); r != almanacMaxWidenRadius {
-			t.Errorf("M_min-1 days: r=%d, want cap", r)
+	t.Run("known-slot threshold boundary", func(t *testing.T) {
+		if r, _ := chooseAlmanacRadius("JO32", levels(min, [almanacLevels]int{all, all, all}), min); r != 0 {
+			t.Errorf("exactly %d known slots: r=%d, want 0", min, r)
 		}
-		// Seasonal threshold (8) is met by 9 days.
-		if r, _ := chooseAlmanacRadius("JO32", m, almanacMinActiveDaysSeasonal); r != 0 {
-			t.Errorf("seasonal M_min: r=%d, want 0", r)
+		if r, _ := chooseAlmanacRadius("JO32", levels(min-1, [almanacLevels]int{all, all, all}), min); r == 0 {
+			t.Errorf("%d known slots must not suffice", min-1)
 		}
 	})
 
 	t.Run("edge grid AA00 clipped", func(t *testing.T) {
-		m := map[almanacGridBand]uint64{}
-		r, sq := chooseAlmanacRadius("AA00", m, almanacMinActiveDays30)
+		r, sq := chooseAlmanacRadius("AA00", [almanacLevels][]int{}, min)
 		if r != 2 || len(sq) != 9 { // 3×3 quadrant survives clipping
 			t.Errorf("AA00: r=%d len=%d, want 2/9", r, len(sq))
 		}
-		r, sq = chooseAlmanacRadius("RR99", m, almanacMinActiveDays30)
+		r, sq = chooseAlmanacRadius("RR99", [almanacLevels][]int{}, min)
 		if r != 2 || len(sq) != 9 {
 			t.Errorf("RR99: r=%d len=%d, want 2/9", r, len(sq))
 		}
-		setBands(m, "AA01", len(almanacInScopeBands), full)
-		if r, _ := chooseAlmanacRadius("AA00", m, almanacMinActiveDays30); r != 1 {
-			t.Errorf("AA00 with active neighbour AA01: r=%d, want 1", r)
+		if r, _ := chooseAlmanacRadius("AA00", levels(min, [almanacLevels]int{0, all, all}), min); r != 1 {
+			t.Errorf("AA00 known from ring 1: r=%d, want 1", r)
 		}
 	})
 
 	t.Run("lowercase centre normalized", func(t *testing.T) {
-		m := map[almanacGridBand]uint64{}
-		setBands(m, "JO32", len(almanacInScopeBands), full)
-		if r, sq := chooseAlmanacRadius("jo32ab", m, almanacMinActiveDays30); r != 0 || sq[0] != "JO32" {
+		if r, sq := chooseAlmanacRadius("jo32ab", levels(min, [almanacLevels]int{all, all, all}), min); r != 0 || sq[0] != "JO32" {
 			t.Errorf("lowercase: r=%d sq=%v", r, sq)
 		}
 	})
 }
 
-func TestAlmanacBandsMeeting(t *testing.T) {
-	m := map[almanacGridBand]uint64{}
-	setBands(m, "JO32", 3, fullMask(almanacMinActiveDays30))
-	if got := almanacBandsMeeting([]string{"JO32"}, m, almanacMinActiveDays30); got != 3 {
-		t.Errorf("bands meeting = %d, want 3", got)
+func TestAlmanacBandsKnown(t *testing.T) {
+	if got := almanacBandsKnown([]int{9, 8, 7, 0, 48}, 8); got != 3 {
+		t.Errorf("bands known = %d, want 3", got)
 	}
 	if got := almanacBandsNeeded(0); got != 1 {
 		t.Errorf("bands needed for 0 = %d, want 1", got)
+	}
+}
+
+// A rural square: spots on a dozen days on most bands, but always in the same
+// two half-hours, so no lane can show more than a couple of slots. The old
+// test (any spot on ≥ M_min days) called that "enough" and stayed at radius 0
+// while the panel read "not enough data" nearly everywhere; per-slot
+// knownness widens to the neighbours that do have coverage.
+func TestAlmanacRuralSquareWidens(t *testing.T) {
+	f := newAggWorld()
+	win := almanacWindowFor(aggTestNow.Unix())
+	for d := win.Start; d < win.Start+12; d++ {
+		for _, b := range almanacInScopeBands[:8] {
+			f.add("JO32", b, "EU", d, 20, 1)
+		}
+	}
+	f.activeAllBands("JO33", win.Start, win.End, allSlots())
+
+	acc, err := readAlmanacAccum(context.Background(), f, "JO32", win, false, -1)
+	if err != nil {
+		t.Fatalf("readAlmanacAccum: %v", err)
+	}
+	known := acc.knownSlotCounts(almanacMinActiveDays30)
+	for bi, b := range almanacInScopeBands[:8] {
+		if k := known[0][bi]; k == 0 || k >= almanacWidenMinKnownSlots {
+			t.Fatalf("%s at r=0: %d known slots, want a few but fewer than %d", b, k, almanacWidenMinKnownSlots)
+		}
+		if known[1][bi] < almanacSeasonSlotsPerDay-1 {
+			t.Errorf("%s at r=1: %d known slots, want nearly all (JO33 covers the day)", b, known[1][bi])
+		}
+	}
+	typ := computeAlmanacTypical(acc)
+	if typ.Radius != 1 || len(typ.Squares) != 9 {
+		t.Fatalf("radius = %d squares = %d, want 1 / 9", typ.Radius, len(typ.Squares))
+	}
+	// The lanes are read at the widened radius: JO33's coverage is in them.
+	if l := findLane(t, typ, "20m", "EU"); l.unknown(10) {
+		t.Errorf("20m slot 10 must be known at radius 1 (m=%d)", l.M[10])
+	}
+}
+
+// Known-slot counts only grow with the radius (rings add coverage).
+func TestAlmanacKnownSlotCountsMonotonic(t *testing.T) {
+	f := newAggWorld()
+	win := almanacWindowFor(aggTestNow.Unix())
+	f.activeAllBands("JO32", win.Start, win.End, slotRange(0, 5))
+	f.activeAllBands("JO33", win.Start, win.End, slotRange(10, 20))
+	f.activeAllBands("JO34", win.Start, win.End, slotRange(30, 40))
+	acc, err := readAlmanacAccum(context.Background(), f, "JO32", win, false, -1)
+	if err != nil {
+		t.Fatalf("readAlmanacAccum: %v", err)
+	}
+	known := acc.knownSlotCounts(almanacMinActiveDays30)
+	for bi := range almanacInScopeBands {
+		if !(known[0][bi] < known[1][bi] && known[1][bi] < known[2][bi]) {
+			t.Fatalf("band %d: known slots by radius = %d, %d, %d, want strictly increasing",
+				bi, known[0][bi], known[1][bi], known[2][bi])
+		}
 	}
 }

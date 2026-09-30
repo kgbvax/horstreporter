@@ -393,7 +393,7 @@ moves down.
 
 ## 6. U2 query plans (stop condition: any read > 1.5 s)
 
-Result (prod, 2026-09-28, JO32 r=2, watermark today−2, cold): (a) seasonal 64 ms, (b) tail aggregate 368 ms, (c) tail active days 181 ms, ingest/lost < 1 ms. No single read exceeds 1.5 s. The whole cold request (typical plus today-overlay reads) landed at 1.3–1.6 s, so `almanacQueryTimeout` was raised to 4 s. The tail index is not needed.
+Result (prod, 2026-09-28, JO32 r=2, watermark today−2, cold): (a) seasonal 64 ms, (b) tail aggregate 368 ms, (c) tail active days 181 ms, ingest/lost < 1 ms. No single read exceeds 1.5 s. The whole cold request (typical plus today-overlay reads) landed at 1.3–1.6 s, so `almanacQueryTimeout` was raised to 4 s. The tail index is not needed. (Query (c), tail active days, has since been removed: the widening radius is now chosen from the per-slot counts the other reads already return, so that 181 ms is gone.)
 
 Status: **pending** — must be run on prod (prod-sized tables); not runnable
 from a dev checkout. Verification Contract "Query plans" for unit U2
@@ -446,17 +446,7 @@ WHERE d.band = ANY(:'bands'::text[])
   AND d.day_index BETWEEN :start AND :today
 GROUP BY r.ring, d.band, d.region, d.day_index, d.slot_of_day;
 
--- (c) Tail active days (widening masks).
-EXPLAIN (ANALYZE, BUFFERS)
-SELECT DISTINCT target_grid4, band, day_index
-FROM dx_region_baseline_daily
-WHERE target_grid4 = ANY(:'grids'::text[])
-  AND band = ANY(:'bands'::text[])
-  AND day_index > :w
-  AND day_index BETWEEN :start AND :end
-  AND spot_count > 0;
-
--- (d) Ingest totals and lost days (small; PK range scans).
+-- (c) Ingest totals and lost days (small; PK range scans).
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT day_index, slot_of_day, spot_total FROM almanac_ingest_slots
 WHERE layer = 'pskr' AND day_index BETWEEN :start AND :today;
@@ -475,8 +465,7 @@ Record:
 |---|---|---|---|---|
 | (a) seasonal | | | | |
 | (b) tail aggregate | | | | |
-| (c) tail active days | | | | |
-| (d) ingest + lost | | | | |
+| (c) ingest + lost | | | | |
 
 Then the end-to-end check: `time curl -s "http://127.0.0.1:<port>/api/almanac?qth=JO32" | jq '.area, (.lanes | length), .agenda[0]'`
 — populated arrays, and a second call within 120 s served from cache.

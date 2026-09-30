@@ -211,10 +211,7 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		return resp
 	}
 
-	qthSet := []string{qth}
-	if surroundings && isLocator(qth) {
-		qthSet = getSurroundingSquares(qth)
-	}
+	qthSet := qthSquares(qth, surroundings)
 
 	cutoff := now - int64(minutes)*60
 	midpoint := cutoff + (now-cutoff)/2

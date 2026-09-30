@@ -138,6 +138,7 @@ export function initHotBandIndicator({ getQth, getSurroundings, getCurrentBand, 
         const params = new URLSearchParams();
         params.set('qth', qth);
         if (getSurroundings?.()) params.set('surroundings', 'true');
+        params.set('rings', 'auto');
         const current = (getCurrentBand?.() || '').toLowerCase();
         if (current && current !== 'all') params.set('current_band', current);
 
