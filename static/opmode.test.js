@@ -32,6 +32,7 @@ import {
     syncAntennaOverlay,
     setAntennaMode,
     updateOpModeStatusLine,
+    getRigBand,
     __setOpModeStateForTest
 } from './opmode.js';
 import { setAzimuthAntennaOverlay } from './azimuth-runtime.js';
@@ -370,5 +371,24 @@ describe('opmode status line (Band | Mode | QRG | Antenna)', () => {
         updateOpModeStatusLine();
         expect(txt('opmode-sl-band')).toBe('15m');
         expect(txt('opmode-sl-qrg')).toBe('21.074 MHz');
+    });
+});
+
+describe('getRigBand (Horst-Kevin answered-by-rig)', () => {
+    it('returns the band while the rig is online', () => {
+        __setOpModeStateForTest({ liveRig: { freqHz: 14074000, mode: 'USB', split: false, online: true, freqRxHz: null, modeRx: '' } });
+        expect(getRigBand()).toBe('20m');
+    });
+
+    it('returns empty when the rig is offline or absent', () => {
+        __setOpModeStateForTest({ liveRig: { freqHz: 14074000, mode: 'USB', split: false, online: false, freqRxHz: null, modeRx: '' } });
+        expect(getRigBand()).toBe('');
+        __setOpModeStateForTest({ liveRig: null });
+        expect(getRigBand()).toBe('');
+    });
+
+    it('returns empty when the rig is outside any band', () => {
+        __setOpModeStateForTest({ liveRig: { freqHz: 5000000, mode: 'USB', split: false, online: true, freqRxHz: null, modeRx: '' } });
+        expect(getRigBand()).toBe('');
     });
 });

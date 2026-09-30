@@ -859,6 +859,9 @@ func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
 
 	currentBand := normalizeBand(strings.TrimSpace(r.URL.Query().Get("current_band")))
 
+	// Opt-in knobs; without them the response is the default top-3 list.
+	opts := parseHotBandsOptions(r.URL.Query())
+
 	now := time.Now().Unix()
 
 	area := liveAreaForRequest(r, qth, surroundings, now)
@@ -875,7 +878,7 @@ func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dxBaseline != nil {
-		resp = dxBaseline.HotBandsArea(qth, surroundings, minutes, cwMinDb, currentBand, historyCopy, now, area)
+		resp = dxBaseline.HotBandsAreaWith(qth, surroundings, minutes, cwMinDb, currentBand, historyCopy, now, area, opts)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

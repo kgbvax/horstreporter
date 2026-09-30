@@ -15,7 +15,7 @@ import { initPushUI } from './push.js';
 import { updateMapVisualization, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint, whenActiveAreaRendered } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming, icon } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
-import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation } from './opmode.js';
+import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation, getRigBand } from './opmode.js';
 import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL, invalidateBundles as invalidateTimelineBundles, refreshMoment as refreshTimelineMoment } from './timeline.js';
 import { updateAfterglow, notifyMapMoved, hideAfterglow } from './afterglow.js';
 import { GRAYLINE_BUCKET_MS, setDataNowMs, clearDataNowOverride } from './data-now.js';
@@ -35,9 +35,10 @@ const MAX_LIVE_SPOTS = 20000;
 let suppressAzimuthClickUntil = 0;
 let hotBandIndicator = null;
 let horstKevin = null;
-// Horst-Kevin avatar (dares, grudge, panel, desktop nags) is off for the time
-// being. Flip this and drop the inline display:none on #horst-kevin to bring it back.
-const HORST_KEVIN_ENABLED = false;
+// Horst-Kevin (dares, grudge, panel, desktop nags). This is the only switch:
+// with it off the sidebar picture stays a plain decorative image and
+// #hk-layer stays hidden.
+const HORST_KEVIN_ENABLED = true;
 // Time travel (timeline.js) is hidden for now: no sidebar option, and a saved
 // timeline URL is not restored, so the timeline bar never opens. Opt back in with
 // ?timetravel=1 or localStorage 'showTimeTravel'='1'.
@@ -196,10 +197,13 @@ function restartStreamIfSubscribed() {
 }
 
 // Focus a band programmatically (hot-band indicator / horst-kevin onBandSwitch).
+// Returns whether the switch happened (a disabled band is refused), so
+// Horst-Kevin only counts a dare as answered when it really was.
 function switchToBand(band) {
-    if (!getEnabledBands().has(band)) return;
+    if (!getEnabledBands().has(band)) return false;
     setBandFocus(band);
     applyBandChange();
+    return true;
 }
 
 function parseBoolParam(raw, fallback = false) {
@@ -1426,6 +1430,8 @@ if (captureConfig?.enabled) {
             getQth: () => document.getElementById('qth')?.value?.trim()?.toUpperCase() || '',
             getSurroundings: () => Boolean(document.getElementById('surroundings')?.checked),
             getCurrentBand: () => getSelectedBand(),
+            getRigBand,
+            getEnabledBands,
             onBandSwitch: switchToBand,
         });
     }
