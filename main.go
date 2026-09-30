@@ -516,6 +516,7 @@ func main() {
 		} else if totalLoaded > 0 {
 			hub.Lock()
 			hub.history = merged
+			wsprSeen.seedFromHistory(merged, time.Now().Unix())
 			hub.Unlock()
 			liveHistoryCompleteSince.Store(windowStart)
 			backfillLanded = true

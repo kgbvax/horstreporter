@@ -3,9 +3,12 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -47,6 +50,7 @@ type wsprAccountingState struct {
 	persistedSpots atomic.Int64
 	forwardedSpots atomic.Int64
 	droppedNoLoc   atomic.Int64
+	duplicateRows  atomic.Int64
 }
 
 func (a *wsprAccountingState) snapshot() (attempts, failures, rowsSeen, parsed, persisted, forwarded, droppedNoLoc int64) {
@@ -61,6 +65,76 @@ func (a *wsprAccountingState) snapshot() (attempts, failures, rowsSeen, parsed, 
 }
 
 var wsprAccounting = &wsprAccountingState{}
+
+// wsprLookbackSeconds is the poll query window (`time > now() - N`). Each poll
+// re-reads the whole window, so consecutive polls overlap and the same row is
+// returned several times; wsprSeen collapses those repeats.
+const wsprLookbackSeconds = 300
+
+// wsprSeenTTL keeps dedup keys for twice the lookback window so a row can't
+// re-enter after its key is pruned while it is still inside the query window.
+const wsprSeenTTL = 2 * wsprLookbackSeconds
+
+type wsprKey struct {
+	t      int64
+	band   string
+	rx, tx string
+	freqHz int64
+}
+
+func wsprKeyFor(m MQTTMessage) wsprKey {
+	return wsprKey{t: m.T, band: m.B, rx: m.SC, tx: m.RC, freqHz: int64(math.Round(m.F * 1000))}
+}
+
+// wsprSeenSet remembers recently ingested WSPR rows (first-seen unix time per
+// key) so overlapping polls don't persist, count and broadcast a spot again.
+type wsprSeenSet struct {
+	mu sync.Mutex
+	m  map[wsprKey]int64
+}
+
+var wsprSeen = &wsprSeenSet{m: make(map[wsprKey]int64)}
+
+// markNew records m and reports whether it was not seen before.
+func (s *wsprSeenSet) markNew(m MQTTMessage, now int64) bool {
+	k := wsprKeyFor(m)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, dup := s.m[k]; dup {
+		return false
+	}
+	s.m[k] = now
+	return true
+}
+
+// prune drops keys first seen more than wsprSeenTTL ago.
+func (s *wsprSeenSet) prune(now int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, first := range s.m {
+		if first < now-wsprSeenTTL {
+			delete(s.m, k)
+		}
+	}
+}
+
+func (s *wsprSeenSet) reset() {
+	s.mu.Lock()
+	s.m = make(map[wsprKey]int64)
+	s.mu.Unlock()
+}
+
+// seedFromHistory marks already-held WSPR history rows as seen so a restart
+// (which backfills history from Postgres) doesn't re-ingest the first poll.
+func (s *wsprSeenSet) seedFromHistory(history []MQTTMessage, now int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range history {
+		if m.Source == "wspr" && m.T >= now-wsprSeenTTL {
+			s.m[wsprKeyFor(m)] = now
+		}
+	}
+}
 
 type wsprConfig struct {
 	Enabled     bool
@@ -164,7 +238,7 @@ func fetchWSPRSpots(client *http.Client, endpoint string, cfg wsprConfig) {
 	// time+band).
 	bandList := "1,3,5,7,10,14,18,21,24,28,50,70,144"
 	q := "SELECT time, band, rx_sign, rx_loc, tx_sign, tx_loc, distance, frequency, power, snr " +
-		"FROM wspr.rx WHERE time > now() - 300 AND band IN (" + bandList + ") FORMAT JSON"
+		"FROM wspr.rx WHERE time > now() - " + strconv.Itoa(wsprLookbackSeconds) + " AND band IN (" + bandList + ") FORMAT JSON"
 	u := endpoint + "/?query=" + url.QueryEscape(q)
 
 	req, err := http.NewRequest(http.MethodGet, u, nil)
@@ -202,9 +276,18 @@ func fetchWSPRSpots(client *http.Client, endpoint string, cfg wsprConfig) {
 	}
 
 	now := time.Now().Unix()
+	wsprSeen.prune(now)
 	for _, s := range resp.Data {
 		wsprAccounting.rowsSeen.Add(1)
-		handleWSPRSpot(s, now, cfg)
+		m, ok := wsprMessageFromRow(s, now)
+		if !ok {
+			continue
+		}
+		if !wsprSeen.markNew(m, now) {
+			wsprAccounting.duplicateRows.Add(1)
+			continue
+		}
+		ingestWSPRMessage(m)
 	}
 	if cfg.Verbose && len(resp.Data) > 0 {
 		logInfo("WSPR poll: %d spots", len(resp.Data))
@@ -212,11 +295,20 @@ func fetchWSPRSpots(client *http.Client, endpoint string, cfg wsprConfig) {
 }
 
 // handleWSPRSpot converts a wspr.rx row into an MQTTMessage and feeds it
-// through persist + live broadcast, mirroring handleRBNSpot.
+// through persist + live broadcast, mirroring handleRBNSpot. It does not
+// dedup; the poller does that via wsprSeen before calling ingestWSPRMessage.
 func handleWSPRSpot(s wsprSpot, now int64, cfg wsprConfig) {
+	if m, ok := wsprMessageFromRow(s, now); ok {
+		ingestWSPRMessage(m)
+	}
+}
+
+// wsprMessageFromRow converts a wspr.rx row into an MQTTMessage. It reports
+// false for out-of-scope bands and rows missing a callsign.
+func wsprMessageFromRow(s wsprSpot, now int64) (MQTTMessage, bool) {
 	band := bandFromWSPR(s.Band)
 	if band == "" {
-		return
+		return MQTTMessage{}, false
 	}
 	ts, err := parseWSPRTime(s.Time)
 	if err != nil || ts <= 0 {
@@ -241,8 +333,14 @@ func handleWSPRSpot(s wsprSpot, now int64, cfg wsprConfig) {
 		TXPower: s.Power,
 	}
 	if m.SC == "" || m.RC == "" {
-		return
+		return MQTTMessage{}, false
 	}
+	return m, true
+}
+
+// ingestWSPRMessage persists a WSPR spot and, when it has a usable locator,
+// broadcasts it to clients whose area it touches.
+func ingestWSPRMessage(m MQTTMessage) {
 	wsprAccounting.parsedSpots.Add(1)
 
 	// Persist unconditionally so the count-based activity chart benefits even
@@ -270,12 +368,10 @@ func handleWSPRSpot(s wsprSpot, now int64, cfg wsprConfig) {
 		return
 	}
 
-	// WSPR is a global propagation reference — broadcast to ALL connected
-	// clients regardless of their QTH. Unlike FT8/DX-cluster/RBN (which are
-	// QTH-filtered because they involve the operator's own station), WSPR
-	// beacons show "is the band open at all?" for any path worldwide. The
-	// client-side show-wspr-spots toggle lets users hide them if too busy.
-	hub.broadcastWSPRToAll(m)
+	// WSPR is scoped like every other source: only clients whose QTH/area
+	// includes the transmitter or receiver get it (from-your-QTH only), so the
+	// live stream matches the history dump.
+	hub.broadcastMsg(m)
 	wsprAccounting.forwardedSpots.Add(1)
 }
 

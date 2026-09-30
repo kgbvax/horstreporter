@@ -139,3 +139,44 @@ func TestHubBroadcastMsg(t *testing.T) {
 		t.Errorf("non-matching client received %d spots, want 0", len(other.send))
 	}
 }
+// TestLiveWSPRIsAreaScoped: live WSPR reaches only clients whose QTH covers
+// the receiver or transmitter square, and reporterLocator is the receiver's.
+func TestLiveWSPRIsAreaScoped(t *testing.T) {
+	savedHub, savedPropBaseline := hub, propBaseline
+	defer func() { hub, propBaseline = savedHub, savedPropBaseline }()
+
+	rxClient := &Client{qthSet: []string{"JO31"}, send: make(chan Spot, 4)}
+	txClient := &Client{qthSet: []string{"EM12"}, send: make(chan Spot, 4)}
+	farClient := &Client{qthSet: []string{"VK3"}, send: make(chan Spot, 4)}
+	hub = &Hub{
+		clients: map[*Client]bool{rxClient: true, txClient: true, farClient: true},
+		history: make([]MQTTMessage, 0),
+	}
+	propBaseline = nil
+
+	// WSPR convention: SC/SL = receiver (reporter), RC/RL = transmitter.
+	ingestWSPRMessage(MQTTMessage{
+		T: time.Now().Unix() - 5, SC: "DL1ABC", SL: "JO31", RC: "K1XYZ", RL: "EM12",
+		B: "20m", MD: "WSPR", RP: -20, Source: "wspr",
+	})
+
+	if len(farClient.send) != 0 {
+		t.Errorf("distant client received %d WSPR spots, want 0", len(farClient.send))
+	}
+	select {
+	case s := <-rxClient.send:
+		if s.Locator != "EM12" || s.ReporterLocator != "JO31" || s.SourceType != "wspr" {
+			t.Errorf("receiver-side spot = %+v, want locator EM12, reporterLocator JO31, wspr", s)
+		}
+	default:
+		t.Fatal("client in the receiver square got no spot")
+	}
+	select {
+	case s := <-txClient.send:
+		if s.Locator != "JO31" || s.ReporterLocator != "JO31" {
+			t.Errorf("transmitter-side spot = %+v, want locator JO31, reporterLocator JO31", s)
+		}
+	default:
+		t.Fatal("client in the transmitter square got no spot")
+	}
+}

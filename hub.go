@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"sync"
 	"time"
 )
@@ -54,41 +53,6 @@ func (h *Hub) broadcastMsg(m MQTTMessage) {
 		if spot, ok := matchAndCreateSpot(client, m, now); ok {
 			safeSend(client.send, spot)
 		}
-	}
-}
-
-// broadcastWSPRToAll sends a WSPR spot to every connected client regardless of
-// their QTH. WSPR is a global propagation reference — it shows which bands
-// have paths open right now, not just paths involving the operator's own
-// station. The client-side show-wspr-spots toggle lets users hide them.
-func (h *Hub) broadcastWSPRToAll(m MQTTMessage) {
-	h.Lock()
-	h.history = append(h.history, m)
-	propBaseline.Observe(m)
-	clients := make([]*Client, 0, len(h.clients))
-	for c := range h.clients {
-		clients = append(clients, c)
-	}
-	h.Unlock()
-
-	now := time.Now().Unix()
-	for _, client := range clients {
-		spot := Spot{
-			Lat:             0,
-			Lng:             0,
-			SNR:             m.RP,
-			AgeSeconds:      ageClamped(now, m.T),
-			Locator:         strings.ToUpper(strings.TrimSpace(m.RL)),
-			ReporterLocator: strings.ToUpper(strings.TrimSpace(m.SL)),
-			SourceType:      "wspr",
-			Band:            m.B,
-			Sender:          m.SC,
-			Receiver:        m.RC,
-		}
-		lat, lng := locatorToLatLng(spot.Locator)
-		spot.Lat = lat
-		spot.Lng = lng
-		safeSend(client.send, spot)
 	}
 }
 

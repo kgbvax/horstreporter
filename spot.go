@@ -30,8 +30,11 @@ func sourceTypeForMessage(m MQTTMessage) string {
 }
 
 func reporterLocatorForMessage(m MQTTMessage) string {
-	mode := strings.ToUpper(strings.TrimSpace(m.MD))
-	if mode == "DXCLUSTER" {
+	// reporterLocator is the receiving (reporting) station's square. For
+	// PSKReporter that is RL; DX cluster, RBN and WSPR use SC/SL for the
+	// reporting station (RC/RL is the station heard).
+	switch sourceTypeForMessage(m) {
+	case "dxcluster", "rbn", "wspr":
 		return strings.ToUpper(strings.TrimSpace(m.SL))
 	}
 	return strings.ToUpper(strings.TrimSpace(m.RL))
@@ -125,10 +128,7 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 	}
 
 	lat, lng := locatorToLatLng(remoteLocator)
-	age := now - m.T
-	if age < 0 {
-		age = 0
-	}
+	age := ageClamped(now, m.T)
 
 	if logLevel == "DEBUG" {
 		logDebug("QTH '%v' matched successfully! Mapped to Remote Locator: %s", client.qthSet, remoteLocator)
