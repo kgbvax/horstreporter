@@ -26,6 +26,13 @@ const RUNG_THRESHOLDS_MS = [0, 3 * 60_000, 8 * 60_000, 20 * 60_000];
 // otherwise it was a lie (Horst-Kevin got excited over nothing).
 const VERDICT_AFTER_MS = 60_000;
 
+// Horst-Kevin only comments on the HF bands 80m to 10m for now; the backend
+// also recommends 160m and VHF/UHF bands, which he must not dare anyone onto.
+const DARE_BANDS = new Set(['80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m']);
+export function isDareBand(band) {
+    return DARE_BANDS.has(String(band || '').toLowerCase());
+}
+
 const GRUDGE_WINDOW_MS = 7 * 24 * 60 * 60_000; // repeat-offender lookback
 const MAX_GRUDGES = 60;
 const MAX_CALLS = 60;
@@ -332,7 +339,7 @@ export function initHorstKevin({ getQth, getSurroundings, getCurrentBand, onBand
 
         for (const rec of recs) {
             const band = (rec.band || '').toLowerCase();
-            if (!band) continue;
+            if (!isDareBand(band)) continue;
             present.add(band);
 
             let t = tracked.get(band);

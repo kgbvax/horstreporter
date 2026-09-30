@@ -1,6 +1,5 @@
 import { state } from './state.js';
 import { WSPR_REGIONS, bandColors, getEnabledBands, getMinSnrMode } from './utils.js';
-import { setPanelToggleState } from './panel-toggle.js';
 import { escapeHtml } from './ui-helpers.js';
 
 // wspr-matrix.js — the unified Propagation panel: band × region propagation-
@@ -30,9 +29,7 @@ import { escapeHtml } from './ui-helpers.js';
 // band × region cell when it was inside the panel.
 
 const PANEL_ID = 'wspr-matrix-window';
-const TOGGLE_ID = 'wspr-matrix-toggle';
 const BODY_ID = 'wspr-matrix-body';
-const ENABLE_KEY = 'wsprMatrixEnabled';
 const SOURCES_KEY = 'wsprMatrixSources';
 const STYLE_KEY = 'wsprMatrixStyle';
 // Legacy localStorage key from the removed from-here/unfiltered toggle —
@@ -166,18 +163,13 @@ const runtime = {
     lastRenderKey: '',
     sources: [...DEFAULT_SOURCES],
     style: 'viridis',
-    onLayoutChange: null,
     // Optional extra per-band columns (see setRowExtras); the Conditions dock
     // uses them to put verdict / count / plot in the same row as the cells.
     rowExtras: null,
 };
 
-const TOGGLE_LABELS = { show: 'Show propagation', hide: 'Hide propagation' };
-
-export function initWsprMatrix({ onLayoutChange } = {}) {
-    runtime.onLayoutChange = onLayoutChange || null;
+export function initWsprMatrix() {
     const panel = document.getElementById(PANEL_ID);
-    const toggle = document.getElementById(TOGGLE_ID);
     if (!panel) return;
 
     localStorage.removeItem(LEGACY_FROM_HERE_KEY);
@@ -194,19 +186,6 @@ export function initWsprMatrix({ onLayoutChange } = {}) {
     const storedStyle = localStorage.getItem(STYLE_KEY);
     if (storedStyle && ALL_STYLES.includes(storedStyle)) {
         runtime.style = storedStyle;
-    }
-
-    // Standalone mode: the panel has its own toggle. Inside the Conditions
-    // dock there is none; cond-dock.js calls setWsprMatrixVisible instead.
-    if (toggle) {
-        if (localStorage.getItem(ENABLE_KEY) === 'true') {
-            setWsprMatrixVisible(true);
-        } else {
-            setPanelToggleState(toggle, false, TOGGLE_LABELS);
-        }
-        toggle.addEventListener('click', () => {
-            setWsprMatrixVisible(!runtime.enabled);
-        });
     }
 
     // Re-poll when QTH changes (band-lab.js pattern).
@@ -243,16 +222,13 @@ export function initWsprMatrix({ onLayoutChange } = {}) {
     document.addEventListener('change', runtime.snrThresholdListener);
 }
 
+// Dock entry point: the Conditions dock owns visibility (cond-dock.js).
 export function setWsprMatrixVisible(visible) {
     const panel = document.getElementById(PANEL_ID);
-    const toggle = document.getElementById(TOGGLE_ID);
     if (!panel) return;
     if (runtime.enabled === visible && (panel.classList.contains('is-hidden') === !visible)) return;
     runtime.enabled = visible;
     panel.classList.toggle('is-hidden', !visible);
-    if (toggle) setPanelToggleState(toggle, visible, TOGGLE_LABELS);
-    localStorage.setItem(ENABLE_KEY, visible ? 'true' : 'false');
-    if (runtime.onLayoutChange) runtime.onLayoutChange();
     if (visible) {
         startPolling();
     } else {
@@ -486,6 +462,8 @@ function renderMatrix() {
     }
     activeBands.sort((a, b) => BAND_ORDER.indexOf(a) - BAND_ORDER.indexOf(b));
     const extras = runtime.rowExtras;
+    const hidden = new Set(extras?.hiddenRegions || []);
+    const regions = WSPR_REGIONS.filter((r) => !hidden.has(r));
 
     // Fingerprint for skip-rebuild (theme included: a toggle re-shades chips;
     // drill-down included: it sets aria-selected and the tab stop; region
@@ -511,7 +489,7 @@ function renderMatrix() {
     let html = renderSourceChips();
     html += '<table class="wspr-matrix-table" role="grid" aria-label="Propagation by band and region">' +
         '<thead><tr role="row"><th scope="col" role="columnheader"><span class="wspr-sr-only">Band</span></th>' + extraHead;
-    for (const region of WSPR_REGIONS) {
+    for (const region of regions) {
         html += `<th scope="col" role="columnheader" title="${escapeHtml(regionNames[region] || region)}">${region}</th>`;
     }
     html += '</tr></thead><tbody>';
@@ -519,9 +497,9 @@ function renderMatrix() {
     for (const band of activeBands) {
         const bandMap = matrix.get(band);
         const color = bandColors[band] || bandColors.all || '#555';
-        html += `<tr role="row"><th scope="row" role="rowheader" class="wspr-matrix-band" style="border-left: 3px solid ${color}">${band}</th>`;
+        html += `<tr role="row"><th scope="row" role="rowheader" class="wspr-matrix-band" style="border-left: 3px solid ${color}">${band}${extras?.rowHeader ? extras.rowHeader(band) : ''}</th>`;
         if (extras) html += extras.cells(band);
-        for (const region of WSPR_REGIONS) {
+        for (const region of regions) {
             const cell = bandMap.get(region);
             html += renderCell(band, region, cell, maxCount, theme, regionNames);
         }
@@ -613,7 +591,7 @@ function renderCell(band, region, cell, maxCount, theme, regionNames = runtime.c
     const selected = state.drillDownBand === band && state.drillDownRegion === region;
     const label = escapeHtml(cellLabel(band, region, cell, regionNames));
     const title = escapeHtml(titleParts.join('\n'));
-    return `<td role="gridcell" class="wspr-matrix-cell" style="${styleAttr}" title="${title}" aria-label="${label}" aria-selected="${selected}" tabindex="-1" data-band="${band}" data-region="${region}">${cell.spot_count}${badges}${atypicalMark}</td>`;
+    return `<td role="gridcell" class="wspr-matrix-cell" style="${styleAttr}" title="${title}" aria-label="${label}" aria-selected="${selected}" tabindex="-1" data-band="${band}" data-region="${region}">${runtime.rowExtras?.hideCounts ? '' : cell.spot_count}${badges}${atypicalMark}</td>`;
 }
 
 function legendHtml() {
@@ -780,8 +758,12 @@ export function clearDrillDown() {
 }
 
 // Conditions dock hooks. `extras` = { columns: [{label, className}],
-// cells(band) -> '<td>…</td>' per column, key(bands) -> string that changes
-// when the extra cells' markup would, after(body) -> draw into the fresh DOM }.
+// cells(band) -> '<td>…</td>' per column, optional rowHeader(band) -> HTML
+// stacked under the band name in the row header, key(bands) -> string that
+// changes when the extra markup would, after(body) -> draw into the fresh DOM,
+// optional hiddenRegions -> region codes left out of the table, optional
+// hideCounts -> cells show colour and badges only (the count stays in the
+// tooltip and the accessible name) }.
 export function setRowExtras(extras) {
     runtime.rowExtras = extras || null;
     runtime.lastRenderKey = '';
@@ -821,7 +803,6 @@ export const __test = {
         runtime.lastRenderKey = '';
         runtime.sources = [...DEFAULT_SOURCES];
         runtime.style = 'viridis';
-        runtime.onLayoutChange = null;
         runtime.rowExtras = null;
     },
     invalidateCache,
@@ -829,9 +810,7 @@ export const __test = {
     updateDrillDownButton,
     clearDrillDown,
     PANEL_ID,
-    TOGGLE_ID,
     BODY_ID,
-    ENABLE_KEY,
     SOURCES_KEY,
     STYLE_KEY,
 };

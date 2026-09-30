@@ -1210,22 +1210,32 @@ body[data-theme="dark"] .wspr-matrix-cell {
 }
 .cond-now-matrix .wspr-matrix-table {
     width: 100%;
+    /* A small gap between the region columns. */
+    border-collapse: separate;
+    border-spacing: 3px 0;
+}
+/* Headings and the band label one point larger than the table text; the
+   verdict and reports / normal lines under the band keep the table size. */
+.cond-now-matrix .wspr-matrix-table th {
+    font-size: calc(0.72rem + 1px);
+}
+.cond-now-matrix .cond-band-verdict,
+.cond-now-matrix .cond-band-pair {
+    font-size: 0.72rem;
 }
 .cond-now-matrix .wspr-matrix-table tbody tr {
     /* Even rows: tall enough for a cell's count plus two stacked badges. */
     height: 60px;
 }
-.cond-cell-verdict,
-.cond-cell-pair {
-    padding: 0 6px;
+.cond-band-verdict,
+.cond-band-pair {
+    display: block;
+    font-weight: 400;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
 }
-.cond-cell-verdict {
-    text-align: left;
-}
-.cond-cell-pair {
-    text-align: right;
+.cond-band-pair {
+    color: color-mix(in srgb, var(--text-color) 70%, transparent);
 }
 .cond-cell-plot {
     padding: 2px 4px;
@@ -1568,6 +1578,20 @@ body[data-theme="dark"] .band-row {
     border-width: 2px;
     padding: 3px 10px;
     background-color: var(--hot-band-bg-strong, rgba(85, 85, 85, 0.28));
+}
+
+/* Horst-Kevin at the bottom of the sidebar: pushed down when the controls are
+   short, scrolls with them when they are long. Decorative. */
+.sidebar-hk {
+    margin-top: auto;
+    padding-top: 16px;
+    text-align: center;
+}
+.sidebar-hk img {
+    display: inline-block;
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--btn-radius, 8px);
 }
 
 /* ── Horst-Kevin: the band-heckling dragon ─────────────────────────────── */

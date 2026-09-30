@@ -66,13 +66,17 @@ describe('reportsPair', () => {
 });
 
 describe('row extras', () => {
-    it('emits verdict, pair and plot cells for a band', () => {
+    it('stacks verdict and pair under the band name, and adds the plot cell', () => {
         getBandRow.mockReturnValueOnce(row({ activity_level: 'below', regional_spots: 3, regional_expected: 9 }));
-        const html = __test.extras.cells('20m');
-        expect(html).toContain('class="cond-cell-verdict" data-band="20m">quiet</td>');
-        expect(html).toContain('class="cond-cell-pair" data-band="20m">3 / 9</td>');
-        expect(html).toContain('<canvas class="cond-mini" data-band="20m"');
-        expect(__test.extras.columns).toHaveLength(3);
+        const header = __test.extras.rowHeader('20m');
+        expect(header).toBe('<span class="cond-band-verdict">quiet</span><span class="cond-band-pair">3 / 9</span>');
+        expect(__test.extras.cells('20m')).toContain('<canvas class="cond-mini" data-band="20m"');
+        expect(__test.extras.columns).toHaveLength(1);
+    });
+
+    it('leaves out empty header lines', () => {
+        getBandRow.mockReturnValueOnce(row({ activity_level: 'normal' }));
+        expect(__test.extras.rowHeader('20m')).toBe('');
     });
 
     it('keys on the text cells only, so dots redraw without a rebuild', () => {

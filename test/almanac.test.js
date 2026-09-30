@@ -4,9 +4,9 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 // of M days" per 30-min UTC slot), a UTC now line, the schedule above the
 // lanes, and the area header. Fixtures mirror the BACKEND /api/almanac JSON
 // (snake_case, see docs/api.md) so a naming mismatch surfaces here.
-import { initAlmanac, scheduleHtml, __test } from '../static/almanac.js';
+import { initAlmanac, setAlmanacVisible, scheduleHtml, __test } from '../static/almanac.js';
 
-const { runtime, reset, openDrilldown, PANEL_ID, TOGGLE_ID, BODY_ID, ENABLE_KEY } = __test;
+const { runtime, reset, openDrilldown, PANEL_ID, BODY_ID } = __test;
 
 const REGIONS = ['EU', 'NA', 'SA', 'AF', 'AS', 'JA', 'OC', 'VK', 'KH6', 'CAR', 'AN'];
 const IN_SCOPE = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m'];
@@ -28,7 +28,6 @@ function setupDom(qth = 'JO32') {
     document.body.innerHTML = `
         <form id="fetch-form"><input id="qth" value="${qth}" /></form>
         <div id="map-stack">
-            <div id="map-toggles"><button id="${TOGGLE_ID}"></button></div>
             <div id="${PANEL_ID}" class="almanac-window is-hidden">
                 <div class="almanac-window-header"><span id="almanac-title">Typical openings from your area</span></div>
                 <div id="${BODY_ID}"></div>
@@ -94,7 +93,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 async function openPanel() {
     initAlmanac();
-    document.getElementById(TOGGLE_ID).click();
+    setAlmanacVisible(true);
     await flush();
     await flush();
 }
@@ -112,12 +111,11 @@ function stubOffset(offset) {
 }
 
 describe('almanac panel (U7)', () => {
-    let store;
     let originalFetch;
 
     beforeEach(() => {
         originalFetch = global.fetch;
-        store = installLocalStorageMock();
+        installLocalStorageMock();
         setupDom();
         reset();
         Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
@@ -131,34 +129,21 @@ describe('almanac panel (U7)', () => {
         vi.restoreAllMocks();
     });
 
-    it('toggle shows/hides the panel, persists the state and fetches /api/almanac for the QTH', async () => {
+    it('showing the panel fetches /api/almanac for the QTH; hiding stops it', async () => {
         mockFetchOnce(makePayload());
         initAlmanac();
         const panel = document.getElementById(PANEL_ID);
-        const toggle = document.getElementById(TOGGLE_ID);
         expect(panel.classList.contains('is-hidden')).toBe(true);
-        expect(toggle.getAttribute('aria-pressed')).toBe('false');
 
-        toggle.click();
+        setAlmanacVisible(true);
         await flush();
         expect(panel.classList.contains('is-hidden')).toBe(false);
-        expect(store.getItem(ENABLE_KEY)).toBe('true');
-        expect(toggle.getAttribute('aria-pressed')).toBe('true');
         expect(global.fetch).toHaveBeenCalledTimes(1);
         expect(global.fetch.mock.calls[0][0]).toBe('/api/almanac?qth=JO32');
 
-        toggle.click();
+        setAlmanacVisible(false);
         expect(panel.classList.contains('is-hidden')).toBe(true);
-        expect(store.getItem(ENABLE_KEY)).toBe('false');
-    });
-
-    it('restores the open state from localStorage', async () => {
-        mockFetchOnce(makePayload());
-        store.setItem(ENABLE_KEY, 'true');
-        initAlmanac();
-        await flush();
-        expect(document.getElementById(PANEL_ID).classList.contains('is-hidden')).toBe(false);
-        expect(global.fetch).toHaveBeenCalledTimes(1);
+        expect(runtime.timer).toBeNull();
     });
 
     it('JO32: renders 11 region rows with EU last and one labelled lane per band', async () => {
@@ -816,11 +801,10 @@ describe('almanac seasonal drill-down (U8)', () => {
         routeFetch();
         await openOC();
         expect(body().querySelector('.almanac-drill')).not.toBeNull();
-        const toggle = document.getElementById(TOGGLE_ID);
-        toggle.click(); // hide
+        setAlmanacVisible(false);
         expect(runtime.drilldown).toBeNull();
         expect(body().querySelector('.almanac-drill')).toBeNull();
-        toggle.click(); // show again
+        setAlmanacVisible(true); // show again
         expect(body().querySelector('.almanac-drill')).toBeNull();
         await flush();
         await flush();
