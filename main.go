@@ -248,7 +248,7 @@ func main() {
 	keyFile := flag.String("key", "", "Path to TLS key file")
 	domain := flag.String("domain", "", "Domain for Let's Encrypt (enables automatic TLS)")
 	dev := flag.Bool("dev", false, "Enable development mode (disables caching of static files)")
-	flag.BoolVar(&compressStream, "compress", true, "Enable gzip compression for the SSE stream (use -compress=false to disable)")
+	flag.BoolVar(&compressStream, "compress", true, "Enable gzip compression for the SSE stream, JSON API responses and static assets (use -compress=false to disable)")
 	enablePprof := flag.Bool("pprof", false, "Enable pprof profiling on localhost:6060")
 	logLevelFlag := flag.String("log-level", "", "Log level: DEBUG, INFO, WARN (default: INFO if env LOG_LEVEL not set)")
 	logFile := flag.String("log-file", "", "Path to the log file (enables file logging with rotation)")
@@ -808,6 +808,11 @@ func main() {
 		logInfo("region baseline retention enabled: %d days", regionRetentionDays)
 	}
 
+	var appHandler http.Handler = appMux
+	if compressStream {
+		appHandler = gzipMiddleware(appMux)
+	}
+
 	if *domain != "" {
 		logInfo("HorstReporter starting HTTPS server with Let's Encrypt for domain %s on port %s...", *domain, *port)
 		m := &autocert.Manager{
@@ -818,19 +823,19 @@ func main() {
 		server := &http.Server{
 			Addr:      ":" + *port,
 			TLSConfig: m.TLSConfig(),
-			Handler:   appMux,
+			Handler:   appHandler,
 		}
 		if err := server.ListenAndServeTLS("", ""); err != nil {
 			logFatal("HTTPS server failed: %v", err)
 		}
 	} else if *certFile != "" && *keyFile != "" {
 		logInfo("HorstReporter starting HTTPS server with provided certs on port %s...", *port)
-		if err := http.ListenAndServeTLS(":"+*port, *certFile, *keyFile, appMux); err != nil {
+		if err := http.ListenAndServeTLS(":"+*port, *certFile, *keyFile, appHandler); err != nil {
 			logFatal("HTTPS server failed: %v", err)
 		}
 	} else {
 		logInfo("HorstReporter starting HTTP server on port %s...", *port)
-		if err := http.ListenAndServe(":"+*port, appMux); err != nil {
+		if err := http.ListenAndServe(":"+*port, appHandler); err != nil {
 			logFatal("HTTP server failed: %v", err)
 		}
 	}
