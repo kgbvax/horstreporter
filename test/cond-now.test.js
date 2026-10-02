@@ -11,7 +11,7 @@ vi.mock('../static/band-lab.js', () => ({
     getLiveArea: vi.fn(() => null),
 }));
 
-import { verdictText, reportsPair, initCondNow, __test } from '../static/cond-now.js';
+import { verdictText, reportsPair, reportsTitle, formatCount, formatFactor, initCondNow, __test } from '../static/cond-now.js';
 import { setRowExtras, refreshMatrix } from '../static/wspr-matrix.js';
 import { getBandRow, getBandNormalRate, subscribeBandRows, drawBandMiniPlot, getLiveArea } from '../static/band-lab.js';
 import { parseAreaPayload } from '../static/live-area.js';
@@ -53,9 +53,50 @@ describe('verdictText', () => {
     });
 });
 
+describe('formatCount', () => {
+    it.each([
+        [0, 'none'], [7, '7'], [412, '412'], [999, '999'],
+        [1000, '1.0k'], [1034, '1.0k'], [1234, '1.2k'], [9949, '9.9k'], [9960, '10k'],
+        [40213, '40k'], [99500, '100k'], [999499, '999k'], [999500, '1.0M'],
+        [1200000, '1.2M'], [9960000, '10M'], [25000000, '25M'],
+    ])('%s → %s', (n, text) => {
+        expect(formatCount(n)).toBe(text);
+    });
+
+    it('is blank for missing or negative input', () => {
+        expect(formatCount(NaN)).toBe('');
+        expect(formatCount(undefined)).toBe('');
+        expect(formatCount(-3)).toBe('');
+    });
+});
+
+describe('formatFactor', () => {
+    it.each([
+        [0, '×0'], [0.04, '×0'], [0.05, '×0.1'], [0.12, '×0.1'], [0.41, '×0.4'], [0.89, '×0.9'],
+        [0.9, '×1'], [0.95, '×1'], [1.1, '×1'], [1.11, '×1.1'], [2.37, '×2.4'],
+        [9.96, '×10'], [12.6, '×13'], [99, '×99'], [150, '>×99'],
+    ])('%s → %s', (ratio, text) => {
+        expect(formatFactor(ratio)).toBe(text);
+    });
+
+    it('is blank for missing or negative input', () => {
+        expect(formatFactor(NaN)).toBe('');
+        expect(formatFactor(-1)).toBe('');
+    });
+});
+
 describe('reportsPair', () => {
-    it('shows the region reports against its normal', () => {
-        expect(reportsPair(row({ activity_level: 'above', regional_spots: 1234, regional_expected: 812.4 }))).toBe('1,234 / 812');
+    it('shows the bucketed region reports and their factor against normal', () => {
+        expect(reportsPair(row({ activity_level: 'above', regional_spots: 1234, regional_expected: 812.4, activity_ratio: 2.37 }))).toBe('1.2k · ×2.4');
+        expect(reportsPair(row({ activity_level: 'below', regional_spots: 0, regional_expected: 9, activity_ratio: 0 }))).toBe('none · ×0');
+    });
+
+    it('falls back to reports / normal without an activity ratio', () => {
+        expect(reportsPair(row({ activity_level: 'above', regional_spots: 30, regional_expected: 12 }))).toBe('30 · ×2.5');
+    });
+
+    it('shows the count alone when no factor can be computed', () => {
+        expect(reportsPair(row({ activity_level: 'low_sample', regional_spots: 5, regional_expected: 0 }))).toBe('5');
     });
 
     it('is blank without a baseline comparison', () => {
@@ -65,11 +106,19 @@ describe('reportsPair', () => {
     });
 });
 
+describe('reportsTitle', () => {
+    it('keeps the exact numbers for the tooltip', () => {
+        expect(reportsTitle(row({ activity_level: 'above', regional_spots: 1234, regional_expected: 812.4, activity_ratio: 1.5191 })))
+            .toBe('1,234 reports · normal 812 · ×1.52');
+        expect(reportsTitle(row(null))).toBe('');
+    });
+});
+
 describe('row extras', () => {
     it('stacks verdict and pair under the band name, and adds the plot cell', () => {
-        getBandRow.mockReturnValueOnce(row({ activity_level: 'below', regional_spots: 3, regional_expected: 9 }));
+        getBandRow.mockReturnValueOnce(row({ activity_level: 'below', regional_spots: 3, regional_expected: 9, activity_ratio: 0.33 }));
         const header = __test.extras.rowHeader('20m');
-        expect(header).toBe('<span class="cond-band-verdict">quiet</span><span class="cond-band-pair">3 / 9</span>');
+        expect(header).toBe('<span class="cond-band-verdict">quiet</span><span class="cond-band-pair" title="3 reports · normal 9 · ×0.33">3 · ×0.3</span>');
         expect(__test.extras.cells('20m')).toContain('<canvas class="cond-mini" data-band="20m"');
         expect(__test.extras.columns).toHaveLength(1);
     });
@@ -82,7 +131,7 @@ describe('row extras', () => {
     it('keys on the text cells only, so dots redraw without a rebuild', () => {
         getBandRow.mockReturnValue(row({ activity_level: 'above' }));
         const a = __test.extras.key(['20m', '40m']);
-        expect(a).toBe('20m:lively:|40m:lively:');
+        expect(a).toBe('20m:lively::|40m:lively::');
         getBandRow.mockReturnValue(row({ activity_level: 'below' }));
         expect(__test.extras.key(['20m', '40m'])).not.toBe(a);
         getBandRow.mockReturnValue(null);
