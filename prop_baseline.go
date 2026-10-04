@@ -88,6 +88,12 @@ type propBaselineEngine struct {
 	statsCacheAt    int64
 	statsCacheTTL   int64
 	statsCacheErrAt int64
+	// statsRefreshing marks a background refresh in flight (guarded by mu);
+	// statsLoadMu serialises cold loads, which run outside mu.
+	statsRefreshing bool
+	statsLoadMu     sync.Mutex
+	// queryStats replaces the store query (test seam; nil = the store's).
+	queryStats func(ctx context.Context, st *dxPostgresStore, daysBack int, now int64) ([]propRegionCalendarStatRow, error)
 }
 
 const (
@@ -435,23 +441,22 @@ func (s *dxPostgresStore) PropRegionCalendarStats(ctx context.Context, sources [
 	today := utcDayIndex(now)
 	dayStart := today - int64(daysBack-1)
 
+	// One row per (band, source, slot_of_day, region, day_index) is the primary
+	// key, so a per-day SUM would be a no-op: aggregate the table directly. The
+	// CTE that used to do it spilled ~16 MB to temp files at the default
+	// work_mem and took ~700 ms warm (2.3 s cold); this takes ~210 ms with
+	// identical results.
 	rows, err := s.pool.Query(ctx, `
-		WITH daily AS (
-			SELECT band, source, region, slot_of_day, day_index,
-			       SUM(spot_count)::bigint AS c
-			FROM prop_region_baseline_daily
-			WHERE day_index BETWEEN $1 AND $2
-			  AND region <> ''
-			  AND region <> '??'
-			  AND ($4::text[] IS NULL OR source = ANY($4))
-			GROUP BY band, source, region, slot_of_day, day_index
-		)
 		SELECT band, source, region, slot_of_day,
-		       AVG(c)::double precision AS mean,
-		       COALESCE(stddev_samp(c), 0)::double precision AS stddev,
-		       COUNT(DISTINCT day_index)::int AS sample_days,
-		       COALESCE(SUM(c) FILTER (WHERE day_index = $3), 0)::bigint AS today
-		FROM daily
+		       AVG(spot_count)::double precision AS mean,
+		       COALESCE(stddev_samp(spot_count), 0)::double precision AS stddev,
+		       COUNT(*)::int AS sample_days,
+		       COALESCE(SUM(spot_count) FILTER (WHERE day_index = $3), 0)::bigint AS today
+		FROM prop_region_baseline_daily
+		WHERE day_index BETWEEN $1 AND $2
+		  AND region <> ''
+		  AND region <> '??'
+		  AND ($4::text[] IS NULL OR source = ANY($4))
 		GROUP BY band, source, region, slot_of_day
 	`, dayStart, today, today, sources)
 	if err != nil {
@@ -496,19 +501,39 @@ func (e *propBaselineEngine) RegionCalendarStats(ctx context.Context, daysBack i
 		return nil
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if ttl > 0 && (now-e.statsCacheAt) < ttl && e.statsCache != nil {
-		return e.statsCache
-	}
-	if e.statsCache == nil && e.statsCacheErrAt != 0 && (now-e.statsCacheErrAt) < propIntelRegionBaselineNegCacheTTL {
-		return nil
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+
+	// Stale copy and a Postgres store: serve the copy and refresh in the
+	// background. The refresh query takes hundreds of milliseconds, and it used
+	// to run inside the request that found the cache expired.
+	if st != nil && cached != nil {
+		e.refreshStatsAsync(st, daysBack, now)
+		return cached
 	}
 
-	var rows []propRegionCalendarStatRow
-	if st := e.store; st != nil {
-		var err error
-		rows, err = st.PropRegionCalendarStats(ctx, nil, daysBack, now)
+	if st != nil {
+		// Cold load. The query runs outside e.mu: Observe takes that lock under
+		// the hub write lock, so holding it across a Postgres round trip
+		// stalled ingest and every history reader for the query's duration.
+		e.statsLoadMu.Lock()
+		defer e.statsLoadMu.Unlock()
+		e.mu.RLock()
+		if e.statsCache != nil && now-e.statsCacheAt < ttl {
+			rows := e.statsCache
+			e.mu.RUnlock()
+			return rows
+		}
+		if e.statsCache == nil && e.statsCacheErrAt != 0 && now-e.statsCacheErrAt < propIntelRegionBaselineNegCacheTTL {
+			e.mu.RUnlock()
+			return nil
+		}
+		e.mu.RUnlock()
+
+		rows, err := e.fetchStats(ctx, st, daysBack, now)
+		e.mu.Lock()
+		defer e.mu.Unlock()
 		if err != nil {
 			logDebug("prop baseline stats query failed: %v", err)
 			e.statsCacheErrAt = now
@@ -517,14 +542,73 @@ func (e *propBaselineEngine) RegionCalendarStats(ctx context.Context, daysBack i
 			}
 			rows = e.statsFromMemoryLocked(now)
 		}
-	} else {
-		rows = e.statsFromMemoryLocked(now)
+		e.statsCache = rows
+		e.statsCacheAt = now
+		e.statsCacheErrAt = 0
+		return rows
 	}
 
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ttl > 0 && (now-e.statsCacheAt) < ttl && e.statsCache != nil {
+		return e.statsCache
+	}
+	rows := e.statsFromMemoryLocked(now)
 	e.statsCache = rows
 	e.statsCacheAt = now
 	e.statsCacheErrAt = 0
 	return rows
+}
+
+// refreshStatsAsync reloads the climatology from Postgres in the background
+// (one refresh at a time, none within the failure back-off) and swaps it in.
+func (e *propBaselineEngine) refreshStatsAsync(st *dxPostgresStore, daysBack int, now int64) {
+	e.mu.Lock()
+	if e.statsRefreshing || (e.statsCacheErrAt != 0 && now-e.statsCacheErrAt >= 0 && now-e.statsCacheErrAt < propIntelRegionBaselineNegCacheTTL) {
+		e.mu.Unlock()
+		return
+	}
+	e.statsRefreshing = true
+	e.mu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), propIntelRegionBaselineRefreshTimeout)
+		rows, err := e.fetchStats(ctx, st, daysBack, now)
+		cancel()
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		e.statsRefreshing = false
+		if err != nil {
+			logDebug("prop baseline stats refresh failed (keeping the previous copy): %v", err)
+			e.statsCacheErrAt = now
+			return
+		}
+		e.statsCache = rows
+		e.statsCacheAt = now
+		e.statsCacheErrAt = 0
+	}()
+}
+
+func (e *propBaselineEngine) fetchStats(ctx context.Context, st *dxPostgresStore, daysBack int, now int64) ([]propRegionCalendarStatRow, error) {
+	if e.queryStats != nil {
+		return e.queryStats(ctx, st, daysBack, now)
+	}
+	return st.PropRegionCalendarStats(ctx, nil, daysBack, now)
+}
+
+// WarmStats loads the climatology once in the background at startup, so the
+// first request after a restart does not pay the cold query.
+func (e *propBaselineEngine) WarmStats() {
+	if e == nil {
+		return
+	}
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return
+	}
+	go e.RegionCalendarStats(context.Background(), propIntelRegionBaselineDaysBack, time.Now().Unix())
 }
 
 // statsFromMemoryLocked computes climatology stats from in-memory buckets.

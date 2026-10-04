@@ -64,6 +64,29 @@ Third pass (after deploying the second): a 20 s CPU profile of prod showed `allB
 
 Fourth pass: `prop_intel/v2` (43% of prod CPU after the cache deploy). Per 250k-message window on a feed-like mix, `EvaluateV2Area` went from 47 to 20 ms (global mesh) and 45 to 12 ms (wide area), 502k allocations to 7.8k; the v1 nowcast from 19 to 11 ms and 152k allocations to 7.9k. The scan (`scanPropIntelV2Window`, `scanPropIntelWindow`) now resolves locators with in-place case folding (`propIntelRemote`), maps them to regions through a memo keyed by the raw feed string (`rawRegionMemo`: one upper-cased copy per distinct locator instead of two per message), and accumulates into arrays indexed by (band, region, source) instead of three-string map keys. `bandInScope` is a switch. Reference-equivalence tests compare both scans with the old implementations. Concurrency harness: 356 to 461 req/s, `prop_intel/v2` p50 57 to 30 ms.
 
+## Postgres (profiled 2026-10-05 on prod via `pg_stat_statements` + `EXPLAIN (ANALYZE, BUFFERS)`)
+
+`pg_stat_statements` is enabled on prod (stats since 2026-09-22), so per-statement numbers are available with `select ... from pg_stat_statements order by total_exec_time desc`.
+
+| query (request path) | calls / 12 d | mean | notes |
+|---|---|---|---|
+| activity-by-bin on `dx_raw_spots` (3 variants) | 12.4k | 155-590 ms, max 55 s | the `(locator, spot_time)` indexes cannot bound `spot_time` across a locator range, so a 15-minute window scans the locator's whole 4-day retention: JO32 5.3k index blocks, PM95 18k blocks / 2.5 s cold. First request for an unwarmed QTH took 2-7 s; PM95 hit the 6 s query timeout on every call |
+| `dx_baseline_cluster ... WHERE cluster_anchor` | 11.8k | 118 ms | 1.33M rows in 642 MB (~480 B/row after 424M HOT updates), 14.8k rows spread over 8.8k blocks |
+| `dx_baseline_global GROUP BY` | 11.8k | 39 ms | 3.3 MB table, fine |
+| prop climatology (30 days) | 82 | 1.0 s, max 3.3 s | CTE with a redundant per-day `SUM` spilled ~16 MB at `work_mem` 4 MB |
+| WSPR climatology | few | 580 ms | same shape |
+
+Server settings worth knowing: `shared_buffers` 128 MB (default) on an 8 GB box with a 17 GB table, `work_mem` 4 MB, `effective_cache_size` 4 GB, `track_io_timing` on. Write statements total ~39k DB-seconds in 12 days (about 4% of one core): not a bottleneck.
+
+Changes from this profile (fifth pass):
+
+- **Activity series from hub history** (`hubActivityByBin`): for a locator QTH whose window the hub fully covers (inside the retention, after `liveHistoryCompleteSince`, clear of the restart gap: `hubCoversWindow`) the 12-bin series is computed from the history the process already holds, with the area index's positions, instead of querying Postgres. Callsign QTHs and uncovered windows still query Postgres.
+- **Time-first fallback query**: for windows up to 60 minutes the query appends `|| ''` to the locator columns so the planner uses the `spot_time` index; cost follows the window (PM95, 15 min: 2.5 s to ~120 ms; 60 min ~580 ms on prod).
+- **Climatology SQL**: the per-day CTE is gone (the primary key already makes it one row per day). md5-identical results on prod; prop 700 to ~210 ms warm, WSPR 580 to ~150 ms.
+- **Climatology refresh**: an expired cache is served stale while a background refresh (15 s deadline) reloads it; the first load runs at startup; the query no longer runs under the engine mutex. That mutex is taken by `Observe` under the hub write lock, so every refresh used to stall ingest and all history readers for the query's duration (0.7-2.3 s every ~2 minutes of traffic).
+
+Still open on the Postgres side: rewrite `dx_baseline_cluster` (`CLUSTER` or `pg_repack` in a quiet period; the 60 s cache means it only matters once a minute per cluster), raise `shared_buffers` (1-2 GB, restart) and `work_mem` for the app role, and the infrequent heavy reads (`count(*)` on `dx_raw_spots` 4.5 s mean, `/api/history` chunks 0.6-1.5 s, retention `DELETE`s up to 25 s).
+
 ## Invariants
 
 - `hub.history` is append-only; readers use views. See CLAUDE.md.

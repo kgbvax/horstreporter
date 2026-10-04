@@ -1029,7 +1029,9 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 	if matchArea != nil {
 		activityByBinMap = buildActivityByBinFromHistoryAt(history, pos, usePos, matchArea, cwMinDb, minutes, now)
 	} else if st != nil {
-		if m, err := st.activityByBinForTargets(qthSet, cwMinDb, minutes, now); err == nil {
+		if m, ok := hubActivityByBin(qth, surroundings, history, pos, usePos, cwMinDb, minutes, now); ok {
+			activityByBinMap = m
+		} else if m, err := st.activityByBinForTargets(qthSet, cwMinDb, minutes, now); err == nil {
 			activityByBinMap = m
 		} else {
 			logDebug("dx activityByBinForTargets failed (falling back to in-memory binning): %v", err)
@@ -1892,6 +1894,56 @@ func normalizeSeriesTo100(series []float64) []float64 {
 // binning from `events` when there is no store or that query failed.
 // activityBins is the number of bars in a band's activity series.
 const activityBins = 12
+
+// hubCoversWindow reports whether hub.history holds every ingested spot of the
+// last `minutes` minutes: the window fits the retention, starts after the
+// moment the history became complete (process start or backfill start), and
+// does not overlap the hole a restart leaves (liveHistoryGapStart/End).
+func hubCoversWindow(now int64, minutes int) bool {
+	if minutes <= 0 || (liveHistoryRetentionMinutes > 0 && minutes > liveHistoryRetentionMinutes) {
+		return false
+	}
+	start := now - int64(minutes)*60
+	if since := liveHistoryCompleteSince.Load(); since > start {
+		return false
+	}
+	if gs, ge := liveHistoryGapStart.Load(), liveHistoryGapEnd.Load(); ge > gs && ge > start && gs < now {
+		return false
+	}
+	return true
+}
+
+// hubActivityByBin is the Postgres activity-by-bin series for a locator qth
+// (its own square, or the 3x3 block with surroundings) computed from
+// hub.history instead, when the hub covers the window. The query it replaces
+// scanned the locator's whole retention in dx_raw_spots on every request
+// (mean 155-590 ms on prod, 2-7 s for a QTH whose index pages were cold) to
+// produce twelve bins per band out of the last few minutes of spots the
+// process already holds. ok is false when the series has to come from
+// Postgres: callsign targets (the table matches those by exact equality,
+// history matching is by pattern), or a window the hub does not fully cover.
+// Like the Postgres version it returns nil when nothing matched, which tells
+// the caller to fall back to the in-memory event ring.
+func hubActivityByBin(qth string, surroundings bool, history []MQTTMessage, pos []uint32, usePos bool, cwMinDb, minutes int, now int64) (map[string][]float64, bool) {
+	if !isLocator(qth) || !hubCoversWindow(now, minutes) {
+		return nil, false
+	}
+	radius := 0
+	if surroundings {
+		radius = 1
+	}
+	// explicitLiveArea refuses radius 0; the own square is a block too.
+	x, y, ok := locatorSquareXY(qth[:4])
+	if !ok {
+		return nil, false
+	}
+	area := &liveArea{Centre: qth[:4], BaseRadius: radius, Radius: radius, x: x, y: y}
+	out := buildActivityByBinFromHistoryAt(history, pos, usePos, area, cwMinDb, minutes, now)
+	if len(out) == 0 {
+		return nil, true
+	}
+	return out, true
+}
 
 // buildActivityByBinFromHistory is the activity series (spots/min per bin) for
 // every band at once, matched against a wide live area straight from the live

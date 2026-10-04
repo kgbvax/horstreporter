@@ -48,6 +48,10 @@ const (
 	propIntelRegionBaselineNegCacheTTL int64 = 30
 	// propIntelRegionBaselineQueryTimeout is the per-query deadline.
 	propIntelRegionBaselineQueryTimeout = 1500 * time.Millisecond
+	// propIntelRegionBaselineRefreshTimeout is the deadline of the background
+	// refresh and warm-up: nobody is waiting on it, so it can ride out a cold
+	// cache that a request-path deadline could not.
+	propIntelRegionBaselineRefreshTimeout = 15 * time.Second
 	// SSB/CW budget model constants (KTD8).
 	// propIntelSSBFloorDb: SSB requires roughly +10 dB SNR/2500 Hz at 100W
 	// reference power to be comfortably copied.

@@ -71,6 +71,12 @@ type WsprClimatologyEngine struct {
 	statsCacheAt     int64
 	statsCacheTTL    int64
 	statsCacheErrAt  int64 // unix seconds of the last PG failure; 0 when none/valid
+	// statsRefreshing marks a background refresh in flight (guarded by mu);
+	// statsLoadMu serialises cold loads, which run outside mu.
+	statsRefreshing bool
+	statsLoadMu     sync.Mutex
+	// queryStats replaces the store query (test seam; nil = the store's).
+	queryStats func(ctx context.Context, st *dxPostgresStore, daysBack int, now int64) ([]wsprRegionCalendarStatRow, error)
 }
 
 // wsprRegionBaselineKey is the Postgres flush key for wspr_region_baseline_daily.
@@ -366,22 +372,19 @@ func (s *dxPostgresStore) WsprRegionCalendarStats(ctx context.Context, daysBack 
 	today := utcDayIndex(now)
 	dayStart := today - int64(daysBack-1)
 
+	// (band, slot_of_day, region, day_index) is the primary key, so a per-day
+	// SUM would be a no-op: aggregate the table directly (~150 ms instead of
+	// ~580 ms, identical results).
 	rows, err := s.pool.Query(ctx, `
-		WITH daily AS (
-			SELECT band, region, slot_of_day, day_index,
-			       SUM(spot_count)::bigint AS c
-			FROM wspr_region_baseline_daily
-			WHERE day_index BETWEEN $1 AND $2
-			  AND region <> ''
-			  AND region <> '??'
-			GROUP BY band, region, slot_of_day, day_index
-		)
 		SELECT band, region, slot_of_day,
-		       AVG(c)::double precision AS mean,
-		       COALESCE(stddev_samp(c), 0)::double precision AS stddev,
-		       COUNT(DISTINCT day_index)::int AS sample_days,
-		       COALESCE(SUM(c) FILTER (WHERE day_index = $3), 0)::bigint AS today
-		FROM daily
+		       AVG(spot_count)::double precision AS mean,
+		       COALESCE(stddev_samp(spot_count), 0)::double precision AS stddev,
+		       COUNT(*)::int AS sample_days,
+		       COALESCE(SUM(spot_count) FILTER (WHERE day_index = $3), 0)::bigint AS today
+		FROM wspr_region_baseline_daily
+		WHERE day_index BETWEEN $1 AND $2
+		  AND region <> ''
+		  AND region <> '??'
 		GROUP BY band, region, slot_of_day
 	`, dayStart, today, today)
 	if err != nil {
@@ -420,6 +423,7 @@ func (e *WsprClimatologyEngine) RegionCalendarStats(ctx context.Context, daysBac
 	cached := e.statsCache
 	ttl := e.statsCacheTTL
 	errAge := now - e.statsCacheErrAt
+	st := e.store
 	e.mu.RUnlock()
 	if ttl > 0 && cacheAge >= 0 && cacheAge < ttl && cached != nil {
 		return cached
@@ -428,22 +432,35 @@ func (e *WsprClimatologyEngine) RegionCalendarStats(ctx context.Context, daysBac
 		return nil
 	}
 
-	// Slow path: exclusive lock so only one goroutine queries PG.
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if ttl > 0 && (now-e.statsCacheAt) < ttl && e.statsCache != nil {
-		return e.statsCache
-	}
-	if e.statsCache == nil && e.statsCacheErrAt != 0 && (now-e.statsCacheErrAt) < propIntelRegionBaselineNegCacheTTL {
-		return nil
+	// Stale copy and a Postgres store: serve the copy, refresh in the
+	// background (the query used to run inside the request that found the
+	// cache expired).
+	if st != nil && cached != nil {
+		e.refreshStatsAsync(st, daysBack, now)
+		return cached
 	}
 
-	st := e.store
-
-	var rows []wsprRegionCalendarStatRow
 	if st != nil {
-		var err error
-		rows, err = st.WsprRegionCalendarStats(ctx, daysBack, now)
+		// Cold load, outside e.mu: Observe takes that lock under the hub write
+		// lock, so holding it across a Postgres round trip stalled ingest and
+		// every history reader for the query's duration.
+		e.statsLoadMu.Lock()
+		defer e.statsLoadMu.Unlock()
+		e.mu.RLock()
+		if e.statsCache != nil && now-e.statsCacheAt < ttl {
+			rows := e.statsCache
+			e.mu.RUnlock()
+			return rows
+		}
+		if e.statsCache == nil && e.statsCacheErrAt != 0 && now-e.statsCacheErrAt < propIntelRegionBaselineNegCacheTTL {
+			e.mu.RUnlock()
+			return nil
+		}
+		e.mu.RUnlock()
+
+		rows, err := e.fetchStats(ctx, st, daysBack, now)
+		e.mu.Lock()
+		defer e.mu.Unlock()
 		if err != nil {
 			logDebug("WSPR climatology stats query failed: %v", err)
 			e.statsCacheErrAt = now
@@ -453,14 +470,73 @@ func (e *WsprClimatologyEngine) RegionCalendarStats(ctx context.Context, daysBac
 			}
 			rows = e.regionCalendarStatsFromMemoryLocked(now)
 		}
-	} else {
-		rows = e.regionCalendarStatsFromMemoryLocked(now)
+		e.statsCache = rows
+		e.statsCacheAt = now
+		e.statsCacheErrAt = 0
+		return rows
 	}
 
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ttl > 0 && (now-e.statsCacheAt) < ttl && e.statsCache != nil {
+		return e.statsCache
+	}
+	rows := e.regionCalendarStatsFromMemoryLocked(now)
 	e.statsCache = rows
 	e.statsCacheAt = now
 	e.statsCacheErrAt = 0
 	return rows
+}
+
+// refreshStatsAsync reloads the climatology from Postgres in the background
+// (one refresh at a time, none within the failure back-off) and swaps it in.
+func (e *WsprClimatologyEngine) refreshStatsAsync(st *dxPostgresStore, daysBack int, now int64) {
+	e.mu.Lock()
+	if e.statsRefreshing || (e.statsCacheErrAt != 0 && now-e.statsCacheErrAt >= 0 && now-e.statsCacheErrAt < propIntelRegionBaselineNegCacheTTL) {
+		e.mu.Unlock()
+		return
+	}
+	e.statsRefreshing = true
+	e.mu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), propIntelRegionBaselineRefreshTimeout)
+		rows, err := e.fetchStats(ctx, st, daysBack, now)
+		cancel()
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		e.statsRefreshing = false
+		if err != nil {
+			logDebug("WSPR climatology stats refresh failed (keeping the previous copy): %v", err)
+			e.statsCacheErrAt = now
+			return
+		}
+		e.statsCache = rows
+		e.statsCacheAt = now
+		e.statsCacheErrAt = 0
+	}()
+}
+
+func (e *WsprClimatologyEngine) fetchStats(ctx context.Context, st *dxPostgresStore, daysBack int, now int64) ([]wsprRegionCalendarStatRow, error) {
+	if e.queryStats != nil {
+		return e.queryStats(ctx, st, daysBack, now)
+	}
+	return st.WsprRegionCalendarStats(ctx, daysBack, now)
+}
+
+// WarmStats loads the climatology once in the background at startup, so the
+// first request after a restart does not pay the cold query.
+func (e *WsprClimatologyEngine) WarmStats() {
+	if e == nil {
+		return
+	}
+	e.mu.RLock()
+	st := e.store
+	e.mu.RUnlock()
+	if st == nil {
+		return
+	}
+	go e.RegionCalendarStats(context.Background(), wsprClimatologyDefaultDaysBack, time.Now().Unix())
 }
 
 // regionCalendarStatsFromMemory computes climatology stats from the in-memory
