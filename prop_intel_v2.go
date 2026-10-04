@@ -90,18 +90,13 @@ type propIntelV2Cell struct {
 	// ExpectedSpots / Expected is the cell against its normal.
 	Expected      *float64 `json:"expected,omitempty"`
 	ExpectedSpots *int     `json:"expected_spots,omitempty"`
-	// Silent marks a from-here cell with no live spots whose normal is at
-	// least fromHereSilentMinExpected ("usually open at this hour, nothing
-	// now"). Only on request (silent=1).
-	Silent bool `json:"silent,omitempty"`
 }
 
 // propIntelV2FromHere switches the evaluator to the from-here view: only spots
 // with an end in the area are counted, and expected / atypical come from the
 // area's own normal instead of the global climatology.
 type propIntelV2FromHere struct {
-	normals    *fromHereNormals // nil: no normal available
-	withSilent bool
+	normals *fromHereNormals // nil: no normal available
 }
 
 // propIntelV2Response is the JSON envelope for /api/prop_intel/v2.
@@ -224,9 +219,9 @@ func (e *propIntelV2Engine) EvaluateV2Area(qth string, surroundings bool, minute
 // carry expected / expected_spots and the surge z-score compares the live
 // PSKReporter count with the area's normal; without, there is no atypical (the
 // global climatology does not describe paths from one area).
-func (e *propIntelV2Engine) EvaluateV2FromHere(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea, normals *fromHereNormals, withSilent bool) propIntelV2Response {
+func (e *propIntelV2Engine) EvaluateV2FromHere(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea, normals *fromHereNormals) propIntelV2Response {
 	resp := e.evaluateV2(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, area,
-		&propIntelV2FromHere{normals: normals, withSilent: withSilent})
+		&propIntelV2FromHere{normals: normals})
 	resp.FromHere = true
 	return resp
 }
@@ -512,9 +507,6 @@ func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes in
 		}
 		cells = append(cells, cell)
 	}
-	if fh != nil && fh.withSilent && pskrSelected {
-		cells = append(cells, fromHereSilentCells(fh.normals, byCell)...)
-	}
 
 	sort.Slice(cells, func(i, j int) bool {
 		if cells[i].Band != cells[j].Band {
@@ -587,8 +579,7 @@ func propIntelV2Handler(w http.ResponseWriter, r *http.Request) {
 		// From-here view: only spots touching the area, compared with the
 		// area's own normal (prop_intel_fromhere.go).
 		normals := fromHereNormalsFor(fromHereAreaGrids(p.qth, p.surroundings, area), now, p.minutes)
-		resp = propIntelV2.EvaluateV2FromHere(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area,
-			normals, r.URL.Query().Get("silent") == "1")
+		resp = propIntelV2.EvaluateV2FromHere(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area, normals)
 	} else {
 		resp = propIntelV2.EvaluateV2Area(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area)
 	}

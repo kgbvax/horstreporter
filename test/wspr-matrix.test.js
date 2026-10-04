@@ -406,7 +406,7 @@ describe('wspr-matrix (Propagation) panel', () => {
         const groups = Array.from(document.querySelectorAll('.wspr-src-chips [role="group"]'));
         expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['Sources', 'Color scale']);
         expect(groups[0].querySelectorAll('[data-source]').length).toBe(4);
-        expect(groups[1].querySelectorAll('[data-style]').length).toBe(3);
+        expect(groups[1].querySelectorAll('[data-style]').length).toBe(2);
         expect(groups[0].querySelector('[data-source="rbn"]').getAttribute('aria-pressed')).toBe('true');
         expect(groups[0].querySelector('[data-source="dxcluster"]').getAttribute('aria-pressed')).toBe('false');
     });
@@ -1109,249 +1109,27 @@ describe('wspr-matrix row extras (Conditions dock)', () => {
     });
 });
 
-describe('wspr-matrix disc look', () => {
-    const REGION_NAMES = { EU: 'Europe', NA: 'North America', JA: 'Japan', SA: 'South America' };
-    let originalFetch;
-
-    const cellAt = (band, region) =>
-        document.querySelector(`#wspr-matrix-body td[data-band="${band}"][data-region="${region}"]`);
-    const circles = (band, region) => Array.from(cellAt(band, region).querySelectorAll('circle'));
-    // The ring is drawn as a page-coloured halo plus a text-coloured line.
-    const ringOf = (cs) => cs.filter((c) => c.getAttribute('stroke') === 'var(--text-color)' && c.getAttribute('fill') === 'none');
-    const discOf = (cs) => cs.find((c) => c.getAttribute('stroke') !== 'var(--bg-color)' && !ringOf([c]).length);
-
-    async function openWith(data) {
-        mockFetch(data);
-        initWsprMatrix();
-        setWsprMatrixVisible(true);
-        await new Promise((r) => setTimeout(r, 0));
-    }
-
-    const withNormal = (cell, expected, expectedSpots) => ({ ...cell, expected, expected_spots: expectedSpots });
-    const silent = (band, region, expected) => ({
-        band, region, spot_count: 0, silent: true, expected, expected_spots: 0, from_here: true,
-        ssb_open: false, cw_open: false, rising: false, active_sources: [], open_agreement: 0, sources: [],
-    });
-    const payload = () => ({
-        region_names: REGION_NAMES,
-        cells: [
-            withNormal(makeCell({ band: '20m', region: 'EU', spot_count: 130 }), 50, 100),        // ×2: livelier
-            withNormal(makeCell({ band: '20m', region: 'NA', spot_count: 20, ssb_open: false, cw_open: true }), 400, 20), // ×0.05: quieter
-            makeCell({ band: '20m', region: 'JA', spot_count: 3, ssb_open: false, cw_open: false }), // no normal
-            withNormal(makeCell({ band: '20m', region: 'SA', spot_count: 6 }), 80, 0),            // normal, but only WSPR now
-        ],
-    });
-
+describe('wspr-matrix from-here normal in the tooltip', () => {
     beforeEach(() => {
-        originalFetch = global.fetch;
         installLocalStorageMock();
         setupDom();
         reset();
-        state.drillDownBand = '';
-        state.drillDownRegion = '';
-        window.__horstScheduleRender = vi.fn();
-        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     });
 
-    afterEach(() => {
-        reset();
-        delete window.__horstScheduleRender;
-        global.fetch = originalFetch;
-    });
-
-    it('discRadiusForRatio: the ring at x1, area proportional to the share, clamped', () => {
-        const { discRadiusForRatio } = __test;
-        expect(discRadiusForRatio(1)).toBeCloseTo(8.5, 9);
-        // Area doubles with the ratio: radius by sqrt(2).
-        expect(discRadiusForRatio(2) / discRadiusForRatio(1)).toBeCloseTo(Math.SQRT2, 9);
-        expect(discRadiusForRatio(0.25)).toBeCloseTo(4.25, 9);
-        expect(discRadiusForRatio(4)).toBeCloseTo(17, 9);
-        expect(discRadiusForRatio(400)).toBe(discRadiusForRatio(4));
-        expect(discRadiusForRatio(0.001)).toBe(2.5);
-        expect(discRadiusForRatio(0)).toBe(0);
-        expect(discRadiusForRatio(NaN)).toBe(0);
-        // Halving the reports moves the edge by more than two units of 40,
-        // the defect of the log-volume version was well under one.
-        expect(discRadiusForRatio(1) - discRadiusForRatio(0.5)).toBeGreaterThan(2);
-    });
-
-    it('normalRatio / drawRatio / hasNormal / formatRatio', () => {
-        const { normalRatio, drawRatio, hasNormal, formatRatio } = __test;
-        // The drawing pads both counts by two reports: stray reports on an
-        // empty path stay near normal, busy cells are unchanged.
-        expect(drawRatio({ expected: 0.3, expected_spots: 1 })).toBeCloseTo(3 / 2.3, 9);
-        expect(drawRatio({ expected: 4515, expected_spots: 771 })).toBeCloseTo(0.171, 3);
-        expect(drawRatio({ expected: 0.5, expected_spots: 11 })).toBeGreaterThan(4); // a real opening still fills the cell
-        expect(normalRatio({ expected: 50, expected_spots: 100 })).toBe(2);
-        expect(normalRatio({ expected: 0, expected_spots: 3 })).toBe(3); // unseen path: a normal under one counts as one
-        expect(hasNormal({ expected: 0, expected_spots: 0 })).toBe(true);
+    it('expectedLine spells out now, normal and the factor', () => {
+        const { expectedLine, hasNormal } = __test;
+        expect(hasNormal({ expected: 4515.3, expected_spots: 771 })).toBe(true);
         expect(hasNormal({ expected: 10 })).toBe(false);
         expect(hasNormal({})).toBe(false);
-        expect(formatRatio(0.172)).toBe('×0.17');
-        expect(formatRatio(1.46)).toBe('×1.5');
-        expect(formatRatio(12.4)).toBe('×12');
-        expect(formatRatio(-1)).toBe('');
+        expect(expectedLine({ expected: 4515.3, expected_spots: 771 })).toBe('PSKReporter: 771 now, normal about 4,515 at this hour (\u00d70.17)');
+        expect(expectedLine({ expected: 40, expected_spots: 60 })).toBe('PSKReporter: 60 now, normal about 40 at this hour (\u00d71.5)');
+        expect(expectedLine({ expected: 0.4, expected_spots: 11 })).toBe('PSKReporter: 11 now, normally under 1 at this hour');
     });
 
-    it('discInk: the band colour, blended toward white on the dark theme', () => {
-        const { discInk } = __test;
-        expect(discInk('20m', 'light')).toBe('rgb(230, 126, 34)');
-        expect(discInk('20m', 'dark')).toBe('rgb(239, 171, 111)');
-        expect(discInk('nonsense', 'light')).toBe('rgb(85, 85, 85)'); // falls back to "all"
-    });
-
-    it('formatExpected: whole numbers, "<1" below one', () => {
-        const { formatExpected } = __test;
-        expect(formatExpected(640.4)).toBe('640');
-        expect(formatExpected(1234.5)).toBe('1,235');
-        expect(formatExpected(0.4)).toBe('<1');
-        expect(formatExpected(-1)).toBe('');
-        expect(formatExpected('x')).toBe('');
-    });
-
-    it('always asks the backend for silent cells', async () => {
-        const calls = [];
-        global.fetch = vi.fn(async (url) => {
-            calls.push(url);
-            return { ok: true, status: 200, json: async () => ({ cells: [] }) };
-        });
-        initWsprMatrix();
-        setWsprMatrixVisible(true);
-        await new Promise((r) => setTimeout(r, 0));
-        expect(calls[0]).toContain('silent=1');
-        expect(calls[0]).toContain('from_here=true');
-    });
-
-    it('offers Disc next to the colour looks and persists the choice', async () => {
-        await openWith(payload());
-        const chip = document.querySelector('.wspr-src-chip[data-style="disc"]');
-        expect(chip).not.toBeNull();
-        chip.click();
-        expect(runtime.style).toBe('disc');
-        expect(globalThis.localStorage.getItem(__test.STYLE_KEY)).toBe('disc');
-    });
-
-    it('draws each cell as an SVG, with no heat fill and no numeral; still a drillable data cell', async () => {
-        runtime.style = 'disc';
-        await openWith(payload());
-        const eu = cellAt('20m', 'EU');
-        expect(eu.className).toContain('wspr-disc-cell');
-        expect(eu.getAttribute('style')).toBeNull();
-        expect(eu.querySelector('svg.wspr-disc')).not.toBeNull();
-        expect(eu.textContent.trim()).toBe('');
-        expect(eu.hasAttribute('tabindex')).toBe(true);
-    });
-
-    it('livelier than normal: the disc spills outside the fixed ring; quieter: it sits inside', async () => {
-        runtime.style = 'disc';
-        await openWith(payload());
-        const eu = circles('20m', 'EU');
-        const na = circles('20m', 'NA');
-        const euRing = Number(ringOf(eu)[0].getAttribute('r'));
-        const naRing = Number(ringOf(na)[0].getAttribute('r'));
-        expect(euRing).toBe(8.5);
-        expect(naRing).toBe(euRing); // the same ring in every cell
-        expect(Number(discOf(eu).getAttribute('r'))).toBeCloseTo(8.5 * Math.sqrt(102 / 52), 1); // (100+2)/(50+2)
-        expect(Number(discOf(na).getAttribute('r'))).toBeLessThan(naRing / 2);
-        // Mode styles still apply: SSB filled, CW only hollow.
-        expect(discOf(eu).getAttribute('fill-opacity')).toBe('0.8');
-        expect(discOf(na).getAttribute('fill')).toBe('none');
-    });
-
-    it('reports with nothing to compare are a small dashed dot; without a normal there is no ring', async () => {
-        runtime.style = 'disc';
-        await openWith(payload());
-        const ja = circles('20m', 'JA');
-        expect(ringOf(ja)).toHaveLength(0);
-        expect(ja).toHaveLength(1);
-        expect(ja[0].getAttribute('r')).toBe('3.5');
-        expect(ja[0].getAttribute('stroke-dasharray')).not.toBeNull();
-        // A normal exists but no PSKReporter reports now (only WSPR): ring + dashed dot.
-        const sa = circles('20m', 'SA');
-        expect(ringOf(sa)).toHaveLength(1);
-        expect(discOf(sa).getAttribute('r')).toBe('3.5');
-        expect(discOf(sa).getAttribute('stroke-dasharray')).not.toBeNull();
-    });
-
-    it('labels and titles carry the share of normal', async () => {
-        runtime.style = 'disc';
-        await openWith(payload());
-        const eu = cellAt('20m', 'EU');
-        expect(eu.getAttribute('aria-label')).toContain('×2.0 normal');
-        expect(eu.getAttribute('title')).toContain('PSKReporter: 100 now, normal about 50 at this hour (×2.0)');
-        expect(cellAt('20m', 'JA').getAttribute('aria-label')).not.toContain('normal');
-        const unseen = __test.renderCell('20m', 'EU', withNormal(makeCell({ spot_count: 4 }), 0, 4), 10, 'light', REGION_NAMES);
-        expect(unseen).toContain('not normally open at this hour');
-        expect(unseen).toContain('normally under 1 at this hour');
-    });
-
-    it('surge adds orange outlines around the disc, two when strong; rising adds a triangle', () => {
-        const { discSvg } = __test;
-        const base = withNormal({ spot_count: 50, ssb_open: true, cw_open: true }, 20, 40);
-        const count = (cell, theme) => (discSvg('20m', cell, theme).match(/stroke="#(c2410c|f5b83d)"/g) || []).length;
-        expect(count(base, 'light')).toBe(0);
-        expect(count({ ...base, atypical: { z_score: 2.5, confidence: 0.9 } }, 'light')).toBe(1);
-        expect(count({ ...base, atypical: { z_score: 4.5, confidence: 0.9 } }, 'light')).toBe(2);
-        expect(discSvg('20m', { ...base, atypical: { z_score: 2.5 } }, 'dark')).toContain('#f5b83d');
-        expect(discSvg('20m', { ...base, atypical: { z_score: 2.5 } }, 'light')).toContain('#c2410c');
-        expect(discSvg('20m', { ...base, rising: true }, 'light')).toContain('<path');
-        expect(discSvg('20m', base, 'light')).not.toContain('<path');
-    });
-
-    it('never draws the heat looks\' chevrons, rings or badges in disc mode', () => {
-        runtime.style = 'disc';
-        const html = renderCell('20m', 'EU', withNormal(
-            makeCell({ band: '20m', region: 'EU', atypical: { z_score: 4.2, confidence: 0.9 }, rising: true }), 10, 12,
-        ), 100, 'light', REGION_NAMES);
-        expect(html).not.toContain('wspr-chev');
-        expect(html).not.toContain('box-shadow');
-        expect(html).not.toContain('wspr-badge');
-    });
-
-    it('a silent cell is the ring alone: inert, named, and outside the tab order', async () => {
-        runtime.style = 'disc';
-        await openWith({ region_names: REGION_NAMES, cells: [
-            withNormal(makeCell({ band: '20m', region: 'EU', spot_count: 12 }), 10, 12),
-            silent('20m', 'JA', 640),
-        ] });
-        const ja = cellAt('20m', 'JA');
-        expect(ja.className).toContain('wspr-matrix-cell-empty');
-        expect(ja.className).toContain('wspr-disc-silent');
-        expect(ja.hasAttribute('tabindex')).toBe(false);
-        expect(ja.getAttribute('aria-label')).toBe('20m to Japan: none now, usually about 640 PSKReporter reports at this hour');
-        const cs = circles('20m', 'JA');
-        expect(cs).toHaveLength(2); // page-coloured halo + the ring line, no disc
-        for (const c of cs) expect(c.getAttribute('fill')).toBe('none');
-        expect(Number(ringOf(cs)[0].getAttribute('r'))).toBe(8.5);
-        ja.click();
-        expect(state.drillDownBand).toBe('');
-    });
-
-    it('the colour looks drop silent cells, so they never add rows or cells', async () => {
-        runtime.style = 'viridis';
-        await openWith({ region_names: REGION_NAMES, cells: [silent('20m', 'JA', 640)] });
-        expect(document.querySelector('#wspr-matrix-body .wspr-disc-silent')).toBeNull();
-        expect(document.getElementById(BODY_ID).textContent).toContain('No paths open');
-    });
-
-    it('switching looks repaints from the cache without a refetch', async () => {
-        await openWith(payload());
-        const before = global.fetch.mock.calls.length;
-        document.querySelector('.wspr-src-chip[data-style="disc"]').click();
-        expect(cellAt('20m', 'EU').querySelector('svg.wspr-disc')).not.toBeNull();
-        document.querySelector('.wspr-src-chip[data-style="viridis"]').click();
-        expect(cellAt('20m', 'EU').querySelector('svg')).toBeNull();
-        expect(global.fetch.mock.calls.length).toBe(before);
-    });
-
-    it('legend explains ring, disc, dot and the marks', () => {
-        runtime.style = 'disc';
-        const html = __test.legendHtml('light');
-        expect(html).toContain('wspr-disc-key');
-        expect(html).toContain('ring = normal for this hour from your area');
-        expect(html).toContain('ring alone = usually open, nothing now');
-        expect(html).toContain('dashed dot = reports but no normal to compare');
-        expect(html).toContain('orange outline = surge');
-        expect(html).not.toContain('wspr-heat-scale');
+    it('the cell title carries the normal only when the backend sent one', () => {
+        const withNormal = renderCell('20m', 'NA', { ...makeCell({ band: '20m', region: 'NA', spot_count: 800 }), expected: 4515.3, expected_spots: 771 }, 1000, 'light');
+        expect(withNormal).toContain('normal about 4,515 at this hour');
+        const without = renderCell('20m', 'NA', makeCell({ band: '20m', region: 'NA', spot_count: 800 }), 1000, 'light');
+        expect(without).not.toContain('PSKReporter:');
     });
 });

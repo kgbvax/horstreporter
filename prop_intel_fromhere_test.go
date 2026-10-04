@@ -7,7 +7,6 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -197,7 +196,7 @@ func TestEvaluateV2FromHereCountsOnlyAreaSpots(t *testing.T) {
 		t.Fatalf("global view keeps its mesh counts: %+v", g)
 	}
 
-	resp := propIntelV2.EvaluateV2FromHere("JO32", true, 15, profiles, nil, nil, history, now, propIntelAtypicalZThreshold, nil, nil, false)
+	resp := propIntelV2.EvaluateV2FromHere("JO32", true, 15, profiles, nil, nil, history, now, propIntelAtypicalZThreshold, nil, nil)
 	if !resp.FromHere {
 		t.Fatal("from-here response must say so")
 	}
@@ -233,7 +232,7 @@ func TestEvaluateV2FromHereLocalPathCountsOncePerEnd(t *testing.T) {
 		pskrSpot(now-10, "80m", "JO31AA", "JO33BB", -5), // both ends in the area, two squares
 		pskrSpot(now-11, "80m", "JO32AA", "JO32BB", -5), // both ends in one square
 	}
-	resp := propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, nil, false)
+	resp := propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, nil)
 	c := findV2Cell(t, resp, "80m", "EU")
 	if c.SpotCount != 3 {
 		t.Fatalf("spot_count = %d, want 3 (2 + 1, mirroring the baseline keys)", c.SpotCount)
@@ -246,7 +245,7 @@ func TestEvaluateV2FromHereNormalAndSurge(t *testing.T) {
 	normals := &fromHereNormals{SampleDays: 28, ByCell: map[propIntelCellKey]fromHereNormal{
 		{band: "20m", region: "NA"}: {Expected: 2, StdDev: 0.5, SampleDays: 28},
 	}}
-	resp := propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("wspr", "pskr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, normals, false)
+	resp := propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("wspr", "pskr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, normals)
 	c := findV2Cell(t, resp, "20m", "NA")
 	if c.Expected == nil || *c.Expected != 2 {
 		t.Fatalf("expected = %v, want 2", c.Expected)
@@ -271,14 +270,14 @@ func TestEvaluateV2FromHereNormalAndSurge(t *testing.T) {
 	calm := &fromHereNormals{SampleDays: 28, ByCell: map[propIntelCellKey]fromHereNormal{
 		{band: "20m", region: "NA"}: {Expected: 5, StdDev: 2, SampleDays: 28},
 	}}
-	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, calm, false), "20m", "NA")
+	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, calm), "20m", "NA")
 	if c.Expected == nil || c.Atypical != nil {
 		t.Fatalf("a normal cell has expected and no atypical: %+v", c)
 	}
 
 	// A cell the reference days never saw: expected 0, no z.
 	none := &fromHereNormals{SampleDays: 28, ByCell: map[propIntelCellKey]fromHereNormal{}}
-	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, none, false), "20m", "NA")
+	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, none), "20m", "NA")
 	if c.Expected == nil || *c.Expected != 0 || c.Atypical != nil {
 		t.Fatalf("unseen cell: expected 0, no atypical, got %+v", c)
 	}
@@ -288,62 +287,22 @@ func TestEvaluateV2FromHereNormalAndSurge(t *testing.T) {
 		{band: "20m", region: "NA"}: {Expected: 0.2, StdDev: 0.4, SampleDays: 28},
 	}}
 	few := []MQTTMessage{pskrSpot(now-10, "20m", "JO32AB", "FN31AB", -10), pskrSpot(now-11, "20m", "JO32AB", "FN31AB", -10)}
-	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, few, now, propIntelAtypicalZThreshold, nil, sparse, false), "20m", "NA")
+	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, few, now, propIntelAtypicalZThreshold, nil, sparse), "20m", "NA")
 	if c.Atypical != nil {
 		t.Fatalf("%d reports must not make a surge (min %d): %+v", 2, fromHereSurgeMinSpots, c.Atypical)
 	}
 
 	// Too few reference days: no normal at all.
 	thin := &fromHereNormals{SampleDays: propIntelMinSampleDays - 1, ByCell: normals.ByCell}
-	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, thin, false), "20m", "NA")
+	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, thin), "20m", "NA")
 	if c.Expected != nil || c.Atypical != nil {
 		t.Fatalf("under %d sample days there is no normal: %+v", propIntelMinSampleDays, c)
 	}
 
 	// PSKReporter not selected: the normal does not describe what is shown.
-	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("wspr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, normals, false), "20m", "NA")
+	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("wspr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, normals), "20m", "NA")
 	if c.Expected != nil || c.Atypical != nil {
 		t.Fatalf("without pskr selected there is no expected: %+v", c)
-	}
-}
-
-func TestEvaluateV2FromHereSilentCells(t *testing.T) {
-	now := time.Now().Unix()
-	history := fromHereFixture(now)
-	normals := &fromHereNormals{SampleDays: 28, ByCell: map[propIntelCellKey]fromHereNormal{
-		{band: "20m", region: "NA"}:  {Expected: 3, StdDev: 1, SampleDays: 28},  // live: never silent
-		{band: "15m", region: "JA"}:  {Expected: 12, StdDev: 3, SampleDays: 28}, // normally busy, nothing now
-		{band: "12m", region: "JA"}:  {Expected: 2, StdDev: 1, SampleDays: 28},  // under the floor
-		{band: "70cm", region: "EU"}: {Expected: 50, StdDev: 1, SampleDays: 28},
-	}}
-	plain := propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, normals, false)
-	for _, c := range plain.Cells {
-		if c.Silent {
-			t.Fatalf("silent cells are opt-in: %+v", c)
-		}
-	}
-	resp := propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, history, now, propIntelAtypicalZThreshold, nil, normals, true)
-	silent := map[string]propIntelV2Cell{}
-	for _, c := range resp.Cells {
-		if c.Silent {
-			silent[c.Band+"/"+c.Region] = c
-		}
-	}
-	if len(silent) != 1 {
-		t.Fatalf("want exactly 15m/JA silent, got %v", silent)
-	}
-	c := silent["15m/JA"]
-	if !c.FromHere || c.SpotCount != 0 || *c.Expected != 12 || *c.ExpectedSpots != 0 || c.PerSource == nil || c.ActiveSources == nil {
-		t.Fatalf("unexpected silent cell %+v", c)
-	}
-	if got := resp.applyFromHere(true); len(got.Cells) != len(resp.Cells) {
-		t.Fatal("from_here must keep silent cells")
-	}
-	raw, _ := json.Marshal(c)
-	for _, want := range []string{`"silent":true`, `"expected":12`, `"expected_spots":0`, `"sources":[]`} {
-		if !strings.Contains(string(raw), want) {
-			t.Fatalf("silent cell JSON %s lacks %s", raw, want)
-		}
 	}
 }
 
@@ -475,8 +434,7 @@ func TestFromHereNormalsForWithoutStoreOrArea(t *testing.T) {
 }
 
 // TestPropIntelV2HandlerFromHereNormals runs the from-here view end to end:
-// global spots are excluded, the live cell carries its area normal and the
-// silent cell appears with silent=1.
+// global spots are excluded and the live cell carries its area normal.
 func TestPropIntelV2HandlerFromHereNormals(t *testing.T) {
 	now := time.Now().Unix()
 	today := utcDayIndex(now)
@@ -495,7 +453,7 @@ func TestPropIntelV2HandlerFromHereNormals(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(propIntelV2Handler))
 	defer server.Close()
-	resp, err := http.Get(server.URL + "/api/prop_intel/v2?qth=JO32&surroundings=true&from_here=true&silent=1&sources=wspr,pskr")
+	resp, err := http.Get(server.URL + "/api/prop_intel/v2?qth=JO32&surroundings=true&from_here=true&sources=wspr,pskr")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,13 +466,12 @@ func TestPropIntelV2HandlerFromHereNormals(t *testing.T) {
 	if live.SpotCount != 7 || live.Expected == nil || *live.Expected != 15 || live.ExpectedSpots == nil || *live.ExpectedSpots != 6 {
 		t.Fatalf("live from-here cell: %+v", live)
 	}
-	silent := findV2Cell(t, decoded, "15m", "JA")
-	if !silent.Silent || *silent.Expected != 20 {
-		t.Fatalf("silent cell: %+v", silent)
+	if len(decoded.Cells) != 1 {
+		t.Fatalf("only the live from-here cell may appear: %+v", decoded.Cells)
 	}
 
 	// Without from_here the global view is unchanged: mesh counts, no normal.
-	resp2, err := http.Get(server.URL + "/api/prop_intel/v2?qth=JO32&surroundings=true&silent=1&sources=wspr,pskr")
+	resp2, err := http.Get(server.URL + "/api/prop_intel/v2?qth=JO32&surroundings=true&sources=wspr,pskr")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,12 +481,7 @@ func TestPropIntelV2HandlerFromHereNormals(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := findV2Cell(t, global, "20m", "NA")
-	if g.SpotCount != 57 || g.Expected != nil || g.Silent {
+	if g.SpotCount != 57 || g.Expected != nil {
 		t.Fatalf("global view must keep mesh counts and carry no normal: %+v", g)
-	}
-	for _, c := range global.Cells {
-		if c.Silent {
-			t.Fatalf("silent cells are a from-here feature: %+v", c)
-		}
 	}
 }

@@ -479,12 +479,6 @@ Params: v1's (`qth` required, `surroundings`, `minutes`, `surge_threshold`,
   request waits at most 1.2 s for it (a slower read fills the cache for the
   next poll; until then cells have no `expected`).
 
-- `silent=1` (from-here view only): also return silent cells,
-  `{"silent": true, "spot_count": 0, "expected": N, "expected_spots": 0,
-  "sources": []}`: band × regions with no live from-here spots whose normal
-  is at least 5 reports per window ("usually open at this hour, nothing
-  now"). Used by the web panel's Disc look.
-
 - `sources`: source selection, CSV or repeated (`?sources=wspr,pskr` or
   `?sources=wspr&sources=rbn`). Public names: `wspr` (WSPR beacons),
   `pskr` (PSKReporter FT8/FT4), `rbn` (RBN CW/RTTY skimmers),

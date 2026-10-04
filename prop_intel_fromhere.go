@@ -38,9 +38,6 @@ const (
 	fromHereErrorTTL = 60 * time.Second
 	// fromHereCacheCap bounds the cache (one entry per area × slot set × day).
 	fromHereCacheCap = 512
-	// fromHereSilentMinExpected is the smallest normal worth a silent cell
-	// ("usually open at this hour, nothing now"): P(0 | mean 5) is under 1%.
-	fromHereSilentMinExpected = 5.0
 	// fromHereSurgeMinSpots is the fewest live reports a from-here surge needs:
 	// on a path that is normally near empty, a stddev under one report would
 	// otherwise turn one or two stray reports into a surge (and a push).
@@ -508,39 +505,4 @@ func applyFromHereNormal(cell *propIntelV2Cell, normals *fromHereNormals, live i
 	if n := len(cell.PerSource); n > 0 && marked > 0 {
 		cell.AtypicalAgreement = round2(float64(marked) / float64(n))
 	}
-}
-
-// fromHereSilentCells builds the silent cells: band × far-end regions the area
-// normally reaches at this hour (normal ≥ fromHereSilentMinExpected) that have
-// no live from-here spots at all.
-func fromHereSilentCells(normals *fromHereNormals, live map[propIntelCellKey][]propIntelV2SourceCell) []propIntelV2Cell {
-	if normals == nil || normals.SampleDays < propIntelMinSampleDays {
-		return nil
-	}
-	validRegion := make(map[string]bool)
-	for _, r := range allRegionStrings() {
-		validRegion[r] = true
-	}
-	var out []propIntelV2Cell
-	for key, nrm := range normals.ByCell {
-		if _, has := live[key]; has || nrm.Expected < fromHereSilentMinExpected {
-			continue
-		}
-		if !bandInScope(key.band) || !validRegion[key.region] {
-			continue
-		}
-		exp := round1(nrm.Expected)
-		zero := 0
-		out = append(out, propIntelV2Cell{
-			Band:          key.band,
-			Region:        key.region,
-			FromHere:      true,
-			ActiveSources: []string{},
-			PerSource:     []propIntelV2SourceCell{},
-			Expected:      &exp,
-			ExpectedSpots: &zero,
-			Silent:        true,
-		})
-	}
-	return out
 }

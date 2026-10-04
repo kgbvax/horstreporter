@@ -672,33 +672,6 @@ body[data-theme="dark"] .wspr-matrix-cell {
 .wspr-badge-cw { background: #17a2b8; color: #1a1a1a; }         /* 5.7:1 */
 .wspr-badge-rising { background: #ffc107; color: #333; }        /* 7.8:1 */
 .wspr-matrix-legend { margin-top: 4px; padding: 2px 4px; }
-
-/* Disc look (wspr-matrix.js discSvg): the chip has no fill, the SVG is the mark.
-   The heat chips' faint outline and per-theme ring do not apply, and the cell
-   gets a hover tint so it still reads as clickable. */
-.wspr-matrix-cell.wspr-disc-cell,
-body[data-theme="dark"] .wspr-matrix-cell.wspr-disc-cell {
-    box-shadow: none;
-    padding: 3px 2px;
-}
-.wspr-matrix-cell.wspr-disc-cell:hover {
-    background: color-mix(in srgb, var(--text-color) 8%, transparent);
-}
-.wspr-disc {
-    display: block;
-    width: 100%;
-    max-width: 40px;
-    height: 40px;
-    margin: 0 auto;
-    overflow: visible;
-}
-.wspr-disc-silent {
-    padding: 3px 2px;
-}
-.wspr-disc-key {
-    vertical-align: middle;
-    color: var(--text-color);
-}
 /* Sparse → peak heat scale thumbnail; gradient comes inline per look. */
 .wspr-heat-scale {
     display: inline-block;

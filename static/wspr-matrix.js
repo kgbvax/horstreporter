@@ -9,10 +9,6 @@ import { escapeHtml } from './ui-helpers.js';
 // heatmap colormap — switchable between viridis and inferno (chip row) —
 // where the anomaly is a glyph: up-chevrons on viridis, a warning ring on
 // inferno (tmp/prop-vis-round3.html, decision 02: one-channel fill + glyph).
-// A third look, Disc (docs/ideation/2026-10-04-now-matrix-visualization-
-// ideation.html option 4), drops the fill: a fixed ring for the normal at this
-// hour from the operator's area and a disc whose area is the PSKReporter reports
-// now as a share of it (see discSvg).
 // Both looks keep SSB/CW flags and the rising slope. Each look has a ramp per
 // theme: the reference colormaps on the dark theme (chips brighten with
 // activity), page-anchored reversals on the light theme (chips darken with
@@ -73,7 +69,6 @@ const DEFAULT_SOURCES = ['wspr', 'pskr', 'rbn'];
 const STYLES = [
     { key: 'viridis', label: 'Viridis', title: 'Viridis colors, surges shown as chevrons' },
     { key: 'inferno', label: 'Inferno', title: 'Inferno colors, surges shown as rings' },
-    { key: 'disc', label: 'Disc', title: 'Discs: reports now over a ring for the normal at this hour' },
 ];
 const ALL_STYLES = STYLES.map((s) => s.key);
 // Dark theme: 9-stop perceptually-uniform maps (matplotlib reference
@@ -189,134 +184,6 @@ function topModeBadges(cell) {
     if (cell.ssb_open) return '<span class="wspr-badge wspr-badge-ssb">S</span>';
     if (cell.cw_open) return '<span class="wspr-badge wspr-badge-cw">C</span>';
     return '';
-}
-
-// --- Disc look ---------------------------------------------------------------
-// One 40x40 SVG per cell, comparing the cell with its own normal. The ring is
-// the normal for this hour from the operator's area (the same size in every
-// cell); the disc is the PSKReporter reports now, its AREA proportional to
-// their share of that normal (expected_spots / expected, clamped to 1/16..4).
-// Disc inside the ring = quieter than usual, outside = livelier. Filled = SSB
-// open, hollow = CW only, faint = under both floors; the band's rail colour.
-// A cell with reports but nothing to compare (no PSKReporter normal, or only
-// WSPR / RBN reports) is a small dashed dot. The ring alone is "usually open
-// at this hour, nothing now" (a silent cell). A surge (z-score against the
-// same normal, backend) adds an orange outline; rising a small triangle.
-const DISC_BOX = 40;
-const DISC_RING_R = 8.5;
-const DISC_R_MIN = 2.5;
-const DISC_RATIO_MIN = 1 / 16;
-const DISC_RATIO_MAX = 4;
-const DISC_DOT_R = 3.5;
-const DISC_SURGE_LIGHT = '#c2410c';
-const DISC_SURGE_DARK = RING_COLOR;
-
-// The cell carries a from-here normal (expected and the live count it compares).
-function hasNormal(cell) {
-    return cell?.expected != null && cell?.expected_spots != null &&
-        Number.isFinite(Number(cell.expected)) && Number.isFinite(Number(cell.expected_spots));
-}
-
-// Live PSKReporter reports over the normal, for labels; a normal under one
-// report counts as one.
-function normalRatio(cell) {
-    return Number(cell.expected_spots) / Math.max(1, Number(cell.expected));
-}
-
-// The share the disc draws: both counts padded by DISC_PRIOR reports, so one
-// or two stray reports on a path that is normally empty do not fill the cell,
-// while busy cells are unchanged (771 / 4,515 stays x0.17).
-const DISC_PRIOR = 2;
-function drawRatio(cell) {
-    return (Number(cell.expected_spots) + DISC_PRIOR) / (Number(cell.expected) + DISC_PRIOR);
-}
-
-// Disc radius for a share of normal: ratio 1 fills the ring exactly.
-function discRadiusForRatio(ratio) {
-    const v = Number(ratio);
-    if (!Number.isFinite(v) || v <= 0) return 0;
-    const t = Math.min(DISC_RATIO_MAX, Math.max(DISC_RATIO_MIN, v));
-    return Math.max(DISC_R_MIN, DISC_RING_R * Math.sqrt(t));
-}
-
-// "×0.17", "×1.5", "×12" for labels.
-function formatRatio(ratio) {
-    const v = Number(ratio);
-    if (!Number.isFinite(v) || v < 0) return '';
-    if (v < 1) return `×${v.toFixed(2)}`;
-    if (v < 10) return `×${v.toFixed(1)}`;
-    return `×${Math.round(v)}`;
-}
-
-// The band's rail colour; on the dark theme blended 35% toward white so the
-// dark blues, purples and reds of 40m / 80m / 160m stay visible on the panel.
-function discInk(band, theme) {
-    let hex = bandColors[band] || bandColors.all || '#555555';
-    if (/^#[0-9a-f]{3}$/i.test(hex)) hex = `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}`;
-    const rgb = hexToRgb(hex);
-    if (theme !== 'dark') return `rgb(${rgb.join(', ')})`;
-    return `rgb(${rgb.map((v) => Math.round(v + (255 - v) * 0.35)).join(', ')})`;
-}
-
-// "about 640" for labels: whole numbers, "<1" under one.
-function formatExpected(e) {
-    const v = Number(e);
-    if (!Number.isFinite(v) || v < 0) return '';
-    return v < 1 ? '<1' : Math.round(v).toLocaleString('en-US');
-}
-
-// One circle in the cell's mode style: filled = SSB, hollow = CW, faint = neither.
-function modeCircle(c, r, cell, ink, dashed) {
-    const dash = dashed ? ' stroke-dasharray="2 1.5"' : '';
-    if (cell.ssb_open) {
-        return `<circle cx="${c}" cy="${c}" r="${r.toFixed(1)}" fill="${ink}" fill-opacity="0.8" stroke="var(--text-color)" stroke-opacity="${dashed ? 0.7 : 0.3}" stroke-width="1"${dash}/>`;
-    }
-    if (cell.cw_open) {
-        return `<circle cx="${c}" cy="${c}" r="${r.toFixed(1)}" fill="none" stroke="${ink}" stroke-width="2.2"${dash}/>`;
-    }
-    return `<circle cx="${c}" cy="${c}" r="${r.toFixed(1)}" fill="${ink}" fill-opacity="0.28" stroke="${ink}" stroke-opacity="0.6" stroke-width="1"${dash}/>`;
-}
-
-function discSvg(band, cell, theme) {
-    const c = DISC_BOX / 2;
-    let svg = `<svg class="wspr-disc" viewBox="0 0 ${DISC_BOX} ${DISC_BOX}" aria-hidden="true" focusable="false">`;
-    const normal = hasNormal(cell);
-    const n = Number(cell?.spot_count) || 0;
-    let r = 0;
-    if (n > 0) {
-        const ink = discInk(band, theme);
-        const compared = normal && Number(cell.expected_spots) > 0;
-        r = compared ? discRadiusForRatio(drawRatio(cell)) : DISC_DOT_R;
-        svg += modeCircle(c, r, cell, ink, !compared);
-        const strength = surgeStrength(cell);
-        if (strength > 0) {
-            const surge = theme === 'dark' ? DISC_SURGE_DARK : DISC_SURGE_LIGHT;
-            for (let i = 0; i < strength; i++) {
-                svg += `<circle cx="${c}" cy="${c}" r="${(r + 2.5 + i * 2.2).toFixed(1)}" fill="none" stroke="${surge}" stroke-width="1.6"/>`;
-            }
-        }
-    }
-    if (normal) {
-        // Last, so the normal stays readable on top of a bigger disc: a page-
-        // coloured halo under a text-coloured line holds up on any band colour.
-        svg += `<circle cx="${c}" cy="${c}" r="${DISC_RING_R}" fill="none" stroke="var(--bg-color)" stroke-opacity="0.85" stroke-width="3.6"/>` +
-            `<circle cx="${c}" cy="${c}" r="${DISC_RING_R}" fill="none" stroke="var(--text-color)" stroke-opacity="0.9" stroke-width="1.3"/>`;
-    }
-    if (n > 0 && cell.rising) {
-        const y = c - Math.max(r, normal ? DISC_RING_R : 0) - 2.5;
-        svg += `<path d="M${c - 3.5} ${y.toFixed(1)} l3.5 -5 l3.5 5z" fill="var(--text-color)" fill-opacity="0.9"/>`;
-    }
-    return svg + '</svg>';
-}
-
-// Inline key for the Disc look's legend: quieter, livelier, ring alone, dot.
-function discKeySvg() {
-    const ring = 'fill="none" stroke="currentColor" stroke-opacity="0.9" stroke-width="1.2"';
-    return '<svg class="wspr-disc-key" width="96" height="22" viewBox="0 0 96 22" aria-hidden="true" focusable="false">' +
-        `<circle cx="11" cy="11" r="4" fill="currentColor" fill-opacity="0.6"/><circle cx="11" cy="11" r="7" ${ring}/>` +
-        `<circle cx="36" cy="11" r="10" fill="currentColor" fill-opacity="0.6"/><circle cx="36" cy="11" r="7" ${ring}/>` +
-        `<circle cx="61" cy="11" r="7" ${ring}/>` +
-        '<circle cx="85" cy="11" r="3.5" fill="currentColor" fill-opacity="0.6" stroke="currentColor" stroke-dasharray="2 1.5"/></svg>';
 }
 
 const runtime = {
@@ -491,9 +358,6 @@ async function pollMatrix(force) {
     // The server widens a sparse home block (live_area.go) so the matrix has cells.
     params.set('rings', 'auto');
     params.set('sources', runtime.sources.join(','));
-    // Per-cell normals and "usually busy, none now" cells, for the Disc look.
-    // The heat looks drop the silent cells, so every look shares one payload.
-    params.set('silent', '1');
     if (minSnrMode === 'ssb') params.set('ssb_min_db', ssbMinDb);
     if (minSnrMode === 'cw') params.set('cw_min_db', cwMinDb);
 
@@ -595,8 +459,7 @@ function renderMatrix() {
     const allCells = (data && Array.isArray(data.cells)) ? data.cells : [];
     // Rows follow the band rail's enabled set (when the rail is present).
     const enabled = document.querySelector('.band-enable') ? getEnabledBands() : null;
-    const disc = runtime.style === 'disc';
-    const cells = allCells.filter((c) => (!enabled || enabled.has(c.band)) && (disc || !c.silent));
+    const cells = enabled ? allCells.filter((c) => enabled.has(c.band)) : allCells;
     if (cells.length === 0 && !(runtime.rowExtras && enabled && enabled.size > 0)) {
         runtime.lastRenderKey = '';
         const empty = allCells.length > 0
@@ -648,7 +511,6 @@ function renderMatrix() {
         .map((b) => `${b}:${Array.from(matrix.get(b).entries()).sort().map(([r, c]) =>
             `${r}${c.spot_count}${c.ssb_open ? 'S' : ''}${c.cw_open ? 'C' : ''}${c.rising ? 'R' : ''}` +
             `${c.atypical ? `${c.atypical.z_score}~${c.atypical.confidence}` : ''}` +
-            `${runtime.style === 'disc' ? `E${c.expected ?? ''}/${c.expected_spots ?? ''}${c.silent ? 'Z' : ''}` : ''}` +
             `${(c.active_sources || []).join('+')}@${c.open_agreement ?? ''}~${c.atypical_agreement ?? ''}`
         ).join('')}`)
         .join('|')}`;
@@ -700,12 +562,22 @@ function pathSummary(band, region, cell, regionNames = {}) {
     return `${band} to ${regionNames[region] || region}: ${count.toLocaleString('en-US')} ${count === 1 ? 'spot' : 'spots'}`;
 }
 
-// "PSKReporter: 771 now, normal about 4,515 at this hour (×0.17)" from the
-// cell's from-here normal.
+// The cell's from-here normal (backend expected / expected_spots, PSKReporter
+// reports from the operator's area), when present.
+function hasNormal(cell) {
+    return cell?.expected != null && cell?.expected_spots != null &&
+        Number.isFinite(Number(cell.expected)) && Number.isFinite(Number(cell.expected_spots));
+}
+
+// "PSKReporter: 771 now, normal about 4,515 at this hour (×0.17)" for the
+// tooltip; a normal under one report reads "normally under 1".
 function expectedLine(cell) {
     const now = Number(cell.expected_spots) || 0;
-    if (Number(cell.expected) < 1) return `PSKReporter: ${now.toLocaleString('en-US')} now, normally under 1 at this hour`;
-    return `PSKReporter: ${now.toLocaleString('en-US')} now, normal about ${formatExpected(cell.expected)} at this hour (${formatRatio(normalRatio(cell))})`;
+    const e = Number(cell.expected);
+    if (e < 1) return `PSKReporter: ${now.toLocaleString('en-US')} now, normally under 1 at this hour`;
+    const r = now / e;
+    const factor = r < 1 ? r.toFixed(2) : r < 10 ? r.toFixed(1) : String(Math.round(r));
+    return `PSKReporter: ${now.toLocaleString('en-US')} now, normal about ${Math.round(e).toLocaleString('en-US')} at this hour (\u00d7${factor})`;
 }
 
 // Accessible name for a data cell: path, spot count and the marks it shows
@@ -715,25 +587,13 @@ function cellLabel(band, region, cell, regionNames = {}) {
     if (cell.ssb_open) parts.push('SSB open');
     else if (cell.cw_open) parts.push('CW open');
     if (cell.rising) parts.push('rising');
-    if (hasNormal(cell)) parts.push(Number(cell.expected) < 1 ? 'not normally open at this hour' : `${formatRatio(normalRatio(cell))} normal`);
     const surge = surgeStrength(cell);
     if (surge === 2) parts.push('strong surge');
     else if (surge === 1) parts.push('surge');
     return parts.join(', ');
 }
 
-// Disc look, no live spots: the ring alone ("usually busy at this hour, none
-// now") when the cell has a normal; inert like any empty cell.
-function renderSilentDiscCell(band, region, cell, regionNames) {
-    const name = regionNames[region] || region;
-    const text = `${band} to ${name}: none now, usually about ${formatExpected(cell.expected)} PSKReporter reports at this hour`;
-    return `<td role="gridcell" class="wspr-matrix-cell-empty wspr-disc-silent" title="${escapeHtml(text)}" aria-label="${escapeHtml(text)}" data-band="${band}" data-region="${region}">${discSvg(band, cell, currentTheme())}</td>`;
-}
-
 function renderCell(band, region, cell, maxCount, theme, regionNames = runtime.cache?.region_names || {}) {
-    if (runtime.style === 'disc' && cell?.silent && Number(cell.expected) > 0) {
-        return renderSilentDiscCell(band, region, cell, regionNames);
-    }
     if (!cell || cell.spot_count === 0) {
         // Nothing to drill into: a plain grid cell, outside the tab order.
         return `<td role="gridcell" class="wspr-matrix-cell-empty" data-band="${band}" data-region="${region}"></td>`;
@@ -758,7 +618,7 @@ function renderCell(band, region, cell, maxCount, theme, regionNames = runtime.c
         const strong = surgeStrength(cell) === 2;
         if (style === 'inferno') {
             ring = ringShadow(strong, ringColor(theme, ink));
-        } else if (style !== 'disc') {
+        } else {
             atypicalMark = `<span title="${tip}">${chevronGlyph(strong, ink)}</span>`;
         }
     }
@@ -779,21 +639,15 @@ function renderCell(band, region, cell, maxCount, theme, regionNames = runtime.c
             titleParts.push(line);
         }
     }
+    const styleAttr = `background: ${bg}; color: ${ink}${ring ? `; box-shadow: ${ring}` : ''}`;
     const selected = state.drillDownBand === band && state.drillDownRegion === region;
     const label = escapeHtml(cellLabel(band, region, cell, regionNames));
     const title = escapeHtml(titleParts.join('\n'));
-    if (style === 'disc') {
-        return `<td role="gridcell" class="wspr-matrix-cell wspr-disc-cell" title="${title}" aria-label="${label}" aria-selected="${selected}" tabindex="-1" data-band="${band}" data-region="${region}">${discSvg(band, cell, theme)}</td>`;
-    }
-    const styleAttr = `background: ${bg}; color: ${ink}${ring ? `; box-shadow: ${ring}` : ''}`;
     return `<td role="gridcell" class="wspr-matrix-cell" style="${styleAttr}" title="${title}" aria-label="${label}" aria-selected="${selected}" tabindex="-1" data-band="${band}" data-region="${region}">${runtime.rowExtras?.hideCounts ? '' : cell.spot_count}${badges}${atypicalMark}</td>`;
 }
 
 function legendHtml(theme = currentTheme()) {
     const style = runtime.style;
-    if (style === 'disc') {
-        return `<div class="wspr-matrix-legend small text-muted">${discKeySvg()} ring = normal for this hour from your area; disc = PSKReporter reports now against it (inside = quieter, outside = livelier, up to 4&times;); ring alone = usually open, nothing now; dashed dot = reports but no normal to compare. Hollow = CW only, faint = below both thresholds, &#9650; rising, orange outline = surge.</div>`;
-    }
     const stops = rampStops(style, theme);
     // The ring swatch's border follows the theme in style.css (amber on dark,
     // currentColor on light — the same ink rule the chips use).
@@ -988,19 +842,12 @@ export const __test = {
     rampStops,
     legendHtml,
     surgeStrength,
+    hasNormal,
+    expectedLine,
     chevronGlyph,
     ringShadow,
     ringColor,
     setStyle,
-    discRadiusForRatio,
-    normalRatio,
-    drawRatio,
-    hasNormal,
-    formatRatio,
-    discInk,
-    discSvg,
-    formatExpected,
-    expectedLine,
     VIRIDIS_STOPS,
     INFERNO_STOPS,
     VIRIDIS_LIGHT_STOPS,
