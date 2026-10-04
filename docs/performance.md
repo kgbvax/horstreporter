@@ -60,6 +60,8 @@ Frontend (headless Chromium against a local dev server unless noted):
 - `modulepreload` hints for the 32 ES modules (about 170 ms at 80 ms RTT); `test/index-modulepreload.test.js` keeps the list in step with `app.js`.
 - Favicon and status line no longer rewritten every frame.
 
+Third pass (after deploying the second): a 20 s CPU profile of prod showed `allBandBaselinePairs` (two GROUP BY queries, ~25k rows per request) at ~47% of `dx_conditions` / `hot_bands` CPU, and the per-area index skipped in dense regions because the operator's 6x6-square cluster block alone matches over half the feed. The baseline indexes are now cached for 60 s (`baseline_pairs_cache.go`: global index shared, cluster indexes per cluster, one load shared by concurrent requests, stale copy served for up to 10 minutes if Postgres fails, 5 s retry back-off). Not measured on prod yet.
+
 ## Invariants
 
 - `hub.history` is append-only; readers use views. See CLAUDE.md.
@@ -69,6 +71,7 @@ Frontend (headless Chromium against a local dev server unless noted):
 ## Not done / open
 
 - `prop_intel/v2` still walks the whole window: it counts every message per region (a global mesh view), so the per-area index does not apply. `propIntel*Evaluate` and `resolvePropIntelRemoteEndArea` also upper-case locators per message.
+- The area index is skipped when the match share exceeds half the window, which the operator-cluster term (6x6 squares) triggers in dense regions such as Western Europe. Counting the cluster activity separately (per-cluster, per-band, per-second counters) would let the index cover those requests.
 - A short TTL response cache would still help when several clients share a QTH (the area index already makes the per-request cost small).
 - The in-memory (no-Postgres) baseline path (`snapshotEventsLocked`, `buildBandActivityByBin`, `cloneBuckets`) is dev-only and was not optimised; it is most of what remains in the indexed `EvaluateArea` benchmark.
 - Per-client gzip writers for the SSE stream cost ~1 MB each (150 clients, about 160 MB). `BestSpeed` saves a quarter of that at about 30% larger frames; not done.

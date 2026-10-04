@@ -49,6 +49,10 @@ type dxPostgresStore struct {
 	// planner estimates + the baseline_first_observed_at history span). These
 	// change on the scale of minutes but baselineStats ran 2–3 PG round-trips on
 	// every /api/dx_conditions poll (~15s per active browser). 60s TTL.
+	// baselinePairs caches the all-bands baseline indexes allBandBaselinePairs
+	// serves to every dx_conditions / hot_bands request (baseline_pairs_cache.go).
+	baselinePairs baselinePairsCache
+
 	baselineStatsMu   sync.Mutex
 	baselineStatsAt   int64
 	baselineStatsBkt  int
@@ -1370,44 +1374,61 @@ func (s *dxPostgresStore) insertRawSpot(ctx context.Context, m MQTTMessage, band
 //
 // targetIdx is nil when targets is empty. Both indexes are nil only on query
 // error; callers fall back to zero/unused, matching the old per-call err paths.
-// allBandBaselinePairs fetches the two baseline indexes (cluster, global)
-// needed by Evaluate's per-band loop in 2 PG round-trips. clusterIdx is nil
-// when operatorCluster is "". Both indexes are nil only on query error;
-// callers fall back to zero/unused.
+// allBandBaselinePairs returns the two baseline indexes (cluster, global)
+// needed by Evaluate's per-band loop: two GROUP BY queries, cached for
+// baselinePairsTTL and shared across requests (callers must not modify the
+// maps). clusterIdx is nil when operatorCluster is "". Both indexes are nil
+// only on query error; callers fall back to zero/unused.
 func (s *dxPostgresStore) allBandBaselinePairs(operatorCluster string) (map[bandSlotKey][]baselinePair, map[bandSlotKey][]baselinePair, error) {
+	now := time.Now()
+	var clusterIdx baselinePairsIndex
+	if operatorCluster != "" {
+		idx, err := s.baselinePairs.get("c:"+operatorCluster, now, func() (baselinePairsIndex, error) {
+			return s.queryClusterBaselinePairs(operatorCluster)
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		clusterIdx = idx
+	}
+	globalIdx, err := s.baselinePairs.get("", now, s.queryGlobalBaselinePairs)
+	if err != nil {
+		return nil, nil, err
+	}
+	return clusterIdx, globalIdx, nil
+}
+
+// queryClusterBaselinePairs reads one operator cluster's baseline index. The
+// result is cached and shared (baseline_pairs_cache.go): callers must not
+// modify it.
+func (s *dxPostgresStore) queryClusterBaselinePairs(operatorCluster string) (baselinePairsIndex, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
-
-	var clusterIdx map[bandSlotKey][]baselinePair
-	if operatorCluster != "" {
-		rows, err := s.pool.Query(ctx, `
+	rows, err := s.pool.Query(ctx, `
 			SELECT band, slot_of_day, distance_tier, snr_tier, SUM(count)::bigint
 			FROM dx_baseline_cluster
 			WHERE cluster_anchor = $1
 			GROUP BY band, slot_of_day, distance_tier, snr_tier
 		`, operatorCluster)
-		if err != nil {
-			return nil, nil, err
-		}
-		clusterIdx, err = scanBandSlotPairs(rows)
-		if err != nil {
-			return nil, nil, err
-		}
+	if err != nil {
+		return nil, err
 	}
+	return scanBandSlotPairs(rows)
+}
 
+// queryGlobalBaselinePairs reads the global baseline index (cached, shared).
+func (s *dxPostgresStore) queryGlobalBaselinePairs() (baselinePairsIndex, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
 	rows, err := s.pool.Query(ctx, `
 		SELECT band, slot_of_day, distance_tier, snr_tier, SUM(count)::bigint
 		FROM dx_baseline_global
 		GROUP BY band, slot_of_day, distance_tier, snr_tier
 	`)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	globalIdx, err := scanBandSlotPairs(rows)
-	if err != nil {
-		return nil, nil, err
-	}
-	return clusterIdx, globalIdx, nil
+	return scanBandSlotPairs(rows)
 }
 
 // bandSlotRowSource is the row shape scanBandSlotPairs drains — pgx.Rows
