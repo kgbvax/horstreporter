@@ -172,16 +172,13 @@ export function updateBandLab(options = {}) {
 
     const filtered = filterSpots(spots, minutes, thresholds);
     const grouped = groupSpotsByBand(filtered);
-    // The mini plots ignore the SNR floor so they look the same whatever the
-    // filter; spots below it are drawn gray instead.
-    const plotGrouped = groupSpotsByBand(filterSpots(spots, minutes, thresholds, { applySnr: false }));
     const requestSeq = ++runtime.updateSeq;
     const requestKey = `${qth}|${minutes}|${surroundings ? 1 : 0}`;
     const hasDxForKey = Boolean(runtime.dxCache) && runtime.dxCacheKey === requestKey;
 
     // Render immediately from live spots to avoid a blank panel while dx_conditions loads.
     renderSummary(summaryEl, { loading: !hasDxForKey });
-    snapshotRows(grouped, plotGrouped, qth, minutes, hasDxForKey, thresholds);
+    snapshotRows(grouped, qth, minutes, hasDxForKey, thresholds);
 
     // Refetch when the cached response is for another key OR older than the
     // fetch interval. Checking the key alone meant dx_conditions was fetched
@@ -192,7 +189,7 @@ export function updateBandLab(options = {}) {
             if (!runtime.enabled || requestSeq !== runtime.updateSeq) return;
             const ready = Boolean(runtime.dxCache) && runtime.dxCacheKey === requestKey;
             renderSummary(summaryEl);
-            snapshotRows(grouped, plotGrouped, qth, minutes, ready, thresholds);
+            snapshotRows(grouped, qth, minutes, ready, thresholds);
         });
     }
     return null;
@@ -253,7 +250,7 @@ function readUiStoreSnapshot() {
     return snapshot;
 }
 
-function filterSpots(spots, minutes, thresholds = getSnrThresholdsDb(), { applySnr = true } = {}) {
+function filterSpots(spots, minutes, thresholds = getSnrThresholdsDb()) {
     const minSnrMode = getMinSnrMode();
     const { ssbMinDb, cwMinDb } = thresholds;
     const selectedBand = getSelectedBand();
@@ -265,8 +262,8 @@ function filterSpots(spots, minutes, thresholds = getSnrThresholdsDb(), { applyS
         if (spot.ageSeconds > maxAgeSeconds) return false;
         if (!enabledBands.has(spot.band)) return false;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return false;
-        if (applySnr && minSnrMode === 'ssb' && spot.snr < ssbMinDb) return false;
-        if (applySnr && minSnrMode === 'cw' && spot.snr < cwMinDb) return false;
+        if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return false;
+        if (minSnrMode === 'cw' && spot.snr < cwMinDb) return false;
         return true;
     });
 }
@@ -363,7 +360,7 @@ export function enabledBestBands(resp, enabled) {
 // Snapshot what the Now rows need (cond-now.js) and tell the listeners. The
 // row DOM lives in the Conditions dock; this module only supplies the data
 // and the mini plot.
-function snapshotRows(grouped, plotGrouped, qth, minutes, dxReady, thresholds) {
+function snapshotRows(grouped, qth, minutes, dxReady, thresholds) {
     const qthCenter = getQthCenter(qth);
     // Only the response for the current qth/window: a cached one for another
     // key would label the rows with the previous qth's verdicts until the
@@ -371,10 +368,10 @@ function snapshotRows(grouped, plotGrouped, qth, minutes, dxReady, thresholds) {
     const dxBands = toBandMetricMap(dxReady ? runtime.dxCache : null);
     // Compute the qth→spot distance once and reuse it in the axis cap and
     // every band's plot.
-    const distanceCache = qthCenter ? computeDistanceCache(plotGrouped, qthCenter) : null;
-    const capKm = qthCenter ? getGlobalDistanceCapKm(plotGrouped, qthCenter, distanceCache) : null;
+    const distanceCache = qthCenter ? computeDistanceCache(grouped, qthCenter) : null;
+    const capKm = qthCenter ? getGlobalDistanceCapKm(grouped, qthCenter, distanceCache) : null;
     const area = dxReady ? parseAreaPayload(runtime.dxCache?.area) : null;
-    runtime.rowsSnap = { grouped, plotGrouped, qthCenter, distanceCache, capKm, dxBands, dxReady, area, minutes, thresholds, snrAxis: miniSnrAxis(plotGrouped) };
+    runtime.rowsSnap = { grouped, qthCenter, distanceCache, capKm, dxBands, dxReady, area, minutes, thresholds, snrAxis: miniSnrAxis(grouped) };
     notifyRows();
 }
 
@@ -440,20 +437,15 @@ export function miniSnrAxis(grouped) {
     return { lo: -25, hi: Math.min(30, Math.ceil(hi / 5) * 5) };
 }
 
-// SNR floor of the active Min SNR mode (the "workable" threshold), or null
-// when no floor is set. Reports below it are drawn gray in the mini plot.
-function activeFloorDb(thresholds) {
-    const mode = getMinSnrMode();
-    const floor = mode === 'ssb' ? thresholds.ssbMinDb : mode === 'cw' ? thresholds.cwMinDb : null;
-    return Number.isFinite(floor) ? floor : null;
-}
-
 // Mini distance-vs-SNR plot for the Now rows: same samples and distance axis
-// as the removed per-band scatter, drawn small with no labels. The plots do
-// not depend on the Display filter: every report is drawn, those below the
-// active SNR floor in gray and the rest in the band color. The axes are shared
-// by all rows: distance 0..(p95 over all bands) on a square-root scale (so the
-// many short paths do not crowd the left edge), SNR per miniSnrAxis. Dashed
+// as the removed per-band scatter, drawn small with no labels. It draws the
+// reports that pass the Signal filter, exactly the ones the map and the counts
+// use. (The stream drops FT8 and RBN reports below the floor server-side, so
+// "everything, with the weak ones in gray" was never possible: only WSPR
+// arrives below the floor, which drew a gray block with a hard top edge.) The
+// axes are shared by all rows: distance 0..(p95 over all bands) on a
+// square-root scale (so the many short paths do not crowd the left edge), SNR
+// per miniSnrAxis, fixed so a row looks the same whatever the filter. Dashed
 // lines are the SSB / CW thresholds from Display.
 export function drawBandMiniPlot(canvas, band) {
     const snap = runtime.rowsSnap;
@@ -467,7 +459,7 @@ export function drawBandMiniPlot(canvas, band) {
     const ph = h - pad.t - pad.b;
     drawChartFrame(ctx, pad, pw, ph, pal);
 
-    const points = snap?.plotGrouped.get(band) || [];
+    const points = snap?.grouped.get(band) || [];
     const data = snap ? computeScatterData(points, snap.qthCenter, snap.capKm, snap.distanceCache, []) : null;
     const axis = snap?.snrAxis || { lo: -25, hi: 10 };
     const yOf = (snr) => {
@@ -483,24 +475,17 @@ export function drawBandMiniPlot(canvas, band) {
     if (!data) return;
     const dot = hexToRgba(bandColors[band] || '#4f46e5', 0.55);
     const clip = hexToRgba(bandColors[band] || '#4f46e5', 0.9);
-    const gray = hexToRgba(pal.grid, 0.5);
-    const floor = activeFloorDb(snap.thresholds || getSnrThresholdsDb());
-    const below = (sample) => floor !== null && sample.s < floor;
     ctx.font = '9px sans-serif';
     ctx.textAlign = 'right';
-    // Gray first, so the workable reports stay on top where they overlap.
-    for (const grayPass of [true, false]) {
-        for (const sample of data.samples) {
-            if (below(sample) !== grayPass) continue;
-            const y = yOf(sample.s);
-            if (sample.clipped) {
-                ctx.fillStyle = grayPass ? gray : clip;
-                ctx.fillText('\u203a', pad.l + pw + 2, y + 3);
-                continue;
-            }
-            ctx.fillStyle = grayPass ? gray : dot;
-            fillCircle(ctx, pad.l + Math.sqrt(sample.d / data.maxDist) * pw, y, 1.6);
+    for (const sample of data.samples) {
+        const y = yOf(sample.s);
+        if (sample.clipped) {
+            ctx.fillStyle = clip;
+            ctx.fillText('\u203a', pad.l + pw + 2, y + 3);
+            continue;
         }
+        ctx.fillStyle = dot;
+        fillCircle(ctx, pad.l + Math.sqrt(sample.d / data.maxDist) * pw, y, 1.6);
     }
     ctx.textAlign = 'left';
 }
