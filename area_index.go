@@ -4,7 +4,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 )
 
 // Per-area index over hub.history.
@@ -83,12 +82,13 @@ type areaIndexEntry struct {
 	from     uint64   // oldest seq covered
 	scanned  uint64   // newest seq examined; covered range is [from, scanned]
 	offs     []uint32 // ascending offsets (seq - base) of matching messages
-	lastUsed int64    // unix nanos, for eviction; guarded by areaIndexCache.mu
+	lastUsed uint64   // areaIndexCache.tick at last use, for eviction; guarded by areaIndexCache.mu
 }
 
 type areaIndexCache struct {
-	mu sync.Mutex
-	m  map[areaIndexKey]*areaIndexEntry
+	mu   sync.Mutex
+	m    map[areaIndexKey]*areaIndexEntry
+	tick uint64 // use counter: a clock can repeat a value, a counter cannot
 }
 
 var areaIdx = &areaIndexCache{m: make(map[areaIndexKey]*areaIndexEntry)}
@@ -100,7 +100,7 @@ func (c *areaIndexCache) entry(k areaIndexKey) *areaIndexEntry {
 	if e == nil {
 		if len(c.m) >= areaIndexMaxEntries {
 			var oldestKey areaIndexKey
-			oldest := int64(1<<63 - 1)
+			oldest := ^uint64(0)
 			for kk, ee := range c.m {
 				if ee.lastUsed < oldest {
 					oldest, oldestKey = ee.lastUsed, kk
@@ -111,7 +111,8 @@ func (c *areaIndexCache) entry(k areaIndexKey) *areaIndexEntry {
 		e = &areaIndexEntry{}
 		c.m[k] = e
 	}
-	e.lastUsed = time.Now().UnixNano()
+	c.tick++
+	e.lastUsed = c.tick
 	return e
 }
 

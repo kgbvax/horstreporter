@@ -210,77 +210,7 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 	cutoff := now - int64(minutes)*60
 	midpoint := cutoff + (now-cutoff)/2
 
-	acc := make(map[propIntelCellKey]*propIntelCellAcc)
-	bandsSeen := make(map[string]struct{})
-	regions := newRegionMemo()
-
-	for _, m := range history {
-		if m.T > now || m.T < cutoff {
-			continue
-		}
-		// WSPR spots only — the old FT8 nowcast is retired (R12).
-		if m.Source != "wspr" {
-			continue
-		}
-		band := normalizeBand(m.B)
-		if band == "" || !bandInScope(band) {
-			continue
-		}
-		// Resolve the remote end: SC/SL = receiver, RC/RL = transmitter for
-		// WSPR (opposite of the FT8 convention). If the operator's QTH matches
-		// one end, the remote is the other end; otherwise (global mesh view)
-		// the receiver locator (SL) is the region key — "where the path
-		// landed". Shared with the v2 engine via resolvePropIntelRemoteEnd
-		// (receiverSide "sc" = this exact behavior).
-		remoteLocator, remoteCall, matchedEnd := resolvePropIntelRemoteEnd(m, qthSet, "sc")
-		if remoteLocator == "" || !isLocator(remoteLocator) {
-			continue
-		}
-		reg := regions.get(remoteLocator)
-		if reg == region.Unknown {
-			continue
-		}
-		key := propIntelCellKey{band: band, region: string(reg)}
-
-		cell := acc[key]
-		if cell == nil {
-			cell = &propIntelCellAcc{
-				uniqueSenders: make(map[string]struct{}),
-				sources:       make(map[string]struct{}),
-			}
-			acc[key] = cell
-		}
-		if remoteCall != "" {
-			cell.uniqueSenders[remoteCall] = struct{}{}
-		}
-		cell.sources["wspr"] = struct{}{}
-		cell.spotCount++
-		bandsSeen[band] = struct{}{}
-
-		// SSB/CW budget: effective_snr = wspr_snr + (ref_power_dbm - tx_power_dbm)
-		// TXPower is in dBm (wspr.live convention). The reference is 100W = 50 dBm.
-		// A 20W beacon (43 dBm) at SNR +5 dB has effective SNR = 5 + (50-43) = +12 dB
-		// (the path would carry a 100W signal 7 dB stronger than the beacon).
-		if m.TXPower > 0 {
-			cell.hasPower = true
-			effectiveSNR := float64(m.RP) + propIntelReferencePowerDbm - float64(m.TXPower)
-			if effectiveSNR > cell.bestBudgetSNR {
-				cell.bestBudgetSNR = effectiveSNR
-			}
-		}
-
-		// From-here: check if the operator's QTH is one end of this path.
-		if !cell.fromHere && matchedEnd {
-			cell.fromHere = true
-		}
-
-		// Rising slope: first vs second half of the window.
-		if m.T < midpoint {
-			cell.firstHalfSpots++
-		} else {
-			cell.secondHalfSpots++
-		}
-	}
+	acc, bandsSeen := scanPropIntelWindow(history, qthSet, now, cutoff, midpoint)
 
 	resp.Bands = inScopeBandsOrdered(bandsSeen)
 	slot := utcSlotOfDay(now)
@@ -487,6 +417,91 @@ func regionFromLocatorCached(loc string) region.Region {
 	return r
 }
 
+// scanPropIntelWindow walks the history window once for the v1 nowcast and
+// accumulates the WSPR cells per (band, region) and the bands seen. Same
+// array-indexed, allocation-free scan as the v2 engine's.
+func scanPropIntelWindow(history []MQTTMessage, qthSet []string, now, cutoff, midpoint int64) (map[propIntelCellKey]*propIntelCellAcc, map[string]struct{}) {
+	nBands, nRegions := len(inScopeBandNames), len(region.AllRegions())
+	cells := make([]*propIntelCellAcc, nBands*nRegions)
+	regions := newRawRegionMemo()
+
+	for i := range history {
+		m := &history[i]
+		if m.T > now || m.T < cutoff {
+			continue
+		}
+		// WSPR spots only — the old FT8 nowcast is retired (R12).
+		if m.Source != "wspr" {
+			continue
+		}
+		bi := feedBandIndex(m.B)
+		if bi < 0 {
+			continue
+		}
+		// Resolve the remote end: SC/SL = receiver, RC/RL = transmitter for
+		// WSPR (opposite of the FT8 convention). If the operator's QTH matches
+		// one end, the remote is the other end; otherwise (global mesh view)
+		// the receiver locator (SL) is the region key — "where the path
+		// landed". Shared with the v2 engine via propIntelRemote (receiverSide
+		// "sc" = this exact behavior).
+		remoteLoc, remoteIsRecv, matchedEnd := propIntelRemote(m, qthSet, nil, "sc")
+		ri := regions.get(remoteLoc)
+		if ri < 0 {
+			continue
+		}
+
+		cell := cells[bi*nRegions+ri]
+		if cell == nil {
+			cell = &propIntelCellAcc{
+				uniqueSenders: make(map[string]struct{}),
+				sources:       map[string]struct{}{"wspr": {}},
+			}
+			cells[bi*nRegions+ri] = cell
+		}
+		if call := propIntelRemoteCall(m, "sc", remoteIsRecv); call != "" {
+			cell.uniqueSenders[call] = struct{}{}
+		}
+		cell.spotCount++
+
+		// SSB/CW budget: effective_snr = wspr_snr + (ref_power_dbm - tx_power_dbm)
+		// TXPower is in dBm (wspr.live convention). The reference is 100W = 50 dBm.
+		// A 20W beacon (43 dBm) at SNR +5 dB has effective SNR = 5 + (50-43) = +12 dB
+		// (the path would carry a 100W signal 7 dB stronger than the beacon).
+		if m.TXPower > 0 {
+			cell.hasPower = true
+			effectiveSNR := float64(m.RP) + propIntelReferencePowerDbm - float64(m.TXPower)
+			if effectiveSNR > cell.bestBudgetSNR {
+				cell.bestBudgetSNR = effectiveSNR
+			}
+		}
+
+		// From-here: check if the operator's QTH is one end of this path.
+		if !cell.fromHere && matchedEnd {
+			cell.fromHere = true
+		}
+
+		// Rising slope: first vs second half of the window.
+		if m.T < midpoint {
+			cell.firstHalfSpots++
+		} else {
+			cell.secondHalfSpots++
+		}
+	}
+
+	acc := make(map[propIntelCellKey]*propIntelCellAcc)
+	bandsSeen := make(map[string]struct{})
+	allRegions := region.AllRegions()
+	for bi := 0; bi < nBands; bi++ {
+		for ri := 0; ri < nRegions; ri++ {
+			if cell := cells[bi*nRegions+ri]; cell != nil {
+				acc[propIntelCellKey{band: inScopeBandNames[bi], region: string(allRegions[ri])}] = cell
+				bandsSeen[inScopeBandNames[bi]] = struct{}{}
+			}
+		}
+	}
+	return acc, bandsSeen
+}
+
 // regionMemo is a per-request front for regionFromLocatorCached. The window
 // scans resolve a region for every in-scope message, and with many concurrent
 // requests the shared cache's RWMutex reader count became a contended cache
@@ -504,6 +519,40 @@ func (m regionMemo) get(loc string) region.Region {
 	r := regionFromLocatorCached(loc)
 	m[loc] = r
 	return r
+}
+
+// regionIndex maps a region to its position in region.AllRegions().
+var regionIndex = func() map[region.Region]int {
+	m := make(map[region.Region]int)
+	for i, r := range region.AllRegions() {
+		m[r] = i
+	}
+	return m
+}()
+
+// rawRegionMemo resolves a locator exactly as it arrives on the feed (mixed
+// case, untrimmed padding already removed by the caller) to its region index,
+// -1 when the locator is empty, malformed or in no region. It is the v2 window
+// scan's front for regionFromLocatorCached: keyed by the raw string, so the
+// per-message upper-cased copy is only made once per distinct locator.
+type rawRegionMemo map[string]int8
+
+func newRawRegionMemo() rawRegionMemo { return make(rawRegionMemo, 1024) }
+
+func (m rawRegionMemo) get(raw string) int {
+	if i, ok := m[raw]; ok {
+		return int(i)
+	}
+	idx := -1
+	if up := strings.ToUpper(raw); up != "" && isLocator(up) {
+		if reg := regionFromLocatorCached(up); reg != region.Unknown {
+			if i, ok := regionIndex[reg]; ok {
+				idx = i
+			}
+		}
+	}
+	m[raw] = int8(idx)
+	return idx
 }
 
 // regionBaselineKey indexes regionCalendarStats rows by (band, region, slot).
