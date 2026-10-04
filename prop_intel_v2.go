@@ -90,6 +90,18 @@ type propIntelV2Cell struct {
 	// ExpectedSpots / Expected is the cell against its normal.
 	Expected      *float64 `json:"expected,omitempty"`
 	ExpectedSpots *int     `json:"expected_spots,omitempty"`
+	// Silent marks a from-here cell with no live spots whose normal is at
+	// least fromHereSilentMinExpected ("usually open at this hour, nothing
+	// now"). Only on request (silent=1).
+	Silent bool `json:"silent,omitempty"`
+	// NormalDay is the area normal over the whole UTC day: 48 means, one per
+	// 30-minute slot from 00:00 UTC, of the count behind Expected (per slot,
+	// not per window). Only on request (normal_day=1) and once the area's day
+	// curves are loaded (prop_intel_fromhere_detail.go).
+	NormalDay []float64 `json:"normal_day,omitempty"`
+	// Trend counts the spots behind ExpectedSpots in 12 five-minute bins
+	// ending now, oldest first. Only on request (trend=1).
+	Trend []int `json:"trend,omitempty"`
 }
 
 // propIntelV2FromHere switches the evaluator to the from-here view: only spots
@@ -97,6 +109,13 @@ type propIntelV2Cell struct {
 // area's own normal instead of the global climatology.
 type propIntelV2FromHere struct {
 	normals *fromHereNormals // nil: no normal available
+	// Optional detail (prop_intel_fromhere_detail.go): silent cells, day
+	// curves (nil: not requested or not loaded yet) and the trend, counted
+	// over trendHistory (the last hour).
+	withSilent   bool
+	dayCurves    *fromHereDayCurves
+	trend        bool
+	trendHistory []MQTTMessage
 }
 
 // propIntelV2Response is the JSON envelope for /api/prop_intel/v2.
@@ -116,6 +135,8 @@ type propIntelV2Response struct {
 	Regions          []string          `json:"regions"`
 	RegionNames      map[string]string `json:"region_names"`
 	Cells            []propIntelV2Cell `json:"cells"`
+	// TrendBinMinutes is the width of a cell trend bin, set with trend=1.
+	TrendBinMinutes int `json:"trend_bin_minutes,omitempty"`
 }
 
 // propIntelV2CellKey indexes accumulators by (band × region × source).
@@ -426,9 +447,18 @@ func (e *propIntelV2Engine) EvaluateV2Area(qth string, surroundings bool, minute
 // PSKReporter count with the area's normal; without, there is no atypical (the
 // global climatology does not describe paths from one area).
 func (e *propIntelV2Engine) EvaluateV2FromHere(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea, normals *fromHereNormals) propIntelV2Response {
-	resp := e.evaluateV2(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, area,
-		&propIntelV2FromHere{normals: normals})
+	return e.EvaluateV2FromHereDetail(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, area,
+		propIntelV2FromHere{normals: normals})
+}
+
+// EvaluateV2FromHereDetail is EvaluateV2FromHere with the optional detail in
+// fh (silent cells, day curves, trend).
+func (e *propIntelV2Engine) EvaluateV2FromHereDetail(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea, fh propIntelV2FromHere) propIntelV2Response {
+	resp := e.evaluateV2(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, area, &fh)
 	resp.FromHere = true
+	if fh.trend {
+		resp.TrendBinMinutes = fromHereTrendBinSec / 60
+	}
 	return resp
 }
 
@@ -497,6 +527,10 @@ func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes in
 		if p.InternalTag == "mqtt" {
 			pskrSelected = true
 		}
+	}
+	var trend map[propIntelCellKey][]int
+	if fh != nil && fh.trend && pskrSelected {
+		trend = fromHereTrend(fh.trendHistory, profiles, qthSet, matchArea, now)
 	}
 
 	for ck, acc := range cellAccs {
@@ -626,8 +660,15 @@ func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes in
 		}
 		if fh != nil && pskrSelected {
 			applyFromHereNormal(&cell, fh.normals, normalSpots[cellKey], atypicalThreshold)
+			applyFromHereDetail(&cell, fh, trend)
 		}
 		cells = append(cells, cell)
+	}
+	if fh != nil && fh.withSilent && pskrSelected {
+		for _, c := range fromHereSilentCells(fh.normals, byCell) {
+			applyFromHereDetail(&c, fh, trend)
+			cells = append(cells, c)
+		}
 	}
 
 	sort.Slice(cells, func(i, j int) bool {
@@ -699,9 +740,27 @@ func propIntelV2Handler(w http.ResponseWriter, r *http.Request) {
 	var resp propIntelV2Response
 	if p.fromHere {
 		// From-here view: only spots touching the area, compared with the
-		// area's own normal (prop_intel_fromhere.go).
-		normals := fromHereNormalsFor(fromHereAreaGrids(p.qth, p.surroundings, area), now, p.minutes)
-		resp = propIntelV2.EvaluateV2FromHere(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area, normals)
+		// area's own normal (prop_intel_fromhere.go), plus the optional detail
+		// the experimental matrix looks ask for (prop_intel_fromhere_detail.go).
+		q := r.URL.Query()
+		grids := fromHereAreaGrids(p.qth, p.surroundings, area)
+		wantDay := q.Get("normal_day") == "1"
+		if wantDay {
+			fromHereDayCurvesFor(grids, now, 0) // start the fetch alongside the window normals
+		}
+		fh := propIntelV2FromHere{
+			normals:    fromHereNormalsFor(grids, now, p.minutes),
+			withSilent: q.Get("silent") == "1",
+		}
+		if wantDay {
+			fh.dayCurves = fromHereDayCurvesFor(grids, now, fromHereDayWait)
+		}
+		if q.Get("trend") == "1" {
+			trendHistory, releaseTrend := snapshotPropIntelHistory(now, fromHereTrendBins*fromHereTrendBinSec/60)
+			defer releaseTrend()
+			fh.trend, fh.trendHistory = true, trendHistory
+		}
+		resp = propIntelV2.EvaluateV2FromHereDetail(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area, fh)
 	} else {
 		resp = propIntelV2.EvaluateV2Area(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area)
 	}
