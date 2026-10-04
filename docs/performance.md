@@ -87,6 +87,13 @@ Changes from this profile (fifth pass):
 
 Still open on the Postgres side: rewrite `dx_baseline_cluster` (`CLUSTER` or `pg_repack` in a quiet period; the 60 s cache means it only matters once a minute per cluster), raise `shared_buffers` (1-2 GB, restart) and `work_mem` for the app role, and the infrequent heavy reads (`count(*)` on `dx_raw_spots` 4.5 s mean, `/api/history` chunks 0.6-1.5 s, retention `DELETE`s up to 25 s).
 
+Sixth pass (after tuning Postgres on prod, 2026-10-05):
+
+- **v2 on a radius-1 live area**: the scan matched every message against 9 string tokens (18 `matchCall` plus 18 prefix compares); prod profile showed `matchCall`/`memeqbody` at ~40% of CPU and the request at ~250 ms whenever the live area sat at radius 1 (the area decision follows traffic, so the same QTH flips between ~100 and ~250 ms). `propRemoteMatcher` compares integer square coordinates in the original token order behind a bounding-box reject; a test checks it against the token loop over 200k random cases. 250k-message window, 3x3 block: 60 to 14.7 ms.
+- **`hubCoversWindow` no longer checks the restart gap.** The gap only matters for live rates; for a count of recorded spots the hub and `dx_raw_spots` miss the same downtime. The check had sent every window overlapping the gap to Postgres for up to an hour after each restart.
+- **FT8 climatology** (`loadFT8Baselines`, 30 days of `dx_region_baseline_daily`, 23M rows, 8-19 s on prod) always hit the 1.5 s request deadline: the v1 atypical-flavor cross-reference never had data on prod and each `prop_intel/summary` refresh waited the 1.5 s out. It now loads in the background (first load 20 s after start, then every 30 minutes, 3 minute deadline, 5 minute retry back-off) and requests never wait on it. It still costs ~1.4 GB of temp I/O per refresh.
+- **Postgres tuning applied on prod** (`scripts/pg-tune.sh`): `shared_buffers` 2 GB, `effective_cache_size` 5 GB, `work_mem` 32 MB for the app role, lower autovacuum thresholds on the baseline tables. Warm query timings barely moved: the profiled queries are plan-bound, not memory-bound.
+
 ## Invariants
 
 - `hub.history` is append-only; readers use views. See CLAUDE.md.

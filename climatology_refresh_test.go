@@ -169,3 +169,109 @@ func TestWsprClimatologyServesStaleCopyAndDoesNotHoldTheEngineLock(t *testing.T)
 		return e.RegionCalendarStats(context.Background(), 30, late+1)[0].Mean == 2
 	})
 }
+
+func ft8Engine(t *testing.T) *propIntelEngine {
+	t.Helper()
+	base := newDxBaselineEngine(t.TempDir() + "/b.json")
+	base.store = &dxPostgresStore{}
+	return &propIntelEngine{baseline: base}
+}
+
+func ft8Rows(mean float64) []regionCalendarStatRow {
+	return []regionCalendarStatRow{{Band: "20m", Region: "EU", SlotOfDay: 3, Mean: mean, SampleDays: 10}}
+}
+
+// The FT8 climatology takes seconds on prod (8-19 s): a request must never
+// wait on it, and before the first load lands the answer is "no data".
+func TestFT8BaselinesNeverBlockRequestsAndSwapInWhenLoaded(t *testing.T) {
+	e := ft8Engine(t)
+	release := make(chan struct{})
+	var calls atomic.Int64
+	e.queryFT8 = func(ctx context.Context, _ *dxPostgresStore, _ int, _ int64) ([]regionCalendarStatRow, error) {
+		calls.Add(1)
+		<-release
+		return ft8Rows(4), nil
+	}
+	now := time.Now().Unix()
+
+	done := make(chan map[regionBaselineKey]regionCalendarStatRow, 1)
+	go func() { done <- e.loadFT8Baselines(now) }()
+	select {
+	case got := <-done:
+		if got != nil {
+			t.Fatalf("cold call returned %v, want nil", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("loadFT8Baselines waited for the Postgres query")
+	}
+	// Further requests while it runs neither block nor start a second query.
+	e.loadFT8Baselines(now + 1)
+	waitFor(t, "the refresh to start", func() bool { return calls.Load() == 1 })
+	if calls.Load() != 1 {
+		t.Fatalf("%d queries in flight", calls.Load())
+	}
+	close(release)
+	waitFor(t, "the first load", func() bool { return e.loadFT8Baselines(now+2) != nil })
+	got := e.loadFT8Baselines(now + 3)
+	if row, ok := got[regionBaselineKey{"20m", "EU", 3}]; !ok || row.Mean != 4 {
+		t.Fatalf("loaded climatology = %v", got)
+	}
+}
+
+func TestFT8BaselinesStaleCopyServedWhileRefreshingAndFailureBacksOff(t *testing.T) {
+	e := ft8Engine(t)
+	var calls atomic.Int64
+	fail := atomic.Bool{}
+	release := make(chan struct{})
+	e.queryFT8 = func(ctx context.Context, _ *dxPostgresStore, _ int, _ int64) ([]regionCalendarStatRow, error) {
+		n := calls.Add(1)
+		if n == 1 {
+			return ft8Rows(1), nil
+		}
+		<-release
+		if fail.Load() {
+			return nil, errors.New("pg down")
+		}
+		return ft8Rows(float64(n)), nil
+	}
+	now := time.Now().Unix()
+	e.loadFT8Baselines(now)
+	waitFor(t, "the first load", func() bool { return e.loadFT8Baselines(now+1) != nil })
+
+	// Inside the TTL: no query. After it: the stale copy comes back at once and
+	// one refresh starts.
+	if calls.Load() != 1 {
+		t.Fatalf("%d queries inside the TTL", calls.Load())
+	}
+	late := now + propIntelFT8BaselineTTL + 1
+	fail.Store(true)
+	if got := e.loadFT8Baselines(late); got[regionBaselineKey{"20m", "EU", 3}].Mean != 1 {
+		t.Fatalf("expected the stale copy, got %v", got)
+	}
+	waitFor(t, "the refresh to start", func() bool { return calls.Load() == 2 })
+	close(release)
+	waitFor(t, "the failed refresh", func() bool {
+		e.ft8CacheMu.RLock()
+		defer e.ft8CacheMu.RUnlock()
+		return e.ft8CacheErrAt == late && !e.ft8Refreshing
+	})
+	// The previous copy survives the failure, and Postgres is left alone until
+	// the retry window has passed.
+	if got := e.loadFT8Baselines(late + 1); got[regionBaselineKey{"20m", "EU", 3}].Mean != 1 {
+		t.Fatalf("lost the copy after a failed refresh: %v", got)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if calls.Load() != 2 {
+		t.Fatalf("retried inside the back-off (%d queries)", calls.Load())
+	}
+	fail.Store(false)
+	e.loadFT8Baselines(late + propIntelFT8RetryAfter + 1)
+	waitFor(t, "the retry", func() bool { return calls.Load() == 3 })
+}
+
+func TestFT8BaselinesWithoutStoreStayNil(t *testing.T) {
+	e := &propIntelEngine{baseline: newDxBaselineEngine(t.TempDir() + "/b.json")}
+	if got := e.loadFT8Baselines(time.Now().Unix()); got != nil {
+		t.Fatalf("no store: %v", got)
+	}
+}

@@ -70,3 +70,14 @@ func BenchmarkEvaluateV2FromHere(b *testing.B) {
 		propIntelV2.EvaluateV2FromHere("JO32", true, 15, nil, nil, nil, hist, now, 2.0, nil, nil)
 	}
 }
+
+// A radius-1 live area makes the scan match against a 3x3 block of squares.
+func BenchmarkEvaluateV2Block3x3(b *testing.B) {
+	hist := v2Window(250_000, 15)
+	now := time.Now().Unix()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		propIntelV2.EvaluateV2Area("JO32", true, 15, nil, nil, nil, hist, now, 2.0, nil)
+	}
+}

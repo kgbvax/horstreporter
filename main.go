@@ -400,6 +400,9 @@ func main() {
 	// Postgres store (regionCalendarStats). Set up early so the handler
 	// always has a baseline reference even if EnablePostgres fails below.
 	propIntel.baseline = dxBaseline
+	// The first FT8 climatology load takes seconds (8-19 s on prod); start it
+	// once startup has settled instead of on the first request.
+	time.AfterFunc(20*time.Second, propIntel.WarmFT8)
 	// Construct the WSPR climatology engine. JSONL fallback path is always
 	// set; the Postgres store is wired after EnablePostgres succeeds.
 	wsprClimatology = newWsprClimatologyEngine(strings.TrimSpace(*wsprClimatologyFile))
