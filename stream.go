@@ -230,12 +230,11 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	snap := streamSnapshot{
-		window:  make([]MQTTMessage, len(hub.history)-startIdx),
+		window:  hub.windowFromLocked(startIdx),
 		baseSeq: hub.baseSeq + uint64(startIdx),
 		highSeq: hub.highSeqLocked(),
 		ok:      true,
 	}
-	copy(snap.window, hub.history[startIdx:])
 	hub.Unlock()
 
 	var historySpots []Spot

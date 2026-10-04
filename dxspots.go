@@ -43,8 +43,7 @@ func dxSpotsHandler(w http.ResponseWriter, r *http.Request) {
 
 	hub.RLock()
 	idx := sort.Search(len(hub.history), func(i int) bool { return hub.history[i].T >= cutoff })
-	window := make([]MQTTMessage, len(hub.history)-idx)
-	copy(window, hub.history[idx:])
+	window := hub.windowFromLocked(idx)
 	hub.RUnlock()
 
 	// Keep the most recent spot per (DX call, band). history is ascending in T,

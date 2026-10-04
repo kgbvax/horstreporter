@@ -228,7 +228,12 @@ describe('app.js stream v2 client', () => {
 
         global.EventSource = eventSourceMock;
         window.EventSource = eventSourceMock;
-        global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ spots: [] }), text: async () => '' }));
+        // No local operator agent: the opmode probe (/v1/status) must fail, as it does
+        // against the plain backend. A blanket ok response would turn operator mode on
+        // and exempt the stream from the hidden-tab close.
+        global.fetch = vi.fn(async (url) => (String(url).includes('/v1/status')
+            ? { ok: false, status: 404, json: async () => ({}), text: async () => '' }
+            : { ok: true, json: async () => ({ spots: [] }), text: async () => '' }));
         vi.spyOn(Date, 'now').mockReturnValue(NOW_MS);
         document.getElementById('qth').value = 'W1AW';
     });

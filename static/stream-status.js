@@ -50,8 +50,16 @@ export function timeTravelErrorText(message) {
 //   message  second line (or the only line), in the given tone (optional)
 //   tone     'ok' | 'warn' | 'danger' | '' → .status-ok / .status-warn / .status-danger
 //   spinner  append the loading spinner
+// The last state written into each element. The live stream re-renders the same
+// "Live for X / N spots" state several times a second; rebuilding identical
+// nodes costs a style recalc each time, so identical writes are skipped.
+const lastRendered = new WeakMap();
+
 export function renderStreamStatus(el, { title = '', message = '', tone = '', spinner = false } = {}) {
     if (!el) return;
+    const key = JSON.stringify([title, message, tone, spinner]);
+    if (lastRendered.get(el) === key && el.firstChild) return;
+    lastRendered.set(el, key);
     const nodes = [];
     if (title) nodes.push(document.createTextNode(title));
     if (message) {

@@ -148,7 +148,7 @@ describe('map.js mercator dxcc labels', () => {
         mapModule.initMap([52, 7], 2);
 
         await expect(mapModule.syncMercatorDxccLabelLayer({ force: true, enabled: true })).resolves.toBeUndefined();
-        expect(globalThis.fetch).toHaveBeenCalledWith('vendor/world.geojson');
+        expect(globalThis.fetch).toHaveBeenCalledWith('world-slim.geojson');
         expect(mockMap.getZoom).toHaveBeenCalled();
     });
 
@@ -216,7 +216,7 @@ describe('map.js mercator country layer', () => {
         mapModule.initMap([52, 7], 2);
         await mapModule.syncMercatorCountryLayer({ enabled: true, force: true });
 
-        expect(globalThis.fetch).toHaveBeenCalledWith('vendor/world.geojson');
+        expect(globalThis.fetch).toHaveBeenCalledWith('world-slim.geojson');
         expect(globalThis.L.geoJSON).toHaveBeenCalledTimes(1);
         const [geoJson, opts] = globalThis.L.geoJSON.mock.calls[0];
         expect(geoJson.type).toBe('FeatureCollection');

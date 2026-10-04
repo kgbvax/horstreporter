@@ -145,12 +145,6 @@ type propIntelEngine struct {
 // checks (the handler still guards for safety).
 var propIntel = &propIntelEngine{}
 
-// propIntelHistoryPoolCap sizes the shared historyScratchPool (dx_conditions.go):
-// a 1.8M-entry window is ~360MB, and allocating (and GC-ing) that on every
-// request amplifies the cost of the evaluation passes. Buffers grow to fit and
-// are returned after Evaluate, which does not retain the slice.
-const propIntelHistoryPoolCap = 1 << 14
-
 // propIntelCellKey indexes a (band × region) accumulator.
 type propIntelCellKey struct {
 	band   string
@@ -218,6 +212,7 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 
 	acc := make(map[propIntelCellKey]*propIntelCellAcc)
 	bandsSeen := make(map[string]struct{})
+	regions := newRegionMemo()
 
 	for _, m := range history {
 		if m.T > now || m.T < cutoff {
@@ -241,7 +236,7 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		if remoteLocator == "" || !isLocator(remoteLocator) {
 			continue
 		}
-		reg := regionFromLocatorCached(remoteLocator)
+		reg := regions.get(remoteLocator)
 		if reg == region.Unknown {
 			continue
 		}
@@ -492,6 +487,25 @@ func regionFromLocatorCached(loc string) region.Region {
 	return r
 }
 
+// regionMemo is a per-request front for regionFromLocatorCached. The window
+// scans resolve a region for every in-scope message, and with many concurrent
+// requests the shared cache's RWMutex reader count became a contended cache
+// line (RLock/RUnlock were ~25% of API CPU). A request touches only a few
+// thousand distinct locators, so each one goes to the shared cache once and
+// then hits this unsynchronised map. Not safe for concurrent use.
+type regionMemo map[string]region.Region
+
+func newRegionMemo() regionMemo { return make(regionMemo, 1024) }
+
+func (m regionMemo) get(loc string) region.Region {
+	if r, ok := m[loc]; ok {
+		return r
+	}
+	r := regionFromLocatorCached(loc)
+	m[loc] = r
+	return r
+}
+
 // regionBaselineKey indexes regionCalendarStats rows by (band, region, slot).
 type regionBaselineKey struct {
 	band   string
@@ -653,9 +667,9 @@ func parsePropIntelParams(r *http.Request) (propIntelParams, bool) {
 	return p, true
 }
 
-// snapshotPropIntelHistory copies the hub.history window from `now - minutes`
-// to `now` into a pooled scratch buffer. The returned release func must be
-// called after Evaluate to return the buffer to the pool. The `now` must be
+// snapshotPropIntelHistory returns a read-only view of the hub.history window
+// from `now - minutes` to `now` (zero-copy, see snapshotHubHistoryWindow). The
+// returned release func is a no-op kept for call-site symmetry. The `now` must be
 // the same value passed to Evaluate so the window and the evaluation agree.
 func snapshotPropIntelHistory(now int64, minutes int) ([]MQTTMessage, func()) {
 	return snapshotHubHistoryWindow(now, minutes)

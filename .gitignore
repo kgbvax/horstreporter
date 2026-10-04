@@ -77,3 +77,6 @@ vite.config.js.timestamp-*
 # configured (-prop-baseline-file / -wspr-climatology-file); not source.
 prop_baseline.json
 wspr_climatology.json
+
+# Local profiling output (scripts/profile-ui.mjs, perf gate reports)
+tmp/

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -33,40 +32,22 @@ const (
 
 var dxBaselineMaxEvents = defaultDxBaselineMaxEvents
 
-// historyScratchPool backs snapshotHubHistoryWindow: pooled scratch buffers
-// for the per-request hub.history window copy. dx_conditions, hot_bands, and
-// prop_intel share the element type, so they share the pool (ce-optimize
-// prop-latency: the old per-request make() churned a ~40MB window slice and
-// its GC pressure on every /api/dx_conditions and /api/hot_bands hit).
-var historyScratchPool = sync.Pool{
-	New: func() interface{} {
-		b := make([]MQTTMessage, 0, propIntelHistoryPoolCap)
-		return &b
-	},
-}
-
-// snapshotHubHistoryWindow copies the hub.history slice covering
-// [now-minutes*60, now] into a pooled scratch buffer and returns it together
-// with a release func. Callers must release() as soon as Evaluate/HotBands
-// has returned — the engine reads the slice but never retains it (same
-// contract as the prop_intel pool this extends to the DX endpoints).
+// snapshotHubHistoryWindow returns a read-only view of the hub.history slice
+// covering [now-minutes*60, now] together with a release func (a no-op kept
+// so callers keep their defer). The view is zero-copy (Hub.windowFromLocked):
+// the old per-request copy of a ~50MB window, even pooled, made API memory
+// scale with concurrency and held hub.RLock long enough to starve the ingest
+// append path. Callers must treat the slice as read-only; engines read it but
+// never retain it.
 func snapshotHubHistoryWindow(now int64, minutes int) ([]MQTTMessage, func()) {
 	cutoff := now - int64(minutes)*60
 	hub.RLock()
 	idx := sort.Search(len(hub.history), func(i int) bool {
 		return hub.history[i].T >= cutoff
 	})
-	n := len(hub.history) - idx
-	bufp := historyScratchPool.Get().(*[]MQTTMessage)
-	if cap(*bufp) < n {
-		*bufp = make([]MQTTMessage, n)
-	} else {
-		*bufp = (*bufp)[:n]
-	}
-	hist := (*bufp)[:n]
-	copy(hist, hub.history[idx:])
+	hist := hub.windowFromLocked(idx)
 	hub.RUnlock()
-	return hist, func() { historyScratchPool.Put(bufp) }
+	return hist, func() {}
 }
 
 // SlotsOfDay is the number of 30-minute slots in one UTC day: 48.
@@ -1494,6 +1475,10 @@ func legacyConditionFromStatus(status string, score float64) string {
 // SSB, AM, FM, DIGI, WSPR, …) is excluded. Only RBN and WSPR produce those real non-FT8
 // modes today.
 func isNonConditionsMode(md string) bool {
+	switch md { // the feed's own spelling, without the normalising copy
+	case "", "FT8", "FT4", "DXCLUSTER":
+		return false
+	}
 	switch strings.ToUpper(strings.TrimSpace(md)) {
 	case "", "FT8", "FT4", "DXCLUSTER":
 		return false
@@ -1748,20 +1733,32 @@ func extractMatchedBandEventArea(m MQTTMessage, qthSet []string, area *liveArea)
 	if band == "" {
 		return matchedBandEvent{}, false
 	}
-	sc := strings.ToUpper(strings.TrimSpace(m.SC))
-	rc := strings.ToUpper(strings.TrimSpace(m.RC))
-	sl := strings.ToUpper(strings.TrimSpace(m.SL))
-	rl := strings.ToUpper(strings.TrimSpace(m.RL))
-	if sl == "" || rl == "" {
+	slTrim := strings.TrimSpace(m.SL)
+	rlTrim := strings.TrimSpace(m.RL)
+	if slTrim == "" || rlTrim == "" {
 		return matchedBandEvent{}, false
 	}
 
+	// This runs once per hub.history message on every request, and most
+	// messages are outside the requested area: reject them on the raw
+	// locators (contains is case-insensitive and allocation-free) before
+	// upper-casing four strings and building keys for a spot we then drop.
 	isSender := false
 	isReceiver := false
 	if area != nil {
-		isSender = area.contains(sl)
-		isReceiver = area.contains(rl)
-	} else {
+		isSender = area.contains(slTrim)
+		isReceiver = area.contains(rlTrim)
+		if !isSender && !isReceiver {
+			return matchedBandEvent{}, false
+		}
+	}
+
+	sc := strings.ToUpper(strings.TrimSpace(m.SC))
+	rc := strings.ToUpper(strings.TrimSpace(m.RC))
+	sl := strings.ToUpper(slTrim)
+	rl := strings.ToUpper(rlTrim)
+
+	if area == nil {
 		for _, t := range qthSet {
 			if matchCall(sc, t) || (isLocator(t) && strings.HasPrefix(sl, t)) {
 				isSender = true
@@ -1781,20 +1778,26 @@ func extractMatchedBandEventArea(m MQTTMessage, qthSet []string, area *liveArea)
 		localLocator = rl
 		remoteLocator = sl
 	}
-	if localLocator == "" || remoteLocator == "" {
-		return matchedBandEvent{}, false
-	}
 
-	distanceKm := distanceKmForLocators(localLocator, remoteLocator)
+	// Same result as distanceKmForLocators + bearingDirection, with each
+	// locator decoded once instead of three times.
+	distanceKm := 0.0
+	direction := ""
 	lat1, lon1 := locatorToLatLng(localLocator)
 	lat2, lon2 := locatorToLatLng(remoteLocator)
-	direction := ""
 	if !(lat1 == 0 && lon1 == 0) && !(lat2 == 0 && lon2 == 0) {
+		distanceKm = haversineKm(lat1, lon1, lat2, lon2)
 		direction = bearingDirection(lat1, lon1, lat2, lon2)
 	}
 
-	dedupBucket := m.T / dxDedupWindowSeconds
-	dedupKey := fmt.Sprintf("%d|%s|%s|%s|%s|%s", dedupBucket, band, sc, rc, sl, rl)
+	// "%d|%s|%s|%s|%s|%s" without fmt: one allocation, no interface boxing.
+	var keyBuf [96]byte
+	kb := strconv.AppendInt(keyBuf[:0], m.T/dxDedupWindowSeconds, 10)
+	for _, part := range [...]string{band, sc, rc, sl, rl} {
+		kb = append(kb, '|')
+		kb = append(kb, part...)
+	}
+	dedupKey := string(kb)
 	qualityKey := band + "|" + sc + "|" + rc + "|" + remoteLocator
 	remote4 := ""
 	if isLocator(remoteLocator) {
@@ -2111,10 +2114,10 @@ func clusterEndCount(m MQTTMessage, ax, ay int) int {
 		return 0
 	}
 	n := 0
-	if locatorInCluster(strings.ToUpper(sl), ax, ay) {
+	if locatorInCluster(sl, ax, ay) { // case-insensitive, no upper-cased copy
 		n++
 	}
-	if locatorInCluster(strings.ToUpper(rl), ax, ay) {
+	if locatorInCluster(rl, ax, ay) {
 		n++
 	}
 	return n

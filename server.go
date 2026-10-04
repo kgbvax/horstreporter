@@ -299,8 +299,7 @@ func squareDetailsHandler(w http.ResponseWriter, r *http.Request) {
 	idx := sort.Search(len(hub.history), func(i int) bool {
 		return hub.history[i].T >= cutoff
 	})
-	historyCopy := make([]MQTTMessage, len(hub.history)-idx)
-	copy(historyCopy, hub.history[idx:])
+	historyCopy := hub.windowFromLocked(idx)
 	hub.RUnlock()
 
 	resp := buildSquareDetailsResponse(qth, surroundings, locator, minutes, minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands, historyCopy, now)
@@ -550,21 +549,26 @@ func buildSquareDetailsResponse(qth string, surroundings bool, locator string, m
 }
 
 func statsHandler(w http.ResponseWriter, r *http.Request) {
+	// Scan a zero-copy view outside the lock: walking a ~1M-message history
+	// under RLock stalled the ingest append (and every other history reader
+	// queued behind it) for the length of the scan on each stats poll.
 	hub.RLock()
 	numClients := len(hub.clients)
-	historySize := len(hub.history)
+	history := hub.windowFromLocked(0)
+	hub.RUnlock()
+	historySize := len(history)
 	var historyMinutes int
 	var historySizeBytes int64
 	if historySize > 0 {
-		oldest := hub.history[0].T
+		oldest := history[0].T
 		now := time.Now().Unix()
 		historyMinutes = int((now - oldest) / 60)
-		for _, m := range hub.history {
+		for i := range history {
+			m := &history[i]
 			// Estimate memory footprint: base struct size (~112 bytes) + string lengths
 			historySizeBytes += 112 + int64(len(m.SC)+len(m.SL)+len(m.RC)+len(m.RL)+len(m.B)+len(m.MD))
 		}
 	}
-	hub.RUnlock()
 	started, completed, active, bytesTotal, avgBytes := streamAccounting.snapshot()
 	dxConnAttempts, dxConnected, dxLinesSeen, dxParsed, dxPersisted, dxForwarded, dxDroppedNoLoc := dxClusterAccounting.snapshot()
 	rbnAttempts, rbnConnected, rbnLinesSeen, rbnParsed, rbnPersisted, rbnForwarded, rbnDroppedNoLoc := rbnAccounting.snapshot()

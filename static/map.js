@@ -6,8 +6,9 @@ let currentGraylineLayer = null;
 const pendingGraylineRetirements = new Set();
 let currentDxccLabelLayer = null;
 
-import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getGraylineOverlayOpacities, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, hexToRgb, blendOverlayColors, icon } from './utils.js';
+import { getCountryColoringEnabled, getCountryFillForFeature, getGraylineEnabled, getMercatorDxccLabelsEnabled, getSubsolarPoint, greatCirclePoints, hexToRgb, icon } from './utils.js';
 import { selectProminentDxccLabels } from './azimuth-runtime.js';
+import { fillMercatorGraylinePixels } from './grayline.js';
 import { dataNow, GRAYLINE_BUCKET_MS } from './data-now.js';
 import { COUNTRY_FILL_OPACITY, getMapTokens } from './map-tokens.js';
 import { endPerfTimer, incrementPerfCounter, startPerfTimer } from './perf.js';
@@ -226,7 +227,7 @@ function applyMercatorViewConstraints() {
 async function loadWorldGeoJson() {
     if (worldGeoJsonData) return worldGeoJsonData;
     if (!worldGeoJsonPromise) {
-        worldGeoJsonPromise = fetch('vendor/world.geojson')
+        worldGeoJsonPromise = fetch('world-slim.geojson')
             .then(resp => {
                 if (!resp.ok) {
                     throw new Error(`Failed to load world.geojson: ${resp.status}`);
@@ -288,10 +289,6 @@ function removeDxccLabelLayer() {
     currentDxccLabelLayerKey = null;
 }
 
-function mercatorYToLat(yRatio) {
-    return (Math.atan(Math.sinh(Math.PI * (1 - (2 * yRatio))))) * 180 / Math.PI;
-}
-
 function buildMercatorGraylineDataUrl(theme, subsolarPoint) {
     const width = 1024;
     const height = 512;
@@ -310,24 +307,7 @@ function buildMercatorGraylineDataUrl(theme, subsolarPoint) {
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
 
-    for (let y = 0; y < height; y += 1) {
-        const lat = mercatorYToLat(y / (height - 1));
-        for (let x = 0; x < width; x += 1) {
-            const lng = -180 + ((x / (width - 1)) * 360);
-            const { graylineOpacity, nightOpacity } = getGraylineOverlayOpacities(lat, lng, subsolarPoint);
-            if (graylineOpacity <= 0 && nightOpacity <= 0) continue;
-
-            let pixel = { r: 0, g: 0, b: 0, a: 0 };
-            pixel = blendOverlayColors(pixel, twilightFill, graylineOpacity);
-            pixel = blendOverlayColors(pixel, nightFill, nightOpacity);
-
-            const offset = (y * width * 4) + (x * 4);
-            data[offset] = Math.round(pixel.r);
-            data[offset + 1] = Math.round(pixel.g);
-            data[offset + 2] = Math.round(pixel.b);
-            data[offset + 3] = Math.round(pixel.a * 255);
-        }
-    }
+    fillMercatorGraylinePixels(data, width, height, subsolarPoint, twilightFill, nightFill);
 
     ctx.putImageData(imageData, 0, 0);
     return canvas.toDataURL('image/png');

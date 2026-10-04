@@ -101,21 +101,12 @@ func percentile(sortedMs []float64, p float64) float64 {
 	return math.Round(sortedMs[idx]*1000) / 1000
 }
 
-func TestPropLatencyHarness(t *testing.T) {
-	if os.Getenv(latencyHarnessEnv) == "" {
-		t.Skip("latency harness: set HORST_LATENCY_HARNESS=1 to run (invoked via scripts/measure-prop-latency.mjs)")
-	}
-
-	count := 1_000_000
-	if v := os.Getenv("HORST_LATENCY_HISTORY"); v != "" {
-		fmt.Sscanf(v, "%d", &count)
-	}
-	requests := 60
-	if v := os.Getenv("HORST_LATENCY_REQUESTS"); v != "" {
-		fmt.Sscanf(v, "%d", &requests)
-	}
-
-	// --- wire the engines the way main.go does (no Postgres store) ---------
+// wireLatencyWorld wires the engines the way main.go does (no Postgres
+// store), installs a synthetic prod-scale hub.history of count messages and
+// serves the latency-sensitive handlers on an httptest server. Package-level
+// singletons are restored on t.Cleanup.
+func wireLatencyWorld(t *testing.T, count int) *httptest.Server {
+	t.Helper()
 	dir := t.TempDir()
 	dxEng := newDxBaselineEngine(filepath.Join(dir, "dx_baseline.json"))
 	if err := dxEng.Load(); err != nil {
@@ -126,14 +117,14 @@ func TestPropLatencyHarness(t *testing.T) {
 	savedBaseline := dxBaseline
 	savedClim := wsprClimatology
 	savedPropIntelBaseline := propIntel.baseline
-	defer func() {
+	t.Cleanup(func() {
 		hub.Lock()
 		hub.history = savedHubHistory
 		hub.Unlock()
 		dxBaseline = savedBaseline
 		wsprClimatology = savedClim
 		propIntel.baseline = savedPropIntelBaseline
-	}()
+	})
 
 	history := buildLatencyHistory(count)
 	// Feed the engines a bounded sample of the ingest stream, not the full
@@ -173,7 +164,25 @@ func TestPropLatencyHarness(t *testing.T) {
 	mux.HandleFunc("/api/dx_conditions", dxConditionsHandler)
 	mux.HandleFunc("/api/hot_bands", hotBandsHandler)
 	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestPropLatencyHarness(t *testing.T) {
+	if os.Getenv(latencyHarnessEnv) == "" {
+		t.Skip("latency harness: set HORST_LATENCY_HARNESS=1 to run (invoked via scripts/measure-prop-latency.mjs)")
+	}
+
+	count := 1_000_000
+	if v := os.Getenv("HORST_LATENCY_HISTORY"); v != "" {
+		fmt.Sscanf(v, "%d", &count)
+	}
+	requests := 60
+	if v := os.Getenv("HORST_LATENCY_REQUESTS"); v != "" {
+		fmt.Sscanf(v, "%d", &requests)
+	}
+
+	srv := wireLatencyWorld(t, count)
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	qths := []string{"JO62QM", "JO31AB"}

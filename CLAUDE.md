@@ -75,6 +75,17 @@ npm run perf:gate:mercator
 # and npm run test:perf:mercator:assert (node scripts/perf-assert.mjs
 # .perf-baseline.json tmp/perf-reports).
 
+# Backend concurrency harness: 16 parallel clients + live ingest over a 1M-message
+# synthetic hub.history; reports req/s, p50/p95 per endpoint, peak process memory, GC
+# pauses and ingest lock wait. Use it (not the serial prop-latency harness) for anything
+# that touches hub.history readers or per-request allocation. See docs/performance.md.
+node scripts/measure-concurrency.mjs
+
+# UI profiling (headless Chromium, needs a running `go run . -dev`): per-scenario CPU,
+# frame times and long tasks for load/idle/zoom/pan/style/projection switches. For a
+# contest-scale feed run scripts/stress-proxy.mjs and point URL at it.
+node scripts/profile-ui.mjs [label]
+
 # Cell bucket feed (path-scope data plumbing; Propagation Lab was removed 2026-08-04)
 #   -proplab-cell-retention-days  # retention for proplab_cell_buckets / proplab_sw_series (default 60; 0 disables)
 #   -proplab-sw-enable            # NOAA SWPC index series ingest (kp/F10.7/xray/OVATION; consumed by pathscope)
@@ -123,8 +134,10 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `cond-now.js` — the dock's Now rows: verdict, reports / normal and mini plot columns added to the Propagation matrix (`wspr-matrix.js` row-extras hook, numbers from `band-lab.js`)
 
 **Key architectural constraints:**
-- `hub.history` is the in-memory rolling window; changes affect all SSE client fan-out and history dumps
+- `hub.history` is the in-memory rolling window; changes affect all SSE client fan-out and history dumps. It is **append-only**: elements are never written in place, expired spots are dropped by reslicing the front (`dropFrontLocked`), and readers take zero-copy views with `Hub.windowFromLocked` (never `make`+`copy` the window per request — tens of MB per call, up to ~200 MB for the full hour, which drove peak RSS past 4 GB under concurrency). Do not sort, compact or mutate it in place; `hub_view_test.go` (run with `-race`) guards this.
+- Hot per-message paths (`extractMatchedBandEventArea`, `matchAndCreateSpot`, `liveArea.contains`) must stay allocation-free: the feed's locators are mixed case, so use `locatorSquareXYFold` / `hasPrefixFold` instead of `strings.ToUpper` on every message, and build keys without `fmt`. Equivalence tests against the old implementations live in `extract_matched_equiv_test.go` / `match_equiv_test.go`.
 - Production embeds `static/` via `//go:embed static`; `-dev` serves from disk with no-cache
+- The map fetches `static/world-slim.geojson` (generated from `static/vendor/world.geojson` by `scripts/slim-world-geojson.mjs`; re-run it after adding a reader of another Natural Earth property). The live stream must not wait on that download: Mercator boot starts the stream without awaiting the overlay sync (`overlaysReady` in `app.js`)
 - The `dxlens` module is a sibling directory (`../dxlens`), referenced via `go.mod replace`
 - Browser opmode calls `http://127.0.0.1:9955/v1/*` directly; the backend never proxies to the local agent
 

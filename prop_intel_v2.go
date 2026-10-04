@@ -239,6 +239,7 @@ func (e *propIntelV2Engine) EvaluateV2Area(qth string, surroundings bool, minute
 	cellAccs := make(map[propIntelV2CellKey]*propIntelV2Acc)
 	cellFromHere := make(map[propIntelCellKey]bool)
 	bandsSeen := make(map[string]struct{})
+	regions := newRegionMemo()
 
 	for _, m := range history {
 		if m.T > now || m.T < cutoff {
@@ -261,7 +262,7 @@ func (e *propIntelV2Engine) EvaluateV2Area(qth string, surroundings bool, minute
 		if remoteLocator == "" || !isLocator(remoteLocator) {
 			continue
 		}
-		reg := regionFromLocatorCached(remoteLocator)
+		reg := regions.get(remoteLocator)
 		if reg == region.Unknown {
 			continue
 		}

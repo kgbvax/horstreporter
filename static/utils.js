@@ -348,12 +348,20 @@ export function greatCirclePoints(aLat, aLng, bLat, bLng, segments = 48) {
     return out;
 }
 
+// The live stream calls this once per delivered frame (about every second),
+// nearly always with the colour already shown. Re-assigning link.href makes
+// the browser re-resolve the favicon each time, so only write on change.
+let appliedFaviconColor = null;
+let appliedFaviconEl = null;
+
 export function setFaviconColor(color) {
     const favicon = document.getElementById('favicon');
-    if (favicon) {
-        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" fill="${color}"/></svg>`;
-        favicon.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
-    }
+    if (!favicon) return;
+    if (favicon === appliedFaviconEl && color === appliedFaviconColor) return;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" fill="${color}"/></svg>`;
+    favicon.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+    appliedFaviconEl = favicon;
+    appliedFaviconColor = color;
 }
 
 export const bandColors = {

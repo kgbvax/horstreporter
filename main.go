@@ -861,12 +861,12 @@ func pruneLiveHistory(now int64, retentionMinutes int) {
 		return
 	}
 	if keepIdx > 0 {
-		// Reslice in place instead of make+copy of the retained tail. Every
-		// hub.history reader copies its window out under hub.RLock()/Lock() and
-		// no reader caches the slice header across this call, so dropping the
-		// expired prefix by moving the slice start is safe — and it avoids an
-		// ~86MB tail copy under the write lock that blocked the 20k/min ingest
-		// append path every 5 min. The backing array self-compacts on the next
+		// Reslice in place instead of make+copy of the retained tail. Readers
+		// hold zero-copy views of the slice (Hub.windowFromLocked); moving the
+		// slice start never writes to the elements those views point at, so
+		// dropping the expired prefix is safe — and it avoids an ~86MB tail
+		// copy under the write lock that blocked the 20k/min ingest append
+		// path every 5 min. The backing array self-compacts on the next
 		// append-driven reallocation, so the dead prefix is reclaimed shortly.
 		hub.dropFrontLocked(keepIdx)
 	}
