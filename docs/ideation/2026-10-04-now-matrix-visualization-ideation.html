@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: the Now band matrix, six ways to show activity</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1d2127; --muted: #5a626d; --line: #dfe2e6;
+    --card: #ffffff; --accent: #1f5fae; --accent-soft: #e8f0fa; --accent-text: #174a88;
+    --warn-soft: #fbf1e3; --warn-text: #7a4b0f; --ok-soft: #e7f4ec; --ok-text: #1f5c35;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15181c; --fg: #e3e6ea; --muted: #a0a8b3; --line: #2c3239;
+      --card: #1c2025; --accent: #6ea8ec; --accent-soft: #1d2a3a; --accent-text: #a9ccf5;
+      --warn-soft: #33281a; --warn-text: #efc58d; --ok-soft: #1a2e22; --ok-text: #9fd8b2;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15.5px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
+  main { max-width: 1180px; margin-inline: auto; padding: 2.5rem 1.25rem 4rem; }
+  p, li, dd { max-width: 72ch; }
+  h1 { font-size: 1.75rem; line-height: 1.25; margin: .2rem 0 .6rem; }
+  h2 { font-size: 1.3rem; margin: 2.6rem 0 .8rem; padding-bottom: .3rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1.1rem; margin: 0 0 .4rem; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: var(--accent-text); padding: .05em .3em; border-radius: 3px; }
+  .meta { color: var(--muted); font-size: .9rem; }
+  .shots { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 1rem 0; }
+  .shots img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; }
+  .prop { margin: 2.2rem 0 0; padding-top: 1.2rem; border-top: 1px solid var(--line); }
+  .prop .lede { margin: 0 0 .9rem; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: .6rem 0 1rem; }
+  .pair > .mock { min-width: 0; }
+  @media (max-width: 1000px) { .pair, .shots { grid-template-columns: 1fr; } }
+  dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; margin: .4rem 0 0; font-size: .95rem; }
+  dl.facts dt { color: var(--muted); }
+  dl.facts dd { margin: 0; }
+  table.cmp { border-collapse: collapse; font-size: .9rem; width: 100%; }
+  table.cmp th, table.cmp td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.cmp th { color: var(--muted); font-weight: 600; }
+  .pick { background: var(--ok-soft); color: var(--ok-text); padding: .9rem 1rem; border-radius: 8px; }
+  .caveat { background: var(--warn-soft); color: var(--warn-text); padding: .7rem 1rem; border-radius: 8px; }
+
+  /* ---- Mock dock panels: the app's own tokens, both themes side by side ---- */
+  .mock { --mbg: #ffffff; --mfg: #212529; --mline: #dee2e6; --mmuted: #6c757d; --macc: #1f9e8f; --macc-strong: #157f73;
+    background: var(--mbg); color: var(--mfg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 10px 8px;
+    font: 0.72rem/1.25 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow-x: auto; }
+  .mock.dark { --mbg: #212529; --mfg: #e0e0e0; --mline: #444444; --mmuted: #999999; --macc: #4dd3c0; --macc-strong: #4dd3c0; }
+  .mock .mt { font-size: .7rem; color: var(--mmuted); margin-bottom: 6px; }
+  .mock table { border-collapse: separate; border-spacing: 3px 0; width: 100%; table-layout: fixed; font-variant-numeric: tabular-nums; }
+  .mock th { padding: 3px 4px; text-align: center; font-weight: 600; font-size: calc(0.72rem + 1px);
+    color: color-mix(in srgb, var(--mfg) 70%, transparent); border-bottom: 1px solid var(--mline); }
+  .mock td { padding: 3px 4px; text-align: center; border-bottom: 1px solid var(--mline); height: 52px; }
+  .mock th.band { text-align: left; color: var(--mfg); padding-left: 6px; border-left: 3px solid var(--bc); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mock th.band .v, .mock th.band .p { display: block; font-weight: 400; font-size: 0.72rem; }
+  .mock th.band .p { color: color-mix(in srgb, var(--mfg) 70%, transparent); }
+  .mock .legend { margin-top: 6px; font-size: .68rem; color: var(--mmuted); display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+  .mock .sw { display: inline-block; width: 14px; height: 12px; border-radius: 3px; vertical-align: middle; margin-right: 3px; }
+  /* chips (options 1-3) */
+  .chip { display: inline-block; width: 100%; height: 34px; border-radius: 4px; position: relative;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mfg) 14%, transparent); }
+  .mock.dark .chip { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mfg) 30%, transparent); }
+  .chip.cw { background: transparent !important; box-shadow: inset 0 0 0 2px var(--cwc); }
+  .chip.ring-only { background: transparent !important; box-shadow: none; border: 1px dashed color-mix(in srgb, var(--mfg) 45%, transparent); }
+  .chip.surge { box-shadow: inset 0 0 0 2px var(--ink), 0 0 0 1px var(--mbg); }
+  .chip .up { position: absolute; right: 3px; bottom: 2px; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 6px solid var(--ink); }
+  /* ribbons (option 5) */
+  .rib { text-align: left !important; white-space: nowrap; }
+  .rb { display: inline-block; margin-right: 10px; letter-spacing: .01em; cursor: pointer; }
+  .rb.s5 { font-size: 15px; font-weight: 800; }
+  .rb.s4 { font-size: 13.5px; font-weight: 700; }
+  .rb.s3 { font-size: 12px; font-weight: 600; }
+  .rb.s2 { font-size: 11px; font-weight: 500; color: color-mix(in srgb, var(--mfg) 70%, transparent); }
+  .rb.s1 { font-size: 10px; font-weight: 400; color: color-mix(in srgb, var(--mfg) 55%, transparent); }
+  .rb.cw { text-decoration: underline dotted; text-underline-offset: 2px; }
+  .rb .arr { font-weight: 400; font-size: .8em; opacity: .8; }
+  .rb .z { font-weight: 700; color: #d9541e; font-size: .8em; vertical-align: super; }
+  .mock.dark .rb .z { color: #ff9a5c; }
+  .rb.none { color: color-mix(in srgb, var(--mfg) 40%, transparent); font-weight: 400; font-size: 11px; }
+  /* roses (option 6) */
+  .rose-td { text-align: left !important; }
+  .rose-wrap { display: flex; align-items: center; gap: 10px; }
+  .rose-txt { font-size: .7rem; color: color-mix(in srgb, var(--mfg) 80%, transparent); white-space: nowrap; line-height: 1.35; }
+  .rose-txt b { color: var(--mfg); }
+  .compass { display: flex; gap: 14px; align-items: center; margin: 2px 0 8px; color: var(--mmuted); }
+</style>
+</head>
+<body>
+<main>
+<h1>The Now band matrix: six ways to show activity</h1>
+<p class="meta">4 Oct 2026. Review of the Conditions dock's Now view (<code>static/cond-now.js</code> + <code>static/wspr-matrix.js</code>). All mockups below render from a live <code>/api/prop_intel/v2</code> payload for JO32 captured today (8 rail-enabled bands, Antarctica hidden, as on production). Nothing here is implemented; this page is for signoff.</p>
+
+<h2>What the current matrix does, and why it reads wrong</h2>
+<div class="shots">
+  <img src="2026-10-04-now-matrix-current-light.jpg" alt="Current Now matrix, light theme">
+  <img src="2026-10-04-now-matrix-current-dark.jpg" alt="Current Now matrix, dark theme">
+</div>
+<ol>
+  <li><strong>The scale is linear-to-global-max on data that spans five decades.</strong> Today's payload runs from 1 spot (80m SA) to 74,732 (20m NA). Even with the sqrt stretch, 15m to SA at 1,585 spots lands at 15% of the ramp and looks "almost nothing". Two or three cells own the whole colour range; the rest collapse onto the sparse end. The eye reads "only 20m and 40m EU/NA are open", which is false.</li>
+  <li><strong>Spot count is the wrong quantity to colour.</strong> It mostly measures how many stations live in a region. EU and NA will always be the hot columns and AF, VK, JA always cold, whatever the ionosphere does. The question an operator asks a cell is "is this path open, and is it better than usual?", and the backend already answers both (<code>ssb_open</code>/<code>cw_open</code>, and the climatology mean behind the z-score). Neither is what the fill shows.</li>
+  <li><strong>Viridis and inferno carry no ham semantics.</strong> On dark, the busiest cell is bright yellow (reads as a warning). On light, the same cell is near-black purple (reads as dead). The ramps are also reversed per theme, so a learned mapping does not survive a theme switch. Users must keep consulting the legend.</li>
+  <li><strong>Three visual languages fight inside one chip.</strong> Fill colour (count), coloured badges S / C / up-arrow (mode, trend) and chevrons or rings (surge). The green S badge sits on nearly every cell today (59 of 60 cells are SSB-open), so it is a lot of ink for almost no information, and its green collides with the mid-viridis green.</li>
+  <li><strong>The row and its cells disagree.</strong> The row header says "quiet, x0.3" (reports versus this hour's normal) while the cells next to it are coloured against the global maximum. 12m says "no reports" (the row follows the SSB-workable floor from the sidebar) while four 12m cells are lit. Two normalisations and two filters in one row.</li>
+</ol>
+<p>So the fix is mostly about <em>what</em> is encoded and on <em>which scale</em>; the palette is secondary. Each proposal below picks one quantity per channel, uses the same mapping in both themes, and drops the badge stack to at most one glyph.</p>
+
+<h2>Six proposals</h2>
+<p class="meta">Every mock shows the light and the dark theme. The Distance / SNR mini-plot column is unchanged in all six and omitted here for room. "Normal" (the expected count for this hour) is illustrative in the mocks: the backend has the per-cell climatology mean but does not expose it yet (see "needs" on each card).</p>
+
+<section class="prop" id="p1">
+  <h3>1. One ink, five decades</h3>
+  <p class="lede">Keep the heatmap, fix the scale. One hue (the app accent), five discrete steps by order of magnitude: single digits, tens, hundreds, thousands, ten-thousands. The step is the distance from the page colour, so the direction is identical on both themes. Mode is shape, not a badge: solid chip = SSB open, outlined chip = CW only. One glyph for rising, a ring for a surge.</p>
+  <div class="pair"><div class="mock light" data-opt="1"></div><div class="mock dark" data-opt="1"></div></div>
+  <dl class="facts">
+    <dt>Encodes</dt><dd>fill = spots (log, 5 steps); shape = SSB / CW; triangle = rising; ring = surge</dd>
+    <dt>Gains</dt><dd>Every lit cell is legible; the 20m row now shows seven open paths instead of two. Steps are nameable ("hundreds to AF"), so the legend becomes a sentence. No per-theme reversal.</dd>
+    <dt>Loses</dt><dd>Still colours raw count, so EU/NA still dominate. Finding 2 stays.</dd>
+    <dt>Needs</dt><dd>frontend only</dd>
+    <dt>Effort</dt><dd>small</dd>
+  </dl>
+</section>
+
+<section class="prop" id="p2">
+  <h3>2. Against normal</h3>
+  <p class="lede">Colour the thing the row header already talks about: this cell's reports against its own normal for this hour. A diverging scale with a neutral middle: cool = quieter than usual, page-grey = normal, warm = livelier, hot = surge. The rows and the cells finally agree. A dashed empty chip means "usually open at this hour, nothing now", which today is invisible.</p>
+  <div class="pair"><div class="mock light" data-opt="2"></div><div class="mock dark" data-opt="2"></div></div>
+  <dl class="facts">
+    <dt>Encodes</dt><dd>fill = ratio to normal (5 steps, diverging); dashed = expected but silent; shape = SSB / CW</dd>
+    <dt>Gains</dt><dd>EU/NA stop hogging the palette; AF at 2x normal is as loud as NA at 2x normal. The anomaly channel (chevrons / rings) folds into the fill. Blue-orange is colour-blind safe.</dd>
+    <dt>Loses</dt><dd>You no longer see absolute volume (a "normal" cell with 5 spots looks like a "normal" cell with 50k). Cells without a baseline (widened area, under 3 sample days) fall back to a flat "open" chip.</dd>
+    <dt>Needs</dt><dd>backend: expose <code>expected</code> per cell from the existing climatology mean (<code>base.Mean</code> in <code>prop_intel_v2.go</code>, scaled to the window)</dd>
+    <dt>Effort</dt><dd>small frontend + small backend</dd>
+  </dl>
+</section>
+
+<section class="prop" id="p3">
+  <h3>3. Band ink</h3>
+  <p class="lede">The matrix borrows the band rail's canonical colours: every chip in the 20m row is a tint of 20m green, every 10m chip a tint of 10m red. Five tints by decade, outline for CW only. The dock stops having a palette of its own, and a row reads as "20m is lit toward NA and EU" in the same colour the map and the rail use for 20m.</p>
+  <div class="pair"><div class="mock light" data-opt="3"></div><div class="mock dark" data-opt="3"></div></div>
+  <dl class="facts">
+    <dt>Encodes</dt><dd>hue = band (fixed); tint = spots (log, 5 steps); shape = SSB / CW</dd>
+    <dt>Gains</dt><dd>No new colour vocabulary; map, rail and matrix share one. Cross-band scanning is by row, where the colour is constant, so the tint is the only thing varying.</dd>
+    <dt>Loses</dt><dd>Perceived weight differs per hue (17m olive vs 10m red), so comparing a 17m cell to a 10m cell by eye is weaker. 12m cyan and 15m orange stay pale on light.</dd>
+    <dt>Needs</dt><dd>frontend only</dd>
+    <dt>Effort</dt><dd>small</dd>
+  </dl>
+</section>
+
+<section class="prop" id="p4">
+  <h3>4. Disc and ring</h3>
+  <p class="lede">No fill colour at all. Each cell is a disc (reports now) drawn over a thin ring (normal for this hour), both radii on a log scale. Disc spilling outside its ring = livelier than usual; disc inside the ring = quieter; ring with no disc = usually open, dead right now. Filled disc = SSB, hollow disc = CW only. Discs take the band colour so rows tie to the rail.</p>
+  <div class="pair"><div class="mock light" data-opt="4"></div><div class="mock dark" data-opt="4"></div></div>
+  <dl class="facts">
+    <dt>Encodes</dt><dd>disc size = spots (log); ring size = normal (log); disc vs ring = anomaly; filled / hollow = SSB / CW; tick = rising</dd>
+    <dt>Gains</dt><dd>Both absolute volume and "versus normal" in one mark, with no palette to learn and nothing that flips between themes. Column scanning still works ("who is open to JA"). Degrades cleanly: no baseline, no ring, the disc still shows volume.</dd>
+    <dt>Loses</dt><dd>Smallest cells (1 to 9 spots) are 3 px dots; the eye needs the ring to judge them. Busier than flat chips.</dd>
+    <dt>Needs</dt><dd>backend: same <code>expected</code> field as proposal 2</dd>
+    <dt>Effort</dt><dd>medium frontend (SVG per cell, keep the ARIA grid) + small backend</dd>
+  </dl>
+</section>
+
+<section class="prop" id="p5">
+  <h3>5. Ranked ribbons</h3>
+  <p class="lede">Drop the region columns. Each band becomes one line that lists its open regions busiest-first, and the type itself is the mark: ten-thousands set bold and large, tens set light and small. A dotted underline is CW only, a thin arrow is rising, an orange mark is a surge. The row answers "where is 15m open, in what order" at reading speed and needs about half the width of the grid.</p>
+  <div class="pair"><div class="mock light" data-opt="5"></div><div class="mock dark" data-opt="5"></div></div>
+  <dl class="facts">
+    <dt>Encodes</dt><dd>order = rank; weight and size = spots (log, 5 steps); underline = CW; arrow = rising; mark = surge</dd>
+    <dt>Gains</dt><dd>Narrowest option, no colour semantics at all, empty regions cost nothing (OC, KH6 simply do not appear). Reads like a DX cluster line.</dd>
+    <dt>Loses</dt><dd>No column scan: "which bands reach JA" means reading every line. Rank hides magnitude gaps (NA at 75k and EU at 43k are neighbours).</dd>
+    <dt>Needs</dt><dd>frontend only; keyboard model changes from grid to list</dd>
+    <dt>Effort</dt><dd>small to medium</dd>
+  </dl>
+</section>
+
+<section class="prop" id="p6">
+  <h3>6. Beam roses</h3>
+  <p class="lede">Regions sit where they actually are: each band gets a small compass rose with one wedge per open region at its true short-path bearing from the QTH. Wedge length is reports on a log scale, filled for SSB, outlined for CW. Next to it, the top headings as numbers, which is the thing an operator with a rotator actually does. A single bearing key at the top teaches the geometry once.</p>
+  <div class="pair"><div class="mock light" data-opt="6"></div><div class="mock dark" data-opt="6"></div></div>
+  <dl class="facts">
+    <dt>Encodes</dt><dd>angle = bearing; wedge length = spots (log); filled / outlined = SSB / CW; text = top headings</dd>
+    <dt>Gains</dt><dd>Spatial, so it matches the map and the rotator. Nine roses replace ninety cells. Strongly ham-native; nothing else looks like this.</dd>
+    <dt>Loses</dt><dd>Region scan is by angle, not by column. Bearings are to a region centroid, so a wedge is a heading hint, not a beam heading. Needs the QTH to compute angles (the dock already has it). Long path is not shown.</dd>
+    <dt>Needs</dt><dd>frontend only (bearings from region centroids, which <code>prop_intel.go</code> already defines)</dd>
+    <dt>Effort</dt><dd>medium</dd>
+  </dl>
+</section>
+
+<h2>Side by side</h2>
+<table class="cmp">
+  <thead><tr><th>Proposal</th><th>Fixes finding 1 (scale)</th><th>Fixes finding 2 (count vs open)</th><th>Same in both themes</th><th>Column scan</th><th>Backend</th><th>Effort</th></tr></thead>
+  <tbody>
+    <tr><td>1. One ink, five decades</td><td>yes</td><td>no</td><td>yes</td><td>yes</td><td>none</td><td>S</td></tr>
+    <tr><td>2. Against normal</td><td>yes</td><td>yes</td><td>yes</td><td>yes</td><td>expected per cell</td><td>S+S</td></tr>
+    <tr><td>3. Band ink</td><td>yes</td><td>no</td><td>yes</td><td>yes</td><td>none</td><td>S</td></tr>
+    <tr><td>4. Disc and ring</td><td>yes</td><td>yes</td><td>yes</td><td>yes</td><td>expected per cell</td><td>M+S</td></tr>
+    <tr><td>5. Ranked ribbons</td><td>yes</td><td>partly (rank)</td><td>yes</td><td>no</td><td>none</td><td>S-M</td></tr>
+    <tr><td>6. Beam roses</td><td>yes</td><td>no</td><td>yes</td><td>by angle</td><td>none</td><td>M</td></tr>
+  </tbody>
+</table>
+
+<h2>Recommendation</h2>
+<p class="pick"><strong>Build 4, Disc and ring.</strong> It is the only option that shows volume and "versus normal" in one mark, works identically on both themes, keeps the grid (so column scans and the ARIA keyboard model survive), and reuses the band palette instead of adding one. The backend change is a single field. If flat chips are preferred, 2 (Against normal) is the same idea in colour and the cheapest real fix. 6 (Beam roses) is the one I would add later as a second view toggle, not as the default: it is the most memorable, but the grid answers "who reaches JA" faster.</p>
+<p class="caveat">Not recommended on their own: 1 and 3 are quick wins on the scale but leave EU/NA owning the matrix, which is finding 2. 5 is the right shape for a narrow dock on a phone, not for a 620 px desktop panel.</p>
+
+<script>
+// Live JO32 payload from /api/prop_intel/v2, 2026-10-04 (AN dropped). n = spots, s = SSB open, c = CW open, r = rising, z = surge z-score.
+const DATA = {"10m":{"AF":{"n":191,"s":1,"c":1,"z":5.4},"AS":{"n":6,"s":1,"c":1},"EU":{"n":1245,"s":1,"c":1,"r":1},"NA":{"n":6161,"s":1,"c":1,"z":3.6},"SA":{"n":1671,"s":1,"c":1,"z":3.5}},"12m":{"CAR":{"n":40,"s":1,"c":1,"r":1},"EU":{"n":593,"s":1,"c":1},"NA":{"n":3296,"s":1,"c":1},"SA":{"n":485,"s":1,"c":1}},"15m":{"AF":{"n":376,"s":1,"c":1,"r":1},"AS":{"n":34,"s":1,"c":1},"CAR":{"n":376,"s":1,"c":1,"r":1},"EU":{"n":4639,"s":1,"c":1,"r":1},"NA":{"n":16876,"s":1,"c":1,"z":2.3},"SA":{"n":1585,"s":1,"c":1}},"160m":{"AS":{"n":93,"s":1,"c":1},"EU":{"n":4956,"s":1,"c":1}},"17m":{"AF":{"n":501,"s":1,"c":1,"r":1},"AS":{"n":85,"s":1,"c":1},"CAR":{"n":176,"s":1,"c":1,"r":1},"EU":{"n":5190,"s":1,"c":1,"r":1},"NA":{"n":14193,"s":1,"c":1},"SA":{"n":199,"s":1,"c":1,"r":1}},"20m":{"AF":{"n":1862,"s":1,"c":1},"AS":{"n":1286,"s":1,"c":1},"CAR":{"n":898,"s":1,"c":1},"EU":{"n":42815,"s":1,"c":1},"NA":{"n":74732,"s":1,"c":1},"SA":{"n":1148,"s":1,"c":1,"r":1},"VK":{"n":333,"s":1,"c":1}},"2m":{"EU":{"n":255,"s":1,"c":1}},"30m":{"AF":{"n":349,"s":1,"c":1},"AS":{"n":689,"s":1,"c":1},"EU":{"n":18467,"s":1,"c":1},"JA":{"n":142,"s":1,"c":1},"NA":{"n":6675,"s":1,"c":1},"VK":{"n":415,"s":1,"c":1}},"40m":{"AF":{"n":442,"s":1,"c":1},"AS":{"n":1628,"s":1,"c":1,"r":1},"EU":{"n":45814,"s":1,"c":1,"r":1},"JA":{"n":800,"s":1,"c":1,"r":1},"NA":{"n":7465,"s":1,"c":1},"VK":{"n":456,"s":1,"c":1,"r":1}},"60m":{"AF":{"n":39,"s":1,"c":1,"r":1},"AS":{"n":33,"s":1,"c":1,"z":2.8},"EU":{"n":3536,"s":1,"c":1},"VK":{"n":9,"s":1,"c":1}},"6m":{"EU":{"n":67,"s":1,"c":1,"r":1}},"80m":{"AF":{"n":116,"s":1,"c":1},"AS":{"n":800,"s":1,"c":1,"z":2.1},"EU":{"n":17535,"s":1,"c":1},"JA":{"n":773,"s":1,"c":1},"NA":{"n":318,"s":1,"c":1,"z":2.3},"SA":{"n":1,"c":1,"r":1},"VK":{"n":160,"s":1,"c":1}}};
+// Row header lines as production showed them at capture time (dx_conditions).
+const ROWS = { '80m': ['not scored', ''], '40m': ['quiet', '18k · ×0.6'], '20m': ['quiet', '21k · ×0.7'], '17m': ['quiet', '2.0k · ×0.3'],
+  '15m': ['quiet', '3.0k · ×0.4'], '12m': ['no reports', ''], '10m': ['quiet', '314 · ×0.5'], '6m': ['no reports', ''] };
+const BANDS = ['80m', '40m', '20m', '17m', '15m', '12m', '10m', '6m'];
+const REGIONS = ['EU', 'NA', 'SA', 'AF', 'AS', 'JA', 'OC', 'VK', 'KH6', 'CAR'];
+const BC = { '160m': '#8B0000', '80m': '#800080', '60m': '#4B0082', '40m': '#0000FF', '30m': '#03b1b1', '20m': '#008000', '17m': '#808000',
+  '15m': '#FFA500', '12m': '#00FFFF', '10m': '#FF0000', '6m': '#FF00FF', '4m': '#FF1493', '2m': '#008080' };
+// Approximate short-path bearings from JO32 to each region's centroid.
+const BEARING = { EU: 115, NA: 300, SA: 230, AF: 165, AS: 60, JA: 35, OC: 50, VK: 80, KH6: 350, CAR: 275 };
+
+// Illustrative "normal for this hour" per cell. Deterministic so the page is stable; the
+// real value would come from the v2 climatology mean. A few silent cells get a normal so
+// the "usually open, dead now" state is visible (20m JA, 15m JA, 17m VK).
+function hash(s) { let h = 2166136261; for (const ch of s) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967296; }
+const SILENT_NORMAL = { '20m:JA': 640, '15m:JA': 210, '17m:VK': 120, '10m:JA': 60 };
+function expectedOf(band, region) {
+  const key = `${band}:${region}`;
+  const c = DATA[band]?.[region];
+  if (!c) return SILENT_NORMAL[key] || 0;
+  if (c.z) return c.n / (1.6 + c.z * 0.5);           // a surge: well above normal
+  const rowFactor = parseFloat((ROWS[band]?.[1] || '').split('×')[1]) || 1;
+  const jitter = 0.55 + hash(key) * 1.3;               // 0.55 .. 1.85
+  return c.n / Math.max(0.2, rowFactor * jitter);
+}
+const step = (n) => n <= 0 ? 0 : n < 10 ? 1 : n < 100 ? 2 : n < 1000 ? 3 : n < 10000 ? 4 : 5;
+const log5 = (n) => Math.log10(n + 1) / 5;             // 0..1 over five decades
+const fmt = (n) => n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+
+function rowHeader(band) {
+  const [v, p] = ROWS[band] || ['', ''];
+  return `<th class="band" style="--bc:${BC[band]}">${band}${v ? `<span class="v">${esc(v)}</span>` : ''}${p ? `<span class="p">${esc(p)}</span>` : ''}</th>`;
+}
+function tableShell(headCells, rows, legend, note) {
+  return (note ? `<div class="mt">${note}</div>` : '') +
+    `<table><thead><tr><th style="width:82px"></th>${headCells}</tr></thead><tbody>${rows}</tbody></table>` +
+    `<div class="legend">${legend}</div>`;
+}
+const regionHead = REGIONS.map((r) => `<th>${r}</th>`).join('');
+function tip(band, region, c) {
+  if (!c) return '';
+  const parts = [`${band} to ${region}: ${c.n.toLocaleString('en-US')} spots`];
+  if (c.s) parts.push('SSB open'); else if (c.c) parts.push('CW open');
+  if (c.r) parts.push('rising');
+  if (c.z) parts.push(`surge z=${c.z}`);
+  return esc(parts.join(', '));
+}
+
+// --- 1. One ink, five decades ---------------------------------------------------
+const STEP_MIX = [0, 14, 30, 50, 72, 100];
+// Dark page: the low mixes sink into the panel, so spread them wider.
+const STEP_MIX_DARK = [0, 22, 42, 62, 82, 100];
+function chipCell(band, region, c, fillFor, dark) {
+  if (!c || c.n === 0) return '<td></td>';
+  const st = step(c.n);
+  const fill = fillFor(st, c);
+  const strongInk = st >= 4 ? (dark ? '#111' : '#fff') : 'var(--mfg)';
+  const cls = ['chip', (!c.s && c.c) ? 'cw' : '', c.z ? 'surge' : ''].filter(Boolean).join(' ');
+  return `<td><span class="${cls}" title="${tip(band, region, c)}" style="background:${fill}; --cwc:${fill}; --ink:${strongInk}">${c.r ? '<span class="up"></span>' : ''}</span></td>`;
+}
+function opt1(dark) {
+  const mix = dark ? STEP_MIX_DARK : STEP_MIX;
+  const fillFor = (st) => `color-mix(in srgb, var(--macc) ${mix[st]}%, var(--mbg))`;
+  const rows = BANDS.map((b) => `<tr>${rowHeader(b)}${REGIONS.map((r) => chipCell(b, r, DATA[b]?.[r], fillFor, dark)).join('')}</tr>`).join('');
+  const sw = [1, 2, 3, 4, 5].map((st) => `<span class="sw" style="background:${fillFor(st)}"></span>`).join('');
+  const legend = `<span>${sw} spots: 1–9 · 10s · 100s · 1,000s · 10,000s</span><span><span class="sw" style="box-shadow: inset 0 0 0 2px var(--macc)"></span>outline = CW only</span><span>▲ rising</span><span><span class="sw" style="background:${fillFor(3)}; box-shadow: inset 0 0 0 2px var(--mfg)"></span>ring = surge</span>`;
+  return tableShell(regionHead, rows, legend);
+}
+
+// --- 2. Against normal --------------------------------------------------------------
+const COOL = '#2f6fd8', WARM = '#e07a2a', HOT = '#cf3f12';
+function ratioBucket(n, e) { if (!e) return null; const r = n / e; return r < 0.5 ? -2 : r < 0.67 ? -1 : r <= 1.5 ? 0 : r < 3 ? 1 : 2; }
+function divFill(bk) {
+  switch (bk) {
+    case -2: return `color-mix(in srgb, ${COOL} 100%, var(--mbg))`;
+    case -1: return `color-mix(in srgb, ${COOL} 48%, var(--mbg))`;
+    case 0: return `color-mix(in srgb, var(--mfg) 12%, var(--mbg))`;
+    case 1: return `color-mix(in srgb, ${WARM} 70%, var(--mbg))`;
+    case 2: return `color-mix(in srgb, ${HOT} 100%, var(--mbg))`;
+    default: return `color-mix(in srgb, var(--mfg) 22%, var(--mbg))`;
+  }
+}
+function opt2(dark) {
+  const rows = BANDS.map((b) => `<tr>${rowHeader(b)}${REGIONS.map((r) => {
+    const c = DATA[b]?.[r];
+    const e = expectedOf(b, r);
+    if (!c || c.n === 0) {
+      return e > 0 ? `<td><span class="chip ring-only" title="${b} to ${r}: usually about ${Math.round(e)} spots at this hour, none now"></span></td>` : '<td></td>';
+    }
+    const bk = ratioBucket(c.n, e);
+    const fill = divFill(bk);
+    const ink = (bk === -2 || bk === 2) ? '#fff' : 'var(--mfg)';
+    const cls = ['chip', (!c.s && c.c) ? 'cw' : ''].filter(Boolean).join(' ');
+    const t = bk == null ? `${tip(b, r, c)} (no baseline)` : `${tip(b, r, c)}, normal ${Math.round(e)} (×${(c.n / e).toFixed(1)})`;
+    return `<td><span class="${cls}" title="${t}" style="background:${fill}; --cwc:${fill}; --ink:${ink}"></span></td>`;
+  }).join('')}</tr>`).join('');
+  const sw = [-2, -1, 0, 1, 2].map((bk) => `<span class="sw" style="background:${divFill(bk)}"></span>`).join('');
+  const legend = `<span>${sw} vs normal: under ½ · under ⅔ · normal · over 1½ · over 3 (surge)</span><span><span class="sw" style="border:1px dashed var(--mmuted)"></span>usually open, silent now</span><span><span class="sw" style="box-shadow: inset 0 0 0 2px var(--mmuted)"></span>outline = CW only</span>`;
+  return tableShell(regionHead, rows, legend, 'normal = this cell\'s climatology mean for the hour (illustrative values here)');
+}
+
+// --- 3. Band ink --------------------------------------------------------------------
+const BAND_MIX = [0, 12, 26, 45, 70, 100];
+const BAND_MIX_DARK = [0, 20, 38, 58, 80, 100];
+function opt3(dark) {
+  const bmix = dark ? BAND_MIX_DARK : BAND_MIX;
+  const rows = BANDS.map((b) => {
+    const fillFor = (st) => `color-mix(in srgb, ${BC[b]} ${bmix[st]}%, var(--mbg))`;
+    return `<tr>${rowHeader(b)}${REGIONS.map((r) => chipCell(b, r, DATA[b]?.[r], fillFor, dark)).join('')}</tr>`;
+  }).join('');
+  const sw = [1, 2, 3, 4, 5].map((st) => `<span class="sw" style="background:color-mix(in srgb, ${BC['20m']} ${BAND_MIX[st]}%, var(--mbg))"></span>`).join('');
+  const legend = `<span>${sw} spots on the band's own colour: 1–9 · 10s · 100s · 1,000s · 10,000s</span><span>outline = CW only · ▲ rising · ring = surge</span>`;
+  return tableShell(regionHead, rows, legend);
+}
+
+// --- 4. Disc and ring ---------------------------------------------------------------
+function discCell(b, r, c, dark) {
+  const e = expectedOf(b, r);
+  if ((!c || c.n === 0) && !e) return '<td></td>';
+  const S = 40, cx = 20, cy = 20;
+  const rad = (n) => n > 0 ? 2.5 + 14.5 * log5(n) : 0;
+  let svg = `<svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}" role="img" aria-label="${c ? tip(b, r, c) : `${b} to ${r}: usually open, silent now`}" style="display:block;margin:auto;overflow:visible">`;
+  if (e > 0) svg += `<circle cx="${cx}" cy="${cy}" r="${rad(e).toFixed(1)}" fill="none" stroke="var(--mfg)" stroke-opacity="${dark ? 0.6 : 0.5}" stroke-width="1"/>`;
+  if (c && c.n > 0) {
+    const rr = rad(c.n).toFixed(1);
+    if (c.s) svg += `<circle cx="${cx}" cy="${cy}" r="${rr}" fill="${BC[b]}" fill-opacity="${dark ? 0.85 : 0.75}"/>`;
+    else svg += `<circle cx="${cx}" cy="${cy}" r="${rr}" fill="none" stroke="${BC[b]}" stroke-width="2"/>`;
+    if (c.r) svg += `<path d="M${cx - 3} ${cy - rad(c.n) - 2} l3 -4 l3 4z" fill="var(--mfg)" fill-opacity=".8"/>`;
+  }
+  svg += '</svg>';
+  return `<td title="${c ? tip(b, r, c) : ''}">${svg}</td>`;
+}
+function opt4(dark) {
+  const rows = BANDS.map((b) => `<tr>${rowHeader(b)}${REGIONS.map((r) => discCell(b, r, DATA[b]?.[r], dark)).join('')}</tr>`).join('');
+  const key = `<svg width="92" height="22" viewBox="0 0 92 22" style="vertical-align:middle">
+    <circle cx="11" cy="11" r="9" fill="none" stroke="var(--mfg)" stroke-opacity=".5"/><circle cx="11" cy="11" r="5" fill="${BC['20m']}" fill-opacity=".75"/>
+    <circle cx="36" cy="11" r="5" fill="none" stroke="var(--mfg)" stroke-opacity=".5"/><circle cx="36" cy="11" r="9" fill="${BC['20m']}" fill-opacity=".75"/>
+    <circle cx="61" cy="11" r="8" fill="none" stroke="${BC['20m']}" stroke-width="2"/>
+    <circle cx="84" cy="11" r="7" fill="none" stroke="var(--mfg)" stroke-opacity=".5"/></svg>`;
+  const legend = `<span>${key} disc = spots now, ring = normal for this hour (both log scale): quieter · livelier · hollow = CW only · ring alone = usually open, silent now</span><span>▲ rising</span>`;
+  return tableShell(regionHead, rows, legend, 'normal = this cell\'s climatology mean for the hour (illustrative values here)');
+}
+
+// --- 5. Ranked ribbons --------------------------------------------------------------
+function opt5() {
+  const rows = BANDS.map((b) => {
+    const cells = Object.entries(DATA[b] || {}).filter(([r, c]) => REGIONS.includes(r) && c.n > 0).sort((x, y) => y[1].n - x[1].n);
+    const inner = cells.length === 0 ? '<span class="rb none">no open paths</span>' : cells.map(([r, c]) => {
+      const cls = ['rb', `s${step(c.n)}`, (!c.s && c.c) ? 'cw' : ''].filter(Boolean).join(' ');
+      return `<span class="${cls}" title="${tip(b, r, c)}">${r}${c.z ? '<span class="z">•</span>' : ''}${c.r ? '<span class="arr">↑</span>' : ''}</span>`;
+    }).join('');
+    return `<tr>${rowHeader(b)}<td class="rib">${inner}</td></tr>`;
+  }).join('');
+  const legend = `<span><span class="rb s5">NA</span><span class="rb s4">EU</span><span class="rb s3">AF</span><span class="rb s2">AS</span><span class="rb s1">VK</span> busiest first; size = 10,000s · 1,000s · 100s · 10s · 1–9</span><span><span class="rb s3 cw">SA</span> CW only</span><span>↑ rising</span><span><span class="z" style="font-weight:700;color:#d9541e">•</span> surge</span>`;
+  return tableShell('<th style="text-align:left;padding-left:6px">Open regions, busiest first</th>', rows, legend);
+}
+
+// --- 6. Beam roses ------------------------------------------------------------------
+function wedge(cx, cy, r0, r1, deg, half) {
+  const a0 = (deg - half - 90) * Math.PI / 180, a1 = (deg + half - 90) * Math.PI / 180;
+  const p = (r, a) => `${(cx + r * Math.cos(a)).toFixed(1)} ${(cy + r * Math.sin(a)).toFixed(1)}`;
+  return `M${p(r0, a0)} L${p(r1, a0)} A${r1} ${r1} 0 0 1 ${p(r1, a1)} L${p(r0, a1)} A${r0} ${r0} 0 0 0 ${p(r0, a0)}Z`;
+}
+function rose(b, dark) {
+  const S = 60, c = 30, R = 27;
+  let svg = `<svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}" role="img" aria-label="${b} headings" style="display:block">`;
+  svg += `<circle cx="${c}" cy="${c}" r="${R}" fill="none" stroke="var(--mfg)" stroke-opacity=".25"/>`;
+  svg += `<circle cx="${c}" cy="${c}" r="${R / 2}" fill="none" stroke="var(--mfg)" stroke-opacity=".12"/>`;
+  svg += `<path d="M${c} ${c - R - 2} v4" stroke="var(--mfg)" stroke-opacity=".6"/>`;
+  const cells = Object.entries(DATA[b] || {}).filter(([r, cc]) => REGIONS.includes(r) && cc.n > 0);
+  for (const [r, cc] of cells) {
+    const len = 4 + (R - 4) * log5(cc.n);
+    const d = wedge(c, c, 3, len, BEARING[r], 9);
+    svg += cc.s
+      ? `<path d="${d}" fill="${BC[b]}" fill-opacity="${dark ? 0.85 : 0.75}"><title>${tip(b, r, cc)}</title></path>`
+      : `<path d="${d}" fill="none" stroke="${BC[b]}" stroke-width="1.5"><title>${tip(b, r, cc)}</title></path>`;
+  }
+  return svg + '</svg>';
+}
+function compassKey() {
+  const S = 120, c = 60, R = 50;
+  let svg = `<svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}" role="img" aria-label="Bearing key" style="display:block">`;
+  svg += `<circle cx="${c}" cy="${c}" r="${R}" fill="none" stroke="var(--mfg)" stroke-opacity=".3"/>`;
+  svg += `<text x="${c}" y="${c - R + 12}" text-anchor="middle" font-size="9" fill="var(--mfg)" fill-opacity=".6">N</text>`;
+  for (const [r, deg] of Object.entries(BEARING)) {
+    const a = (deg - 90) * Math.PI / 180;
+    const x = c + (R - 10) * Math.cos(a), y = c + (R - 10) * Math.sin(a) + 3;
+    svg += `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle" font-size="8.5" font-weight="600" fill="var(--mfg)">${r}</text>`;
+  }
+  return svg + '</svg>';
+}
+function opt6(dark) {
+  const rows = BANDS.map((b) => {
+    const cells = Object.entries(DATA[b] || {}).filter(([r, cc]) => REGIONS.includes(r) && cc.n > 0).sort((x, y) => y[1].n - x[1].n).slice(0, 3);
+    const txt = cells.length === 0 ? '<span style="opacity:.5">no open paths</span>'
+      : cells.map(([r, cc]) => `<b>${r}</b> ${BEARING[r]}° ${fmt(cc.n)}`).join('<br>');
+    return `<tr>${rowHeader(b)}<td class="rose-td"><div class="rose-wrap">${rose(b, dark)}<div class="rose-txt">${txt}</div></div></td></tr>`;
+  }).join('');
+  const note = `<div class="compass">${compassKey()}<div>Short-path bearings from JO32 to each region's centre.<br>Wedge length = spots (log scale); filled = SSB open, outlined = CW only.<br>Text: top three headings with spot counts.</div></div>`;
+  return tableShell('<th style="text-align:left;padding-left:6px">Headings</th>', rows, '<span>Click a wedge to drill the map down to that band × region.</span>', note);
+}
+
+const RENDER = { 1: opt1, 2: opt2, 3: opt3, 4: opt4, 5: opt5, 6: opt6 };
+for (const el of document.querySelectorAll('.mock[data-opt]')) {
+  const dark = el.classList.contains('dark');
+  el.innerHTML = RENDER[el.dataset.opt](dark);
+}
+</script>
+</main>
+</body>
+</html>
