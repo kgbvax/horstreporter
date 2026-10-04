@@ -262,24 +262,22 @@ describe('Mini plot guides', () => {
         expect(getBandNormalRate('20m')).toBe(null);
     });
 
-    it('draws the same reports whatever the filter and grays those below the floor', async () => {
-        // No floor: every report in the band color.
+    it('draws only the reports that pass the signal filter, all in the band color', async () => {
+        // No floor: every report that fits the axis, in the band color.
         start({ ssb: 0, cw: -15 });
         const fills = () => document.getElementById('mini').__ctx.dotFills;
         expect(fills()).toHaveLength(2);
         expect(new Set(fills()).size).toBe(1);
         const bandColored = fills()[0];
 
-        // SSB floor at 0 dB: the -8 dB and -16 dB reports fall below it. Same
-        // dots, same places, but the ones below the floor are gray.
+        // SSB floor at 0 dB: the -8 dB and -16 dB reports are gone, not gray.
+        // (The stream never delivers FT8/RBN below the floor, so the plot must
+        // not pretend to show them.)
         document.querySelector('input[name="min-snr"]').insertAdjacentHTML('afterend', '<input type="radio" name="min-snr" value="ssb" checked>');
         document.querySelector('input[value="none"]').checked = false;
         const slider = document.getElementById('ssb-min-db');
         slider.dispatchEvent(new Event('input', { bubbles: true }));
         await vi.advanceTimersByTimeAsync(300);
-        expect(fills()).toHaveLength(2);
-        // Paris (+4 dB) stays in the band color, Moscow (-16 dB) is gray.
-        expect(fills().filter((f) => f === bandColored)).toHaveLength(1);
-        expect(fills().filter((f) => f !== bandColored)).toHaveLength(1);
+        expect(fills()).toEqual([bandColored]); // Paris (+4 dB) only
     });
 });
