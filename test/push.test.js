@@ -367,6 +367,35 @@ describe('push.js UI: enable flow posts subscription to backend', () => {
     });
 });
 
+describe('push.js UI: a new subscription starts on "All surges"', () => {
+    const lastPost = () => global.__pushSubCalls[global.__pushSubCalls.length - 1];
+
+    it('ticks All surges, greys the matrix and subscribes to everything when nothing was selected', async () => {
+        Object.defineProperty(window, 'PushManager', { value: function () {}, configurable: true });
+        const mod = await import('../static/push.js');
+        const ctrl = await mod.initPushUI();
+        const all = document.getElementById('push-pref-all');
+        expect(all.checked).toBe(false);
+        document.getElementById('push-enable').checked = true;
+        await ctrl.enable();
+        expect(all.checked).toBe(true);
+        expect(document.getElementById('push-pref-10m-CAR').disabled).toBe(true);
+        expect(lastPost().preferences).toEqual({ all: true });
+        expect(ctrl._readPreferences()).toEqual({ all: true });
+    });
+
+    it('keeps a selection the operator already made', async () => {
+        Object.defineProperty(window, 'PushManager', { value: function () {}, configurable: true });
+        const mod = await import('../static/push.js');
+        const ctrl = await mod.initPushUI();
+        document.getElementById('push-pref-10m-CAR').checked = true;
+        document.getElementById('push-enable').checked = true;
+        await ctrl.enable();
+        expect(document.getElementById('push-pref-all').checked).toBe(false);
+        expect(lastPost().preferences).toEqual({ '10m:CAR': true });
+    });
+});
+
 describe('push.js UI: preference matrix reads "all" correctly', () => {
     it('returns { all: true } when the all-surge checkbox is checked', async () => {
         Object.defineProperty(window, 'PushManager', { value: function () {}, configurable: true });

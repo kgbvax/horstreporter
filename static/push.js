@@ -288,6 +288,17 @@ export async function initPushUI() {
 
     let currentSubscription = null;
 
+    // With "All surges" on, the per-cell matrix is greyed out.
+    function syncMatrixDisabled() {
+        const all = Boolean(allCheckbox && allCheckbox.checked);
+        for (const band of PUSH_BANDS) {
+            for (const region of PUSH_REGIONS) {
+                const el = document.getElementById(`push-pref-${band}-${region}`);
+                if (el) el.disabled = all;
+            }
+        }
+    }
+
     async function enable() {
         setStatus('Enabling…', 'busy');
         try {
@@ -302,6 +313,13 @@ export async function initPushUI() {
             const reg = await registerServiceWorker();
             const sub = await getOrCreateSubscription(reg, appServerKey);
             currentSubscription = sub;
+            // Start on "All surges": an empty selection is a subscription that
+            // never fires, which reads as a broken feature. A selection the
+            // operator already made is kept.
+            if (allCheckbox && Object.keys(readPreferences()).length === 0) {
+                allCheckbox.checked = true;
+                syncMatrixDisabled();
+            }
             const prefs = readPreferences();
             await postSubscription(sub, prefs);
             if (matrixRoot) matrixRoot.hidden = false;
@@ -348,14 +366,7 @@ export async function initPushUI() {
 
     if (allCheckbox) {
         allCheckbox.addEventListener('change', () => {
-            // Disable the matrix checkboxes when "all" is on.
-            const checked = allCheckbox.checked;
-            for (const band of PUSH_BANDS) {
-                for (const region of PUSH_REGIONS) {
-                    const el = document.getElementById(`push-pref-${band}-${region}`);
-                    if (el) el.disabled = checked;
-                }
-            }
+            syncMatrixDisabled();
             resubscribeIfActive();
         });
     }
