@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // The zero-copy window views (Hub.windowFromLocked) are only safe while hub
@@ -92,5 +93,14 @@ func TestHubWindowFromLockedClampsCapacity(t *testing.T) {
 	h.history = h.history[:11]
 	if h.history[10].SC != "" {
 		t.Fatalf("append to the view leaked into the hub backing array")
+	}
+}
+
+// hub.history holds about a million MQTTMessage values; every byte added here
+// is a megabyte of resident memory. Keep rarely-used fields behind X.
+func TestMQTTMessageStaysCompact(t *testing.T) {
+	const maxBytes = 152
+	if got := unsafe.Sizeof(MQTTMessage{}); got > maxBytes {
+		t.Fatalf("MQTTMessage is %d bytes, budget %d: move new rarely-used fields behind DXExtra", got, maxBytes)
 	}
 }

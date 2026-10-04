@@ -50,6 +50,23 @@ func snapshotHubHistoryWindow(now int64, minutes int) ([]MQTTMessage, func()) {
 	return hist, func() {}
 }
 
+// snapshotHubHistoryWindowSeq is snapshotHubHistoryWindow plus the sequence
+// numbers the per-area index keys on.
+func snapshotHubHistoryWindowSeq(now int64, minutes int) historyWindow {
+	cutoff := now - int64(minutes)*60
+	hub.RLock()
+	idx := sort.Search(len(hub.history), func(i int) bool {
+		return hub.history[i].T >= cutoff
+	})
+	win := historyWindow{
+		msgs:     hub.windowFromLocked(idx),
+		firstSeq: hub.baseSeq + uint64(idx) + 1,
+		hubFirst: hub.baseSeq + 1,
+	}
+	hub.RUnlock()
+	return win
+}
+
 // SlotsOfDay is the number of 30-minute slots in one UTC day: 48.
 // Buckets are aggregated across the week into this 24h × 30min grid;
 // day-of-week is intentionally collapsed because propagation patterns
@@ -876,6 +893,14 @@ func (e *DxBaselineEngine) Evaluate(qth string, surroundings bool, minutes int, 
 // tests) and bins the activity series from the live history instead of a
 // Postgres query with an arm per square.
 func (e *DxBaselineEngine) EvaluateArea(qth string, surroundings bool, minutes int, cwMinDb int, history []MQTTMessage, now int64, area *liveArea) dxConditionsResponse {
+	return e.EvaluateAreaWindow(qth, surroundings, minutes, cwMinDb, historyWindow{msgs: history}, now, area)
+}
+
+// EvaluateAreaWindow is EvaluateArea over a history window that carries
+// sequence numbers, which lets it scan only the messages that can matter to
+// this area (area_index.go) instead of the whole window.
+func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, minutes int, cwMinDb int, win historyWindow, now int64, area *liveArea) dxConditionsResponse {
+	history := win.msgs
 	qth = normalizeQTHToken(qth)
 	if minutes <= 0 {
 		minutes = defaultDxWindowMinutes
@@ -922,6 +947,15 @@ func (e *DxBaselineEngine) EvaluateArea(qth string, surroundings bool, minutes i
 		surroundings = area.Radius == 1
 	}
 	qthSet := qthSquares(qth, surroundings)
+
+	// pos, when non-nil, lists the only positions of history worth visiting.
+	var pos []uint32
+	usePos := false
+	if areaIndexEnabled && win.firstSeq != 0 {
+		if key, ok := areaIndexKeyFor(qth, surroundings, matchArea, operatorCluster); ok {
+			pos, usePos = areaIdx.positions(key, win)
+		}
+	}
 
 	e.mu.RLock()
 	st := e.store
@@ -993,7 +1027,7 @@ func (e *DxBaselineEngine) EvaluateArea(qth string, surroundings bool, minutes i
 	// in-memory event ring and falls back to in-memory binning (see the loop).
 	var activityByBinMap map[string][]float64
 	if matchArea != nil {
-		activityByBinMap = buildActivityByBinFromHistory(history, matchArea, cwMinDb, minutes, now)
+		activityByBinMap = buildActivityByBinFromHistoryAt(history, pos, usePos, matchArea, cwMinDb, minutes, now)
 	} else if st != nil {
 		if m, err := st.activityByBinForTargets(qthSet, cwMinDb, minutes, now); err == nil {
 			activityByBinMap = m
@@ -1049,7 +1083,16 @@ func (e *DxBaselineEngine) EvaluateArea(qth string, surroundings bool, minutes i
 	localCount := make(map[string]int)
 	clusterX, clusterY, clusterOK := locatorSquareXY(operatorCluster)
 
-	for _, m := range history {
+	visits := len(history)
+	if usePos {
+		visits = len(pos)
+	}
+	for vi := 0; vi < visits; vi++ {
+		hi := vi
+		if usePos {
+			hi = int(pos[vi])
+		}
+		m := history[hi]
 		if m.T < liveStart || m.T > now {
 			continue
 		}
@@ -1856,6 +1899,12 @@ const activityBins = 12
 // buildBandActivityByBin use (any source, ≥ cwMinDb) for the part of the
 // window the history covers; bins before that read zero.
 func buildActivityByBinFromHistory(history []MQTTMessage, area *liveArea, cwMinDb, minutes int, now int64) map[string][]float64 {
+	return buildActivityByBinFromHistoryAt(history, nil, false, area, cwMinDb, minutes, now)
+}
+
+// buildActivityByBinFromHistoryAt is buildActivityByBinFromHistory visiting
+// only the positions in pos when usePos is set (the area index's matches).
+func buildActivityByBinFromHistoryAt(history []MQTTMessage, pos []uint32, usePos bool, area *liveArea, cwMinDb, minutes int, now int64) map[string][]float64 {
 	out := make(map[string][]float64)
 	if area == nil || minutes <= 0 {
 		return out
@@ -1866,8 +1915,16 @@ func buildActivityByBinFromHistory(history []MQTTMessage, area *liveArea, cwMinD
 		return out
 	}
 	windowStart := now - windowSec
-	for i := range history {
-		m := &history[i]
+	visits := len(history)
+	if usePos {
+		visits = len(pos)
+	}
+	for vi := 0; vi < visits; vi++ {
+		hi := vi
+		if usePos {
+			hi = int(pos[vi])
+		}
+		m := &history[hi]
 		if m.T < windowStart || m.T > now || m.RP < cwMinDb {
 			continue
 		}

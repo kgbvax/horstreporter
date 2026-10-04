@@ -13,10 +13,10 @@ func TestDxSpotsHandler(t *testing.T) {
 	// Seed hub.history with a mix of dxcluster + mqtt messages.
 	hub.Lock()
 	hub.history = []MQTTMessage{
-		{T: now - 300, MD: "DXCLUSTER", SC: "DL1ABC", RC: "VK9XX", RL: "OH29", SL: "JO31", B: "20m", F: 14074.0, CM: "up 5"},
+		{T: now - 300, MD: "DXCLUSTER", SC: "DL1ABC", RC: "VK9XX", RL: "OH29", SL: "JO31", B: "20m", F: 14074.0, X: &DXExtra{CM: "up 5"}},
 		{T: now - 120, MD: "FT8", SC: "G3ABC", RC: "W1AW", B: "20m"},                                                  // not a cluster spot → excluded
-		{T: now - 60, MD: "DXCLUSTER", SC: "EA4XYZ", RC: "VK9XX", RL: "OH29", B: "20m", F: 14075.0, CM: "still here"}, // newer VK9XX/20m → wins dedup
-		{T: now - 30, MD: "DXCLUSTER", SC: "F5ABC", RC: "3Y0J", RL: "IB59", B: "17m", F: 18145.0, CM: "QRT soon"},
+		{T: now - 60, MD: "DXCLUSTER", SC: "EA4XYZ", RC: "VK9XX", RL: "OH29", B: "20m", F: 14075.0, X: &DXExtra{CM: "still here"}}, // newer VK9XX/20m → wins dedup
+		{T: now - 30, MD: "DXCLUSTER", SC: "F5ABC", RC: "3Y0J", RL: "IB59", B: "17m", F: 18145.0, X: &DXExtra{CM: "QRT soon"}},
 	}
 	hub.Unlock()
 	defer func() { hub.Lock(); hub.history = nil; hub.Unlock() }()

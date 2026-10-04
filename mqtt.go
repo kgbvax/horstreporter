@@ -21,11 +21,14 @@ type MQTTMessage struct {
 
 	// Set programmatically for DX-cluster spots only (never from the MQTT
 	// payload — hence json:"-"); carried in hub.history for /api/dxspots.
-	F          float64 `json:"-"` // spot frequency in kHz
-	CM         string  `json:"-"` // spot comment
-	OpName     string  `json:"-"` // DX operator name (QRZ)
-	Country    string  `json:"-"` // DX country / DXCC entity (cty.dat, else QRZ)
-	CountryISO string  `json:"-"` // ISO-3166 alpha-2 for the flag (cty.dat)
+	F float64 `json:"-"` // spot frequency in kHz (DX cluster, RBN, WSPR)
+
+	// X holds the DX-cluster / RBN annotations (comment, operator name,
+	// country). They are four strings (64 bytes) that FT8 spots never use, and
+	// hub.history holds ~1M messages, so they sit behind a pointer that is nil
+	// for everything else. Read it through extra(); like the rest of a history
+	// message it is immutable once the message has been appended.
+	X *DXExtra `json:"-"`
 
 	// Source identifies which ingest produced this spot: "mqtt" (PSKReporter),
 	// "dxcluster", or "rbn". Set by each ingest and by the startup backfill (from
@@ -40,6 +43,31 @@ type MQTTMessage struct {
 	// to compute SSB/CW viability from a SNR+Power budget model. json:"-" —
 	// never in the raw MQTT payload; carried in hub.history for the nowcast.
 	TXPower int `json:"-"`
+}
+
+// DXExtra is the optional DX-cluster / RBN part of an MQTTMessage.
+type DXExtra struct {
+	CM         string // spot comment
+	OpName     string // DX operator name (QRZ)
+	Country    string // DX country / DXCC entity (cty.dat, else QRZ)
+	CountryISO string // ISO-3166 alpha-2 for the flag (cty.dat)
+}
+
+// newDXExtra returns nil when every field is empty, so messages without
+// annotations (and RBN spots without QRZ data) allocate nothing.
+func newDXExtra(cm, opName, country, countryISO string) *DXExtra {
+	if cm == "" && opName == "" && country == "" && countryISO == "" {
+		return nil
+	}
+	return &DXExtra{CM: cm, OpName: opName, Country: country, CountryISO: countryISO}
+}
+
+// extra returns the annotations, zero when there are none.
+func (m *MQTTMessage) extra() DXExtra {
+	if m.X == nil {
+		return DXExtra{}
+	}
+	return *m.X
 }
 
 func startMQTT() {

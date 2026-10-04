@@ -155,7 +155,13 @@ func (e *DxBaselineEngine) HotBandsArea(qth string, surroundings bool, minutes i
 
 // HotBandsAreaWith is HotBandsArea with the opt-in bands/max/include knobs.
 func (e *DxBaselineEngine) HotBandsAreaWith(qth string, surroundings bool, minutes int, cwMinDb int, currentBand string, history []MQTTMessage, now int64, area *liveArea, opts hotBandsOptions) hotBandsResponse {
-	cond := e.EvaluateArea(qth, surroundings, minutes, cwMinDb, history, now, area)
+	return e.HotBandsAreaWindow(qth, surroundings, minutes, cwMinDb, currentBand, historyWindow{msgs: history}, now, area, opts)
+}
+
+// HotBandsAreaWindow is HotBandsAreaWith over a sequence-numbered window (see
+// EvaluateAreaWindow).
+func (e *DxBaselineEngine) HotBandsAreaWindow(qth string, surroundings bool, minutes int, cwMinDb int, currentBand string, win historyWindow, now int64, area *liveArea, opts hotBandsOptions) hotBandsResponse {
+	cond := e.EvaluateAreaWindow(qth, surroundings, minutes, cwMinDb, win, now, area)
 	return hotBandsFromConditions(cond, currentBand, opts)
 }
 

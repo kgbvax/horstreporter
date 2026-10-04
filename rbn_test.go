@@ -384,8 +384,8 @@ func TestHandleRBNSpotPopulatesLiveFields(t *testing.T) {
 	if m.F != 14024.0 {
 		t.Errorf("F = %v, want 14024", m.F)
 	}
-	if m.OpName != "Bob" {
-		t.Errorf("OpName = %q, want Bob", m.OpName)
+	if x := m.extra(); x.OpName != "Bob" {
+		t.Errorf("OpName = %q, want Bob", x.OpName)
 	}
 }
 

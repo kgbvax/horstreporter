@@ -809,8 +809,7 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 
 	area := liveAreaForRequest(r, qth, surroundings, now)
-	historyCopy, releaseHistory := snapshotHubHistoryWindow(now, minutes)
-	defer releaseHistory()
+	win := snapshotHubHistoryWindowSeq(now, minutes)
 
 	resp := dxConditionsResponse{
 		QTH:              qth,
@@ -830,7 +829,7 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dxBaseline != nil {
-		resp = dxBaseline.EvaluateArea(qth, surroundings, minutes, cwMinDb, historyCopy, now, area)
+		resp = dxBaseline.EvaluateAreaWindow(qth, surroundings, minutes, cwMinDb, win, now, area)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -869,8 +868,7 @@ func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 
 	area := liveAreaForRequest(r, qth, surroundings, now)
-	historyCopy, releaseHistory := snapshotHubHistoryWindow(now, minutes)
-	defer releaseHistory()
+	win := snapshotHubHistoryWindowSeq(now, minutes)
 
 	resp := hotBandsResponse{
 		QTH:              qth,
@@ -882,7 +880,7 @@ func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dxBaseline != nil {
-		resp = dxBaseline.HotBandsAreaWith(qth, surroundings, minutes, cwMinDb, currentBand, historyCopy, now, area, opts)
+		resp = dxBaseline.HotBandsAreaWindow(qth, surroundings, minutes, cwMinDb, currentBand, win, now, area, opts)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -309,9 +309,7 @@ func handleRBNSpot(spot rbnSpot, resolver CallsignLocatorResolver, ctyResolver *
 		B:          band,
 		MD:         spot.Mode,
 		F:          spot.FrequencyKHz,
-		OpName:     dxName,
-		Country:    dxCountry,
-		CountryISO: dxCountryISO,
+		X:          newDXExtra("", dxName, dxCountry, dxCountryISO),
 		Source:     "rbn",
 	}
 

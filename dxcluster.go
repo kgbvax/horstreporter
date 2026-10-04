@@ -340,10 +340,7 @@ func handleDXClusterSpot(spot dxClusterSpot, resolver CallsignLocatorResolver, c
 		B:          band,
 		MD:         "DXCLUSTER",
 		F:          spot.FrequencyKHz,
-		CM:         spot.Comment,
-		OpName:     dxName,
-		Country:    dxCountry,
-		CountryISO: dxCountryISO,
+		X:          newDXExtra(spot.Comment, dxName, dxCountry, dxCountryISO),
 		Source:     "dxcluster",
 	}
 

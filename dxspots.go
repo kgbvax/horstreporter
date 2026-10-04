@@ -69,6 +69,7 @@ func dxSpotsHandler(w http.ResponseWriter, r *http.Request) {
 		if age < 0 {
 			age = 0
 		}
+		x := m.extra()
 		spots = append(spots, dxSpot{
 			DXCall:         m.RC,
 			Spotter:        m.SC,
@@ -77,10 +78,10 @@ func dxSpotsHandler(w http.ResponseWriter, r *http.Request) {
 			DXLocator:      m.RL,
 			SpotterLocator: m.SL,
 			AgeSeconds:     age,
-			Comment:        m.CM,
-			OpName:         m.OpName,
-			Country:        m.Country,
-			CountryISO:     m.CountryISO,
+			Comment:        x.CM,
+			OpName:         x.OpName,
+			Country:        x.Country,
+			CountryISO:     x.CountryISO,
 		})
 	}
 	sort.Slice(spots, func(i, j int) bool { return spots[i].AgeSeconds < spots[j].AgeSeconds })

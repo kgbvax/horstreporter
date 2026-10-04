@@ -2011,14 +2011,16 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 	out := make([]MQTTMessage, 0, 8192)
 	for rows.Next() {
 		var m MQTTMessage
+		var cm string
 		// F (frequency_khz) and CM (comment) restore the fields /api/dxspots needs;
 		// without them, spots restored after a restart score as freq 0 (unscorable).
 		// Source (from source_type) restores the ingest tag so sourceTypeForMessage
 		// tags backfilled RBN rows "rbn" (not "mqtt") and the frontend toggle works
 		// across a restart.
-		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP, &m.F, &m.CM, &m.Source); err != nil {
+		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP, &m.F, &cm, &m.Source); err != nil {
 			return nil, err
 		}
+		m.X = newDXExtra(cm, "", "", "")
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -2100,9 +2102,11 @@ func (s *dxPostgresStore) loadSpotsRangeForTargets(start, end int64, tokens []st
 	out := make([]MQTTMessage, 0, 1024)
 	for rows.Next() {
 		var m MQTTMessage
-		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP, &m.F, &m.CM, &m.Source); err != nil {
+		var cm string
+		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP, &m.F, &cm, &m.Source); err != nil {
 			return nil, err
 		}
+		m.X = newDXExtra(cm, "", "", "")
 		out = append(out, m)
 	}
 	return out, rows.Err()
