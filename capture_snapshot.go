@@ -58,8 +58,7 @@ func captureSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 	cutoff := snapshotAt - int64(windowMinutes*60)
 
 	hub.RLock()
-	historyCopy := make([]MQTTMessage, len(hub.history))
-	copy(historyCopy, hub.history)
+	historyCopy := hub.windowFromLocked(0)
 	hub.RUnlock()
 
 	spots := make([]streamSpot, 0)

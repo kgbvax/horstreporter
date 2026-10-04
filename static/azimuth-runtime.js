@@ -289,7 +289,7 @@ export function initAzimuthCanvas() {
 export async function loadAzimuthWorldGeoJson() {
     if (state.worldGeoJson) return state.worldGeoJson;
     if (typeof fetch !== 'function') return null;
-    const resp = await fetch('vendor/world.geojson');
+    const resp = await fetch('world-slim.geojson');
     if (!resp.ok) {
         throw new Error(`Failed to load world.geojson: ${resp.status}`);
     }

@@ -81,17 +81,21 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 		return Spot{}, false
 	}
 
+	// Runs once per history message on every stream open and once per client
+	// per live message. Callsigns arrive upper-case (ToUpper returns them
+	// as-is), but locators are mixed case ("JO31lk"), so locators are compared
+	// case-insensitively in place instead of being upper-cased into a new
+	// string for every message; the one upper-cased copy is made for a match.
 	sc, rc := strings.ToUpper(m.SC), strings.ToUpper(m.RC)
-	sl, rl := strings.ToUpper(m.SL), strings.ToUpper(m.RL)
 
 	isSender := false
 	isReceiver := false
 
 	for _, t := range client.qthSet {
-		if matchCall(sc, t) || (isLocator(t) && sl != "" && strings.HasPrefix(sl, t)) {
+		if matchCall(sc, t) || (isLocator(t) && hasPrefixFold(m.SL, t)) {
 			isSender = true
 		}
-		if matchCall(rc, t) || (isLocator(t) && rl != "" && strings.HasPrefix(rl, t)) {
+		if matchCall(rc, t) || (isLocator(t) && hasPrefixFold(m.RL, t)) {
 			isReceiver = true
 		}
 	}
@@ -99,16 +103,16 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 	// Area-of-interest match (O(1), additive): a sender/receiver locator within
 	// areaRings grid-squares of the area centre also counts. Backs region feeds.
 	if client.areaActive {
-		if x, y, ok := locatorSquareXY(sl); ok && absInt(x-client.areaX) <= client.areaRings && absInt(y-client.areaY) <= client.areaRings {
+		if x, y, ok := locatorSquareXYFold(m.SL); ok && absInt(x-client.areaX) <= client.areaRings && absInt(y-client.areaY) <= client.areaRings {
 			isSender = true
 		}
-		if x, y, ok := locatorSquareXY(rl); ok && absInt(x-client.areaX) <= client.areaRings && absInt(y-client.areaY) <= client.areaRings {
+		if x, y, ok := locatorSquareXYFold(m.RL); ok && absInt(x-client.areaX) <= client.areaRings && absInt(y-client.areaY) <= client.areaRings {
 			isReceiver = true
 		}
 	}
 
 	if logLevel == "DEBUG" {
-		logDebug("QTH '%v' | Evaluating Spot -> SC:%s RC:%s SL:%s RL:%s | isSender:%v isReceiver:%v", client.qthSet, sc, rc, sl, rl, isSender, isReceiver)
+		logDebug("QTH '%v' | Evaluating Spot -> SC:%s RC:%s SL:%s RL:%s | isSender:%v isReceiver:%v", client.qthSet, sc, rc, strings.ToUpper(m.SL), strings.ToUpper(m.RL), isSender, isReceiver)
 	}
 
 	if !isSender && !isReceiver {
@@ -118,10 +122,10 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 	var remoteLocator string
 	var relation string
 	if isSender {
-		remoteLocator = rl
+		remoteLocator = strings.ToUpper(m.RL)
 		relation = "Sender"
 	} else {
-		remoteLocator = sl
+		remoteLocator = strings.ToUpper(m.SL)
 		relation = "Receiver"
 	}
 
@@ -154,6 +158,26 @@ func matchAndCreateSpot(client *Client, m MQTTMessage, now int64) (Spot, bool) {
 	}, true
 }
 
+// hasPrefixFold reports whether s starts with prefix, ignoring ASCII case.
+// prefix must already be upper case (qthSet entries are). An empty s never
+// matches a non-empty prefix, like the strings.HasPrefix(ToUpper(s), prefix)
+// it replaces.
+func hasPrefixFold(s, prefix string) bool {
+	if len(s) < len(prefix) {
+		return false
+	}
+	for i := 0; i < len(prefix); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' {
+			c -= 'a' - 'A'
+		}
+		if c != prefix[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func isLocator(s string) bool {
 	if len(s) < 4 {
 		return false
@@ -174,10 +198,33 @@ func locatorSquareXY(locator string) (x, y int, ok bool) {
 	if !isLocator(locator) {
 		return 0, 0, false
 	}
-	loc := strings.ToUpper(locator[:4])
-	x = int(loc[0]-'A')*10 + int(loc[2]-'0')
-	y = int(loc[1]-'A')*10 + int(loc[3]-'0')
+	// isLocator already required upper-case field letters and digits, so the
+	// first four bytes need no case folding (this sits on per-message paths).
+	x = int(locator[0]-'A')*10 + int(locator[2]-'0')
+	y = int(locator[1]-'A')*10 + int(locator[3]-'0')
 	return x, y, true
+}
+
+// locatorSquareXYFold is locatorSquareXY(strings.ToUpper(locator)) without
+// the allocation: the field and square letters are folded to upper case
+// inline. It sits on the per-message hot path of the history scans, where the
+// feed's locators are mixed case ("JO31lk") and ToUpper allocated every time.
+func locatorSquareXYFold(locator string) (x, y int, ok bool) {
+	if len(locator) < 4 {
+		return 0, 0, false
+	}
+	c0, c1 := locator[0], locator[1]
+	if c0 >= 'a' && c0 <= 'z' {
+		c0 -= 'a' - 'A'
+	}
+	if c1 >= 'a' && c1 <= 'z' {
+		c1 -= 'a' - 'A'
+	}
+	d0, d1 := locator[2], locator[3]
+	if c0 < 'A' || c0 > 'R' || c1 < 'A' || c1 > 'R' || d0 < '0' || d0 > '9' || d1 < '0' || d1 > '9' {
+		return 0, 0, false
+	}
+	return int(c0-'A')*10 + int(d0-'0'), int(c1-'A')*10 + int(d1-'0'), true
 }
 
 func squareXYToLocator(x, y int) string {
@@ -252,7 +299,7 @@ func clusterAnchorXY(x, y int) (int, int) {
 // grid coordinates (ax, ay) — the same membership rule the baseline write path
 // applies via locatorClusterAnchor, without allocating.
 func locatorInCluster(locator string, ax, ay int) bool {
-	x, y, ok := locatorSquareXY(locator)
+	x, y, ok := locatorSquareXYFold(locator)
 	if !ok {
 		return false
 	}

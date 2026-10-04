@@ -43,8 +43,7 @@ func dxSpotsHandler(w http.ResponseWriter, r *http.Request) {
 
 	hub.RLock()
 	idx := sort.Search(len(hub.history), func(i int) bool { return hub.history[i].T >= cutoff })
-	window := make([]MQTTMessage, len(hub.history)-idx)
-	copy(window, hub.history[idx:])
+	window := hub.windowFromLocked(idx)
 	hub.RUnlock()
 
 	// Keep the most recent spot per (DX call, band). history is ascending in T,
@@ -70,6 +69,7 @@ func dxSpotsHandler(w http.ResponseWriter, r *http.Request) {
 		if age < 0 {
 			age = 0
 		}
+		x := m.extra()
 		spots = append(spots, dxSpot{
 			DXCall:         m.RC,
 			Spotter:        m.SC,
@@ -78,10 +78,10 @@ func dxSpotsHandler(w http.ResponseWriter, r *http.Request) {
 			DXLocator:      m.RL,
 			SpotterLocator: m.SL,
 			AgeSeconds:     age,
-			Comment:        m.CM,
-			OpName:         m.OpName,
-			Country:        m.Country,
-			CountryISO:     m.CountryISO,
+			Comment:        x.CM,
+			OpName:         x.OpName,
+			Country:        x.Country,
+			CountryISO:     x.CountryISO,
 		})
 	}
 	sort.Slice(spots, func(i, j int) bool { return spots[i].AgeSeconds < spots[j].AgeSeconds })

@@ -11,6 +11,14 @@ import (
 	"sync"
 )
 
+func init() {
+	// Go's built-in extension table has no .geojson and a minimal Linux image
+	// may not ship /etc/mime.types, so the country outlines (the largest asset)
+	// were served as text/plain and missed the precompressed static variants,
+	// being gzipped per request instead.
+	_ = mime.AddExtensionType(".geojson", "application/geo+json")
+}
+
 // gzipMinSize is the smallest response worth compressing; below it the gzip
 // header/trailer overhead and CPU aren't worth it.
 const gzipMinSize = 1024

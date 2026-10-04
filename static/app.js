@@ -1382,13 +1382,29 @@ if (captureConfig?.enabled) {
     const initialProjection = captureConfig?.enabled ? captureConfig.projection : savedProjection;
     const projRadio = document.querySelector(`input[name="projection-select"][value="${initialProjection}"]`);
     if (projRadio) projRadio.checked = true;
-    await applyProjectionMode(initialProjection);
-    syncProjectionCenterToActiveQth();
 
-    const dxccToggle = document.getElementById('show-dxcc-labels');
-    if (dxccToggle) dxccToggle.checked = dxccLabelsEnabled;
+    // The country outlines (world-slim.geojson, ~0.6 MB) gate the Mercator
+    // overlays and, in azimuthal mode, the first scene. The live stream starts
+    // when this init finishes, so on a slow link it used to sit behind that
+    // download (first spots ~2 s later at 3 Mbps). In Mercator mode the
+    // overlays now settle in the background: the grid draws without them and
+    // each overlay appears when its data is ready. Azimuthal mode (and capture
+    // mode, which screenshots the finished page) keeps waiting, because
+    // nothing can be drawn without the outlines.
+    const overlaysReady = (async () => {
+        await applyProjectionMode(initialProjection);
+        syncProjectionCenterToActiveQth();
 
-    await syncMercatorOverlays(true);
+        const dxccToggle = document.getElementById('show-dxcc-labels');
+        if (dxccToggle) dxccToggle.checked = dxccLabelsEnabled;
+
+        await syncMercatorOverlays(true);
+    })();
+    if (initialProjection === 'azimuthal' || captureConfig?.enabled) {
+        await overlaysReady;
+    } else {
+        overlaysReady.catch((err) => { console.warn('Initial map overlays failed:', err); });
+    }
 
     attachMapEvents();
     attachUITooltipEvents();

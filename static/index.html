@@ -10,6 +10,44 @@
          vendored Font Awesome 6 Free solid font (CC BY 4.0). -->
     <link id="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='8' fill='%236c757d'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="style.css" />
+    <!-- app.js pulls in ~30 ES modules two levels deep; without these hints the
+         browser only discovers the second level after parsing the first, which
+         costs extra round trips on slow links. test/index-modulepreload.test.js
+         keeps this list in step with app.js's static imports. -->
+    <link rel="modulepreload" href="app.js">
+    <link rel="modulepreload" href="state.js">
+    <link rel="modulepreload" href="config.js">
+    <link rel="modulepreload" href="cq-flag.js">
+    <link rel="modulepreload" href="map.js">
+    <link rel="modulepreload" href="azimuth-runtime.js">
+    <link rel="modulepreload" href="ui.js">
+    <link rel="modulepreload" href="band-lab.js">
+    <link rel="modulepreload" href="wspr-matrix.js">
+    <link rel="modulepreload" href="almanac.js">
+    <link rel="modulepreload" href="hot-band-indicator.js">
+    <link rel="modulepreload" href="cond-now.js">
+    <link rel="modulepreload" href="cond-dock.js">
+    <link rel="modulepreload" href="horst-kevin.js">
+    <link rel="modulepreload" href="push.js">
+    <link rel="modulepreload" href="renderers.js">
+    <link rel="modulepreload" href="utils.js">
+    <link rel="modulepreload" href="perf.js">
+    <link rel="modulepreload" href="opmode.js">
+    <link rel="modulepreload" href="timeline.js">
+    <link rel="modulepreload" href="afterglow.js">
+    <link rel="modulepreload" href="data-now.js">
+    <link rel="modulepreload" href="session-ring.js">
+    <link rel="modulepreload" href="stream-wire.js">
+    <link rel="modulepreload" href="live-area.js">
+    <link rel="modulepreload" href="stream-status.js">
+    <link rel="modulepreload" href="grayline.js">
+    <link rel="modulepreload" href="map-tokens.js">
+    <link rel="modulepreload" href="canvas-draw.js">
+    <link rel="modulepreload" href="ui-helpers.js">
+    <link rel="modulepreload" href="hot-bands-client.js">
+    <link rel="modulepreload" href="panel-toggle.js">
+    <link rel="modulepreload" href="info-dialog.js">
+    <link rel="modulepreload" href="dist/horst-ui.js">
 </head>
 <body class="d-flex vh-100 overflow-hidden m-0 position-relative">
     <div id="controls" class="d-flex flex-column p-3 border-end overflow-auto z-1 position-relative" style="max-width: 320px; width: 100%; transition: margin-left 0.3s, background-color 0.3s, border-color 0.3s;">

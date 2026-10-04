@@ -58,7 +58,7 @@ type liveArea struct {
 // contains reports whether locator's 4-char square lies in the block
 // (Chebyshev distance ≤ Radius, the same test the stream's area filter uses).
 func (a *liveArea) contains(locator string) bool {
-	x, y, ok := locatorSquareXY(strings.ToUpper(locator))
+	x, y, ok := locatorSquareXYFold(locator)
 	if !ok {
 		return false
 	}

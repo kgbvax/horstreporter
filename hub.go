@@ -25,6 +25,12 @@ type Client struct {
 type Hub struct {
 	sync.RWMutex
 	clients map[*Client]bool
+	// history is append-only: elements are never written in place. New spots
+	// are appended, expired ones are dropped by reslicing the front
+	// (dropFrontLocked) and the startup backfill swaps the whole slice
+	// (replaceHistoryLocked). That makes windowFromLocked's zero-copy views
+	// safe to read without the lock — a concurrent append writes past the
+	// view's length (or into a fresh backing array), never into the view.
 	history []MQTTMessage
 	// baseSeq is the count of messages that were in history before
 	// history[0]: history[i] has sequence number baseSeq+i+1 (1-based, so a
@@ -55,6 +61,17 @@ func (h *Hub) dropFrontLocked(n int) {
 	}
 	h.baseSeq += uint64(n)
 	h.history = h.history[n:]
+}
+
+// windowFromLocked returns history[idx:] as a read-only view without copying.
+// The capacity is clamped so an append to the view can never write into the
+// hub's backing array. The caller must not modify the elements; it may keep
+// the view after releasing the lock (see the history invariant above) — it
+// only pins the old backing array for as long as it holds it. Caller holds
+// the lock (read or write).
+func (h *Hub) windowFromLocked(idx int) []MQTTMessage {
+	n := len(h.history)
+	return h.history[idx:n:n]
 }
 
 // replaceHistoryLocked swaps in a new history (startup backfill). The old

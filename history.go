@@ -262,8 +262,7 @@ func historyMessagesFromHub(t0, t1 int64) []MQTTMessage {
 	idx := sort.Search(len(hub.history), func(i int) bool {
 		return hub.history[i].T >= t0
 	})
-	window := make([]MQTTMessage, len(hub.history)-idx)
-	copy(window, hub.history[idx:])
+	window := hub.windowFromLocked(idx)
 	hub.RUnlock()
 
 	out := make([]MQTTMessage, 0, len(window))

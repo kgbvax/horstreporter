@@ -229,8 +229,8 @@ func TestHandleDXClusterSpotPopulatesLiveFields(t *testing.T) {
 	if m.F != 14074.0 {
 		t.Errorf("F = %v, want 14074", m.F)
 	}
-	if m.CM != "cq dx" {
-		t.Errorf("CM = %q, want 'cq dx'", m.CM)
+	if x := m.extra(); x.CM != "cq dx" {
+		t.Errorf("CM = %q, want 'cq dx'", x.CM)
 	}
 	if m.T != 1700000000 {
 		t.Errorf("T = %d, want 1700000000", m.T)
@@ -238,11 +238,11 @@ func TestHandleDXClusterSpotPopulatesLiveFields(t *testing.T) {
 	if m.RP != 0 {
 		t.Errorf("RP = %d, want 0 (dx-cluster spots are baseline-benign)", m.RP)
 	}
-	if m.OpName != "Joe" {
-		t.Errorf("OpName = %q, want Joe", m.OpName)
+	if x := m.extra(); x.OpName != "Joe" {
+		t.Errorf("OpName = %q, want Joe", x.OpName)
 	}
-	if m.Country != "United States" {
-		t.Errorf("Country = %q, want from QRZ fallback (no cty resolver)", m.Country)
+	if x := m.extra(); x.Country != "United States" {
+		t.Errorf("Country = %q, want from QRZ fallback (no cty resolver)", x.Country)
 	}
 }
 
