@@ -5,6 +5,7 @@ import { getGridResolution, latLngToLocator, locatorToBounds, getMinSnrMode, get
 // in ui-helpers.js so they are unit-testable without this module's map.js /
 // init-closure surface.
 import { escapeHtml, getHoverSquareStyle, hoverSquareAzimuth, buildHoverRequestKey } from './ui-helpers.js';
+import { initInfoDialog } from './info-dialog.js';
 
 export function initUI() {
     initInfoOverlay();
@@ -339,36 +340,16 @@ export function attachUITooltipEvents() {
 
 function initInfoOverlay() {
     const themeToggleBtn = document.getElementById('theme-toggle');
-    if (themeToggleBtn && themeToggleBtn.parentNode) {
-        // Same button as its header siblings (theme toggle, hide sidebar); the
-        // header's flex row already spaces them.
-        const infoBtn = document.createElement('button');
-        infoBtn.type = 'button';
-        infoBtn.id = 'info-toggle';
-        infoBtn.className = 'btn btn-outline-secondary btn-sm';
-        infoBtn.innerHTML = icon('question-circle');
-        infoBtn.title = 'Help';
-        infoBtn.setAttribute('aria-label', 'Help');
-
-        themeToggleBtn.parentNode.insertBefore(infoBtn, themeToggleBtn);
-
-        const overlay = document.createElement('div');
-        overlay.id = 'info-overlay';
-        overlay.innerHTML = `
-            <div class="info-content">
-                <button id="close-info" title="Close">&times;</button>
-                <iframe src="info.html" frameborder="0"></iframe>
-            </div>
-        `;
-        document.body.appendChild(overlay);
-
-        infoBtn.addEventListener('click', () => overlay.style.display = 'flex');
-        document.getElementById('close-info').addEventListener('click', () => overlay.style.display = 'none');
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.style.display = 'none'; });
-
-        if (!localStorage.getItem('infoShown')) {
-            overlay.style.display = 'flex';
-            localStorage.setItem('infoShown', 'true');
-        }
-    }
+    if (!themeToggleBtn?.parentNode) return;
+    // Same button as its header siblings (theme toggle, hide sidebar); the
+    // header's flex row already spaces them.
+    const infoBtn = document.createElement('button');
+    infoBtn.type = 'button';
+    infoBtn.id = 'info-toggle';
+    infoBtn.className = 'btn btn-outline-secondary btn-sm';
+    infoBtn.innerHTML = icon('question-circle');
+    infoBtn.title = 'Help';
+    infoBtn.setAttribute('aria-label', 'Help');
+    themeToggleBtn.parentNode.insertBefore(infoBtn, themeToggleBtn);
+    initInfoDialog({ trigger: infoBtn });
 }

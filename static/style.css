@@ -377,6 +377,11 @@ body[data-theme="dark"] {
     background: var(--bg-color);
 }
 
+#close-info:focus-visible {
+    outline: 3px solid var(--accent-strong, currentColor);
+    outline-offset: 2px;
+}
+
 #close-info {
     position: absolute;
     top: -15px;

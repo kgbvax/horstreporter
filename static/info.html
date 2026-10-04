@@ -27,7 +27,7 @@
         // Pick the doc by browser language preference: the first supported
         // language in the browser's ordered preference list wins.
         function preferredDoc() {
-            const byLang = { en: 'info.md', de: 'info.de.md', fr: 'info.fr.md', ja: 'info.ja.md' };
+            const byLang = { en: 'info.md', fr: 'info.fr.md', ja: 'info.ja.md' };
             const langs = (navigator.languages && navigator.languages.length)
                 ? navigator.languages
                 : [navigator.language || 'en'];
@@ -53,6 +53,14 @@
             })
             .then(text => document.getElementById('content').innerHTML = marked.parse(text))
             .catch(err => document.getElementById('content').innerHTML = `<p class="status-danger">Error loading info: ${err.message}</p>`);
+
+        // Key events do not bubble out of an iframe: tell the Help dialog around
+        // this page (ui.js / info-dialog.js) that Escape was pressed in here.
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && window.parent !== window) {
+                window.parent.postMessage({ type: 'horst-info-close' }, window.location.origin);
+            }
+        });
 
         // Sync the iframe's theme with the parent window
         try {
