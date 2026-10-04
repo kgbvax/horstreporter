@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation round two: the Now matrix against its normal, ten more ways</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1d2127; --muted: #5a626d; --line: #dfe2e6;
+    --card: #ffffff; --accent: #1f5fae; --accent-soft: #e8f0fa; --accent-text: #174a88;
+    --warn-soft: #fbf1e3; --warn-text: #7a4b0f; --ok-soft: #e7f4ec; --ok-text: #1f5c35;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15181c; --fg: #e3e6ea; --muted: #a0a8b3; --line: #2c3239;
+      --card: #1c2025; --accent: #6ea8ec; --accent-soft: #1d2a3a; --accent-text: #a9ccf5;
+      --warn-soft: #33281a; --warn-text: #efc58d; --ok-soft: #1a2e22; --ok-text: #9fd8b2;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15.5px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
+  main { max-width: 1180px; margin-inline: auto; padding: 2.5rem 1.25rem 4rem; }
+  p, li, dd { max-width: 72ch; }
+  h1 { font-size: 1.75rem; line-height: 1.25; margin: .2rem 0 .6rem; }
+  h2 { font-size: 1.3rem; margin: 2.6rem 0 .8rem; padding-bottom: .3rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1.1rem; margin: 0 0 .4rem; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: var(--accent-text); padding: .05em .3em; border-radius: 3px; }
+  .meta { color: var(--muted); font-size: .9rem; }
+  .prop { margin: 2.2rem 0 0; padding-top: 1.2rem; border-top: 1px solid var(--line); }
+  .prop .lede { margin: 0 0 .9rem; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: .6rem 0 1rem; }
+  .pair > .mock { min-width: 0; }
+  @media (max-width: 1000px) { .pair { grid-template-columns: 1fr; } }
+  dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; margin: .4rem 0 0; font-size: .95rem; }
+  dl.facts dt { color: var(--muted); }
+  dl.facts dd { margin: 0; }
+  table.cmp { border-collapse: collapse; font-size: .88rem; width: 100%; }
+  table.cmp th, table.cmp td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.cmp th { color: var(--muted); font-weight: 600; }
+  .pick { background: var(--ok-soft); color: var(--ok-text); padding: .9rem 1rem; border-radius: 8px; }
+  .caveat { background: var(--warn-soft); color: var(--warn-text); padding: .7rem 1rem; border-radius: 8px; }
+  ol.refs { font-size: .92rem; padding-left: 1.4rem; }
+  ol.refs li { margin-bottom: .3rem; }
+
+  /* ---- Mock dock panels: the app's own tokens, both themes side by side ---- */
+  .mock { --mbg: #ffffff; --mfg: #212529; --mline: #dee2e6; --mmuted: #6c757d; --macc: #1f9e8f;
+    background: var(--mbg); color: var(--mfg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 10px 8px;
+    font: 0.72rem/1.25 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow-x: auto; }
+  .mock.dark { --mbg: #212529; --mfg: #e0e0e0; --mline: #444444; --mmuted: #999999; --macc: #4dd3c0; }
+  .mock .mt { font-size: .7rem; color: var(--mmuted); margin-bottom: 6px; }
+  .mock table { border-collapse: separate; border-spacing: 3px 0; width: 100%; table-layout: fixed; font-variant-numeric: tabular-nums; }
+  .mock th { padding: 3px 2px; text-align: center; font-weight: 600; font-size: calc(0.72rem + 1px);
+    color: color-mix(in srgb, var(--mfg) 70%, transparent); border-bottom: 1px solid var(--mline); }
+  .mock th small { display: block; font-weight: 400; font-size: .62rem; color: var(--mmuted); }
+  .mock td { padding: 2px 1px; text-align: center; border-bottom: 1px solid var(--mline); height: 46px; }
+  .mock td svg { display: block; margin: auto; overflow: visible; }
+  .mock th.band { text-align: left; color: var(--mfg); padding-left: 6px; border-left: 3px solid var(--bc); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mock th.band .v, .mock th.band .p { display: block; font-weight: 400; font-size: 0.7rem; }
+  .mock th.band .p { color: color-mix(in srgb, var(--mfg) 70%, transparent); }
+  .mock .legend { margin-top: 6px; font-size: .68rem; color: var(--mmuted); display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+  .mock .legend svg { vertical-align: middle; }
+  .ink { stroke: var(--mfg); fill: var(--mfg); }
+
+  /* 0 numbers */
+  .num { line-height: 1.1; }
+  .num b { display: block; font-weight: 700; }
+  .num small { display: block; font-size: .6rem; color: var(--mmuted); margin-top: 1px; }
+  .num.far b { font-size: 15px; font-weight: 800; }
+  .num.mid b { font-size: 12.5px; font-weight: 650; }
+  .num.near b { font-size: 11px; font-weight: 400; color: color-mix(in srgb, var(--mfg) 62%, transparent); }
+  .num.below b { color: color-mix(in srgb, var(--mfg) 55%, transparent); font-weight: 500; }
+  .num.below.far b { font-size: 13px; }
+  .num.cwonly b { text-decoration: underline dotted; text-underline-offset: 2px; }
+  .num.silent b { font-weight: 400; color: color-mix(in srgb, var(--mfg) 40%, transparent); font-size: 11px; }
+  .num.surge b::after { content: " •"; font-size: .7em; vertical-align: super; }
+
+  /* 3 dot strip */
+  .strip td { text-align: left; padding: 0 4px; }
+  .strip th.axis { text-align: left; padding: 0 4px 2px; font-weight: 400; color: var(--mmuted); }
+
+  /* 8 skyline */
+  .sky td { position: relative; }
+  .sky td.ceil { border-top: 2px solid var(--mfg); }
+  .sky td.above { background: repeating-linear-gradient(0deg, transparent 0 3px, color-mix(in srgb, var(--mfg) 4%, transparent) 3px 4px); }
+
+  /* 9 compass board */
+  .board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .tile { border: 1px solid var(--mline); border-radius: 5px; padding: 5px 7px 6px; min-height: 76px; }
+  .tile.home { border-style: dashed; display: flex; flex-direction: column; justify-content: center; align-items: center; color: var(--mmuted); text-align: center; }
+  .tile.home b { color: var(--mfg); font-size: .95rem; }
+  .tile h4 { margin: 0 0 3px; font-size: .74rem; font-weight: 700; }
+  .tile h4 small { font-weight: 400; color: var(--mmuted); margin-left: 4px; }
+  .pill { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 5px; border-radius: 9px; font-size: .68rem; line-height: 1.35;
+    border: 1px solid color-mix(in srgb, var(--mfg) 25%, transparent); border-left: 3px solid var(--bc); white-space: nowrap; }
+  .pill.above { font-weight: 700; border-color: color-mix(in srgb, var(--mfg) 70%, transparent); border-left-color: var(--bc); }
+  .pill.below { color: color-mix(in srgb, var(--mfg) 55%, transparent); }
+  .pill.silent { border-style: dashed; color: color-mix(in srgb, var(--mfg) 50%, transparent); }
+  .pill.cwonly { text-decoration: underline dotted; text-underline-offset: 2px; }
+  .tile .none { color: var(--mmuted); font-size: .68rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>The Now matrix against its normal: ten more ways, and a control</h1>
+<p class="meta">5 Oct 2026, round two. Round one's pick (disc and ring) shipped as an experiment and was discarded. Brief for this round, from the signoff questions: the matrix must answer <em>which band</em>, <em>where</em> and <em>what is unusual</em> at one glance; the headline value is <strong>now against the normal for this hour</strong>; the geometry may leave the grid; web first. Every mockup renders from a live from-here <code>/api/prop_intel/v2</code> payload for JO32 captured 22:53 UTC today (48 cells, each with its normal) and from the real 28-day diurnal normals of the JO32 block (<code>dx_region_baseline_daily</code>). Nothing here is implemented; this page is for signoff.</p>
+
+<h2>What the disc taught us</h2>
+<p>Three things went wrong, and all three are known results, not bad luck.</p>
+<ul>
+  <li><strong>Area is the weakest quantitative channel.</strong> Cleveland and McGill's experiments rank position on a common scale first, then length, then angle, then area, then colour. A disc asks the eye to compare areas; a ring inside a disc asks it to compare two areas. Both are bottom-tier tasks at 10 px.</li>
+  <li><strong>Five decades on one radius leaves no room for the signal.</strong> A log radius over 1 to 100,000 makes a doubling less than one unit of forty. The question we care about (now against normal) lives in a factor of 2 to 4, so it vanished.</li>
+  <li><strong>Two concentric marks force a comparison; one mark that already is the comparison does not.</strong> Every proposal below encodes the <em>ratio</em> directly (as a position, a length, an angle, a count of pips, a word, a texture) and treats volume as a secondary weight, not the other way round.</li>
+</ul>
+
+<h2>Ground rules for this round</h2>
+<ul>
+  <li>The quantity is <code>expected_spots / expected</code>, taken as <code>log2</code> and clamped to ±3: ×⅛ to ×8, with ×1 in the middle. Halving and doubling are the same distance. Within ×0.7 to ×1.4 counts as normal.</li>
+  <li>No hue carries meaning. One ink per theme, plus the existing band colour on the row header. Anything that needs colour to be read is out (about 8% of men would read it wrong; printing kills it).</li>
+  <li>Volume (all-source spot count) stays visible as a weight: five decades as five steps of stroke, size or type weight.</li>
+  <li>A cell that usually has traffic at this hour but is silent now is a state worth showing. The backend dropped silent cells with the disc; five such cells exist in this payload (17m NA normally 179, 15m NA 43, 30m JA 32, 40m JA 10, 60m CAR 5). Proposals mark them where they can.</li>
+  <li>Mode badges shrink to one convention: solid means SSB is workable, hollow or dotted means CW only.</li>
+</ul>
+
+<!-- ============================== 0 ============================== -->
+<section class="prop">
+  <h3>0. Numbers only (the control)</h3>
+  <p class="lede">The simplest honest answer: type the factor. "×2.3" needs no legend. Type weight and size follow the distance from normal, so the page scans like a newspaper: large bold figures are the news, light small ones are the weather. Every other proposal has to beat this.</p>
+  <div class="pair"><div class="mock" data-opt="0"></div><div class="mock dark" data-opt="0"></div></div>
+  <dl class="facts"><dt>Channel</dt><dd>Typographic weight and size (ordinal), the number itself (exact)</dd><dt>Grid</dt><dd>unchanged</dd><dt>Backend</dt><dd>none; silent cells need <code>silent=1</code> back</dd><dt>Risk</dt><dd>Reads as a spreadsheet; no shape to pick up peripherally</dd></dl>
+</section>
+
+<!-- ============================== 1 ============================== -->
+<section class="prop">
+  <h3>1. Bullet bars</h3>
+  <p class="lede">Stephen Few's bullet graph, one per cell: a bar for now, a tick for the normal, both on the same five-decade log scale. The eye reads the bar against the tick without a legend, and the part of the bar past the tick is set in full ink so the excess pops; a shortfall shows as a dotted gap up to the tick.</p>
+  <div class="pair"><div class="mock" data-opt="1"></div><div class="mock dark" data-opt="1"></div></div>
+  <dl class="facts"><dt>Channel</dt><dd>Length against a reference mark (Cleveland rank 2)</dd><dt>Grid</dt><dd>unchanged</dd><dt>Backend</dt><dd>none</dd><dt>Risk</dt><dd>Log length still compresses the factor; the excess/shortfall ink rescues it</dd></dl>
+</section>
+
+<!-- ============================== 2 ============================== -->
+<section class="prop">
+  <h3>2. Deviation stems</h3>
+  <p class="lede">Each band row becomes a diverging chart around its own normal line. A stem rises for above normal and drops for below, length is the log factor, the dot's size is the volume. The row reads as a skyline of surprises; a flat row is a normal evening. Columns stay put, so "who reaches JA" is still a glance down one column.</p>
+  <div class="pair"><div class="mock" data-opt="2"></div><div class="mock dark" data-opt="2"></div></div>
+  <dl class="facts"><dt>Channel</dt><dd>Position and length from a shared baseline (rank 1 to 2)</dd><dt>Grid</dt><dd>kept; the cell border fades, the row rule carries the structure</dd><dt>Backend</dt><dd>none; silent cells need <code>silent=1</code></dd><dt>Risk</dt><dd>Needs 40 px of row height; tight on phones</dd></dl>
+</section>
+
+<!-- ============================== 3 ============================== -->
+<section class="prop">
+  <h3>3. Dot strip</h3>
+  <p class="lede">Cleveland's dot plot: one shared axis from ×⅛ to ×8, one row per band, every region a labelled dot placed where it stands against normal. Regions give up their fixed column, but gain a name in the mark, so no legend and no header lookup. Anything right of the centre line is better than usual; a crowd on the line is an ordinary night.</p>
+  <div class="pair"><div class="mock strip" data-opt="3"></div><div class="mock dark strip" data-opt="3"></div></div>
+  <dl class="facts"><dt>Channel</dt><dd>Position on a common scale (rank 1)</dd><dt>Grid</dt><dd>rows stay bands; columns dissolve into an axis</dd><dt>Backend</dt><dd>none; silent cells need <code>silent=1</code></dd><dt>Risk</dt><dd>Labels collide when several regions are normal; the mock alternates label sides</dd></dl>
+</section>
+
+<!-- ============================== 4 ============================== -->
+<section class="prop">
+  <h3>4. Doubling pips</h3>
+  <p class="lede">Seven pips per cell, like a signal meter you can count. The middle pip lights for any traffic; one filled pip to the right for every doubling above normal, one ring to the left for every halving below. ×4 is two dots to the right. Discrete, countable, draws with primitives a home-screen widget already has.</p>
+  <div class="pair"><div class="mock" data-opt="4"></div><div class="mock dark" data-opt="4"></div></div>
+  <dl class="facts"><dt>Channel</dt><dd>Count of marks plus direction (ordinal, exact to one doubling)</dd><dt>Grid</dt><dd>unchanged</dd><dt>Backend</dt><dd>none</dd><dt>Risk</dt><dd>Volume is only a faint underline; "many pips" could be misread as "busy" until learned</dd></dl>
+</section>
+
+<!-- ============================== 5 ============================== -->
+<section class="prop">
+  <h3>5. Tilt field</h3>
+  <p class="lede">One stroke per cell. Upright is normal; it leans right as the cell runs above normal, left as it falls below, up to 60° at ×8 and ×⅛. Stroke weight is the volume. The matrix becomes a field of needles and the eye reads the lean of a whole row or column at once, the way a slope field or a wind chart is read.</p>
+  <div class="pair"><div class="mock" data-opt="5"></div><div class="mock dark" data-opt="5"></div></div>
+  <dl class="facts"><dt>Channel</dt><dd>Angle (rank 3), weight for volume</dd><dt>Grid</dt><dd>unchanged</dd><dt>Backend</dt><dd>none; silent cells need <code>silent=1</code></dd><dt>Risk</dt><dd>Angle is less precise than length; it is the most distinctive look here, and the most likely to be called a gimmick</dd></dl>
+</section>
+
+<!-- ============================== 6 ============================== -->
+<section class="prop">
+  <h3>6. Day strip</h3>
+  <p class="lede">Each cell draws this path's whole typical day as a small shaded curve (the 28-day normal, hour by hour), a cursor at the current UTC hour, and a dot for right now. The dot above the curve means better than usual; its place on the curve says whether the opening is just starting, at its peak, or closing. No other proposal answers "should I hurry?".</p>
+  <div class="pair"><div class="mock" data-opt="6"></div><div class="mock dark" data-opt="6"></div></div>
+  <dl class="facts"><dt>Channel</dt><dd>Position in time, position against a curve (small multiples)</dd><dt>Grid</dt><dd>unchanged</dd><dt>Backend</dt><dd>24 hourly normals per cell (one query, cached per area per day)</dd><dt>Risk</dt><dd>Dense at 44 px; the curve must be a silhouette, not a chart</dd></dl>
+</section>
+
+<!-- ============================== 7 ============================== -->
+<section class="prop">
+  <h3>7. Sparkline against normal</h3>
+  <p class="lede">Tufte's sparkline: the last hour in 5-minute bins, with the normal as a dashed line. "Rising" stops being a chevron and becomes a visible slope; a surge is a line that leaves its dashed normal behind. Reads at a glance as a trend, and rewards a second look with the shape.</p>
+  <div class="pair"><div class="mock" data-opt="7"></div><div class="mock dark" data-opt="7"></div></div>
+  <dl class="facts"><dt>Channel</dt><dd>Position over time against a reference line</dd><dt>Grid</dt><dd>unchanged</dd><dt>Backend</dt><dd>per-cell 5-minute bins from the hub window (cheap; the mock's series are illustrative, ending at the real count)</dd><dt>Risk</dt><dd>Twelve points at 40 px is near the floor; must be a line, not an area</dd></dl>
+</section>
+
+<!-- ============================== 8 ============================== -->
+<section class="prop">
+  <h3>8. MUF skyline</h3>
+  <p class="lede">The grid, read as a ham reads it. Bands are stacked by frequency, highest on top; regions run west to east like a world strip, with their beam headings. A rule sits on the highest band open to each region: that is the ceiling, your working MUF estimate, drawn as a skyline across the world. Above the rule nothing happens; below it dots say how each band compares to normal.</p>
+  <div class="pair"><div class="mock sky" data-opt="8"></div><div class="mock dark sky" data-opt="8"></div></div>
+  <dl class="facts"><dt>Channel</dt><dd>Position (the ceiling line), size for volume, ink weight for factor</dd><dt>Grid</dt><dd>kept, rows inverted, columns reordered by longitude</dd><dt>Backend</dt><dd>none</dd><dt>Risk</dt><dd>A single stray spot lifts the ceiling; needs the 5-spot floor</dd></dl>
+</section>
+
+<!-- ============================== 9 ============================== -->
+<section class="prop">
+  <h3>9. Compass board</h3>
+  <p class="lede">Leave the grid entirely. Regions sit around your station by beam heading, north up, as on the azimuthal map. Each tile lists the bands open to that region as pills carrying their factor; bold pills are above normal, dashed ones usually work at this hour but are silent now. Turn the antenna with your eye, then pick a band.</p>
+  <div class="pair"><div class="mock" data-opt="9"></div><div class="mock dark" data-opt="9"></div></div>
+  <dl class="facts"><dt>Channel</dt><dd>Layout by bearing, type weight for factor, band colour on the pill edge</dd><dt>Grid</dt><dd>replaced</dd><dt>Backend</dt><dd>none; silent cells need <code>silent=1</code></dd><dt>Risk</dt><dd>Column scans across bands are gone; taller than the grid on a phone</dd></dl>
+</section>
+
+<!-- ============================== 10 ============================== -->
+<section class="prop">
+  <h3>10. Hatching</h3>
+  <p class="lede">Bertin's texture variables, which print and survive any colour vision: line spacing is the volume, line direction is the verdict. Rising diagonals for above normal, falling for below, horizontal for normal, cross-hatch for a surge, dotted lines for CW only. It looks like an engraving and it is read like one: dense and climbing is good news.</p>
+  <div class="pair"><div class="mock" data-opt="10"></div><div class="mock dark" data-opt="10"></div></div>
+  <dl class="facts"><dt>Channel</dt><dd>Texture density (volume) and orientation (verdict)</dd><dt>Grid</dt><dd>unchanged</dd><dt>Backend</dt><dd>none; silent cells need <code>silent=1</code></dd><dt>Risk</dt><dd>Moiré on low-DPI screens; direction is categorical, so ×2 and ×8 look alike</dd></dl>
+</section>
+
+<h2>Side by side</h2>
+<table class="cmp">
+  <thead><tr><th>Proposal</th><th>Main channel (Cleveland rank)</th><th>Which band</th><th>Where</th><th>Unusual</th><th>Volume</th><th>Time phase</th><th>Grid</th><th>Backend</th><th>Effort</th></tr></thead>
+  <tbody>
+    <tr><td>0. Numbers only</td><td>type weight, exact number</td><td>row scan</td><td>column</td><td>bold figures</td><td>small print</td><td>no</td><td>kept</td><td>silent=1</td><td>S</td></tr>
+    <tr><td>1. Bullet bars</td><td>length vs tick (2)</td><td>row</td><td>column</td><td>excess ink</td><td>bar length</td><td>no</td><td>kept</td><td>none</td><td>S</td></tr>
+    <tr><td>2. Deviation stems</td><td>position/length (1-2)</td><td>row skyline</td><td>column</td><td>tall stems</td><td>dot size</td><td>no</td><td>kept</td><td>silent=1</td><td>S-M</td></tr>
+    <tr><td>3. Dot strip</td><td>position on axis (1)</td><td>row</td><td>label on dot</td><td>far from centre</td><td>dot size</td><td>no</td><td>rows only</td><td>silent=1</td><td>M</td></tr>
+    <tr><td>4. Doubling pips</td><td>count (ordinal)</td><td>row</td><td>column</td><td>many pips</td><td>underline</td><td>no</td><td>kept</td><td>none</td><td>S</td></tr>
+    <tr><td>5. Tilt field</td><td>angle (3)</td><td>row lean</td><td>column</td><td>steep lean</td><td>stroke weight</td><td>no</td><td>kept</td><td>silent=1</td><td>S</td></tr>
+    <tr><td>6. Day strip</td><td>position vs curve</td><td>row</td><td>column</td><td>dot off curve</td><td>indirect</td><td>yes</td><td>kept</td><td>24 normals/cell</td><td>M</td></tr>
+    <tr><td>7. Sparkline</td><td>position over time</td><td>row</td><td>column</td><td>line leaves dashed</td><td>indirect</td><td>last hour</td><td>kept</td><td>5-min bins</td><td>M</td></tr>
+    <tr><td>8. MUF skyline</td><td>position (ceiling)</td><td>ceiling height</td><td>world strip</td><td>ink weight</td><td>dot size</td><td>no</td><td>re-ordered</td><td>none</td><td>S-M</td></tr>
+    <tr><td>9. Compass board</td><td>layout by bearing</td><td>pills per tile</td><td>tile position</td><td>bold pills</td><td>none</td><td>no</td><td>replaced</td><td>silent=1</td><td>M</td></tr>
+    <tr><td>10. Hatching</td><td>texture (Bertin)</td><td>row</td><td>column</td><td>cross-hatch</td><td>density</td><td>no</td><td>kept</td><td>silent=1</td><td>S</td></tr>
+  </tbody>
+</table>
+
+<h2>Recommendation</h2>
+<p class="pick"><strong>Default: 2, Deviation stems, with 0 as its tooltip.</strong> It uses the two strongest perceptual channels, keeps every column where it is, needs no colour and no legend beyond "up is better than usual", and the surge and the silent states fall out of the same mark. Pair it with the numbers from 0 in the hover and the exact figures are one pointer away.</p>
+<p class="pick"><strong>Second view: 6, Day strip.</strong> It is the only proposal that answers a question the operator actually asks at 22:50 UTC: is 20m to NA closing or is this a lull. It needs one backend addition (24 hourly normals per cell, which the almanac tables already hold) and would sit behind the existing look chips, replacing Inferno.</p>
+<p class="caveat">Worth a prototype, not the default: 8 (MUF skyline) is the most ham-shaped idea on the page and costs almost nothing, but the ceiling line is only as honest as the 5-spot floor. 9 (Compass board) is the right shape for the phone app, where the grid never fit. 5 and 10 are the two surprises; both read well on this data and both would need a week of real use to know if they stay legible. 3 lost its columns, which the brief said it may, but it answers "where" worse than the grid did.</p>
+
+<h2>References consulted</h2>
+<ol class="refs">
+  <li>Cleveland, W. S. and McGill, R. (1984). Graphical perception: theory, experimentation, and application to the development of graphical methods. <em>JASA</em> 79(387). The channel ranking used throughout.</li>
+  <li>Bertin, J. (1967). <em>Sémiologie graphique</em>. Visual variables, including texture and orientation (proposals 5, 10).</li>
+  <li>Few, S. (2013). Bullet graph design specification. The bar-plus-comparative-tick form (proposal 1).</li>
+  <li>Tufte, E. (2006). <em>Beautiful Evidence</em>, sparklines; and (1983) small multiples (proposals 6, 7).</li>
+  <li>Heer, J., Kong, N. and Agrawala, M. (2009). Sizing the horizon: the effects of chart size and layering on the graphical perception of time series visualizations. <em>CHI</em>. Sets the ~24 px floor for small time series (proposals 6, 7).</li>
+  <li>Munzner, T. (2014). <em>Visualization Analysis and Design</em>, ch. 5 and 10. Diverging data want a diverging encoding centred on the meaningful middle; here ×1 on a log axis.</li>
+  <li>Okabe, M. and Ito, K. (2008). Color universal design. Why no proposal uses hue to carry the verdict.</li>
+  <li>Ham practice: the S-meter and signal-bars convention (4), VOACAP hour-by-hour reliability charts and the greyline (6), MUF as "highest band open on this path" (8), azimuthal beam-heading maps (9).</li>
+</ol>
+
+<script>
+const D = {"cells":{"10m":{"EU":{"n":25,"es":0,"e":1.4,"s":1,"c":1,"src":"w"}},"12m":{"EU":{"n":2,"es":0,"e":0.6,"c":1,"src":"w"}},"15m":{"CAR":{"n":1,"es":1,"e":2.9,"c":1,"r":1,"src":"p"},"EU":{"n":19,"es":11,"e":6.1,"s":1,"c":1,"r":1,"src":"wp"},"SA":{"n":2,"es":2,"e":3.5,"c":1,"r":1,"src":"p"}},"160m":{"AF":{"n":7,"es":7,"e":3.3,"s":1,"c":1,"src":"p"},"CAR":{"n":1,"es":1,"e":1,"r":1,"src":"p"},"EU":{"n":939,"es":538,"e":354.2,"s":1,"c":1,"src":"wp"},"NA":{"n":14,"es":14,"e":4.3,"c":1,"src":"p"}},"17m":{"CAR":{"n":3,"es":3,"e":6.7,"c":1,"src":"p"},"EU":{"n":14,"es":12,"e":14.3,"s":1,"c":1,"r":1,"src":"wp"},"SA":{"n":1,"es":1,"e":4.6,"c":1,"src":"p"},"VK":{"n":1,"es":1,"e":0.9,"r":1,"src":"p"}},"20m":{"AF":{"n":141,"es":119,"e":56,"s":1,"c":1,"src":"wpr"},"AS":{"n":4,"es":4,"e":12.8,"c":1,"src":"p"},"CAR":{"n":79,"es":74,"e":58.2,"s":1,"c":1,"src":"wp"},"EU":{"n":457,"es":340,"e":363.6,"s":1,"c":1,"r":1,"src":"wpr"},"NA":{"n":74,"es":74,"e":2055.5,"s":1,"c":1,"src":"p"},"SA":{"n":299,"es":271,"e":130.4,"s":1,"c":1,"r":1,"src":"wpr"},"VK":{"n":13,"es":6,"e":2.8,"c":1,"r":1,"src":"wp"}},"2m":{"EU":{"n":13,"es":13,"e":11.6,"s":1,"c":1,"src":"p"}},"30m":{"AF":{"n":55,"es":25,"e":41.3,"s":1,"c":1,"r":1,"src":"wp"},"AN":{"n":1,"es":0,"e":0,"c":1,"r":1,"src":"w"},"AS":{"n":11,"es":11,"e":63.3,"c":1,"src":"p"},"CAR":{"n":46,"es":5,"e":21.2,"s":1,"c":1,"r":1,"src":"wp"},"EU":{"n":424,"es":353,"e":517.4,"s":1,"c":1,"src":"wpr"},"NA":{"n":516,"es":493,"e":878.6,"s":1,"c":1,"src":"wpr"},"SA":{"n":38,"es":34,"e":32.2,"s":1,"c":1,"r":1,"src":"wp"},"VK":{"n":8,"es":1,"e":4.2,"s":1,"c":1,"r":1,"src":"wp"}},"40m":{"AF":{"n":129,"es":105,"e":137.1,"s":1,"c":1,"src":"wp"},"AS":{"n":186,"es":181,"e":260.8,"s":1,"c":1,"r":1,"src":"wpr"},"CAR":{"n":107,"es":99,"e":53.4,"s":1,"c":1,"src":"wp"},"EU":{"n":3083,"es":2553,"e":3273.1,"s":1,"c":1,"src":"wpr"},"NA":{"n":1605,"es":1348,"e":1356.8,"s":1,"c":1,"src":"wpr"},"SA":{"n":109,"es":102,"e":72.4,"s":1,"c":1,"r":1,"src":"wp"},"VK":{"n":25,"es":11,"e":11.1,"s":1,"c":1,"r":1,"src":"wp"}},"60m":{"AF":{"n":13,"es":13,"e":8.7,"s":1,"c":1,"src":"p"},"EU":{"n":731,"es":599,"e":464.9,"s":1,"c":1,"src":"wp"},"NA":{"n":107,"es":105,"e":74.7,"s":1,"c":1,"r":1,"src":"wp"},"SA":{"n":5,"es":5,"e":0.7,"s":1,"c":1,"r":1,"z":3.5,"src":"p"}},"80m":{"AF":{"n":8,"es":8,"e":19.3,"s":1,"c":1,"src":"p"},"AN":{"n":1,"es":0,"e":0,"src":"w"},"AS":{"n":42,"es":42,"e":56,"s":1,"c":1,"src":"p"},"CAR":{"n":1,"es":1,"e":10.2,"c":1,"src":"p"},"EU":{"n":2270,"es":876,"e":2352.1,"s":1,"c":1,"src":"wpr"},"NA":{"n":64,"es":59,"e":74.1,"s":1,"c":1,"src":"pr"},"SA":{"n":3,"es":3,"e":2.6,"c":1,"src":"p"},"VK":{"n":2,"es":1,"e":0.5,"c":1,"src":"wp"}}},"norm":{"10m":{"AF":[0,0.5,0,0,0,4.0,3.4,21.0,35.7,69.5,100.9,131.7,140.5,122.0,94.0,62.1,30.9,23.6,19.8,22.5,10.5,2.0,1.5,0.5],"AS":[0.6,0.5,0.5,0.5,0.6,1.8,4.6,30.8,108.9,188.5,175.3,179.7,99.8,30.8,10.8,4.5,1.4,1.3,0.8,0.7,0.6,0.6,0.8,0.5],"CAR":[0.8,0,0.5,0,0,0,0,0,0.5,1.0,1.9,6.6,9.7,12.3,5.7,4.8,6.7,7.1,5.0,4.6,13.8,7.5,0.5,0.5],"EU":[3.1,2.3,2.5,2.9,3.0,5.6,27.3,87.8,201.8,413.9,496.1,575.8,528.5,435.3,292.6,190.4,149.0,154.9,73.9,41.8,12.8,5.5,3.0,2.8],"SA":[0.5,0,0,0.5,0.5,0,0,0,0.5,2.0,9.4,24.6,90.9,204.1,180.8,119.7,139.5,169.0,134.6,82.0,22.7,7.2,0.6,1.0]},"12m":{"AF":[0,0,0,0,0,5.2,8.2,15.1,32.3,49.0,56.0,58.1,64.8,72.7,68.2,58.5,44.1,18.0,8.3,5.5,2.6,0.7,0.5,0.5],"AS":[0.5,0.5,0.5,1.2,0.7,2.8,11.7,45.7,103.7,135.3,152.1,126.2,94.2,45.7,20.7,6.9,2.8,1.3,0.7,0.5,0.5,0.5,0.9,0],"CAR":[0,0,0,0,0,0,0,0,0,2.0,1.9,3.8,6.8,11.8,12.0,12.1,8.7,8.2,7.2,7.3,5.2,1.9,0.9,0],"EU":[1.7,1.8,2.1,2.2,1.6,2.2,12.4,50.4,137.3,248.6,304.4,336.9,302.9,231.8,194.8,185.2,151.7,83.5,30.4,19.3,7.5,2.2,2.2,2.1],"JA":[0,0,0,0,0,0.5,2.5,15.9,52.4,127.5,97.0,94.6,47.8,8.4,1.0,0.5,0.5,0.5,0.5,0,0,0,0.5,0],"SA":[0,0,0,0.5,0,0,0,0,0.5,3.3,9.1,12.4,27.1,49.0,48.2,49.8,56.2,47.1,36.4,29.8,14.8,5.1,2.2,0]},"15m":{"AF":[0.5,0,0,0.5,4.5,19.3,72.0,150.6,203.5,250.0,254.8,266.1,294.2,339.2,383.4,370.9,354.6,245.4,95.4,35.5,14.7,9.0,2.1,0.5],"AS":[0.5,0.5,2.0,2.9,10.4,68.4,284.2,583.7,750.9,873.5,842.6,884.4,803.1,679.8,527.0,302.8,138.6,52.2,12.5,3.0,1.3,0.8,0.5,0.5],"CAR":[0.8,0,0,0,1.5,0.5,0.5,3.1,1.6,4.1,17.4,48.6,72.4,89.7,110.6,129.0,122.3,119.1,111.0,77.4,50.8,26.2,10.9,2.8],"EU":[3.3,2.5,2.8,3.3,12.1,104.6,483.2,1248.8,2040.0,2567.3,2731.6,2805.9,2917.8,2822.7,2494.7,2355.5,2142.2,1664.1,955.0,450.4,210.2,61.1,8.8,3.4],"NA":[1.1,0.7,0.5,0.6,0.5,0.5,0.7,2.0,5.5,6.9,46.0,360.0,1156.5,2265.4,3213.0,3561.6,3314.3,2533.4,1616.7,1103.5,603.3,201.2,43.1,7.0],"SA":[5.9,2.1,0.5,0.5,0,0.5,0.8,1.1,3.1,35.8,68.6,103.8,164.7,202.5,224.9,255.6,344.6,469.4,509.8,342.0,161.7,68.8,13.9,6.1],"VK":[5.0,0.5,1.0,4.0,0.9,2.7,9.4,23.4,25.0,30.2,37.9,23.5,14.8,20.4,10.5,7.0,5.2,0.8,0.5,1.0,2.0,4.1,1.9,0.8]},"160m":{"AF":[3.3,3.2,2.9,2.9,1.7,5.3,0,0,0,0.5,0,0,0.5,2.0,0,0.5,1.0,2.1,2.2,3.7,4.7,6.7,4.8,3.2],"CAR":[3.3,2.2,2.1,1.8,2.6,1.7,0,0,0,0.5,0,0,0,0,0,0,0,0,0.5,0.5,0.5,0.9,1.8,2.9],"EU":[192.3,185.4,253.1,299.1,349.9,122.4,14.6,7.8,6.5,3.0,3.3,3.0,2.4,2.5,2.5,6.6,66.0,308.4,669.4,890.6,849.4,636.7,437.8,247.2]},"17m":{"AF":[1.3,1.1,0.5,2.0,3.4,7.0,20.5,48.0,60.3,73.2,67.8,73.1,79.8,97.2,121.2,134.5,131.0,150.2,83.9,42.9,19.9,8.3,4.8,1.1],"AS":[0.5,0.8,1.0,3.1,16.9,45.6,119.6,203.3,274.2,285.3,289.3,357.9,380.3,343.7,279.7,199.5,129.0,90.8,41.0,11.3,2.6,1.4,0.8,0.6],"CAR":[1.4,0.7,1.1,2.5,0,1.4,1.1,4.0,5.9,3.3,10.5,17.6,26.2,23.1,23.3,28.1,25.8,33.3,36.0,44.5,47.1,32.8,11.8,3.2],"EU":[3.1,1.9,2.2,3.6,23.9,133.3,460.4,937.1,1527.8,1744.7,1866.2,2007.7,2121.7,2091.6,2102.4,2174.8,2050.8,1915.1,1157.6,687.5,394.2,124.1,26.7,3.8],"JA":[0,0.8,0,0,3.5,26.2,121.5,321.4,396.6,386.9,506.4,671.2,514.5,255.6,88.1,26.5,15.2,6.7,7.1,3.5,2.8,1.5,0.5,0.5],"NA":[11.5,5.0,0.9,0.8,0.7,0.6,1.3,2.0,4.5,6.9,102.8,392.5,806.0,1185.7,1486.7,1679.2,1619.0,1693.2,1438.4,1359.8,1272.8,681.6,178.7,28.4],"SA":[2.9,2.0,3.4,0.8,0,0.5,1.1,1.1,5.4,17.6,10.1,7.5,7.2,7.3,11.0,15.0,30.1,51.5,81.5,104.3,94.8,42.6,12.4,4.6],"VK":[1.5,1.2,0.8,0.5,0.6,2.1,10.9,21.0,14.8,11.0,13.9,20.1,23.8,20.6,14.3,12.0,8.7,5.9,2.3,2.4,3.2,4.6,4.3,2.1]},"20m":{"AF":[18.9,17.5,8.8,24.5,65.3,128.7,198.7,223.2,187.0,169.7,143.1,145.3,156.4,189.7,219.6,259.0,321.7,351.7,345.4,251.7,191.1,126.7,76.2,33.4],"AS":[8.2,6.7,10.2,79.3,311.5,504.1,636.3,683.0,660.0,567.7,629.9,801.1,963.0,1258.3,1377.2,1221.2,983.1,700.2,533.3,372.1,153.0,32.7,13.7,10.9],"CAR":[33.3,21.6,12.9,5.7,5.7,8.6,29.5,40.8,35.1,33.2,59.7,59.5,38.3,24.6,16.0,19.4,24.8,36.3,75.3,102.0,122.1,113.7,73.6,45.4],"EU":[105.1,70.5,71.3,207.2,1087.8,3080.9,6454.3,8883.5,9586.5,9760.5,9502.8,9678.3,9814.6,10080.2,9569.0,9378.9,9936.5,9959.3,8899.8,5912.2,3122.4,1405.2,481.8,175.6],"JA":[1.5,0,2.5,2.0,3.8,28.1,96.8,195.8,151.2,106.3,199.8,383.4,402.3,366.2,273.8,170.5,169.2,131.5,163.3,138.2,51.1,9.5,2.9,0.6],"NA":[493.5,237.6,112.9,26.5,9.5,41.5,104.6,144.9,171.5,248.8,1218.8,2530.8,2743.0,2528.9,2274.6,2340.8,2721.6,3441.1,4368.0,5490.0,6295.3,5060.0,2667.4,992.3],"SA":[55.9,41.5,34.6,21.5,10.6,23.2,43.0,44.9,45.1,33.0,10.1,9.4,8.3,6.2,7.2,4.4,5.3,15.6,61.4,163.8,353.9,328.2,161.7,82.5],"VK":[6.3,5.4,11.3,17.4,21.2,111.8,448.1,475.0,229.4,73.0,20.3,16.8,36.1,59.8,67.5,89.6,94.9,79.8,67.6,51.8,57.3,14.6,4.6,5.0]},"2m":{"EU":[12.8,13.7,9.6,7.9,17.8,49.2,117.0,252.8,418.8,397.4,295.1,237.9,223.9,240.8,271.9,295.0,269.1,351.6,391.0,291.1,133.4,45.6,20.4,15.4]},"30m":{"AF":[24.5,20.4,19.9,16.5,14.9,19.6,24.2,27.9,16.3,10.2,6.7,4.1,3.8,5.9,11.3,14.9,26.7,39.0,56.2,67.7,60.4,55.4,44.0,31.0],"AS":[26.6,33.8,34.7,52.0,84.4,70.5,53.0,32.5,19.8,17.6,21.6,32.5,59.8,120.5,184.9,224.6,255.7,233.8,207.5,164.6,139.2,112.6,73.5,39.4],"CAR":[26.1,27.7,19.1,12.3,9.3,10.2,12.9,11.3,8.3,3.5,1.6,1.0,0.5,0,7.5,0,0.5,1.2,1.1,5.2,14.9,22.5,23.4,20.1],"EU":[198.4,173.0,208.1,398.6,790.5,1571.1,2677.1,2899.3,2055.2,1734.4,1451.7,1290.3,1278.8,1584.4,2032.5,2464.6,3072.5,3480.1,3628.5,3307.1,2358.5,1345.3,630.0,303.9],"JA":[2.9,8.0,0,0.5,0.5,0.7,4.1,18.2,4.1,4.0,4.3,11.9,9.9,13.3,25.2,35.6,40.8,51.7,78.1,118.8,199.6,195.0,31.8,3.0],"NA":[667.5,500.8,393.9,223.8,158.1,216.2,410.1,328.4,193.7,151.4,129.2,93.1,41.4,28.3,31.1,42.0,53.2,101.8,206.9,381.5,658.8,892.8,860.8,744.9],"SA":[26.9,23.1,29.9,23.9,13.7,15.2,18.5,11.9,3.8,1.2,0.6,1.1,0.8,0.5,0.6,1.0,0.6,0.5,2.0,8.9,30.2,44.9,33.0,20.3],"VK":[1.2,1.3,2.4,6.8,14.3,54.6,119.9,116.9,31.8,7.1,1.5,1.3,2.6,5.0,11.1,21.8,34.0,38.8,44.0,41.6,40.2,24.4,6.9,2.3]},"40m":{"AF":[88.3,81.8,85.7,81.2,44.1,42.8,45.6,28.9,9.4,2.5,1.2,1.4,1.2,1.0,1.9,6.2,21.5,57.0,78.5,112.6,118.3,159.6,150.7,113.8],"AS":[221.0,241.4,261.4,152.1,82.1,41.0,10.1,4.2,4.4,4.5,3.8,4.9,7.1,19.0,96.6,266.5,451.6,516.6,443.7,366.5,326.0,347.6,276.4,226.3],"CAR":[82.8,98.7,91.2,70.5,48.6,46.1,40.1,18.5,2.9,0.8,0.8,1.8,0.5,0.5,0.5,0.8,0.6,3.5,0.6,0.7,3.8,26.6,43.9,69.0],"EU":[1676.2,1544.8,1956.5,2643.1,3835.7,6520.3,7908.5,7760.9,7032.4,6429.2,4984.6,4265.9,4360.1,5075.2,6496.8,8160.9,9224.3,11447.7,13300.5,11874.0,8581.8,6178.2,3669.8,2257.1],"JA":[0.5,0.5,0.8,0.8,0.5,0.5,0.6,3.9,0.9,1.4,0.8,0.7,1.0,0.8,3.8,3.4,10.4,39.4,74.1,128.9,220.6,144.6,9.6,3.5],"NA":[1894.9,1809.0,1798.5,1534.2,1406.6,1695.9,1127.0,543.5,151.8,31.2,4.1,1.6,1.8,1.2,3.2,3.6,5.3,6.6,24.2,100.4,289.1,759.1,1201.7,1806.2],"SA":[102.2,103.5,100.3,84.4,80.2,104.4,66.2,18.8,4.2,1.5,0.8,0.5,0.8,1.4,2.9,0.6,0.6,1.6,0.5,3.5,20.0,62.9,68.0,83.6],"VK":[4.4,5.4,2.3,1.7,12.2,66.1,89.7,45.9,4.8,0.8,0.8,0.6,0.5,1.5,1.2,14.6,46.2,66.6,68.5,55.1,54.0,33.5,15.9,3.1]},"60m":{"AF":[4.8,4.9,5.8,5.8,8.9,10.2,3.3,0.7,1.2,0.5,0.5,0.5,0,4.0,0.5,0.5,0.8,3.4,7.4,10.0,10.9,12.0,8.8,7.3],"CAR":[5.9,7.8,8.8,8.8,9.0,9.6,3.6,1.1,0.5,0,0.5,0,0,0,0,0.5,0.5,0.5,0,0.5,0.5,0.8,5.4,4.2],"EU":[241.8,232.2,286.0,436.8,667.0,960.9,613.8,162.6,54.9,46.8,30.7,27.8,34.0,35.6,68.0,107.1,271.5,707.5,1088.5,1359.6,1155.1,837.2,508.2,316.7],"NA":[117.2,124.7,149.9,172.7,197.7,187.7,57.3,7.0,0.7,0.5,0.5,2.6,0.5,0.5,0.6,0.9,0.6,0.8,0.7,1.3,9.9,33.6,67.0,98.6],"SA":[2.7,3.3,3.4,3.8,5.2,5.5,1.8,0.8,0,0.5,0,0,0,0,0,0.5,0,0.8,0.5,0.5,0.9,1.5,2.2,3.0],"VK":[0,0.5,0,0,1.6,13.8,7.8,0.6,0,0,0,0,0,0,0,0,1.0,1.0,1.1,0.8,0.9,1.1,0.8,0]},"6m":{"EU":[1.6,1.5,1.5,1.7,1.8,2.7,7.0,8.6,12.7,19.4,14.1,12.7,15.5,16.3,16.3,10.6,7.5,8.7,8.9,4.6,4.1,2.5,1.6,1.4]},"80m":{"AF":[10.2,9.2,9.8,13.4,15.2,19.5,2.5,0.8,0.5,0.5,0.5,0,0.5,0,0.5,0.6,2.9,5.5,10.8,19.4,21.9,24.1,19.8,16.3],"AS":[57.4,66.7,45.4,8.5,3.2,4.1,2.1,0.9,0.7,0.9,0.5,0.6,0.6,0.6,1.9,6.7,24.6,67.8,73.9,62.4,47.9,51.0,52.8,50.5],"CAR":[8.7,12.9,15.4,13.7,16.6,13.3,3.2,0.6,0.5,0.5,0.5,0,0,0,0,1.0,1.0,0.6,0,0.5,0,1.9,9.7,7.5],"EU":[1505.7,1605.3,1854.0,2543.8,3205.8,3023.0,1159.0,190.6,48.1,28.7,21.5,19.8,19.2,33.2,44.8,218.2,944.6,2657.5,4303.0,5142.8,4733.2,3896.0,2598.1,1771.8],"NA":[173.8,206.4,230.9,307.7,409.9,401.3,49.6,1.8,0.5,0.7,0.5,1.3,1.3,1.4,1.0,0.7,0.8,2.5,1.0,1.5,3.0,12.3,55.3,141.7],"SA":[6.8,10.8,9.8,9.7,8.2,7.1,0.9,0.5,0.5,0.5,3.0,0,2.5,0,0.5,0.5,1.1,2.7,3.2,1.2,1.0,1.7,3.5,4.7],"VK":[1.9,2.0,0,0.5,0.5,2.6,1.7,0,1.0,0,0.5,0,0,0,0.5,0.5,4.2,9.3,5.4,4.8,4.3,1.9,1.9,1.0]}},"now":1791154390};
+const H = new Date(D.now * 1000).getUTCHours(), MIN = new Date(D.now * 1000).getUTCMinutes();
+const BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m'];
+const REGIONS = ['EU', 'NA', 'SA', 'AF', 'AS', 'JA', 'OC', 'VK', 'KH6', 'CAR'];
+const BC = { '160m': '#8B0000', '80m': '#800080', '60m': '#4B0082', '40m': '#0000FF', '30m': '#03b1b1', '20m': '#008000', '17m': '#808000',
+  '15m': '#FFA500', '12m': '#00FFFF', '10m': '#FF0000', '6m': '#FF00FF', '4m': '#FF1493', '2m': '#008080' };
+const MHZ = { '160m': '1.8', '80m': '3.5', '60m': '5.3', '40m': '7', '30m': '10', '20m': '14', '17m': '18', '15m': '21', '12m': '24', '10m': '28' };
+// Approximate short-path bearings from JO32 to each region's centre, and a west-to-east order.
+const BEARING = { EU: 115, NA: 300, SA: 230, AF: 165, AS: 60, JA: 35, OC: 50, VK: 80, KH6: 345, CAR: 275 };
+const WEST_EAST = ['NA', 'CAR', 'SA', 'EU', 'AF', 'AS', 'JA', 'OC', 'VK', 'KH6'];
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const step = (n) => n <= 0 ? 0 : n < 10 ? 1 : n < 100 ? 2 : n < 1000 ? 3 : n < 10000 ? 4 : 5;
+const log5 = (n) => clamp(Math.log10(n + 1) / 5, 0, 1);
+const fmt = (n) => n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n));
+const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+const fmtF = (F) => F == null ? '' : F < 0.05 ? '×0' : F >= 10 ? `×${Math.round(F)}` : `×${F.toFixed(1)}`;
+function hash(s) { let h = 2166136261; for (const ch of s) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967296; }
+
+// model(): one record per cell. lf = log2(now / normal) clamped to ±3; null when there is no usable normal.
+// silent: no traffic now but a normal of at least 5 at this hour.
+function model(b, r) {
+  const c = D.cells[b]?.[r];
+  const curve = D.norm[b]?.[r];
+  const e = c?.e ?? curve?.[H] ?? 0;
+  if (!c) return e >= 5 ? { silent: true, e, n: 0, es: 0, lf: -3, curve } : null;
+  const es = c.es ?? c.n;
+  let lf = null, F = null;
+  if (e >= 1) { F = es / e; lf = clamp(Math.log2(Math.max(es, 0.5) / e), -3, 3); }
+  else if (es >= 5) { F = es / Math.max(e, 0.5); lf = 3; }
+  return { ...c, es, e, lf, F, curve };
+}
+const fclass = (m) => m.lf == null ? 'none' : Math.abs(m.lf) < 0.5 ? 'near' : Math.abs(m.lf) < 1.5 ? 'mid' : 'far';
+const cwOnly = (m) => !m.s && m.c;
+function tip(b, r, m) {
+  if (!m) return '';
+  if (m.silent) return esc(`${b} to ${r}: no reports now, usually about ${fmt(m.e)} at this hour`);
+  const p = [`${b} to ${r}: ${m.n.toLocaleString('en-US')} reports`];
+  if (m.e >= 1) p.push(`PSKReporter ${m.es} now, normal about ${fmt(m.e)} (${fmtF(m.F)})`);
+  else if (m.es > 0) p.push(`PSKReporter ${m.es} now, normally under 1 at this hour`);
+  if (m.s) p.push('SSB workable'); else if (m.c) p.push('CW workable');
+  if (m.r) p.push('rising');
+  if (m.z) p.push(`surge z=${m.z}`);
+  return esc(p.join(', '));
+}
+function rowStats(b) {
+  let es = 0, e = 0, n = 0;
+  for (const r of REGIONS) { const m = model(b, r); if (!m || m.silent) continue; n += m.n; if (m.e >= 1) { es += m.es; e += m.e; } }
+  const F = e > 0 ? es / e : null;
+  const v = F == null ? '' : F < 0.67 ? 'quiet' : F > 1.5 ? 'busy' : '';
+  return { n, F, v };
+}
+function rowHeader(b, extra) {
+  const s = rowStats(b);
+  const p = s.n ? `${fmt(s.n)}${s.F != null ? ` · ${fmtF(s.F)}` : ''}` : '';
+  return `<th class="band" style="--bc:${BC[b]}">${b}${extra ? ` <small style="font-weight:400;color:var(--mmuted)">${extra}</small>` : ''}` +
+    `${s.v ? `<span class="v">${s.v}</span>` : ''}${p ? `<span class="p">${p}</span>` : (s.n ? '' : '<span class="p">no reports</span>')}</th>`;
+}
+function tableShell(headCells, rows, legend, note, headW = 78) {
+  return (note ? `<div class="mt">${note}</div>` : '') +
+    `<table><thead><tr><th style="width:${headW}px"></th>${headCells}</tr></thead><tbody>${rows}</tbody></table>` +
+    (legend ? `<div class="legend">${legend}</div>` : '');
+}
+const regionHead = REGIONS.map((r) => `<th>${r}</th>`).join('');
+const grid = (cellFn, head = regionHead, legend = '', note = '') =>
+  tableShell(head, BANDS.map((b) => `<tr>${rowHeader(b)}${REGIONS.map((r) => cellFn(b, r, model(b, r))).join('')}</tr>`).join(''), legend, note);
+const INK = 'var(--mfg)';
+
+// --- 0. Numbers only -----------------------------------------------------------------
+function opt0() {
+  return grid((b, r, m) => {
+    if (!m) return '<td></td>';
+    if (m.silent) return `<td class="num silent" title="${tip(b, r, m)}"><b>silent</b><small>usually ${fmt(m.e)}</small></td>`;
+    const cls = ['num', fclass(m), m.lf != null && m.lf <= -0.5 ? 'below' : '', cwOnly(m) ? 'cwonly' : '', m.z ? 'surge' : ''].filter(Boolean).join(' ');
+    const main = m.lf == null ? fmt(m.n) : fmtF(m.F);
+    return `<td class="${cls}" title="${tip(b, r, m)}"><b>${main}</b><small>${m.lf == null ? 'no normal' : fmt(m.n)}</small></td>`;
+  }, regionHead, '<span>figure = reports now against the normal for this hour; heavier type = further from normal, light = below</span><span>small print = all-source reports</span><span>dotted = CW only</span><span>• surge</span>');
+}
+
+// --- 1. Bullet bars ------------------------------------------------------------------
+function bullet(b, r, m, dark) {
+  if (!m) return '<td></td>';
+  const W = 42, x0 = 1, y = 7, h = 8;
+  const xn = x0 + (W - 2) * log5(m.n), xe = x0 + (W - 2) * log5(m.e);
+  const faint = dark ? .35 : .28, soft = dark ? .62 : .55;
+  let s = `<svg width="${W}" height="18" viewBox="0 0 ${W} 18" role="img" aria-label="${tip(b, r, m)}">`;
+  s += `<line x1="${x0}" x2="${W - 1}" y1="${y + h}" y2="${y + h}" stroke="${INK}" stroke-opacity=".18"/>`;
+  if (m.silent) {
+    s += `<line x1="${xe}" x2="${xe}" y1="${y - 3}" y2="${y + h + 2}" stroke="${INK}" stroke-opacity=".5" stroke-width="2" stroke-dasharray="2 1.5"/>`;
+  } else {
+    const hollow = cwOnly(m);
+    if (m.e >= 1 && xn > xe) {
+      // up to the tick in soft ink, the excess in full ink
+      s += `<rect x="${x0}" y="${y}" width="${(xe - x0).toFixed(1)}" height="${h}" fill="${INK}" fill-opacity="${soft}"/>`;
+      s += `<rect x="${xe.toFixed(1)}" y="${y}" width="${(xn - xe).toFixed(1)}" height="${h}" fill="${INK}"/>`;
+    } else {
+      s += hollow
+        ? `<rect x="${x0 + .5}" y="${y + .5}" width="${Math.max(1, xn - x0 - 1).toFixed(1)}" height="${h - 1}" fill="none" stroke="${INK}" stroke-opacity="${soft + .2}"/>`
+        : `<rect x="${x0}" y="${y}" width="${(xn - x0).toFixed(1)}" height="${h}" fill="${INK}" fill-opacity="${soft}"/>`;
+      if (m.e >= 1 && xe > xn + 1) s += `<line x1="${xn + 1}" x2="${xe}" y1="${y + h / 2}" y2="${y + h / 2}" stroke="${INK}" stroke-opacity="${faint}" stroke-dasharray="1.5 1.5"/>`;
+    }
+    if (m.e >= 1) s += `<line x1="${xe.toFixed(1)}" x2="${xe.toFixed(1)}" y1="${y - 3}" y2="${y + h + 2}" stroke="${INK}" stroke-width="2"/>`;
+    if (m.z) s += `<circle cx="${W - 2}" cy="2.5" r="2" fill="${INK}"/>`;
+  }
+  return `<td title="${tip(b, r, m)}">${s}</svg></td>`;
+}
+function opt1(dark) {
+  const key = `<svg width="60" height="14" viewBox="0 0 60 14"><rect x="1" y="3" width="24" height="8" fill="${INK}" fill-opacity=".55"/><rect x="25" y="3" width="14" height="8" fill="${INK}"/><line x1="25" x2="25" y1="0" y2="13" stroke="${INK}" stroke-width="2"/></svg>`;
+  return grid((b, r, m) => bullet(b, r, m, dark), regionHead,
+    `<span>${key} bar = reports now, tick = normal for this hour, both log over five decades; the part past the tick is the excess</span><span>dotted gap = shortfall</span><span>hollow = CW only</span><span>dashed tick alone = usually open, silent now</span><span>• surge</span>`);
+}
+
+// --- 2. Deviation stems --------------------------------------------------------------
+function stem(b, r, m, dark) {
+  const W = 44, Hh = 44, mid = 22, x = 22;
+  let s = `<svg width="${W}" height="${Hh}" viewBox="0 0 ${W} ${Hh}" role="img" aria-label="${tip(b, r, m)}">`;
+  s += `<line x1="-2" x2="${W + 2}" y1="${mid}" y2="${mid}" stroke="${INK}" stroke-opacity="${dark ? .3 : .22}"/>`;
+  if (m) {
+    const rad = 1.6 + step(m.n) * 0.75;
+    if (m.silent) {
+      s += `<line x1="${x}" x2="${x}" y1="${mid}" y2="${mid + 15}" stroke="${INK}" stroke-opacity=".45" stroke-dasharray="2 2"/>`;
+      s += `<circle cx="${x}" cy="${mid + 16}" r="2.6" fill="none" stroke="${INK}" stroke-opacity=".5" stroke-dasharray="1.5 1.2"/>`;
+    } else if (m.lf == null) {
+      s += `<circle cx="${x}" cy="${mid}" r="${rad}" fill="${INK}" fill-opacity=".35"/>`;
+    } else {
+      const dy = -m.lf * 6, y1 = mid + dy;
+      const w = 1 + step(m.n) * 0.35;
+      if (Math.abs(dy) > 1.5) s += `<line x1="${x}" x2="${x}" y1="${mid}" y2="${y1.toFixed(1)}" stroke="${INK}" stroke-width="${w.toFixed(1)}" stroke-opacity="${m.lf < 0 ? .55 : 1}"/>`;
+      s += cwOnly(m)
+        ? `<circle cx="${x}" cy="${y1.toFixed(1)}" r="${rad.toFixed(1)}" fill="var(--mbg)" stroke="${INK}" stroke-width="1.4" stroke-opacity="${m.lf < 0 ? .6 : 1}"/>`
+        : `<circle cx="${x}" cy="${y1.toFixed(1)}" r="${rad.toFixed(1)}" fill="${INK}" fill-opacity="${m.lf < 0 ? .5 : 1}"/>`;
+      if (m.z) s += `<circle cx="${x}" cy="${y1.toFixed(1)}" r="${(rad + 3).toFixed(1)}" fill="none" stroke="${INK}" stroke-width="1"/>`;
+    }
+  }
+  return `<td title="${tip(b, r, m)}" style="padding:0">${s}</svg></td>`;
+}
+function opt2(dark) {
+  const key = `<svg width="86" height="26" viewBox="0 0 86 26"><line x1="0" x2="86" y1="13" y2="13" stroke="${INK}" stroke-opacity=".3"/>
+    <line x1="10" x2="10" y1="13" y2="3" stroke="${INK}" stroke-width="2"/><circle cx="10" cy="3" r="3" fill="${INK}"/>
+    <circle cx="30" cy="13" r="2.5" fill="${INK}"/>
+    <line x1="50" x2="50" y1="13" y2="22" stroke="${INK}" stroke-opacity=".55"/><circle cx="50" cy="22" r="2.5" fill="${INK}" fill-opacity=".5"/>
+    <circle cx="70" cy="7" r="2.5" fill="var(--mbg)" stroke="${INK}" stroke-width="1.4"/><circle cx="70" cy="7" r="5.5" fill="none" stroke="${INK}"/></svg>`;
+  return grid((b, r, m) => stem(b, r, m, dark), regionHead,
+    `<span>${key} above normal · normal · below normal · hollow = CW only, ring = surge</span><span>stem = log factor, ×2 per notch up to ×8; dot = reports now (five sizes)</span><span>dashed drop = usually open, silent now</span>`);
+}
+
+// --- 3. Dot strip ----------------------------------------------------------------------
+function opt3(dark) {
+  const W = 430, PAD = 14, cx = (lf) => PAD + (W - 2 * PAD) * (lf + 3) / 6;
+  const ticks = [[-3, '⅛'], [-2, '¼'], [-1, '½'], [0, '×1'], [1, '2'], [2, '4'], [3, '8']];
+  const axis = `<svg width="${W}" height="14" viewBox="0 0 ${W} 14">${ticks.map(([lf, t]) => `<text x="${cx(lf).toFixed(1)}" y="11" text-anchor="middle" font-size="9.5" fill="${INK}" fill-opacity="${lf === 0 ? .9 : .55}" font-weight="${lf === 0 ? 700 : 400}">${t}</text>`).join('')}</svg>`;
+  const rows = BANDS.map((b) => {
+    const ms = REGIONS.map((r) => [r, model(b, r)]).filter(([, m]) => m).sort((a, c) => a[1].lf - c[1].lf);
+    let s = `<svg width="${W}" height="40" viewBox="0 0 ${W} 40" style="overflow:visible">`;
+    for (const [lf] of ticks) s += `<line x1="${cx(lf).toFixed(1)}" x2="${cx(lf).toFixed(1)}" y1="2" y2="36" stroke="${INK}" stroke-opacity="${lf === 0 ? .45 : .1}"/>`;
+    let lastX = -99, lvl = 0;
+    for (const [r, m] of ms) {
+      const x = cx(m.lf ?? 0), rad = m.silent ? 2.6 : 1.8 + step(m.n) * 0.8;
+      lvl = (x - lastX < 30) ? (lvl + 1) % 3 : 0; lastX = x;
+      const ly = [9, 35, 2][lvl];
+      if (m.silent) s += `<circle cx="${x.toFixed(1)}" cy="20" r="${rad}" fill="none" stroke="${INK}" stroke-opacity=".5" stroke-dasharray="1.5 1.2"><title>${tip(b, r, m)}</title></circle>`;
+      else if (cwOnly(m)) s += `<circle cx="${x.toFixed(1)}" cy="20" r="${rad.toFixed(1)}" fill="var(--mbg)" stroke="${INK}" stroke-width="1.4"><title>${tip(b, r, m)}</title></circle>`;
+      else s += `<circle cx="${x.toFixed(1)}" cy="20" r="${rad.toFixed(1)}" fill="${INK}" fill-opacity="${m.lf != null && m.lf < -0.5 ? .55 : 1}"><title>${tip(b, r, m)}</title></circle>`;
+      if (m.z) s += `<circle cx="${x.toFixed(1)}" cy="20" r="${(rad + 3).toFixed(1)}" fill="none" stroke="${INK}"/>`;
+      s += `<text x="${x.toFixed(1)}" y="${ly}" text-anchor="middle" font-size="9.5" font-weight="600" fill="${INK}" fill-opacity="${m.silent ? .5 : .85}">${r}</text>`;
+    }
+    return `<tr>${rowHeader(b)}<td style="padding:0 4px">${s}</svg></td></tr>`;
+  }).join('');
+  return tableShell(`<th class="axis">${axis}</th>`, rows, '<span>each region sits where it stands against its normal for this hour; centre line = normal, right = busier than usual</span><span>dot size = reports now</span><span>hollow = CW only, ring = surge, dashed = usually open, silent now</span>');
+}
+
+// --- 4. Doubling pips ----------------------------------------------------------------
+function pips(b, r, m) {
+  if (!m) return '<td></td>';
+  const W = 44, y = 7, dx = 6, x0 = 4;
+  let s = `<svg width="${W}" height="16" viewBox="0 0 ${W} 16" role="img" aria-label="${tip(b, r, m)}">`;
+  const k = m.lf == null ? 0 : Math.round(m.lf);
+  for (let i = -3; i <= 3; i++) {
+    const x = x0 + (i + 3) * dx;
+    let lit = false, ring = false;
+    if (m.silent) { lit = false; ring = i <= 0; }
+    else if (i === 0) lit = true;
+    else if (i > 0 && k >= i) lit = true;
+    else if (i < 0 && k <= i) ring = true;
+    if (lit) s += cwOnly(m) ? `<rect x="${x - 2.6}" y="${y - 2.6}" width="5.2" height="5.2" fill="${INK}"/>` : `<circle cx="${x}" cy="${y}" r="2.9" fill="${INK}"/>`;
+    else if (ring) s += `<circle cx="${x}" cy="${y}" r="2.6" fill="none" stroke="${INK}" stroke-width="1.1" stroke-opacity="${m.silent ? .45 : .8}" ${m.silent ? 'stroke-dasharray="1.5 1.2"' : ''}/>`;
+    else s += `<circle cx="${x}" cy="${y}" r="1" fill="${INK}" fill-opacity=".22"/>`;
+  }
+  if (!m.silent) s += `<line x1="${x0 - 2}" x2="${(x0 - 2 + 40 * log5(m.n)).toFixed(1)}" y1="14.5" y2="14.5" stroke="${INK}" stroke-opacity="${m.z ? 1 : .35}" stroke-width="${m.z ? 2 : 1.2}"/>`;
+  return `<td title="${tip(b, r, m)}">${s}</svg></td>`;
+}
+function opt4() {
+  const key = (k, sq) => { let s = `<svg width="44" height="12" viewBox="0 0 44 12">`; for (let i = -3; i <= 3; i++) { const x = 4 + (i + 3) * 6; const lit = i === 0 || (i > 0 && k >= i), ring = i < 0 && k <= i; s += lit ? (sq ? `<rect x="${x - 2.6}" y="3.4" width="5.2" height="5.2" fill="${INK}"/>` : `<circle cx="${x}" cy="6" r="2.9" fill="${INK}"/>`) : ring ? `<circle cx="${x}" cy="6" r="2.6" fill="none" stroke="${INK}" stroke-width="1.1"/>` : `<circle cx="${x}" cy="6" r="1" fill="${INK}" fill-opacity=".22"/>`; } return s + '</svg>'; };
+  return grid((b, r, m) => pips(b, r, m), regionHead,
+    `<span>${key(0)} normal</span><span>${key(2)} ×4 (two doublings)</span><span>${key(-2)} ×¼ (two halvings)</span><span>${key(1, true)} squares = CW only</span><span>underline = reports now (log); heavy underline = surge</span><span>dashed rings = usually open, silent now</span>`);
+}
+
+// --- 5. Tilt field ----------------------------------------------------------------------
+function tilt(b, r, m, dark) {
+  if (!m) return '<td></td>';
+  const W = 44, Hh = 32, cx = 22, cy = 16, L = 13;
+  const lf = m.lf ?? 0, a = lf * 20 * Math.PI / 180;
+  const x1 = cx - L * Math.sin(a), y1 = cy + L * Math.cos(a), x2 = cx + L * Math.sin(a), y2 = cy - L * Math.cos(a);
+  const w = m.silent ? 1 : 0.9 + step(m.n) * 0.55;
+  let s = `<svg width="${W}" height="${Hh}" viewBox="0 0 ${W} ${Hh}" role="img" aria-label="${tip(b, r, m)}">`;
+  s += `<line x1="${cx - 5}" x2="${cx + 5}" y1="${cy + L + 2}" y2="${cy + L + 2}" stroke="${INK}" stroke-opacity=".15"/>`;
+  if (m.silent) s += `<line x1="${cx}" x2="${cx}" y1="${cy + L}" y2="${cy - L}" stroke="${INK}" stroke-opacity=".4" stroke-dasharray="2 2"/>`;
+  else s += `<line x1="${x1.toFixed(1)}" x2="${x2.toFixed(1)}" y1="${y1.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${INK}" stroke-width="${w.toFixed(1)}" stroke-linecap="round" stroke-opacity="${lf < -0.5 ? .55 : 1}" ${cwOnly(m) ? 'stroke-dasharray="3 2.2"' : ''}/>`;
+  if (m.z) s += `<circle cx="${x2.toFixed(1)}" cy="${y2.toFixed(1)}" r="${(w / 2 + 2.2).toFixed(1)}" fill="none" stroke="${INK}"/>`;
+  return `<td title="${tip(b, r, m)}" style="padding:0">${s}</svg></td>`;
+}
+function opt5(dark) {
+  const k = (lf, w, dash) => { const a = lf * 20 * Math.PI / 180, L = 9; return `<svg width="22" height="22" viewBox="0 0 22 22"><line x1="${(11 - L * Math.sin(a)).toFixed(1)}" y1="${(11 + L * Math.cos(a)).toFixed(1)}" x2="${(11 + L * Math.sin(a)).toFixed(1)}" y2="${(11 - L * Math.cos(a)).toFixed(1)}" stroke="${INK}" stroke-width="${w}" stroke-linecap="round" ${dash ? 'stroke-dasharray="3 2"' : ''}/></svg>`; };
+  return grid((b, r, m) => tilt(b, r, m, dark), regionHead,
+    `<span>${k(-3, 2)} ×⅛ ${k(-1, 2)} ×½ ${k(0, 2)} normal ${k(1, 2)} ×2 ${k(3, 2)} ×8: the needle leans right as the cell runs above its normal</span><span>${k(0, 1)}${k(0, 2.5)}${k(0, 3.6)} weight = reports now</span><span>${k(1, 2, true)} dotted = CW only</span><span>ring at the tip = surge</span><span>faint upright dashes = usually open, silent now</span>`);
+}
+
+// --- 6. Day strip ----------------------------------------------------------------------
+function dayStrip(b, r, m, dark) {
+  if (!m) return '<td></td>';
+  const W = 44, Hh = 30, top = 3, base = 27;
+  const curve = m.curve || [];
+  const max = Math.max(1, ...curve, m.es || 0);
+  const yOf = (v) => base - (base - top) * Math.sqrt(v / max);   // square root keeps the small hours visible
+  const xOf = (h) => (W - 2) * h / 24 + 1;
+  let s = `<svg width="${W}" height="${Hh}" viewBox="0 0 ${W} ${Hh}" role="img" aria-label="${tip(b, r, m)}">`;
+  if (curve.length === 24) {
+    const pts = curve.map((v, i) => `${xOf(i + 0.5).toFixed(1)} ${yOf(v).toFixed(1)}`);
+    s += `<path d="M${xOf(0)} ${base} L${pts.join(' L')} L${xOf(24)} ${base}Z" fill="${INK}" fill-opacity="${dark ? .22 : .14}"/>`;
+    s += `<path d="M${pts.join(' L')}" fill="none" stroke="${INK}" stroke-opacity="${dark ? .55 : .4}" stroke-width="1"/>`;
+  }
+  s += `<line x1="1" x2="${W - 1}" y1="${base}" y2="${base}" stroke="${INK}" stroke-opacity=".25"/>`;
+  const xn = xOf(H + MIN / 60);
+  s += `<line x1="${xn.toFixed(1)}" x2="${xn.toFixed(1)}" y1="${top - 2}" y2="${base + 1}" stroke="${INK}" stroke-opacity=".5" stroke-dasharray="1.5 1.5"/>`;
+  if (!m.silent) {
+    const y = yOf(m.es), rad = 2.6;
+    s += cwOnly(m) ? `<circle cx="${xn.toFixed(1)}" cy="${y.toFixed(1)}" r="${rad}" fill="var(--mbg)" stroke="${INK}" stroke-width="1.4"/>` : `<circle cx="${xn.toFixed(1)}" cy="${y.toFixed(1)}" r="${rad}" fill="${INK}"/>`;
+    if (m.z) s += `<circle cx="${xn.toFixed(1)}" cy="${y.toFixed(1)}" r="${rad + 2.5}" fill="none" stroke="${INK}"/>`;
+  }
+  return `<td title="${tip(b, r, m)}" style="padding:1px 0">${s}</svg></td>`;
+}
+function opt6(dark) {
+  const key = `<svg width="60" height="22" viewBox="0 0 60 22"><path d="M1 20 L8 19 L16 14 L24 6 L32 4 L40 8 L48 15 L58 19 L58 20Z" fill="${INK}" fill-opacity=".16"/><path d="M8 19 L16 14 L24 6 L32 4 L40 8 L48 15 L58 19" fill="none" stroke="${INK}" stroke-opacity=".45"/><line x1="44" x2="44" y1="1" y2="21" stroke="${INK}" stroke-opacity=".5" stroke-dasharray="1.5 1.5"/><circle cx="44" cy="7" r="2.6" fill="${INK}"/></svg>`;
+  return grid((b, r, m) => dayStrip(b, r, m, dark), REGIONS.map((r) => `<th>${r}</th>`).join(''),
+    `<span>${key} shaded = this path's usual day (00 to 24 UTC, 28-day mean), dashed line = now, dot = reports now: above the curve is better than usual</span><span>hollow = CW only, ring = surge</span><span>no dot = usually open, silent now</span>`,
+    `curves are real: hourly normals for the JO32 block; the dot is the live PSKReporter count`);
+}
+
+// --- 7. Sparkline against normal --------------------------------------------------------
+function series(b, r, m) {
+  // Illustrative: twelve 5-minute bins ending at the live count, trending up when the backend says rising.
+  const end = Math.max(m.es, 0.3), k = `${b}:${r}`;
+  const start = m.r ? end / (1.5 + hash(k)) : end * (0.8 + hash(k) * 0.5);
+  const out = [];
+  for (let i = 0; i < 12; i++) { const t = i / 11; const base = start + (end - start) * (t * t * 0.6 + t * 0.4); out.push(Math.max(0, base * (0.86 + 0.28 * hash(k + i)))); }
+  out[11] = end; return out;
+}
+function spark(b, r, m, dark) {
+  if (!m) return '<td></td>';
+  const W = 44, Hh = 28, top = 3, base = 25;
+  if (m.silent) return `<td title="${tip(b, r, m)}" style="padding:1px 0"><svg width="${W}" height="${Hh}" viewBox="0 0 ${W} ${Hh}"><line x1="2" x2="${W - 2}" y1="14" y2="14" stroke="${INK}" stroke-opacity=".45" stroke-dasharray="2 2"/></svg></td>`;
+  const ys = series(b, r, m), max = Math.max(...ys, m.e, 1) * 1.08;
+  const yOf = (v) => base - (base - top) * (v / max), xOf = (i) => 2 + (W - 4) * i / 11;
+  let s = `<svg width="${W}" height="${Hh}" viewBox="0 0 ${W} ${Hh}" role="img" aria-label="${tip(b, r, m)}">`;
+  if (m.e >= 1) s += `<line x1="2" x2="${W - 2}" y1="${yOf(m.e).toFixed(1)}" y2="${yOf(m.e).toFixed(1)}" stroke="${INK}" stroke-opacity=".45" stroke-dasharray="2 2"/>`;
+  s += `<path d="M${ys.map((v, i) => `${xOf(i).toFixed(1)} ${yOf(v).toFixed(1)}`).join(' L')}" fill="none" stroke="${INK}" stroke-width="${0.9 + step(m.n) * 0.3}" stroke-linejoin="round" ${cwOnly(m) ? 'stroke-dasharray="2.5 1.8"' : ''}/>`;
+  s += `<circle cx="${xOf(11).toFixed(1)}" cy="${yOf(ys[11]).toFixed(1)}" r="2.2" fill="${INK}"/>`;
+  if (m.z) s += `<circle cx="${xOf(11).toFixed(1)}" cy="${yOf(ys[11]).toFixed(1)}" r="4.6" fill="none" stroke="${INK}"/>`;
+  return `<td title="${tip(b, r, m)}" style="padding:1px 0">${s}</svg></td>`;
+}
+function opt7(dark) {
+  const key = `<svg width="56" height="20" viewBox="0 0 56 20"><line x1="2" x2="54" y1="12" y2="12" stroke="${INK}" stroke-opacity=".45" stroke-dasharray="2 2"/><path d="M2 16 L10 15 L18 14 L26 13 L34 11 L42 8 L50 5" fill="none" stroke="${INK}" stroke-width="1.5"/><circle cx="50" cy="5" r="2.2" fill="${INK}"/></svg>`;
+  return grid((b, r, m) => spark(b, r, m, dark), regionHead,
+    `<span>${key} line = reports per 5 minutes over the last hour, dashed = normal for this hour</span><span>stroke weight = reports now</span><span>dotted line = CW only, ring = surge</span><span>dashed line alone = usually open, silent now</span>`,
+    `series are illustrative (the backend does not expose per-cell bins yet); the end point and the normal are real`);
+}
+
+// --- 8. MUF skyline -----------------------------------------------------------------------
+function opt8(dark) {
+  const bands = [...BANDS].reverse();
+  const ceiling = {};
+  for (const r of WEST_EAST) for (const b of bands) { const m = model(b, r); if (m && !m.silent && m.n >= 5) { ceiling[r] = b; break; } }
+  const head = WEST_EAST.map((r) => `<th>${r}<small>${BEARING[r]}°</small></th>`).join('');
+  const rows = bands.map((b) => `<tr>${rowHeader(b, MHz(b))}${WEST_EAST.map((r) => {
+    const m = model(b, r);
+    const ci = bands.indexOf(ceiling[r]); const bi = bands.indexOf(b);
+    const cls = [ceiling[r] === b ? 'ceil' : '', ci >= 0 && bi < ci ? 'above' : ''].filter(Boolean).join(' ');
+    if (!m) return `<td class="${cls}"></td>`;
+    const rad = 1.8 + step(m.n) * 0.85;
+    let g = `<svg width="24" height="24" viewBox="0 0 24 24">`;
+    if (m.silent) g += `<circle cx="12" cy="12" r="3" fill="none" stroke="${INK}" stroke-opacity=".5" stroke-dasharray="1.5 1.2"/>`;
+    else {
+      const op = m.lf == null ? .5 : m.lf >= 0.5 ? 1 : m.lf > -0.5 ? .6 : .3;
+      g += cwOnly(m) ? `<circle cx="12" cy="12" r="${rad.toFixed(1)}" fill="var(--mbg)" stroke="${INK}" stroke-width="1.4" stroke-opacity="${op}"/>` : `<circle cx="12" cy="12" r="${rad.toFixed(1)}" fill="${INK}" fill-opacity="${op}"/>`;
+      if (m.z) g += `<circle cx="12" cy="12" r="${(rad + 3).toFixed(1)}" fill="none" stroke="${INK}"/>`;
+    }
+    return `<td class="${cls}" title="${tip(b, r, m)}">${g}</svg></td>`;
+  }).join('')}</tr>`).join('');
+  return tableShell(head, rows,
+    `<span>rule = highest band with reports to that region (your MUF estimate); striped cells sit above it</span><span>dot size = reports now; full ink = above normal, half = normal, faint = below</span><span>hollow = CW only, ring = surge, dashed = usually open, silent now</span>`,
+    `columns west to east by region centre, with short-path bearings from JO32; rows by frequency`, 84);
+}
+function MHz(b) { return `${MHZ[b]} MHz`; }
+
+// --- 9. Compass board -------------------------------------------------------------------
+function opt9() {
+  const place = { NW: [], N: ['KH6'], NE: ['JA', 'OC', 'AS'], W: ['NA', 'CAR'], E: ['VK'], SW: ['SA'], S: ['AF'], SE: ['EU'] };
+  const order = ['NW', 'N', 'NE', 'W', 'HOME', 'E', 'SW', 'S', 'SE'];
+  const hhmm = `${String(H).padStart(2, '0')}:${String(MIN).padStart(2, '0')}`;
+  const tileFor = (r) => {
+    const items = BANDS.map((b) => [b, model(b, r)]).filter(([, m]) => m);
+    const body = items.length ? items.map(([b, m]) => {
+      const cls = ['pill', m.silent ? 'silent' : m.lf != null && m.lf >= 0.5 ? 'above' : m.lf != null && m.lf <= -0.5 ? 'below' : '', !m.silent && cwOnly(m) ? 'cwonly' : ''].filter(Boolean).join(' ');
+      const txt = m.silent ? `${b} usually ${fmt(m.e)}` : m.lf == null ? `${b} ${fmt(m.n)}` : `${b} ${fmtF(m.F)}${m.z ? ' •' : ''}`;
+      return `<span class="${cls}" style="--bc:${BC[b]}" title="${tip(b, r, m)}">${txt}</span>`;
+    }).join('') : '<span class="none">nothing heard</span>';
+    return `<h4>${r}<small>${BEARING[r]}°</small></h4>${body}`;
+  };
+  const cells = order.map((k) => {
+    if (k === 'HOME') return `<div class="tile home"><b>JO32</b><span>${hhmm} UTC</span><span>north up</span></div>`;
+    const regs = place[k];
+    if (!regs.length) return `<div class="tile" style="border-color:transparent"></div>`;
+    return `<div class="tile">${regs.map(tileFor).join('<div style="height:5px"></div>')}</div>`;
+  }).join('');
+  return `<div class="board">${cells}</div><div class="legend"><span>pill = band open to that region with reports against normal; bold = above normal, light = below, dashed = usually open, silent now</span><span>dotted text = CW only</span><span>• surge</span><span>coloured edge = band colour</span></div>`;
+}
+
+// --- 10. Hatching ---------------------------------------------------------------------------
+function hatch(b, r, m, dark, pre) {
+  if (!m) return '<td></td>';
+  const W = 42, Hh = 28, id = `${pre}-${b}-${r}`.replace(/[^a-z0-9-]/gi, '');
+  const gap = [0, 8, 6, 4.5, 3.2, 2.3][step(m.n)] || 8;
+  const rot = m.lf == null ? 0 : m.lf >= 0.5 ? -45 : m.lf <= -0.5 ? 45 : 0;
+  const op = dark ? .85 : .75;
+  let s = `<svg width="${W}" height="${Hh}" viewBox="0 0 ${W} ${Hh}" role="img" aria-label="${tip(b, r, m)}"><defs>`;
+  if (!m.silent) {
+    s += `<pattern id="${id}" patternUnits="userSpaceOnUse" width="${gap}" height="${gap}" patternTransform="rotate(${rot})"><line x1="0" x2="${gap}" y1="0.5" y2="0.5" stroke="${INK}" stroke-opacity="${op}" stroke-width="1" ${cwOnly(m) ? 'stroke-dasharray="2 1.6"' : ''}/></pattern>`;
+    if (m.z) s += `<pattern id="${id}x" patternUnits="userSpaceOnUse" width="${gap}" height="${gap}" patternTransform="rotate(45)"><line x1="0" x2="${gap}" y1="0.5" y2="0.5" stroke="${INK}" stroke-opacity="${op}" stroke-width="1"/></pattern>`;
+  }
+  s += `</defs>`;
+  if (m.silent) s += `<rect x=".5" y=".5" width="${W - 1}" height="${Hh - 1}" rx="2" fill="none" stroke="${INK}" stroke-opacity=".45" stroke-dasharray="2 2"/>`;
+  else {
+    s += `<rect x="0" y="0" width="${W}" height="${Hh}" rx="2" fill="url(#${id})"/>`;
+    if (m.z) s += `<rect x="0" y="0" width="${W}" height="${Hh}" rx="2" fill="url(#${id}x)"/>`;
+    s += `<rect x=".5" y=".5" width="${W - 1}" height="${Hh - 1}" rx="2" fill="none" stroke="${INK}" stroke-opacity=".3"/>`;
+  }
+  return `<td title="${tip(b, r, m)}">${s}</svg></td>`;
+}
+function opt10(dark) {
+  const pre = dark ? 'hd' : 'hl';
+  const k = (rot, gap, dash, cross) => `<svg width="22" height="16" viewBox="0 0 22 16"><defs><pattern id="${pre}k${rot}${gap}${dash ? 'd' : ''}${cross ? 'x' : ''}" patternUnits="userSpaceOnUse" width="${gap}" height="${gap}" patternTransform="rotate(${rot})"><line x1="0" x2="${gap}" y1=".5" y2=".5" stroke="${INK}" stroke-opacity=".8" ${dash ? 'stroke-dasharray="2 1.6"' : ''}/></pattern>${cross ? `<pattern id="${pre}kx" patternUnits="userSpaceOnUse" width="${gap}" height="${gap}" patternTransform="rotate(45)"><line x1="0" x2="${gap}" y1=".5" y2=".5" stroke="${INK}" stroke-opacity=".8"/></pattern>` : ''}</defs><rect width="22" height="16" rx="2" fill="url(#${pre}k${rot}${gap}${dash ? 'd' : ''}${cross ? 'x' : ''})"/>${cross ? `<rect width="22" height="16" rx="2" fill="url(#${pre}kx)"/>` : ''}<rect x=".5" y=".5" width="21" height="15" rx="2" fill="none" stroke="${INK}" stroke-opacity=".3"/></svg>`;
+  return grid((b, r, m) => hatch(b, r, m, dark, pre), regionHead,
+    `<span>${k(-45, 4.5)} rising lines = above normal ${k(0, 4.5)} level = normal ${k(45, 4.5)} falling = below</span><span>${k(0, 8)}${k(0, 4.5)}${k(0, 2.3)} closer lines = more reports (five steps)</span><span>${k(-45, 4.5, false, true)} cross-hatch = surge</span><span>${k(-45, 4.5, true)} dotted = CW only</span><span>dashed frame = usually open, silent now</span>`);
+}
+
+const RENDER = { 0: opt0, 1: opt1, 2: opt2, 3: opt3, 4: opt4, 5: opt5, 6: opt6, 7: opt7, 8: opt8, 9: opt9, 10: opt10 };
+for (const el of document.querySelectorAll('.mock[data-opt]')) {
+  const dark = el.classList.contains('dark');
+  try { el.innerHTML = RENDER[el.dataset.opt](dark); } catch (e) { el.textContent = `render error: ${e.message}`; console.error(el.dataset.opt, e); }
+}
+</script>
+</main>
+</body>
+</html>
