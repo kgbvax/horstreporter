@@ -244,7 +244,7 @@ function renderDxClusterMarkers(dxClusterSpots) {
 // --- WSPR beacon markers (region-scoped, distinct style) --------------------
 // WSPR spots are a global propagation reference. They're drawn as a separate
 // layer (like DX-cluster) with a distinct visual style (smaller, teal/cyan
-// fill with dashed border) so they're clearly separable from regular spots
+// band-colored fill with dashed border) so they're clearly separable from regular spots
 // and DX-cluster markers. Region-scoped: only WSPR paths where either end is
 // in the operator's DXPulse region are shown, keeping the map relevant.
 let wsprMarkerFingerprint = '';
@@ -293,14 +293,15 @@ function renderWsprMarkers(wsprSpots) {
 
     wsprSpots.forEach((spot) => {
         if (!Number.isFinite(spot.lat) || !Number.isFinite(spot.lng)) return;
-        // Distinct style: small teal/cyan dots with a thin dashed border.
+        // Distinct style: small band-colored dots with a thin dashed border.
+        const color = bandColors[spot.band] || bandColors.all;
         const marker = L.circleMarker([spot.lat, spot.lng], {
-            color: '#0d6efd',
-            fillColor: '#17a2b8',
+            color,
+            fillColor: color,
             radius: 3,
             weight: 1,
-            opacity: 0.7,
-            fillOpacity: 0.5,
+            opacity: 0.8,
+            fillOpacity: 0.65,
             dashArray: '3,2',
             interactive: true,
             bubblingMouseEvents: false

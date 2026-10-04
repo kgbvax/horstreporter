@@ -519,18 +519,19 @@ function drawWsprSpots(ctx, width, height, wsprSpots) {
     for (const spot of wsprSpots) {
         const p = projectToCanvas(spot.lat, spot.lng, width, height);
         if (!p) continue;
-        // Distinct style: small teal/cyan filled dot with a thin dashed ring.
+        // Distinct style: small band-colored filled dot with a thin dashed ring.
+        const color = bandColors[spot.band] || bandColors.all;
         ctx.beginPath();
         ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-        ctx.fillStyle = '#17a2b8';
-        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.65;
         ctx.fill();
 
         ctx.beginPath();
         ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-        ctx.strokeStyle = '#0d6efd';
+        ctx.strokeStyle = color;
         ctx.lineWidth = 0.8;
-        ctx.globalAlpha = 0.7;
+        ctx.globalAlpha = 0.8;
         ctx.setLineDash([2, 2]);
         ctx.stroke();
         ctx.setLineDash([]);
