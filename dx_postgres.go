@@ -1640,19 +1640,34 @@ func locatorPrefixRange(prefix string) (lo, hi string, ok bool) {
 // otherwise force the planner back to a full-window filter scan for every
 // request, even pure-locator ones.
 func appendTargetArms(arms []string, args []any, idx int, locators, calls []string) ([]string, []any, int) {
+	return appendTargetArmsOpt(arms, args, idx, locators, calls, false)
+}
+
+// appendTargetArmsOpt is appendTargetArms with an option to keep the planner
+// off the (locator, spot_time) indexes. Those indexes cannot bound spot_time
+// across a locator range, so a short window still scans the locator's whole
+// retention (PM95, 15 minutes: 18k index blocks, 2.5 s cold on prod).
+// Appending an empty string makes the locator predicates non-indexable, which leaves
+// the spot_time index: a cost that follows the window (15 minutes: ~120 ms for
+// any locator) instead of the locator's traffic over the whole retention.
+func appendTargetArmsOpt(arms []string, args []any, idx int, locators, calls []string, timeFirst bool) ([]string, []any, int) {
+	sender, receiver := "sender_locator", "receiver_locator"
+	if timeFirst {
+		sender, receiver = "(sender_locator || '')", "(receiver_locator || '')"
+	}
 	for _, t := range locators {
 		lo, hi, _ := locatorPrefixRange(t)
 		loIdx := idx
 		args = append(args, lo)
 		idx++
 		if hi == "" {
-			arms = append(arms, fmt.Sprintf("(sender_locator ~>=~ $%[1]d OR receiver_locator ~>=~ $%[1]d)", loIdx))
+			arms = append(arms, fmt.Sprintf("(%[2]s ~>=~ $%[1]d OR %[3]s ~>=~ $%[1]d)", loIdx, sender, receiver))
 			continue
 		}
 		hiIdx := idx
 		args = append(args, hi)
 		idx++
-		arms = append(arms, fmt.Sprintf("((sender_locator ~>=~ $%[1]d AND sender_locator ~<~ $%[2]d) OR (receiver_locator ~>=~ $%[1]d AND receiver_locator ~<~ $%[2]d))", loIdx, hiIdx))
+		arms = append(arms, fmt.Sprintf("((%[3]s ~>=~ $%[1]d AND %[3]s ~<~ $%[2]d) OR (%[4]s ~>=~ $%[1]d AND %[4]s ~<~ $%[2]d))", loIdx, hiIdx, sender, receiver))
 	}
 	if len(calls) > 0 {
 		args = append(args, calls)
@@ -1678,6 +1693,12 @@ func appendTargetArms(arms []string, args []any, idx int, locators, calls []stri
 // minutes<=0, no targets, or zero matched rows → nil map (caller falls back to
 // in-memory binning; an empty non-nil map would defeat that fallback and
 // render all-zero charts next to non-zero live report counts).
+// activityTimeFirstMaxMinutes is the window length up to which the activity
+// query is steered onto the spot_time index (cost ~ 8 ms per window minute on
+// prod, ~580 ms at 60). Longer windows keep the locator indexes, whose cost
+// does not grow with the window.
+const activityTimeFirstMaxMinutes = 60
+
 func (s *dxPostgresStore) activityByBinForTargets(targets []string, cwMinDb, minutes int, now int64) (map[string][]float64, error) {
 	if s == nil || minutes <= 0 || now <= 0 {
 		return nil, nil
@@ -1717,7 +1738,7 @@ func (s *dxPostgresStore) activityByBinForTargets(targets []string, cwMinDb, min
 
 	args := []any{windowStart, binSec, now, cwMinDb}
 	arms := make([]string, 0, len(locators)+1)
-	arms, args, _ = appendTargetArms(arms, args, len(args)+1, locators, calls)
+	arms, args, _ = appendTargetArmsOpt(arms, args, len(args)+1, locators, calls, minutes <= activityTimeFirstMaxMinutes)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()

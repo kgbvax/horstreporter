@@ -462,6 +462,7 @@ func main() {
 				stopCh := make(chan struct{})
 				go wsprClimatology.FlushPendingAsync(30*time.Second, stopCh)
 				_ = stopCh
+				wsprClimatology.WarmStats()
 			}
 			// Unified per-source climatology (v2): same pool, own table.
 			propBaseline.SetStore(dxBaseline.Store())
@@ -474,6 +475,7 @@ func main() {
 					stopCh := make(chan struct{})
 					go propBaseline.FlushPendingAsync(30*time.Second, stopCh)
 					_ = stopCh
+					propBaseline.WarmStats()
 					// Seed non-WSPR sources from dx_raw_spots (resumable,
 					// day-chunked, idempotent — see prop_baseline_backfill.go).
 					st.startPropBaselineBackfill()
