@@ -1108,3 +1108,28 @@ describe('wspr-matrix row extras (Conditions dock)', () => {
         expect(document.querySelectorAll('#wspr-matrix-body tbody tr')).toHaveLength(2);
     });
 });
+
+describe('wspr-matrix from-here normal in the tooltip', () => {
+    beforeEach(() => {
+        installLocalStorageMock();
+        setupDom();
+        reset();
+    });
+
+    it('expectedLine spells out now, normal and the factor', () => {
+        const { expectedLine, hasNormal } = __test;
+        expect(hasNormal({ expected: 4515.3, expected_spots: 771 })).toBe(true);
+        expect(hasNormal({ expected: 10 })).toBe(false);
+        expect(hasNormal({})).toBe(false);
+        expect(expectedLine({ expected: 4515.3, expected_spots: 771 })).toBe('PSKReporter: 771 now, normal about 4,515 at this hour (\u00d70.17)');
+        expect(expectedLine({ expected: 40, expected_spots: 60 })).toBe('PSKReporter: 60 now, normal about 40 at this hour (\u00d71.5)');
+        expect(expectedLine({ expected: 0.4, expected_spots: 11 })).toBe('PSKReporter: 11 now, normally under 1 at this hour');
+    });
+
+    it('the cell title carries the normal only when the backend sent one', () => {
+        const withNormal = renderCell('20m', 'NA', { ...makeCell({ band: '20m', region: 'NA', spot_count: 800 }), expected: 4515.3, expected_spots: 771 }, 1000, 'light');
+        expect(withNormal).toContain('normal about 4,515 at this hour');
+        const without = renderCell('20m', 'NA', makeCell({ band: '20m', region: 'NA', spot_count: 800 }), 1000, 'light');
+        expect(without).not.toContain('PSKReporter:');
+    });
+});

@@ -562,6 +562,24 @@ function pathSummary(band, region, cell, regionNames = {}) {
     return `${band} to ${regionNames[region] || region}: ${count.toLocaleString('en-US')} ${count === 1 ? 'spot' : 'spots'}`;
 }
 
+// The cell's from-here normal (backend expected / expected_spots, PSKReporter
+// reports from the operator's area), when present.
+function hasNormal(cell) {
+    return cell?.expected != null && cell?.expected_spots != null &&
+        Number.isFinite(Number(cell.expected)) && Number.isFinite(Number(cell.expected_spots));
+}
+
+// "PSKReporter: 771 now, normal about 4,515 at this hour (×0.17)" for the
+// tooltip; a normal under one report reads "normally under 1".
+function expectedLine(cell) {
+    const now = Number(cell.expected_spots) || 0;
+    const e = Number(cell.expected);
+    if (e < 1) return `PSKReporter: ${now.toLocaleString('en-US')} now, normally under 1 at this hour`;
+    const r = now / e;
+    const factor = r < 1 ? r.toFixed(2) : r < 10 ? r.toFixed(1) : String(Math.round(r));
+    return `PSKReporter: ${now.toLocaleString('en-US')} now, normal about ${Math.round(e).toLocaleString('en-US')} at this hour (\u00d7${factor})`;
+}
+
 // Accessible name for a data cell: path, spot count and the marks it shows
 // (top mode badge, rising arrow, surge glyph or ring).
 function cellLabel(band, region, cell, regionNames = {}) {
@@ -609,6 +627,7 @@ function renderCell(band, region, cell, maxCount, theme, regionNames = runtime.c
     if (cell.cw_open) titleParts.push('CW open');
     if (cell.rising) titleParts.push('Rising');
     if (surgeLine) titleParts.push(surgeLine);
+    if (hasNormal(cell)) titleParts.push(expectedLine(cell));
     if (Array.isArray(cell.sources) && cell.sources.length) {
         for (const s of cell.sources) {
             let line = `${SOURCE_LABELS[s.source] || s.source}: ${s.spot_count} spots`;
@@ -823,6 +842,8 @@ export const __test = {
     rampStops,
     legendHtml,
     surgeStrength,
+    hasNormal,
+    expectedLine,
     chevronGlyph,
     ringShadow,
     ringColor,

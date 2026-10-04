@@ -82,6 +82,21 @@ type propIntelV2Cell struct {
 	// fired. Omitted when no source is atypical.
 	AtypicalAgreement float64                 `json:"atypical_agreement,omitempty"`
 	PerSource         []propIntelV2SourceCell `json:"sources"`
+	// Expected and ExpectedSpots are set in the from-here view only, when
+	// PSKReporter is selected and the area has a normal (prop_intel_fromhere.go).
+	// Expected is the mean PSKReporter (+ DX-cluster) count for this band and
+	// far-end region over the same clock window on recent days, from the
+	// operator's area; ExpectedSpots is the live count of those same spots, so
+	// ExpectedSpots / Expected is the cell against its normal.
+	Expected      *float64 `json:"expected,omitempty"`
+	ExpectedSpots *int     `json:"expected_spots,omitempty"`
+}
+
+// propIntelV2FromHere switches the evaluator to the from-here view: only spots
+// with an end in the area are counted, and expected / atypical come from the
+// area's own normal instead of the global climatology.
+type propIntelV2FromHere struct {
+	normals *fromHereNormals // nil: no normal available
 }
 
 // propIntelV2Response is the JSON envelope for /api/prop_intel/v2.
@@ -235,6 +250,17 @@ func propIntelRemoteCall(m *MQTTMessage, receiverSide string, remoteIsRecv bool)
 // scanPropIntelV2Window walks the history window once and accumulates the
 // per-(band, region, source) cells, the from-here flags and the bands seen.
 func scanPropIntelV2Window(history []MQTTMessage, profiles []propIntelSourceProfile, qthSet []string, matchArea *liveArea, now, cutoff, midpoint int64) (map[propIntelV2CellKey]*propIntelV2Acc, map[propIntelCellKey]bool, map[string]struct{}) {
+	accs, fromHere, bands, _ := scanPropIntelV2WindowMode(history, profiles, qthSet, matchArea, now, cutoff, midpoint, false)
+	return accs, fromHere, bands
+}
+
+// scanPropIntelV2WindowMode is scanPropIntelV2Window with the from-here view:
+// with fromHereOnly a spot counts once for each of its ends inside the area,
+// in the cell of the OTHER end's region (fromHereRemoteEnds), and spots that
+// do not touch the area are skipped. normalSpots then counts, per (band,
+// region), the spots the area normal is built from (PSKReporter FT8/FT4 and
+// DX cluster); nil otherwise.
+func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSourceProfile, qthSet []string, matchArea *liveArea, now, cutoff, midpoint int64, fromHereOnly bool) (map[propIntelV2CellKey]*propIntelV2Acc, map[propIntelCellKey]bool, map[string]struct{}, map[propIntelCellKey]int) {
 	// Per-message accumulation is indexed by (band, region, source) position
 	// in flat arrays instead of string-keyed maps (three string hashes per
 	// message); the maps the rest of the function reads are rebuilt below.
@@ -244,6 +270,12 @@ func scanPropIntelV2Window(history []MQTTMessage, profiles []propIntelSourceProf
 	accs := make([]*propIntelV2Acc, nBands*nRegions*nSources)
 	var bandSeen [len(inScopeBandNames)]bool
 	fromHere := make([]bool, nBands*nRegions)
+	var normal []int
+	var fhm fromHereMatcher
+	if fromHereOnly {
+		normal = make([]int, nBands*nRegions)
+		fhm = newFromHereMatcher(qthSet, matchArea)
+	}
 	regions := newRawRegionMemo()
 
 	for i := range history {
@@ -271,43 +303,64 @@ func scanPropIntelV2Window(history []MQTTMessage, profiles []propIntelSourceProf
 			continue
 		}
 
-		remoteLoc, _, matchedEnd := propIntelRemote(m, qthSet, matchArea, prof.ReceiverSide)
-		ri := regions.get(remoteLoc)
-		if ri < 0 {
-			continue
-		}
-
-		ai := (bi*nRegions+ri)*nSources + si
-		cell := accs[ai]
-		if cell == nil {
-			cell = &propIntelV2Acc{}
-			accs[ai] = cell
-		}
-		cell.spotCount++
-		bandSeen[bi] = true
-
-		if prof.HasTXPower && m.TXPower > 0 {
-			eff := float64(m.RP) + propIntelReferencePowerDbm - float64(m.TXPower)
-			if !cell.hasPower || eff > cell.bestBudgetSNR {
-				cell.bestBudgetSNR = eff
+		var ends [2]string
+		nEnds := 0
+		matchedEnd := true
+		if fromHereOnly {
+			a, b := fhm.ends(m, prof.ReceiverSide)
+			if a != "" {
+				ends[nEnds] = a
+				nEnds++
 			}
-			cell.hasPower = true
-		}
-		if prof.InternalTag == "mqtt" || prof.InternalTag == "rbn" {
-			if !cell.hasReport || m.RP > cell.bestReportSNR {
-				cell.bestReportSNR = m.RP
+			if b != "" {
+				ends[nEnds] = b
+				nEnds++
 			}
-			cell.hasReport = true
-		}
-
-		if matchedEnd {
-			fromHere[bi*nRegions+ri] = true
-		}
-
-		if m.T < midpoint {
-			cell.firstHalfSpots++
 		} else {
-			cell.secondHalfSpots++
+			ends[0], _, matchedEnd = propIntelRemote(m, qthSet, matchArea, prof.ReceiverSide)
+			nEnds = 1
+		}
+		for k := 0; k < nEnds; k++ {
+			ri := regions.get(ends[k])
+			if ri < 0 {
+				continue
+			}
+
+			ai := (bi*nRegions+ri)*nSources + si
+			cell := accs[ai]
+			if cell == nil {
+				cell = &propIntelV2Acc{}
+				accs[ai] = cell
+			}
+			cell.spotCount++
+			bandSeen[bi] = true
+
+			if prof.HasTXPower && m.TXPower > 0 {
+				eff := float64(m.RP) + propIntelReferencePowerDbm - float64(m.TXPower)
+				if !cell.hasPower || eff > cell.bestBudgetSNR {
+					cell.bestBudgetSNR = eff
+				}
+				cell.hasPower = true
+			}
+			if prof.InternalTag == "mqtt" || prof.InternalTag == "rbn" {
+				if !cell.hasReport || m.RP > cell.bestReportSNR {
+					cell.bestReportSNR = m.RP
+				}
+				cell.hasReport = true
+			}
+
+			if matchedEnd {
+				fromHere[bi*nRegions+ri] = true
+			}
+			if fromHereOnly && (src == "mqtt" || src == "dxcluster") {
+				normal[bi*nRegions+ri]++
+			}
+
+			if m.T < midpoint {
+				cell.firstHalfSpots++
+			} else {
+				cell.secondHalfSpots++
+			}
 		}
 	}
 
@@ -315,6 +368,10 @@ func scanPropIntelV2Window(history []MQTTMessage, profiles []propIntelSourceProf
 	cellAccs := make(map[propIntelV2CellKey]*propIntelV2Acc)
 	cellFromHere := make(map[propIntelCellKey]bool)
 	bandsSeen := make(map[string]struct{})
+	var normalSpots map[propIntelCellKey]int
+	if fromHereOnly {
+		normalSpots = make(map[propIntelCellKey]int)
+	}
 	allRegions := region.AllRegions()
 	for bi := 0; bi < nBands; bi++ {
 		if bandSeen[bi] {
@@ -324,6 +381,9 @@ func scanPropIntelV2Window(history []MQTTMessage, profiles []propIntelSourceProf
 			if fromHere[bi*nRegions+ri] {
 				cellFromHere[propIntelCellKey{band: inScopeBandNames[bi], region: string(allRegions[ri])}] = true
 			}
+			if fromHereOnly && normal[bi*nRegions+ri] > 0 {
+				normalSpots[propIntelCellKey{band: inScopeBandNames[bi], region: string(allRegions[ri])}] = normal[bi*nRegions+ri]
+			}
 			for si := 0; si < nSources; si++ {
 				if acc := accs[(bi*nRegions+ri)*nSources+si]; acc != nil {
 					cellAccs[propIntelV2CellKey{band: inScopeBandNames[bi], region: string(allRegions[ri]), source: profiles[si].PublicName}] = acc
@@ -331,7 +391,7 @@ func scanPropIntelV2Window(history []MQTTMessage, profiles []propIntelSourceProf
 			}
 		}
 	}
-	return cellAccs, cellFromHere, bandsSeen
+	return cellAccs, cellFromHere, bandsSeen, normalSpots
 }
 
 // propIntelV2Engine is stateless like v1's; the propBaseline singleton holds
@@ -354,6 +414,25 @@ func (e *propIntelV2Engine) EvaluateV2(qth string, surroundings bool, minutes in
 // the climatology it compares against is not scaled to a widened block, so its
 // larger live counts would read as surges.
 func (e *propIntelV2Engine) EvaluateV2Area(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea) propIntelV2Response {
+	return e.evaluateV2(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, area, nil)
+}
+
+// EvaluateV2FromHere is the from-here view (from_here=true): a spot counts once
+// for each of its ends inside the area, in the cell of the OTHER end's region,
+// exactly as dx_region_baseline_daily keys it (one count when both ends share a
+// square). Spots that do not touch the area are ignored, so counts, open flags
+// and rising describe paths from the operator's area only. With normals, cells
+// carry expected / expected_spots and the surge z-score compares the live
+// PSKReporter count with the area's normal; without, there is no atypical (the
+// global climatology does not describe paths from one area).
+func (e *propIntelV2Engine) EvaluateV2FromHere(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea, normals *fromHereNormals) propIntelV2Response {
+	resp := e.evaluateV2(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, area,
+		&propIntelV2FromHere{normals: normals})
+	resp.FromHere = true
+	return resp
+}
+
+func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea, fh *propIntelV2FromHere) propIntelV2Response {
 	qth = normalizeQTHToken(qth)
 	if len(profiles) == 0 {
 		profiles = propIntelSourceProfiles
@@ -390,7 +469,7 @@ func (e *propIntelV2Engine) EvaluateV2Area(qth string, surroundings bool, minute
 	cutoff := now - int64(minutes)*60
 	midpoint := cutoff + (now-cutoff)/2
 
-	cellAccs, cellFromHere, bandsSeen := scanPropIntelV2Window(history, profiles, qthSet, matchArea, now, cutoff, midpoint)
+	cellAccs, cellFromHere, bandsSeen, normalSpots := scanPropIntelV2WindowMode(history, profiles, qthSet, matchArea, now, cutoff, midpoint, fh != nil)
 
 	resp.Bands = inScopeBandsOrdered(bandsSeen)
 	slot := utcSlotOfDay(now)
@@ -401,7 +480,7 @@ func (e *propIntelV2Engine) EvaluateV2Area(qth string, surroundings bool, minute
 		slot                 int
 	}
 	clim := map[climKey]propRegionCalendarStatRow{}
-	if propBaseline != nil {
+	if propBaseline != nil && fh == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), propIntelRegionBaselineQueryTimeout)
 		rows := propBaseline.RegionCalendarStats(ctx, propIntelRegionBaselineDaysBack, now)
 		cancel()
@@ -413,6 +492,12 @@ func (e *propIntelV2Engine) EvaluateV2Area(qth string, surroundings bool, minute
 
 	// Group source accumulators into cells.
 	byCell := make(map[propIntelCellKey][]propIntelV2SourceCell)
+	pskrSelected := false
+	for _, p := range profiles {
+		if p.InternalTag == "mqtt" {
+			pskrSelected = true
+		}
+	}
 
 	for ck, acc := range cellAccs {
 		prof := propIntelProfilesByName[ck.source]
@@ -539,6 +624,9 @@ func (e *propIntelV2Engine) EvaluateV2Area(qth string, surroundings bool, minute
 				cell.AtypicalAgreement = round2(float64(atypicalCount) / float64(len(sources)))
 			}
 		}
+		if fh != nil && pskrSelected {
+			applyFromHereNormal(&cell, fh.normals, normalSpots[cellKey], atypicalThreshold)
+		}
 		cells = append(cells, cell)
 	}
 
@@ -608,7 +696,15 @@ func propIntelV2Handler(w http.ResponseWriter, r *http.Request) {
 	historyCopy, release := snapshotPropIntelHistory(now, p.minutes)
 	defer release()
 
-	resp := propIntelV2.EvaluateV2Area(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area)
+	var resp propIntelV2Response
+	if p.fromHere {
+		// From-here view: only spots touching the area, compared with the
+		// area's own normal (prop_intel_fromhere.go).
+		normals := fromHereNormalsFor(fromHereAreaGrids(p.qth, p.surroundings, area), now, p.minutes)
+		resp = propIntelV2.EvaluateV2FromHere(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area, normals)
+	} else {
+		resp = propIntelV2.EvaluateV2Area(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area)
+	}
 	resp = resp.applyFromHere(p.fromHere)
 
 	// Push fan-out: adapt v2 cells to the v1 push payload (push.go consumes
