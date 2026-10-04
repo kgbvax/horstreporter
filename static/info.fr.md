@@ -19,7 +19,7 @@ C'est en pratique une interface alternative pour <a href="https://www.pskreporte
 
 ## Interaction avec la carte
 * Survolez les éléments colorés de la carte pour voir des statistiques détaillées (SNR min/max/moyen) et les meilleurs rapports de la zone.
-* Cliquez n'importe où sur la carte pour définir rapidement un nouveau locator cible et actualiser les données.  
+* Double-cliquez sur la carte pour définir rapidement un nouveau locator cible et actualiser les données.  
 
 
 
@@ -34,7 +34,7 @@ Si cette approche vous intéresse, jetez un œil à <a href="https://hf.dxview.o
 Comme tout en radioamateur, ceci est à considérer comme expérimental et peut imploser à tout moment. 95 % de ce projet a été créé avec Google Gemini. Contactez-moi pour tout retour ou demande.  
 Plus d'informations sont peut-être disponibles sur mon blog : <a href="https://dl9et.darc.de/tags/horstreporter/" target="_blank">https://dl9et.darc.de/tags/horstreporter/</a>
 
-Le dragon en peluche vert en bas à gauche s'appelle « Horst-Kevin ».
+Le dragon en peluche vert en bas de la barre latérale s'appelle « Horst-Kevin ».
 
 ## Note d'implémentation
 Au cœur du système, horstreporter s'abonne *une seule fois* au firehose de pskreporter et assure lui-même le fan-out / filtrage 1:n pour chaque client. C'est un choix délibéré pour ne pas surcharger les serveurs pskreporter. Horstreporter conserve aussi un court historique afin que les nouveaux clients n'aient pas à attendre l'arrivée des données via le flux d'événements. L'essentiel de la logique de visualisation et d'interaction se fait dans le navigateur, tandis que le scoring dérivé des conditions DX est calculé côté serveur et exposé via `/api/dx_conditions`.
