@@ -2531,8 +2531,54 @@ var bandsInScope = map[string]struct{}{
 
 // bandInScope reports whether a normalized band is one HorstReporter analyses.
 func bandInScope(band string) bool {
-	_, ok := bandsInScope[band]
-	return ok
+	return inScopeBandIndex(band) >= 0
+}
+
+// inScopeBandNames lists the in-scope bands in propIntelBandOrder's order;
+// inScopeBandIndex is its inverse (-1 for anything else). A switch instead of
+// a map lookup: this is called for every message of every window scan.
+var inScopeBandNames = [...]string{"160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m"}
+
+func inScopeBandIndex(band string) int {
+	switch band {
+	case "160m":
+		return 0
+	case "80m":
+		return 1
+	case "60m":
+		return 2
+	case "40m":
+		return 3
+	case "30m":
+		return 4
+	case "20m":
+		return 5
+	case "17m":
+		return 6
+	case "15m":
+		return 7
+	case "12m":
+		return 8
+	case "10m":
+		return 9
+	case "6m":
+		return 10
+	case "4m":
+		return 11
+	case "2m":
+		return 12
+	}
+	return -1
+}
+
+// feedBandIndex is inScopeBandIndex(normalizeBand(raw)) (-1 when the band is
+// empty or out of scope) without normalizing in the common case: the feeds
+// already send "20m".
+func feedBandIndex(raw string) int {
+	if i := inScopeBandIndex(raw); i >= 0 {
+		return i
+	}
+	return inScopeBandIndex(normalizeBand(raw))
 }
 
 func baselineKey(band string, slotOfDay, distanceTier, snrTier int) string {

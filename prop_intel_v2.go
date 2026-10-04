@@ -173,6 +173,167 @@ func resolvePropIntelRemoteEndArea(m MQTTMessage, qthSet []string, area *liveAre
 	return recvLoc, recvCall, false
 }
 
+// propIntelRemote is resolvePropIntelRemoteEndArea for the window scans: same
+// matching, but the remote locator comes back as the trimmed feed string
+// instead of an upper-cased copy (callers map it to a region through
+// rawRegionMemo, which upper-cases once per distinct locator), and the remote
+// callsign is only built on request (remoteCall). Locators are compared case-
+// insensitively in place, so the common case allocates nothing.
+//
+// remoteIsRecv says whether the remote end is the receiver side (receiverSide
+// "sc": SC/SL, "rc": RC/RL) or the other one.
+func propIntelRemote(m *MQTTMessage, qthSet []string, area *liveArea, receiverSide string) (remoteLoc string, remoteIsRecv, matchedEnd bool) {
+	sl := strings.TrimSpace(m.SL)
+	rl := strings.TrimSpace(m.RL)
+	recvLoc, otherLoc := sl, rl
+	if receiverSide == "rc" {
+		recvLoc, otherLoc = rl, sl
+	}
+
+	if area != nil {
+		if area.contains(recvLoc) {
+			return otherLoc, false, true
+		}
+		if area.contains(otherLoc) {
+			return recvLoc, true, true
+		}
+		return recvLoc, true, false
+	}
+
+	var recvCall, otherCall string
+	if len(qthSet) > 0 {
+		recvCall = strings.ToUpper(strings.TrimSpace(m.SC))
+		otherCall = strings.ToUpper(strings.TrimSpace(m.RC))
+		if receiverSide == "rc" {
+			recvCall, otherCall = otherCall, recvCall
+		}
+	}
+	for _, t := range qthSet {
+		if matchCall(recvCall, t) || (isLocator(t) && hasPrefixFold(recvLoc, t)) {
+			return otherLoc, false, true
+		}
+		if matchCall(otherCall, t) || (isLocator(t) && hasPrefixFold(otherLoc, t)) {
+			return recvLoc, true, true
+		}
+	}
+	return recvLoc, true, false
+}
+
+// propIntelRemoteCall is the upper-cased callsign of the end propIntelRemote
+// picked as the remote one.
+func propIntelRemoteCall(m *MQTTMessage, receiverSide string, remoteIsRecv bool) string {
+	recvCall, otherCall := m.SC, m.RC
+	if receiverSide == "rc" {
+		recvCall, otherCall = otherCall, recvCall
+	}
+	if remoteIsRecv {
+		return strings.ToUpper(strings.TrimSpace(recvCall))
+	}
+	return strings.ToUpper(strings.TrimSpace(otherCall))
+}
+
+// scanPropIntelV2Window walks the history window once and accumulates the
+// per-(band, region, source) cells, the from-here flags and the bands seen.
+func scanPropIntelV2Window(history []MQTTMessage, profiles []propIntelSourceProfile, qthSet []string, matchArea *liveArea, now, cutoff, midpoint int64) (map[propIntelV2CellKey]*propIntelV2Acc, map[propIntelCellKey]bool, map[string]struct{}) {
+	// Per-message accumulation is indexed by (band, region, source) position
+	// in flat arrays instead of string-keyed maps (three string hashes per
+	// message); the maps the rest of the function reads are rebuilt below.
+	// cellFromHere is per (band, region) because from-here is source-agnostic
+	// at the rollup level.
+	nBands, nRegions, nSources := len(inScopeBandNames), len(region.AllRegions()), len(profiles)
+	accs := make([]*propIntelV2Acc, nBands*nRegions*nSources)
+	var bandSeen [len(inScopeBandNames)]bool
+	fromHere := make([]bool, nBands*nRegions)
+	regions := newRawRegionMemo()
+
+	for i := range history {
+		m := &history[i]
+		if m.T > now || m.T < cutoff {
+			continue
+		}
+		src := m.Source
+		if src == "" {
+			src = "mqtt" // MQTT ingest leaves Source empty (only wspr/rbn/dxc tag theirs)
+		}
+		si := -1
+		for j := range profiles {
+			if profiles[j].InternalTag == src {
+				si = j
+				break
+			}
+		}
+		if si < 0 {
+			continue
+		}
+		prof := &profiles[si]
+		bi := feedBandIndex(m.B)
+		if bi < 0 {
+			continue
+		}
+
+		remoteLoc, _, matchedEnd := propIntelRemote(m, qthSet, matchArea, prof.ReceiverSide)
+		ri := regions.get(remoteLoc)
+		if ri < 0 {
+			continue
+		}
+
+		ai := (bi*nRegions+ri)*nSources + si
+		cell := accs[ai]
+		if cell == nil {
+			cell = &propIntelV2Acc{}
+			accs[ai] = cell
+		}
+		cell.spotCount++
+		bandSeen[bi] = true
+
+		if prof.HasTXPower && m.TXPower > 0 {
+			eff := float64(m.RP) + propIntelReferencePowerDbm - float64(m.TXPower)
+			if !cell.hasPower || eff > cell.bestBudgetSNR {
+				cell.bestBudgetSNR = eff
+			}
+			cell.hasPower = true
+		}
+		if prof.InternalTag == "mqtt" || prof.InternalTag == "rbn" {
+			if !cell.hasReport || m.RP > cell.bestReportSNR {
+				cell.bestReportSNR = m.RP
+			}
+			cell.hasReport = true
+		}
+
+		if matchedEnd {
+			fromHere[bi*nRegions+ri] = true
+		}
+
+		if m.T < midpoint {
+			cell.firstHalfSpots++
+		} else {
+			cell.secondHalfSpots++
+		}
+	}
+
+	// cellAccs[cellKey] is per (band, region, source).
+	cellAccs := make(map[propIntelV2CellKey]*propIntelV2Acc)
+	cellFromHere := make(map[propIntelCellKey]bool)
+	bandsSeen := make(map[string]struct{})
+	allRegions := region.AllRegions()
+	for bi := 0; bi < nBands; bi++ {
+		if bandSeen[bi] {
+			bandsSeen[inScopeBandNames[bi]] = struct{}{}
+		}
+		for ri := 0; ri < nRegions; ri++ {
+			if fromHere[bi*nRegions+ri] {
+				cellFromHere[propIntelCellKey{band: inScopeBandNames[bi], region: string(allRegions[ri])}] = true
+			}
+			for si := 0; si < nSources; si++ {
+				if acc := accs[(bi*nRegions+ri)*nSources+si]; acc != nil {
+					cellAccs[propIntelV2CellKey{band: inScopeBandNames[bi], region: string(allRegions[ri]), source: profiles[si].PublicName}] = acc
+				}
+			}
+		}
+	}
+	return cellAccs, cellFromHere, bandsSeen
+}
+
 // propIntelV2Engine is stateless like v1's; the propBaseline singleton holds
 // the climatology. Kept as a struct for symmetry and test fixtures.
 type propIntelV2Engine struct{}
@@ -229,78 +390,7 @@ func (e *propIntelV2Engine) EvaluateV2Area(qth string, surroundings bool, minute
 	cutoff := now - int64(minutes)*60
 	midpoint := cutoff + (now-cutoff)/2
 
-	profByTag := make(map[string]propIntelSourceProfile, len(profiles))
-	for _, p := range profiles {
-		profByTag[p.InternalTag] = p
-	}
-
-	// cellAccs[cellKey] is per (band, region, source); cellFromHere is per
-	// (band, region) because from-here is source-agnostic at the rollup level.
-	cellAccs := make(map[propIntelV2CellKey]*propIntelV2Acc)
-	cellFromHere := make(map[propIntelCellKey]bool)
-	bandsSeen := make(map[string]struct{})
-	regions := newRegionMemo()
-
-	for _, m := range history {
-		if m.T > now || m.T < cutoff {
-			continue
-		}
-		src := m.Source
-		if src == "" {
-			src = "mqtt" // MQTT ingest leaves Source empty (only wspr/rbn/dxc tag theirs)
-		}
-		prof, ok := profByTag[src]
-		if !ok {
-			continue
-		}
-		band := normalizeBand(m.B)
-		if band == "" || !bandInScope(band) {
-			continue
-		}
-
-		remoteLocator, _, matchedEnd := resolvePropIntelRemoteEndArea(m, qthSet, matchArea, prof.ReceiverSide)
-		if remoteLocator == "" || !isLocator(remoteLocator) {
-			continue
-		}
-		reg := regions.get(remoteLocator)
-		if reg == region.Unknown {
-			continue
-		}
-
-		regionCode := string(reg)
-		ck := propIntelV2CellKey{band: band, region: regionCode, source: prof.PublicName}
-		cell := cellAccs[ck]
-		if cell == nil {
-			cell = &propIntelV2Acc{}
-			cellAccs[ck] = cell
-		}
-		cell.spotCount++
-		bandsSeen[band] = struct{}{}
-
-		if prof.HasTXPower && m.TXPower > 0 {
-			eff := float64(m.RP) + propIntelReferencePowerDbm - float64(m.TXPower)
-			if !cell.hasPower || eff > cell.bestBudgetSNR {
-				cell.bestBudgetSNR = eff
-			}
-			cell.hasPower = true
-		}
-		if prof.InternalTag == "mqtt" || prof.InternalTag == "rbn" {
-			if !cell.hasReport || m.RP > cell.bestReportSNR {
-				cell.bestReportSNR = m.RP
-			}
-			cell.hasReport = true
-		}
-
-		if matchedEnd {
-			cellFromHere[propIntelCellKey{band: band, region: regionCode}] = true
-		}
-
-		if m.T < midpoint {
-			cell.firstHalfSpots++
-		} else {
-			cell.secondHalfSpots++
-		}
-	}
+	cellAccs, cellFromHere, bandsSeen := scanPropIntelV2Window(history, profiles, qthSet, matchArea, now, cutoff, midpoint)
 
 	resp.Bands = inScopeBandsOrdered(bandsSeen)
 	slot := utcSlotOfDay(now)

@@ -62,6 +62,8 @@ Frontend (headless Chromium against a local dev server unless noted):
 
 Third pass (after deploying the second): a 20 s CPU profile of prod showed `allBandBaselinePairs` (two GROUP BY queries, ~25k rows per request) at ~47% of `dx_conditions` / `hot_bands` CPU, and the per-area index skipped in dense regions because the operator's 6x6-square cluster block alone matches over half the feed. The baseline indexes are now cached for 60 s (`baseline_pairs_cache.go`: global index shared, cluster indexes per cluster, one load shared by concurrent requests, stale copy served for up to 10 minutes if Postgres fails, 5 s retry back-off). Not measured on prod yet.
 
+Fourth pass: `prop_intel/v2` (43% of prod CPU after the cache deploy). Per 250k-message window on a feed-like mix, `EvaluateV2Area` went from 47 to 20 ms (global mesh) and 45 to 12 ms (wide area), 502k allocations to 7.8k; the v1 nowcast from 19 to 11 ms and 152k allocations to 7.9k. The scan (`scanPropIntelV2Window`, `scanPropIntelWindow`) now resolves locators with in-place case folding (`propIntelRemote`), maps them to regions through a memo keyed by the raw feed string (`rawRegionMemo`: one upper-cased copy per distinct locator instead of two per message), and accumulates into arrays indexed by (band, region, source) instead of three-string map keys. `bandInScope` is a switch. Reference-equivalence tests compare both scans with the old implementations. Concurrency harness: 356 to 461 req/s, `prop_intel/v2` p50 57 to 30 ms.
+
 ## Invariants
 
 - `hub.history` is append-only; readers use views. See CLAUDE.md.
@@ -70,7 +72,7 @@ Third pass (after deploying the second): a 20 s CPU profile of prod showed `allB
 
 ## Not done / open
 
-- `prop_intel/v2` still walks the whole window: it counts every message per region (a global mesh view), so the per-area index does not apply. `propIntel*Evaluate` and `resolvePropIntelRemoteEndArea` also upper-case locators per message.
+- `prop_intel/v2` still walks the whole window: it counts every message per region (a global mesh view), so the per-area index does not apply. Keeping per-(band, region, source) counts incrementally would remove the walk; what is left per message is the raw-locator memo lookup and the call matching of the qthSet path.
 - The area index is skipped when the match share exceeds half the window, which the operator-cluster term (6x6 squares) triggers in dense regions such as Western Europe. Counting the cluster activity separately (per-cluster, per-band, per-second counters) would let the index cover those requests.
 - A short TTL response cache would still help when several clients share a QTH (the area index already makes the per-request cost small).
 - The in-memory (no-Postgres) baseline path (`snapshotEventsLocked`, `buildBandActivityByBin`, `cloneBuckets`) is dev-only and was not optimised; it is most of what remains in the indexed `EvaluateArea` benchmark.
