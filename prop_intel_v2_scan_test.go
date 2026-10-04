@@ -284,3 +284,51 @@ func TestScanPropIntelWindowMatchesReference(t *testing.T) {
 		}
 	}
 }
+
+// The precomputed matcher must agree with the original token loop on every
+// shape of qth set, including which end is the remote one when both ends of a
+// spot lie inside a 3x3 block (the first matching token decides).
+func TestPropRemoteMatcherMatchesTokenLoop(t *testing.T) {
+	rng := rand.New(rand.NewSource(77))
+	near := []string{"JO32", "JO31", "JO33", "JO22", "JO42", "JN32", "JN33", "JO21", "JO41", "JO23", "JO43", "JP32", "KO32", "FN20", "RR99", "AA00"}
+	subs := []string{"", "lk", "LK", "xx", "aa"}
+	calls := []string{"DK3JF", "dl1abc", " W1AW ", "F5XYZ/P", "", "N0CALL", "X/DK3JF/Y"}
+	loc := func() string {
+		l := near[rng.Intn(len(near))] + subs[rng.Intn(len(subs))]
+		switch rng.Intn(25) {
+		case 0:
+			return ""
+		case 1:
+			return " " + l + " "
+		case 2:
+			return "J"
+		case 3:
+			return strings.ToLower(l)
+		}
+		return l
+	}
+	qthSets := [][]string{
+		qthSquares("JO32", false), qthSquares("JO32", true), qthSquares("RR99", true), qthSquares("AA00", true),
+		qthSquares("DK3JF", false), {"JO32QM"}, {"JO32", "DK3JF"}, nil,
+	}
+	areas := []*liveArea{nil, explicitLiveArea("JO32", 2)}
+	matched := 0
+	for i := 0; i < 200000; i++ {
+		m := MQTTMessage{SC: calls[rng.Intn(len(calls))], RC: calls[rng.Intn(len(calls))], SL: loc(), RL: loc()}
+		qs := qthSets[rng.Intn(len(qthSets))]
+		area := areas[rng.Intn(len(areas))]
+		side := []string{"sc", "rc"}[rng.Intn(2)]
+		pm := newPropRemoteMatcher(qs, area)
+		gl, gr, gm := pm.resolve(&m, side)
+		wl, wr, wm := propIntelRemote(&m, qs, area, side)
+		if gl != wl || gr != wr || gm != wm {
+			t.Fatalf("qthSet=%v area=%v side=%s msg=%+v\n got  %q %v %v\n want %q %v %v", qs, area, side, m, gl, gr, gm, wl, wr, wm)
+		}
+		if gm {
+			matched++
+		}
+	}
+	if matched < 20000 {
+		t.Fatalf("only %d matches: the comparison is too narrow", matched)
+	}
+}

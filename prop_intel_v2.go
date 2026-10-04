@@ -234,6 +234,83 @@ func propIntelRemote(m *MQTTMessage, qthSet []string, area *liveArea, receiverSi
 	return recvLoc, true, false
 }
 
+// propRemoteMatcher is propIntelRemote with the per-scan work hoisted out of
+// the per-message loop. For a locator qth the token set is a block of 4-char
+// squares (own square, or 3x3 with surroundings); testing a message against
+// 9 string tokens meant 18 matchCall plus 18 prefix comparisons, which made the
+// scan ~250 ms on prod whenever the live area sat at radius 1 (the qthSet
+// path). Here the squares are integer coordinates, compared in the original
+// token order (when both ends of a spot are inside the block, the first token
+// either end matches decides which end is the remote one), behind a bounding-
+// box test that rejects spots with no end near the block.
+//
+// A callsign can never equal a grid square, so the callsign comparisons the
+// token loop also made for locator tokens are dropped. qth sets that are not
+// a plain list of 4-char squares (a callsign qth, longer locators, a mix) keep
+// the original loop.
+type propRemoteMatcher struct {
+	area                   *liveArea
+	qthSet                 []string
+	sq                     [][2]int
+	minX, maxX, minY, maxY int
+	exact                  bool
+}
+
+func newPropRemoteMatcher(qthSet []string, area *liveArea) propRemoteMatcher {
+	pm := propRemoteMatcher{area: area, qthSet: qthSet}
+	if area != nil || len(qthSet) == 0 {
+		return pm
+	}
+	sq := make([][2]int, 0, len(qthSet))
+	for _, t := range qthSet {
+		if len(t) != 4 || !isLocator(t) {
+			return pm
+		}
+		x, y, _ := locatorSquareXY(t)
+		sq = append(sq, [2]int{x, y})
+	}
+	pm.sq, pm.exact = sq, true
+	pm.minX, pm.maxX, pm.minY, pm.maxY = sq[0][0], sq[0][0], sq[0][1], sq[0][1]
+	for _, p := range sq[1:] {
+		pm.minX, pm.maxX = min(pm.minX, p[0]), max(pm.maxX, p[0])
+		pm.minY, pm.maxY = min(pm.minY, p[1]), max(pm.maxY, p[1])
+	}
+	return pm
+}
+
+func (pm *propRemoteMatcher) inBox(x, y int) bool {
+	return x >= pm.minX && x <= pm.maxX && y >= pm.minY && y <= pm.maxY
+}
+
+// resolve is propIntelRemote(m, qthSet, area, receiverSide).
+func (pm *propRemoteMatcher) resolve(m *MQTTMessage, receiverSide string) (remoteLoc string, remoteIsRecv, matchedEnd bool) {
+	if !pm.exact {
+		return propIntelRemote(m, pm.qthSet, pm.area, receiverSide)
+	}
+	sl := strings.TrimSpace(m.SL)
+	rl := strings.TrimSpace(m.RL)
+	recvLoc, otherLoc := sl, rl
+	if receiverSide == "rc" {
+		recvLoc, otherLoc = rl, sl
+	}
+	rx, ry, rok := locatorSquareXYFold(recvLoc)
+	ox, oy, ook := locatorSquareXYFold(otherLoc)
+	rok = rok && pm.inBox(rx, ry)
+	ook = ook && pm.inBox(ox, oy)
+	if !rok && !ook {
+		return recvLoc, true, false
+	}
+	for _, t := range pm.sq {
+		if rok && rx == t[0] && ry == t[1] {
+			return otherLoc, false, true
+		}
+		if ook && ox == t[0] && oy == t[1] {
+			return recvLoc, true, true
+		}
+	}
+	return recvLoc, true, false
+}
+
 // propIntelRemoteCall is the upper-cased callsign of the end propIntelRemote
 // picked as the remote one.
 func propIntelRemoteCall(m *MQTTMessage, receiverSide string, remoteIsRecv bool) string {
@@ -277,6 +354,7 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 		fhm = newFromHereMatcher(qthSet, matchArea)
 	}
 	regions := newRawRegionMemo()
+	pm := newPropRemoteMatcher(qthSet, matchArea)
 
 	for i := range history {
 		m := &history[i]
@@ -317,7 +395,7 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 				nEnds++
 			}
 		} else {
-			ends[0], _, matchedEnd = propIntelRemote(m, qthSet, matchArea, prof.ReceiverSide)
+			ends[0], _, matchedEnd = pm.resolve(m, prof.ReceiverSide)
 			nEnds = 1
 		}
 		for k := 0; k < nEnds; k++ {

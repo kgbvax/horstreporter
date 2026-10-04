@@ -1895,19 +1895,23 @@ func normalizeSeriesTo100(series []float64) []float64 {
 // activityBins is the number of bars in a band's activity series.
 const activityBins = 12
 
-// hubCoversWindow reports whether hub.history holds every ingested spot of the
-// last `minutes` minutes: the window fits the retention, starts after the
-// moment the history became complete (process start or backfill start), and
-// does not overlap the hole a restart leaves (liveHistoryGapStart/End).
+// hubCoversWindow reports whether hub.history holds every spot Postgres holds
+// for the last `minutes` minutes: the window fits the retention and starts
+// after the moment the history became complete (process start, or the start
+// of the startup backfill that loaded it from dx_raw_spots).
+//
+// The restart gap (liveHistoryGapStart/End, the downtime between the newest
+// backfilled spot and the moment ingest resumed) is deliberately not checked:
+// live rates must skip it because the baseline they are compared with
+// expects spots there, but for a count of what was recorded the hub and
+// dx_raw_spots are missing exactly the same spots, so the series is the same.
+// Checking it sent every window that overlapped the gap to Postgres for up to
+// an hour after each restart (250-650 ms instead of tens of ms).
 func hubCoversWindow(now int64, minutes int) bool {
 	if minutes <= 0 || (liveHistoryRetentionMinutes > 0 && minutes > liveHistoryRetentionMinutes) {
 		return false
 	}
-	start := now - int64(minutes)*60
-	if since := liveHistoryCompleteSince.Load(); since > start {
-		return false
-	}
-	if gs, ge := liveHistoryGapStart.Load(), liveHistoryGapEnd.Load(); ge > gs && ge > start && gs < now {
+	if since := liveHistoryCompleteSince.Load(); since > now-int64(minutes)*60 {
 		return false
 	}
 	return true
