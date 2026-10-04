@@ -58,3 +58,15 @@ func BenchmarkEvaluateV1(b *testing.B) {
 		propIntel.Evaluate("JO32", false, 15, -15, hist, now, 2.0)
 	}
 }
+
+// BenchmarkEvaluateV2FromHere is the web panel's request: the from-here view
+// over the 3×3 block (no normals, so no Postgres).
+func BenchmarkEvaluateV2FromHere(b *testing.B) {
+	hist := v2Window(250_000, 15)
+	now := time.Now().Unix()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		propIntelV2.EvaluateV2FromHere("JO32", true, 15, nil, nil, nil, hist, now, 2.0, nil, nil)
+	}
+}

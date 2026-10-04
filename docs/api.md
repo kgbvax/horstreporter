@@ -457,10 +457,27 @@ Params: v1's (`qth` required, `surroundings`, `minutes`, `surge_threshold`,
   given values, clamped ssb −10..30 / cw −40..20. Absent (and for `wspr`'s
   budget model and `dxcluster`'s presence rule) the profile floors apply.
 
-- `rings`: see Conventions. `from_here` is then true for a path with an end
-  anywhere in the area, and the response carries `area`. `atypical` is omitted
-  while the area is widened (the climatology is not scaled to a wider block, so
-  its larger live counts would read as surges); surge push fan-out follows.
+- `rings`: see Conventions. The area is then the block of squares around the
+  QTH and the response carries `area`. Without `from_here`, `atypical` is
+  omitted while the area is widened (the global climatology is not scaled to a
+  wider block, so its larger live counts would read as surges); surge push
+  fan-out follows.
+
+- `from_here=true` switches to the **from-here view** (`prop_intel_fromhere.go`).
+  Only spots with an end in the area are counted: each such end adds one
+  count to the cell of the OTHER end's region (a spot with both ends in the
+  area counts once per end, once if both share a square). This mirrors how
+  `dx_region_baseline_daily` keys spots, so counts, open flags and `rising`
+  describe paths from the operator's area, not the whole mesh. Without
+  `from_here`, cells carry mesh counts: every spot lands in the cell of its
+  receiver's region and `from_here` only flags cells touched by the area.
+  With PSKReporter selected and a locator QTH (area up to 7×7 squares), cells
+  also carry the area's normal (see `expected` below), and `atypical` is the
+  z-score of the live PSKReporter count against it (at least 5 reports);
+  other sources have no from-here climatology, so they carry no `atypical`.
+  The normal is read from Postgres per area, slot set and day, cached, and a
+  request waits at most 1.2 s for it (a slower read fills the cache for the
+  next poll; until then cells have no `expected`).
 
 - `sources`: source selection, CSV or repeated (`?sources=wspr,pskr` or
   `?sources=wspr&sources=rbn`). Public names: `wspr` (WSPR beacons),
@@ -504,6 +521,13 @@ region):
   discount as v1). The rollup cell carries the highest-confidence atypical;
   `atypical_agreement` is the fraction of active sources that surged
   (replaces v1's FT8 flavor cross-reference).
+- `expected` / `expected_spots` (from-here view only, optional): the mean
+  PSKReporter FT8/FT4 (plus DX-cluster) count for this band and far-end region
+  over the same clock window on the last 28 complete UTC days with
+  PSKReporter ingest (≥ 3 such days), from `dx_region_baseline_daily` summed
+  over the area's squares; and the live count of those same spots. Their
+  ratio is the cell against its own normal. `expected` is 0 for a path the
+  reference days never saw.
 - `open_agreement` is vacuously 1.0 with a single active source — render
   the `active_sources` count, not the fraction.
 - Atypical cells fan out Web Push like v1 (adapted to the v1 push payload;
