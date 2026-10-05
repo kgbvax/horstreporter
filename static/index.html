@@ -83,6 +83,18 @@
                      button's aria-pressed/-label/disabled are set by
                      updateBandLabels (renderers.js). -->
                 <div class="band-rail" role="group" aria-label="Bands">
+                    <!-- Time anchor for the sparklines: they span the max spot age
+                         (Display), ending now; renderers.js updateBandLabels
+                         keeps the two labels current. Laid out on the band row
+                         grid so the bracket spans exactly the sparkline column. -->
+                    <div class="band-rail-axis" aria-hidden="true">
+                        <span></span>
+                        <span class="band-rail-axis-grid">
+                            <span></span><span></span>
+                            <span class="band-rail-axis-span"><span class="band-rail-axis-from">15 min ago</span><span class="band-rail-axis-to">now</span></span>
+                            <span class="band-focus-icon">&#9678;</span>
+                        </span>
+                    </div>
                     <div class="band-wrapper band-pill band-row" data-band="160m" style="--band: #8B0000">
                         <input type="checkbox" class="form-check-input band-enable" value="160m" aria-label="Enable 160m" title="Enable 160m">
                         <button type="button" class="band-solo" aria-pressed="false" aria-label="Show only 160m" title="Show only 160m" aria-describedby="band-desc-160m">

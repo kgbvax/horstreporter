@@ -9,7 +9,8 @@ vi.mock('../static/perf.js', () => ({
 vi.mock('../static/map.js', () => ({ map: {} }));
 
 import { readFileSync } from 'node:fs';
-import { bandActivity, updateBandLabels, refreshBandLabels, setBandNormalRateProvider } from '../static/renderers.js';
+import { bandActivity, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, sparkAgoLabel } from '../static/renderers.js';
+import { setDataNowMs, clearDataNowOverride } from '../static/data-now.js';
 
 const ctx = { minSnrMode: 'all', ssbMinDb: 0, cwMinDb: -15 };
 
@@ -143,5 +144,40 @@ describe('band rail sparkline normal line', () => {
         setBandNormalRateProvider(() => 1);
         refreshBandLabels();
         expect(normalOf('20m').hasAttribute('data-off')).toBe(false);
+    });
+});
+
+describe('band rail time anchor', () => {
+    afterEach(() => clearDataNowOverride());
+
+    it('sparkAgoLabel: minutes, whole hours, sane fallback', () => {
+        expect(sparkAgoLabel(15)).toBe('15 min ago');
+        expect(sparkAgoLabel('5')).toBe('5 min ago');
+        expect(sparkAgoLabel(60)).toBe('1 h ago');
+        expect(sparkAgoLabel(90)).toBe('90 min ago');
+        expect(sparkAgoLabel(undefined)).toBe('15 min ago');
+    });
+
+    it('index.html has one anchor above the rows, hidden from assistive tech', () => {
+        document.body.innerHTML = readFileSync('static/index.html', 'utf8');
+        const axis = document.querySelectorAll('.band-rail .band-rail-axis');
+        expect(axis).toHaveLength(1);
+        expect(axis[0].getAttribute('aria-hidden')).toBe('true');
+        expect(axis[0].nextElementSibling.classList.contains('band-row')).toBe(true);
+    });
+
+    it('follows the max spot age, and the replayed moment on the timeline', () => {
+        document.body.innerHTML = `<input id="minutes" value="5">
+            <div class="band-rail-axis"><span class="band-rail-axis-from"></span><span class="band-rail-axis-to"></span></div>
+            <div id="band-container" data-focus-band="">${row('20m', true)}</div>`;
+        updateBandLabels([{ band: '20m', snr: 0, t: 1000 }]);
+        expect(document.querySelector('.band-rail-axis-from').textContent).toBe('5 min ago');
+        expect(document.querySelector('.band-rail-axis-to').textContent).toBe('now');
+
+        document.getElementById('minutes').value = '60';
+        setDataNowMs(Date.UTC(2026, 9, 4, 21, 7));
+        updateBandLabels([{ band: '20m', snr: 0, t: 1000 }]);
+        expect(document.querySelector('.band-rail-axis-from').textContent).toBe('1 h ago');
+        expect(document.querySelector('.band-rail-axis-to').textContent).toBe('21:07 UTC');
     });
 });

@@ -2,6 +2,7 @@ import { state } from './state.js';
 import { map } from './map.js';
 import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, pillTextColor, regionForLocatorCached } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTimer } from './perf.js';
+import { getDataNowMs } from './data-now.js';
 
 // Rendered-state fingerprint for the grid-snr heat layer. Unlike the old
 // spot-list fingerprint (spots.length + first/last ageSeconds — which changes
@@ -504,6 +505,8 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
         }
     }
 
+    updateRailTimeAnchor();
+
     document.querySelectorAll('.band-pill').forEach(pill => {
         const band = pill.dataset.band;
         if (!band) return;
@@ -558,6 +561,25 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
 }
 
 const SPARK_BINS = 15;
+
+// "15 min ago", "1 h ago": the start of the sparklines (max spot age).
+export function sparkAgoLabel(minutes) {
+    const m = Math.max(1, Math.round(Number(minutes) || 15));
+    return m >= 60 && m % 60 === 0 ? `${m / 60} h ago` : `${m} min ago`;
+}
+
+// The time anchor above the band rail: the sparklines run from the max spot
+// age to now, or to the moment being replayed (the timeline pins the data
+// clock, data-now.js).
+function updateRailTimeAnchor() {
+    const from = document.querySelector('.band-rail-axis-from');
+    const to = document.querySelector('.band-rail-axis-to');
+    if (from) from.textContent = sparkAgoLabel(document.getElementById('minutes')?.value);
+    if (to) {
+        const pinned = getDataNowMs();
+        to.textContent = pinned == null ? 'now' : `${new Date(pinned).toISOString().slice(11, 16)} UTC`;
+    }
+}
 
 // Per-band spot count + a SPARK_BINS histogram over the max-spot-age window,
 // anchored on the newest spot so it also works for a timeline moment.

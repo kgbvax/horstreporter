@@ -475,7 +475,7 @@ function renderMatrix() {
 
     let html = renderSourceChips();
     html += `<table class="wspr-matrix-table wspr-look-${runtime.style}" role="grid" aria-label="Propagation by band and region">` +
-        '<thead><tr role="row"><th scope="col" role="columnheader"><span class="wspr-sr-only">Band</span></th>' + extraHead;
+        `<thead><tr role="row"><th scope="col" role="columnheader" class="wspr-matrix-corner"><span class="wspr-sr-only">Band</span>${timeAnchor(data)}</th>` + extraHead;
     if (strip) {
         html += `<th scope="col" role="columnheader" class="wspr-strip-head"><span class="wspr-sr-only">Regions against their normal</span>${stripAxisHtml()}</th>`;
     } else {
@@ -522,6 +522,21 @@ function renderMatrix() {
     if (drill || first) setRovingCell(drill || first);
     restoreFocus(body, focus);
     extras?.after(body);
+}
+
+// Time anchor in the table's top-left corner for the looks that draw time:
+// how far back the sparklines go, or the clock span of the day curves. The
+// legend says the same in words; this is the glanceable version.
+function timeAnchor(data) {
+    let text = '';
+    if (runtime.style === 'trend') {
+        const bins = Math.max(0, ...(data?.cells || []).map((c) => (Array.isArray(c.trend) ? c.trend.length : 0))) || 12;
+        const minutes = bins * (Number(data?.trend_bin_minutes) || 5);
+        text = minutes >= 60 && minutes % 60 === 0 ? `last ${minutes / 60} h` : `last ${minutes} min`;
+    } else if (runtime.style === 'day') {
+        text = '00\u201324 UTC';
+    }
+    return text ? `<span class="wspr-time-anchor" aria-hidden="true">${text}</span>` : '';
 }
 
 // The strip's dot and label placement depends on its width, which changes
@@ -838,6 +853,7 @@ export const __test = {
     HEAT_KEY,
     renderLookCell,
     scheduleDetailRetry,
+    timeAnchor,
     DETAIL_RETRY_MS,
     DEFAULT_STYLE,
     STYLES,

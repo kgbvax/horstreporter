@@ -671,6 +671,19 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     color: var(--text-color);
 }
 
+/* Time anchor in the matrix's top-left corner (Trend: how far back the lines
+   go; Day: the clock span of the curves). */
+.wspr-matrix-table .wspr-matrix-corner {
+    text-align: left;
+    vertical-align: bottom;
+    padding-left: 6px;
+}
+.wspr-time-anchor {
+    font-weight: 400;
+    white-space: nowrap;
+    color: var(--status-color);
+}
+
 /* Heat overlay (Heat chip): cells tinted by reports now on CET-R2, mixed
    into the panel so the ink marks stay readable on every shade (the dark
    panel takes more colour to stay visible). */
@@ -1602,6 +1615,44 @@ body[data-theme="dark"] .band-row {
     font-size: 0.95rem;
     line-height: 1;
     opacity: 0.3;
+}
+
+/* Time anchor above the rail: same grid as a band row (checkbox, then the
+   solo button's name / count / sparkline / icon columns), so the bracket
+   under the two labels spans exactly the sparkline column. */
+.band-rail-axis {
+    display: grid;
+    grid-template-columns: 14px 1fr;
+    column-gap: 8px;
+    padding: 0 6px 5px;
+    font-size: 0.72rem;
+    line-height: 1.2;
+    color: var(--status-color);
+}
+.band-rail-axis-grid {
+    display: grid;
+    grid-template-columns: 3.2rem 2.4rem 1fr auto;
+    align-items: end;
+    column-gap: 8px;
+}
+.band-rail-axis-span {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    white-space: nowrap;
+}
+.band-rail-axis-span::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -4px;
+    height: 3px;
+    border: 1px solid color-mix(in srgb, var(--text-color) 35%, transparent);
+    border-bottom: 0;
+}
+.band-rail-axis .band-focus-icon {
+    visibility: hidden;
 }
 
 .band-row[data-state="live"] .band-count {
