@@ -438,16 +438,33 @@ describe('wspr-matrix (Propagation) panel', () => {
         expect(calls[0]).not.toContain('dxcluster');
     });
 
-    it('the last remaining source chip cannot be deselected', () => {
-        runtime.sources = ['wspr'];
+    it('PSKR is always selected: its chip does not toggle, the others do', () => {
+        runtime.sources = ['pskr'];
+        toggleSource('pskr');
+        expect(runtime.sources).toEqual(['pskr']);
+        toggleSource('dxcluster');
         toggleSource('wspr');
-        expect(runtime.sources).toEqual(['wspr']);
+        expect(runtime.sources).toEqual(['wspr', 'pskr', 'dxcluster']); // canonical order
+        toggleSource('wspr');
+        expect(runtime.sources).toEqual(['pskr', 'dxcluster']);
     });
 
-    it('a stored chip selection survives a re-init', () => {
-        store.setItem(SOURCES_KEY, 'dxcluster,wspr');
+    it('the PSKR chip renders as fixed on', () => {
+        runtime.sources = ['pskr'];
+        const chips = __test.renderSourceChips();
+        expect(chips).toMatch(/class="wspr-src-chip is-on is-fixed" data-source="pskr" aria-pressed="true" aria-disabled="true"/);
+        expect(chips).toMatch(/class="wspr-src-chip" data-source="wspr" aria-pressed="false"/);
+    });
+
+    it('a stored chip selection survives a re-init, and gains PSKR', () => {
+        store.setItem(SOURCES_KEY, 'dxcluster,pskr,wspr');
         initWsprMatrix();
-        expect(runtime.sources).toEqual(['wspr', 'dxcluster']); // canonical order
+        expect(runtime.sources).toEqual(['wspr', 'pskr', 'dxcluster']); // canonical order
+        // A WSPR-only selection (it left every look empty) gains PSKR, stored.
+        store.setItem(SOURCES_KEY, 'wspr');
+        initWsprMatrix();
+        expect(runtime.sources).toEqual(['wspr', 'pskr']);
+        expect(store.getItem(SOURCES_KEY)).toBe('wspr,pskr');
     });
 
     it('a surge is drawn as a ring in the look, named in the cell, never a badge', () => {

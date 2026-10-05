@@ -1140,6 +1140,10 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
     border-color: var(--accent);
     color: var(--accent-strong);
 }
+/* PSKR: always on (the looks compare it with the normal), not a toggle. */
+.wspr-src-chip.is-fixed {
+    cursor: default;
+}
 /* Separator between the source chips and the look chips on the same row. */
 .wspr-chip-sep {
     align-self: center;
@@ -1399,6 +1403,41 @@ canvas.cond-mini {
     width: 96px;
     height: 44px;
     margin: 0 auto;
+}
+/* A dock dragged narrow: Day / Trend's nine region columns plus the band and
+   plot columns overflowed (CAR behind a scrollbar at 473 px). Below 500 px the
+   plot narrows (it draws at its CSS size) and its heading wraps; below 440 px
+   the plot column is left out so the regions still fit. Same in every look, so
+   the columns keep lining up. */
+.cond-now-matrix .wspr-matrix-body {
+    container-type: inline-size;
+}
+@container (max-width: 500px) {
+    .cond-now-matrix .wspr-matrix-table {
+        border-spacing: 2px 0;
+    }
+    .cond-now-matrix th.cond-col-plot {
+        white-space: normal;
+    }
+    canvas.cond-mini {
+        width: 64px;
+    }
+}
+@container (max-width: 440px) {
+    .cond-now-matrix th.cond-col-plot,
+    .cond-now-matrix td.cond-cell-plot {
+        display: none;
+    }
+}
+/* The dock's minimum width (360 px): smaller region headings set the
+   narrowest region columns. */
+@container (max-width: 380px) {
+    .cond-now-matrix .wspr-matrix-table {
+        border-spacing: 1px 0;
+    }
+    .cond-now-matrix th.wspr-matrix-region {
+        font-size: 0.72rem;
+    }
 }
 .cond-collapsed {
     position: absolute;

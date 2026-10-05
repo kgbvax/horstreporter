@@ -66,6 +66,16 @@ const ALL_SOURCES = SOURCES.map((s) => s.key);
 // (-dxcluster-enable absent), so DXC would sit there contributing nothing.
 // The chip stays available for local/dev instances that run the ingest.
 const DEFAULT_SOURCES = ['wspr', 'pskr', 'rbn'];
+// PSKReporter is always selected: every look compares its reports with the
+// area normal, and the other sources have no normal (a WSPR-only selection
+// left all three looks empty). WSPR / RBN / DXC are optional extras.
+const BASE_SOURCE = 'pskr';
+
+// A source list with the base source, in canonical order.
+function withBaseSource(list) {
+    const out = list.includes(BASE_SOURCE) ? [...list] : [...list, BASE_SOURCE];
+    return out.sort((a, b) => ALL_SOURCES.indexOf(a) - ALL_SOURCES.indexOf(b));
+}
 
 // The looks (wspr-matrix-looks.js). A stored look that no longer exists
 // (viridis / inferno) falls back to the default.
@@ -116,9 +126,10 @@ export function initWsprMatrix() {
     const storedSources = localStorage.getItem(SOURCES_KEY);
     if (storedSources) {
         const parsed = storedSources.split(',').map((s) => s.trim()).filter((s) => ALL_SOURCES.includes(s));
-        // Canonical order (matches the backend's parse + the chip row).
-        parsed.sort((a, b) => ALL_SOURCES.indexOf(a) - ALL_SOURCES.indexOf(b));
-        if (parsed.length > 0) runtime.sources = parsed;
+        // Canonical order (matches the backend's parse + the chip row); a
+        // selection stored before PSKR was fixed gains it.
+        runtime.sources = withBaseSource(parsed);
+        if (runtime.sources.join(',') !== storedSources) localStorage.setItem(SOURCES_KEY, runtime.sources.join(','));
     }
 
     runtime.heat = localStorage.getItem(HEAT_KEY) === '1';
@@ -208,17 +219,12 @@ function currentQth() {
     return String(document.getElementById('qth')?.value || state.qth || '').trim().toUpperCase();
 }
 
-// Toggle a source chip. At least one source stays selected — an empty
-// selection would render the whole panel meaningless.
+// Toggle a source chip. The base source (PSKR) stays selected.
 function toggleSource(key) {
+    if (key === BASE_SOURCE || !ALL_SOURCES.includes(key)) return;
     const idx = runtime.sources.indexOf(key);
-    if (idx >= 0) {
-        if (runtime.sources.length === 1) return;
-        runtime.sources.splice(idx, 1);
-    } else {
-        runtime.sources.push(key);
-        runtime.sources.sort((a, b) => ALL_SOURCES.indexOf(a) - ALL_SOURCES.indexOf(b));
-    }
+    if (idx >= 0) runtime.sources.splice(idx, 1);
+    else runtime.sources = withBaseSource([...runtime.sources, key]);
     localStorage.setItem(SOURCES_KEY, runtime.sources.join(','));
     invalidateCache();
     pollMatrix(true);
@@ -338,6 +344,10 @@ function scheduleDetailRetry(payload, key) {
 
 function renderSourceChips() {
     const chips = SOURCES.map((s) => {
+        if (s.key === BASE_SOURCE) {
+            return `<button type="button" class="wspr-src-chip is-on is-fixed" data-source="${s.key}" aria-pressed="true" aria-disabled="true" ` +
+                `title="${s.title}: always on, the looks compare them with the normal">${s.label}</button>`;
+        }
         const on = runtime.sources.includes(s.key);
         return `<button type="button" class="wspr-src-chip${on ? ' is-on' : ''}" data-source="${s.key}" aria-pressed="${on}" title="${s.title}">${s.label}</button>`;
     }).join('');
@@ -480,7 +490,7 @@ function renderMatrix() {
         html += `<th scope="col" role="columnheader" class="wspr-strip-head"><span class="wspr-sr-only">Regions against their normal</span>${stripAxisHtml()}</th>`;
     } else {
         for (const region of regions) {
-            html += `<th scope="col" role="columnheader" title="${escapeHtml(regionNames[region] || region)}">${region}</th>`;
+            html += `<th scope="col" role="columnheader" class="wspr-matrix-region" title="${escapeHtml(regionNames[region] || region)}">${region}</th>`;
         }
     }
     html += '</tr></thead><tbody>';
@@ -852,6 +862,7 @@ export const __test = {
     toggleHeat,
     HEAT_KEY,
     renderLookCell,
+    renderSourceChips,
     scheduleDetailRetry,
     timeAnchor,
     DETAIL_RETRY_MS,
