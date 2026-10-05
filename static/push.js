@@ -18,8 +18,8 @@
 // to "Add to Home Screen" before enabling push on iOS.
 //
 // Feature-detection: hides the push UI entirely when `serviceWorker` or
-// `PushManager` are unsupported, so the matrix panel still works on
-// browsers without Web Push.
+// `PushManager` are unsupported, or when the server has push disabled
+// (no VAPID public key), so the matrix panel still works without Web Push.
 
 const SW_PATH = '/sw.js?v=1';
 import { WSPR_REGIONS, WSPR_REGION_NAMES } from './utils.js';
@@ -249,21 +249,35 @@ function buildPrefGridRows() {
 // backend, exposed for tests.
 let cachedAppServerKey = null;
 
+function hidePushUI(root) {
+    // [hidden], not style.display: Bootstrap's .d-flex is display:flex
+    // !important and would win over an inline display:none.
+    if (root) root.hidden = true;
+    // The Notifications section holds nothing else; drop it entirely.
+    const section = document.getElementById('notifications-section');
+    if (section) section.hidden = true;
+}
+
 // initPushUI wires up the push settings UI in the options panel.
-// Returns null when push is unsupported (UI stays hidden); returns the
-// push controller otherwise. Mirrors the hot-band-indicator.js
-// factory pattern so app.js can store and stop it.
+// Returns null when push is unsupported by the browser or disabled on
+// the server (UI stays hidden); returns the push controller otherwise.
+// Mirrors the hot-band-indicator.js factory pattern so app.js can store
+// and stop it.
 export async function initPushUI() {
     const root = document.getElementById('push-settings-root');
     if (!root || !isPushSupported()) {
-        // [hidden], not style.display: Bootstrap's .d-flex is display:flex
-        // !important and would win over an inline display:none.
-        if (root) root.hidden = true;
-        // The Notifications section holds nothing else; drop it entirely.
-        const section = document.getElementById('notifications-section');
-        if (section) section.hidden = true;
+        hidePushUI(root);
         return null;
     }
+    // The server answers 503 without -push-enable + VAPID keys; offering a
+    // toggle that can only fail is worse than not offering it.
+    let serverKey = null;
+    try { serverKey = await fetchVAPIDPublicKey(); } catch (_) { /* treat as off */ }
+    if (!serverKey) {
+        hidePushUI(root);
+        return null;
+    }
+    cachedAppServerKey = serverKey;
 
     // Build the per-(band × region) checkbox grid rows in the DOM so
     // the IDs are stable for tests and the HTML stays compact. The

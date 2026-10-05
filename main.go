@@ -311,9 +311,9 @@ func main() {
 	proplabSWEnableFlag := flag.Bool("proplab-sw-enable", false, "Enable space-weather index series ingest (NOAA SWPC kp/F10.7/xray/OVATION; consumed by pathscope)")
 	opModeAgentURLFlag := flag.String("opmode-agent-url", "", "Deprecated and ignored: backend never proxies to local operator agent")
 	pushEnableFlag := flag.Bool("push-enable", false, "Enable Web Push notification channel for surge alerts (requires VAPID keys via -push-vapid-private-key/-push-vapid-public-key or PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
-	pushVAPIDPrivateKeyFlag := flag.String("push-vapid-private-key", "", "VAPID private key (base64url) for signing Web Push messages. Falls back to env PUSH_VAPID_PRIVATE_KEY. Generate with `go run github.com/SherClockHolmes/webpush-go` or the scripts/generate-vapid-keys.sh helper.")
+	pushVAPIDPrivateKeyFlag := flag.String("push-vapid-private-key", "", "VAPID private key (base64url) for signing Web Push messages. Falls back to env PUSH_VAPID_PRIVATE_KEY. Generate with scripts/generate-vapid-keys.sh.")
 	pushVAPIDPublicKeyFlag := flag.String("push-vapid-public-key", "", "VAPID public key (base64url) served at /api/push/vapid-public-key for the browser subscription flow. Falls back to env PUSH_VAPID_PUBLIC_KEY.")
-	pushVAPIDSubscriberFlag := flag.String("push-vapid-subscriber", "", "mailto: URL in the VAPID JWT (identifies the sending server to the push service). Defaults to mailto:horstreporter@example.com.")
+	pushVAPIDSubscriberFlag := flag.String("push-vapid-subscriber", "", "E-mail address or https: URL in the VAPID JWT (identifies the sending server to the push service). Defaults to horstreporter@example.com.")
 	pushTrustedProxyCIDRFlag := flag.String("push-trusted-proxy-cidr", "", "Comma-separated CIDR ranges of trusted TLS-terminating proxies whose X-Forwarded-For header is honored for push rate-limiting (e.g. \"10.0.0.0/8,172.16.0.0/12\"). When unset, X-Forwarded-For is NOT trusted and the client IP is taken from RemoteAddr — this prevents spoofed-XFF rate-limit bypass. Only applies when -push-enable is set.")
 	flag.Parse()
 	// hub.history starts empty; the startup backfill (if any) moves this back.
