@@ -1322,14 +1322,19 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 .cond-cell-plot {
     padding: 2px 4px;
 }
-/* One header line at the larger Now type size. */
-.cond-now-matrix th.cond-col-plot {
+/* The plot column keeps its content width (one header line at the larger
+   Now type size), so the full-width table gives its spare room to the region
+   columns; the plot is centred under its heading either way. */
+.cond-now-matrix th.cond-col-plot,
+.cond-now-matrix td.cond-cell-plot {
+    width: 1px;
     white-space: nowrap;
 }
 canvas.cond-mini {
     display: block;
     width: 96px;
     height: 44px;
+    margin: 0 auto;
 }
 .cond-collapsed {
     position: absolute;
