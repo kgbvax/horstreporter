@@ -282,10 +282,10 @@ type dxConditionsResponse struct {
 
 type bandAccumulator struct {
 	total         int
-	uniqueLinks   map[string]struct{}
-	uniqueTx      map[string]struct{}
-	uniqueRx      map[string]struct{}
-	uniqueRemote  map[string]struct{}
+	uniqueLinks   keySet
+	uniqueTx      keySet
+	uniqueRx      keySet
+	uniqueRemote  *squareSet
 	totalDistance float64
 	distancesKm   []float64
 	longHaulCount int
@@ -900,6 +900,16 @@ func (e *DxBaselineEngine) EvaluateArea(qth string, surroundings bool, minutes i
 // sequence numbers, which lets it scan only the messages that can matter to
 // this area (area_index.go) instead of the whole window.
 func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, minutes int, cwMinDb int, win historyWindow, now int64, area *liveArea) dxConditionsResponse {
+	return e.evaluateAreaWindow(qth, surroundings, minutes, cwMinDb, win, now, area, false)
+}
+
+// evaluateAreaWindow is EvaluateAreaWindow with an opt-in lite mode for
+// hot_bands, which classifies bands from the scores, rates, distances and
+// series and discards the per-band diagnostics (unique links / stations /
+// grids, azimuth sectors, dominant direction, region counts). Lite skips
+// building those, which is most of the per-message cost of a dense area; every
+// field hot_bands reads is computed exactly as in the full mode.
+func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, minutes int, cwMinDb int, win historyWindow, now int64, area *liveArea, lite bool) dxConditionsResponse {
 	history := win.msgs
 	qth = normalizeQTHToken(qth)
 	if minutes <= 0 {
@@ -1083,7 +1093,28 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 	liveSpanMin := math.Max(1, float64(liveSpanSec)/60.0)
 	resp.liveSpanMin = liveSpanMin
 	bandAcc := make(map[string]*bandAccumulator)
-	dedupSeen := make(map[string]struct{})
+	// Sets of 128-bit key hashes: the evaluation only ever counts them, and
+	// hashing the bytes built in keyBuf avoids a string (and a map key copy)
+	// per matched message. dedupSeen is sized for the walk to avoid regrowing.
+	dedupHint := len(history)
+	if usePos {
+		dedupHint = len(pos)
+	}
+	dedupSeen := make(keySet, min(dedupHint/3, 1<<19))
+	// The walk keeps its per-band state in arrays indexed by the in-scope band
+	// (a string-keyed map lookup per matched message was a visible cost) and
+	// moves it into the maps the rest of the function reads once it is done.
+	var accs [clusterBandSlots]*bandAccumulator
+	var localCnt [clusterBandSlots]int
+	var keyBuf [160]byte
+	var linkBuf []byte
+	// A locator qth is matched at its 4-char square (own square, or the 3x3
+	// block with surroundings), which is a live area of radius 0 or 1: matching
+	// that skips the token loop and the upper-casing of four strings per message.
+	loopArea := matchArea
+	if loopArea == nil && isLocator(qth) {
+		loopArea = ownSquareArea(qth, surroundings)
+	}
 
 	// Inputs for the band-vs-normal ratio (dxBandCondition.ActivityRatio):
 	// regionalCount mirrors the cluster baseline's write rule; localCount
@@ -1113,31 +1144,33 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 		if walkPos {
 			hi = int(pos[vi])
 		}
-		m := history[hi]
+		m := &history[hi]
 		if m.T < liveStart || m.T > now {
 			continue
 		}
 		conditionsMode := !isNonConditionsMode(m.MD)
-		if !regionalFromIndex && clusterOK && conditionsMode && feedsClusterBaseline(m) {
-			if n := clusterEndCount(m, clusterX, clusterY); n > 0 {
+		if !regionalFromIndex && clusterOK && conditionsMode && feedsClusterBaseline(*m) {
+			if n := clusterEndCount(*m, clusterX, clusterY); n > 0 {
 				if band := normalizeBand(m.B); band != "" {
 					regionalCount[band] += n
 				}
 			}
 		}
-		ev, matched := extractMatchedBandEventArea(m, qthSet, matchArea)
-		if !matched {
-			continue
-		}
 		// Gate to the analysed HF/low-VHF band set (160m–2m). Microwave and
 		// other out-of-scope bands that occasionally arrive on the feeds are
 		// passed through for display but excluded from conditions, matching
 		// the gate already applied in hot_bands.go and dx_cellfeed.go.
-		if !bandInScope(ev.band) {
+		bi := feedBandIndex(m.B)
+		if bi < 0 {
+			continue
+		}
+		band := inScopeBandNames[bi]
+		ev, matched := matchBandEvent(m, qthSet, loopArea, band, lite, keyBuf[:0])
+		if !matched {
 			continue
 		}
 		if ev.snr >= cwMinDb {
-			localCount[ev.band]++
+			localCnt[bi]++
 		}
 		// Keep the FT8-calibrated conditions accumulator (spots_per_min, classifyMode,
 		// avgSnr, distances) pure from RBN CW/RTTY, whose dB is on a different SNR scale
@@ -1151,32 +1184,26 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 		if ev.snr < cwMinDb {
 			continue
 		}
-		if _, exists := dedupSeen[ev.dedupKey]; exists {
+		// string(key) in a lookup does not allocate; only a new key is copied.
+		if !dedupSeen.add(ev.key) {
 			continue
 		}
-		dedupSeen[ev.dedupKey] = struct{}{}
 
-		acc := bandAcc[ev.band]
+		acc := accs[bi]
 		if acc == nil {
-			acc = &bandAccumulator{
-				uniqueLinks:   make(map[string]struct{}),
-				uniqueTx:      make(map[string]struct{}),
-				uniqueRx:      make(map[string]struct{}),
-				uniqueRemote:  make(map[string]struct{}),
-				directionBins: make(map[string]int),
-				regionBins:    make(map[string]int),
-				peakSnr:       -999,
+			acc = &bandAccumulator{peakSnr: -999}
+			if !lite {
+				acc.uniqueLinks = make(keySet)
+				acc.uniqueTx = make(keySet)
+				acc.uniqueRx = make(keySet)
+				acc.uniqueRemote = new(squareSet)
+				acc.directionBins = make(map[string]int)
+				acc.regionBins = make(map[string]int)
 			}
-			bandAcc[ev.band] = acc
+			accs[bi] = acc
 		}
 
 		acc.total++
-		acc.uniqueLinks[ev.qualityKey] = struct{}{}
-		acc.uniqueTx[ev.tx] = struct{}{}
-		acc.uniqueRx[ev.rx] = struct{}{}
-		if ev.remote4 != "" {
-			acc.uniqueRemote[ev.remote4] = struct{}{}
-		}
 		acc.totalDistance += ev.distanceKm
 		acc.distancesKm = append(acc.distancesKm, ev.distanceKm)
 		if ev.distanceKm >= dxLongHaulThresholdKm {
@@ -1193,11 +1220,34 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 		if ev.snr >= -12 {
 			acc.cwCount++
 		}
+		if lite {
+			continue
+		}
+		linkBuf = append(append(append(append(append(append(linkBuf[:0], band...), '|'), ev.tx...), '|'), ev.rx...), '|')
+		linkBuf = append(linkBuf, ev.remote...)
+		acc.uniqueLinks.note(linkBuf)
+		acc.uniqueTx.note(ev.tx)
+		acc.uniqueRx.note(ev.rx)
+		var remote4 []byte
+		if isLocator(string(ev.remote)) { // upper-cased already; no copy for the test
+			remote4 = ev.remote[:4]
+			acc.uniqueRemote.add(remote4)
+		}
 		if ev.direction != "" {
 			acc.directionBins[ev.direction]++
 		}
-		if r := region.FromLocator(ev.remote4); r != "" && r != region.Unknown {
+		if r := region.FromLocator(string(remote4)); r != "" && r != region.Unknown {
 			acc.regionBins[string(r)]++
+		}
+	}
+	for i, acc := range accs {
+		if acc != nil {
+			bandAcc[inScopeBandNames[i]] = acc
+		}
+	}
+	for i, n := range localCnt {
+		if n > 0 {
+			localCount[inScopeBandNames[i]] = n
 		}
 	}
 
@@ -1331,14 +1381,12 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 			avgDistance = acc.totalDistance / float64(acc.total)
 		}
 		maxDistance := maxFloat(acc.distancesKm)
-		medianDistance := percentileFloat(acc.distancesKm, 0.5)
-		p90Distance := percentileFloat(acc.distancesKm, 0.9)
+		medianDistance, p90Distance := medianAndP90Float(acc.distancesKm)
 		longHaulRatio := clamp01(float64(acc.longHaulCount) / float64(acc.total))
 		dxRatio := longHaulRatio
 
 		avgSnr := float64(acc.sumSnr) / math.Max(1, float64(acc.total))
-		medianSnr := percentileInt(acc.snrs, 0.5)
-		p90Snr := percentileInt(acc.snrs, 0.9)
+		medianSnr, p90Snr := medianAndP90Int(acc.snrs)
 
 		// Activity term from the like-for-like regional ratio (1× normal =
 		// 0.5, saturating at 2×). Without a trustworthy ratio (no cluster
@@ -1382,7 +1430,7 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 			SpotsPerMinute:            round2(spotsPerMin),
 			UniqueTxStations:          len(acc.uniqueTx),
 			UniqueRxStations:          len(acc.uniqueRx),
-			UniqueRemoteGrids:         len(acc.uniqueRemote),
+			UniqueRemoteGrids:         acc.uniqueRemote.count(),
 			AvgDistanceKm:             round1(avgDistance),
 			MaxDistanceKm:             round1(maxDistance),
 			MedianDistanceKm:          round1(medianDistance),
@@ -1951,16 +1999,10 @@ func hubActivityByBin(qth string, surroundings bool, history []MQTTMessage, pos 
 	if !isLocator(qth) || !hubCoversWindow(now, minutes) {
 		return nil, false
 	}
-	radius := 0
-	if surroundings {
-		radius = 1
-	}
-	// explicitLiveArea refuses radius 0; the own square is a block too.
-	x, y, ok := locatorSquareXY(qth[:4])
-	if !ok {
+	area := ownSquareArea(qth, surroundings)
+	if area == nil {
 		return nil, false
 	}
-	area := &liveArea{Centre: qth[:4], BaseRadius: radius, Radius: radius, x: x, y: y}
 	out := buildActivityByBinFromHistoryAt(history, pos, usePos, area, cwMinDb, minutes, now)
 	if len(out) == 0 {
 		return nil, true
@@ -2003,13 +2045,14 @@ func buildActivityByBinFromHistoryAt(history []MQTTMessage, pos []uint32, usePos
 		if m.T < windowStart || m.T > now || m.RP < cwMinDb {
 			continue
 		}
-		band := normalizeBand(m.B)
-		if band == "" || !bandInScope(band) {
+		bi := feedBandIndex(m.B)
+		if bi < 0 {
 			continue
 		}
 		if !area.contains(m.SL) && !area.contains(m.RL) {
 			continue
 		}
+		band := inScopeBandNames[bi]
 		s := out[band]
 		if s == nil {
 			s = make([]float64, activityBins)
@@ -2801,11 +2844,20 @@ func average(v []float64) float64 {
 }
 
 func percentileFloat(in []float64, p float64) float64 {
-	if len(in) == 0 {
-		return 0
-	}
+	return percentileSortedFloat(sortedFloats(in), p)
+}
+
+func sortedFloats(in []float64) []float64 {
 	cp := append([]float64(nil), in...)
 	sort.Float64s(cp)
+	return cp
+}
+
+// percentileSortedFloat is percentileFloat over an already sorted slice.
+func percentileSortedFloat(cp []float64, p float64) float64 {
+	if len(cp) == 0 {
+		return 0
+	}
 	if p <= 0 {
 		return cp[0]
 	}
@@ -2823,11 +2875,20 @@ func percentileFloat(in []float64, p float64) float64 {
 }
 
 func percentileInt(in []int, p float64) float64 {
-	if len(in) == 0 {
-		return 0
-	}
+	return percentileSortedInt(sortedInts(in), p)
+}
+
+func sortedInts(in []int) []int {
 	cp := append([]int(nil), in...)
 	sort.Ints(cp)
+	return cp
+}
+
+// percentileSortedInt is percentileInt over an already sorted slice.
+func percentileSortedInt(cp []int, p float64) float64 {
+	if len(cp) == 0 {
+		return 0
+	}
 	if p <= 0 {
 		return float64(cp[0])
 	}

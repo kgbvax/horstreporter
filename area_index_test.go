@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"math/rand"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -56,6 +58,20 @@ func randomWindowMsgs(rng *rand.Rand, n int, t0, t1 int64) []MQTTMessage {
 // iteration order (best_bands / worst_bands, the bands array), so two
 // evaluations of the same input can order tied bands differently; the
 // comparison sorts those lists.
+// resetAreaIndex empties the process-wide index: tests build histories whose
+// sequence numbers start at 1, which would otherwise be mistaken for the
+// continuation of another test's entry.
+func resetAreaIndex(t *testing.T) {
+	t.Helper()
+	clear := func() {
+		areaIdx.mu.Lock()
+		areaIdx.m = make(map[areaIndexKey]*areaIndexEntry)
+		areaIdx.mu.Unlock()
+	}
+	clear()
+	t.Cleanup(clear)
+}
+
 func mustJSON(t *testing.T, v interface{}) string {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -112,6 +128,7 @@ func sortKey(v interface{}) interface{} {
 // The indexed evaluation must equal the full scan, across areas, qth kinds
 // and a history that grows and loses its front between requests.
 func TestEvaluateAreaWindowIndexMatchesFullScan(t *testing.T) {
+	resetAreaIndex(t)
 	rng := rand.New(rand.NewSource(99))
 	eng := newDxBaselineEngine(filepath.Join(t.TempDir(), "b.json"))
 	if err := eng.Load(); err != nil {
@@ -268,4 +285,63 @@ func TestAreaIndexEvictsLeastRecentlyUsed(t *testing.T) {
 	if _, ok := c.m[areaIndexKey{x: 0}]; ok {
 		t.Fatal("oldest entry survived eviction")
 	}
+}
+
+// hot_bands evaluates in lite mode (no per-band diagnostics); the response it
+// builds must equal the one built from the full evaluation.
+func TestHotBandsLiteEqualsFullEvaluation(t *testing.T) {
+	resetAreaIndex(t)
+	rng := rand.New(rand.NewSource(31))
+	eng := newDxBaselineEngine(filepath.Join(t.TempDir(), "b.json"))
+	if err := eng.Load(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	hist := randomWindowMsgs(rng, 40000, now-3600, now)
+	for _, m := range hist[:4000] {
+		eng.Observe(m)
+	}
+	win := historyWindow{msgs: hist, firstSeq: 1, hubFirst: 1}
+	nonEmpty := 0
+	for _, sc := range []struct {
+		qth          string
+		surroundings bool
+		area         *liveArea
+	}{
+		{"JO32", false, nil}, {"JO32", true, nil}, {"JO32", false, explicitLiveArea("JO32", 2)},
+		{"JO31", false, explicitLiveArea("JO32", 3)}, {"FN20", false, nil}, {"DK3JF", false, nil},
+	} {
+		for _, minutes := range []int{15, 60} {
+			full := eng.EvaluateAreaWindow(sc.qth, sc.surroundings, minutes, -15, win, now, sc.area)
+			lite := eng.evaluateAreaWindow(sc.qth, sc.surroundings, minutes, -15, win, now, sc.area, true)
+			if len(full.Bands) == 0 || len(full.Bands) != len(lite.Bands) {
+				t.Fatalf("%+v minutes=%d: %d full bands vs %d lite", sc, minutes, len(full.Bands), len(lite.Bands))
+			}
+			for _, opts := range []hotBandsOptions{{}, {Max: 8}} {
+				want := mustJSON(t, hotBandsFromConditions(full, "", opts))
+				got := mustJSON(t, hotBandsFromConditions(lite, "", opts))
+				if got != want {
+					t.Fatalf("%+v minutes=%d: hot_bands differs\n got  %.300s\n want %.300s", sc, minutes, got, want)
+				}
+				if strings.Contains(want, `"kind"`) {
+					nonEmpty++
+				}
+			}
+			// Band by band, lite is the full band without the diagnostics.
+			fb := map[string]dxBandCondition{}
+			for _, b := range full.Bands {
+				fb[b.Band] = b
+			}
+			for _, b := range lite.Bands {
+				f := fb[b.Band]
+				f.UniqueLinks, f.RepeatRatio, f.UniqueTxStations, f.UniqueRxStations, f.UniqueRemoteGrids = 0, 0, 0, 0, 0
+				f.DominantDirection, f.AzimuthSectors, f.RegionCounts = "", nil, nil
+				b.RepeatRatio, b.DominantDirection, b.AzimuthSectors, b.RegionCounts = 0, "", nil, nil
+				if !reflect.DeepEqual(f, b) {
+					t.Fatalf("%+v minutes=%d band %s: lite band differs beyond the diagnostics\n lite %+v\n full %+v", sc, minutes, b.Band, b, f)
+				}
+			}
+		}
+	}
+	t.Logf("%d responses carried recommendations", nonEmpty)
 }

@@ -161,7 +161,9 @@ func (e *DxBaselineEngine) HotBandsAreaWith(qth string, surroundings bool, minut
 // HotBandsAreaWindow is HotBandsAreaWith over a sequence-numbered window (see
 // EvaluateAreaWindow).
 func (e *DxBaselineEngine) HotBandsAreaWindow(qth string, surroundings bool, minutes int, cwMinDb int, currentBand string, win historyWindow, now int64, area *liveArea, opts hotBandsOptions) hotBandsResponse {
-	cond := e.EvaluateAreaWindow(qth, surroundings, minutes, cwMinDb, win, now, area)
+	// Lite: hot_bands reads the scores, rates, distances and series but none of
+	// the per-band diagnostics the full evaluation also builds.
+	cond := e.evaluateAreaWindow(qth, surroundings, minutes, cwMinDb, win, now, area, true)
 	return hotBandsFromConditions(cond, currentBand, opts)
 }
 

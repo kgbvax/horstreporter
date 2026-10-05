@@ -53,6 +53,7 @@ func TestHubCoversWindow(t *testing.T) {
 // area-based binning produces for the same square (it is that function), and
 // the position list from the area index must not change it.
 func TestHubActivityByBinMatchesFullScanAndAreaIndex(t *testing.T) {
+	resetAreaIndex(t)
 	rng := rand.New(rand.NewSource(5))
 	now := time.Now().Unix()
 	withLiveHistoryState(t, now-3600, 0, 0, 60)

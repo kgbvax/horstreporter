@@ -182,6 +182,7 @@ func TestAreaIndexRegionalCountsUnusableAfterOverflow(t *testing.T) {
 // With the counters unusable (overflow) the evaluation walks the whole window
 // and still equals the unindexed result.
 func TestEvaluateAreaWindowFallsBackWhenCountsOverflow(t *testing.T) {
+	resetAreaIndex(t)
 	rng := rand.New(rand.NewSource(23))
 	eng := newDxBaselineEngine(filepath.Join(t.TempDir(), "b.json"))
 	if err := eng.Load(); err != nil {

@@ -158,3 +158,22 @@ func BenchmarkEvaluate60Area2Dense(b *testing.B) {
 }
 func BenchmarkEvaluate60OwnSquareDense(b *testing.B) { bench60Eu(b, "JO32", nil, 40) }
 func BenchmarkEvaluate60Surroundings(b *testing.B)   { bench60Full(b, "JO32", true, nil, 40) }
+
+func benchHot60(b *testing.B, qth string, surroundings bool, area *liveArea, clusterPct int) {
+	hist := europeWindow(1_400_000, 60, 40, clusterPct)
+	eng := benchEngine(b, hist)
+	now := time.Now().Unix()
+	win := historyWindow{msgs: hist, firstSeq: 1, hubFirst: 1}
+	eng.HotBandsAreaWindow(qth, surroundings, 60, -15, "", win, now, area, hotBandsOptions{}) // build the index
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		eng.HotBandsAreaWindow(qth, surroundings, 60, -15, "", win, now, area, hotBandsOptions{})
+	}
+}
+
+func BenchmarkHotBands60Area2(b *testing.B) {
+	benchHot60(b, "JO32", false, explicitLiveArea("JO32", 2), 40)
+}
+func BenchmarkHotBands60Surroundings(b *testing.B) { benchHot60(b, "JO32", true, nil, 40) }
+func BenchmarkHotBands60OwnSquare(b *testing.B)    { benchHot60(b, "JO32", false, nil, 40) }
