@@ -1,18 +1,20 @@
 import { state } from './state.js';
 import { WSPR_REGIONS, bandColors, getEnabledBands, getMinSnrMode } from './utils.js';
 import { escapeHtml } from './ui-helpers.js';
+import {
+    LOOKS, payloadHas, stripAxisHtml, stripRowHtml, layoutStripLabels,
+    dayStripSvg, sparklineSvg, lookLegendHtml,
+} from './wspr-matrix-looks.js';
 
 // wspr-matrix.js — the unified Propagation panel: band × region propagation-
 // intelligence matrix over ALL ingest sources (WSPR, PSKReporter FT8/FT4,
 // RBN, DX cluster). Polls /api/prop_intel/v2 (the multi-source contract;
-// v1 stays frozen for the horstapp widgets). Renders per-cell activity as a
-// heatmap colormap — switchable between viridis and inferno (chip row) —
-// where the anomaly is a glyph: up-chevrons on viridis, a warning ring on
-// inferno (tmp/prop-vis-round3.html, decision 02: one-channel fill + glyph).
-// Both looks keep SSB/CW flags and the rising slope. Each look has a ramp per
-// theme: the reference colormaps on the dark theme (chips brighten with
-// activity), page-anchored reversals on the light theme (chips darken with
-// activity) — see rampStops().
+// v1 stays frozen for the horstapp widgets). Every look shows a path against
+// its normal for this hour, not its raw count (wspr-matrix-looks.js, chip
+// row): dot strip (default), day strip, sparkline. They replaced the viridis /
+// inferno heatmaps (docs/ideation/2026-10-05-now-matrix-ten-more-ways.html)
+// and ask the backend for silent cells, day curves and the trend (silent=1,
+// normal_day=1, trend=1).
 // The SSB/CW open floors follow the global "Min SNR" control: the panel
 // passes ssb_min_db/cw_min_db from #ssb-min-db/#cw-min-db so a stricter
 // min-SNR raises the open thresholds here too (backend v2 overrides).
@@ -63,127 +65,22 @@ const ALL_SOURCES = SOURCES.map((s) => s.key);
 // The chip stays available for local/dev instances that run the ingest.
 const DEFAULT_SOURCES = ['wspr', 'pskr', 'rbn'];
 
-// Switchable fill "look" (tmp/prop-vis-round3.html, decision 02: one-channel
-// fill + glyph). Both styles are data-colored heatmaps; the ramp direction
-// follows the theme (see rampStops) and the numeral ink flips per chip.
-const STYLES = [
-    { key: 'viridis', label: 'Viridis', title: 'Viridis colors, surges shown as chevrons' },
-    { key: 'inferno', label: 'Inferno', title: 'Inferno colors, surges shown as rings' },
-];
+// The looks (wspr-matrix-looks.js). A stored look that no longer exists
+// (viridis / inferno) falls back to the default.
+const STYLES = LOOKS;
 const ALL_STYLES = STYLES.map((s) => s.key);
-// Dark theme: 9-stop perceptually-uniform maps (matplotlib reference
-// samples), sparse → peak. Their dark low end sinks into the dark panel and
-// the bright high end stands off it, so visual weight tracks activity.
-const VIRIDIS_STOPS = ['#440154', '#482677', '#3f4788', '#31688e', '#26828e', '#1f9e89', '#35b779', '#6ece58', '#fde725'];
-const INFERNO_STOPS = ['#000004', '#1b0c41', '#4a0c6b', '#781c6d', '#a52c60', '#cf4446', '#ed6925', '#fb9b06', '#fcffa4'];
-// Light theme: the same colormaps reversed so lightness runs page-white →
-// dark (a sequential ramp on a light surface must darken with magnitude; the
-// reference direction puts the heaviest, near-black chip on the *least*
-// active path). The three sparse stops are the reversed map's bright end
-// blended toward the page (30/55/78% and 65/62/85% of the reference color)
-// so 1-2 spots read as a faint tint instead of saturated yellow / cream, and
-// inferno drops its #000004 tail so the peak is deep purple, not black. Hue
-// order is unchanged, so both looks stay recognisable across themes.
-const VIRIDIS_LIGHT_STOPS = ['#fef8be', '#afe4a3', '#61c796', '#1f9e89', '#26828e', '#31688e', '#3f4788', '#482677', '#440154'];
-const INFERNO_LIGHT_STOPS = ['#fdffc4', '#fdc165', '#f08046', '#cf4446', '#a52c60', '#781c6d', '#4a0c6b', '#1b0c41'];
+const DEFAULT_STYLE = 'dots';
+// One retry when the data a look needs was not ready yet (the area normal
+// and day curves load in the background on the server).
+const DETAIL_RETRY_MS = 6_000;
 
-// Current theme as the render sees it (body[data-theme], 'light' unless dark).
-function currentTheme() {
-    return document.body?.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
-}
-
-// Stop table for a look in a theme (unknown/legacy keys — e.g. a stored
-// 'aqua' — fall back to the viridis default).
-function rampStops(style, theme) {
-    if (theme === 'dark') return style === 'inferno' ? INFERNO_STOPS : VIRIDIS_STOPS;
-    return style === 'inferno' ? INFERNO_LIGHT_STOPS : VIRIDIS_LIGHT_STOPS;
-}
-
-function hexToRgb(h) {
-    return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
-}
-
-// Interpolate a stop table at t in 0..1 → [r,g,b]. sqrt() spreads the low end
-// so 1-2 spots don't collapse onto the dead shade.
-function rampAt(stops, t) {
-    t = Math.sqrt(Math.max(0, Math.min(1, t)));
-    const n = stops.length - 1;
-    const i = Math.min(n - 1, Math.floor(t * n));
-    const a = hexToRgb(stops[i]);
-    const b = hexToRgb(stops[i + 1]);
-    const f = t * n - i;
-    return a.map((v, k) => Math.round(v + (b[k] - v) * f));
-}
-
-// Per-style, per-theme chip fill.
-function styleFill(style, intensity, theme = currentTheme()) {
-    return rampAt(rampStops(style, theme), intensity);
-}
-
-// Numerals flip ink at the luminance where white/black cross (~0.179); pure
-// black/white inks keep >= 4.58:1 on every shade either side of the switch —
-// a mid-luminance ink would fail AA with both, which is why the switch uses
-// #000 rather than the softer #1a1a1a used by the flag badges.
-const WHITE_INK = 'rgb(255, 255, 255)';
-const BLACK_INK = 'rgb(0, 0, 0)';
-
-function rgbLuminance([r, g, b]) {
-    const lin = (c) => {
-        const s = c / 255;
-        return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-    };
-    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-}
-
-// Pick the numeral ink for a chip color: whichever of white/black is AA-safe.
-function cellInk(rgb) {
-    const l = typeof rgb === 'string'
-        ? rgbLuminance(rgb.match(/\d+/g).map(Number))
-        : rgbLuminance(rgb);
-    return l <= 0.179 ? WHITE_INK : BLACK_INK;
-}
-
-// Heat-style anomaly glyphs (round-3 decision: shape carries the anomaly).
-// v2 atypical only fires on surges (z >= threshold), so glyphs only ever go
-// up / amber; "strong" doubles the mark for z >= 4 or multi-source agreement.
+// Surge strength for the accessible name: z >= 4 or >= 50% source agreement
+// is a strong surge.
 function surgeStrength(cell) {
     if (!cell.atypical) return 0;
     const multi = (cell.atypical_agreement ?? 0) >= 0.5;
     const z = Number(cell.atypical.z_score) || 0;
     return (z >= 4 || multi) ? 2 : 1;
-}
-
-function chevSvg(ink) {
-    return `<svg width="9" height="5" viewBox="0 0 9 5" style="display:block" aria-hidden="true"><polygon points="0,4.5 4.5,0.5 9,4.5" fill="${ink}"/></svg>`;
-}
-
-function chevronGlyph(strong, ink) {
-    const svgs = chevSvg(ink) + (strong ? chevSvg(ink) : '');
-    return `<span class="wspr-chev">${svgs}</span>`;
-}
-
-// Inferno surge ring. Dark theme: amber, which stands off the dark and red
-// shades that dominate that ramp. Light theme: the chip's own numeral ink —
-// the light ramp runs cream → orange → red, where amber vanishes, and the
-// ink is AA-safe on every shade by construction (see cellInk).
-const RING_COLOR = '#f5b83d';
-
-function ringColor(theme, ink) {
-    return theme === 'dark' ? RING_COLOR : ink;
-}
-
-function ringShadow(strong, color = RING_COLOR) {
-    const w = strong ? 3 : 2;
-    return `inset 0 0 0 ${w}px ${color}`;
-}
-
-// Mode badge shows only the top mode: SSB beats CW (if SSB is open, phone
-// wins the band, so the CW badge is dropped for glanceability). Full detail
-// stays in the cell tooltip.
-function topModeBadges(cell) {
-    if (cell.ssb_open) return '<span class="wspr-badge wspr-badge-ssb">S</span>';
-    if (cell.cw_open) return '<span class="wspr-badge wspr-badge-cw">C</span>';
-    return '';
 }
 
 const runtime = {
@@ -196,7 +93,11 @@ const runtime = {
     lastQth: '',
     lastRenderKey: '',
     sources: [...DEFAULT_SOURCES],
-    style: 'viridis',
+    style: DEFAULT_STYLE,
+    detailRetryTimer: null,
+    detailRetryKey: '',
+    stripObserver: null,
+    stripWidth: 0,
     // Optional extra per-band columns (see setRowExtras); the Conditions dock
     // uses them to put verdict / count / plot in the same row as the cells.
     rowExtras: null,
@@ -288,6 +189,8 @@ function stopPolling() {
         runtime.abortController.abort();
         runtime.abortController = null;
     }
+    clearTimeout(runtime.detailRetryTimer);
+    runtime.detailRetryTimer = null;
 }
 
 function invalidateCache() {
@@ -360,6 +263,11 @@ async function pollMatrix(force) {
     params.set('sources', runtime.sources.join(','));
     if (minSnrMode === 'ssb') params.set('ssb_min_db', ssbMinDb);
     if (minSnrMode === 'cw') params.set('cw_min_db', cwMinDb);
+    // What the looks draw besides the counts: silent cells ("usually open,
+    // nothing now"), the usual day and the last hour per cell.
+    params.set('silent', '1');
+    params.set('normal_day', '1');
+    params.set('trend', '1');
 
     try {
         const resp = await fetch(`/api/prop_intel/v2?${params.toString()}`, { signal: controller.signal });
@@ -370,6 +278,7 @@ async function pollMatrix(force) {
         runtime.lastFetchedAt = Date.now();
         runtime.lastQth = qth;
         renderMatrix();
+        scheduleDetailRetry(payload, key);
     } catch (err) {
         if (err?.name === 'AbortError') return;
         console.warn('prop_intel v2 fetch failed:', err);
@@ -386,14 +295,32 @@ async function pollMatrix(force) {
     }
 }
 
-// Switch the fill look. Style is render-only (same payload), so this resets
-// the render fingerprint and repaints from cache — no refetch.
+// Switch the look. Render-only (same payload): reset the render fingerprint
+// and repaint from cache, no refetch.
 function setStyle(key) {
     if (!ALL_STYLES.includes(key) || runtime.style === key) return;
     runtime.style = key;
     localStorage.setItem(STYLE_KEY, key);
     runtime.lastRenderKey = '';
     renderMatrix();
+}
+
+// When the data the looks need was not ready (no normal yet, or no day
+// curves) the panel refetches once a few seconds later instead of waiting
+// for the next 30 s poll.
+function scheduleDetailRetry(payload, key) {
+    const has = payloadHas(payload);
+    const missing = runtime.sources.includes('pskr') && (!has.normal || !has.day);
+    if (!missing || runtime.detailRetryKey === key) return;
+    runtime.detailRetryKey = key;
+    clearTimeout(runtime.detailRetryTimer);
+    runtime.detailRetryTimer = setTimeout(() => {
+        runtime.detailRetryTimer = null;
+        if (runtime.enabled && runtime.cacheKey === key) {
+            invalidateCache();
+            pollMatrix(true);
+        }
+    }, DETAIL_RETRY_MS);
 }
 
 function renderSourceChips() {
@@ -408,7 +335,7 @@ function renderSourceChips() {
     return '<div class="wspr-src-chips">' +
         `<div class="wspr-chip-group" role="group" aria-label="Sources">${chips}</div>` +
         '<span class="wspr-chip-sep" aria-hidden="true"></span>' +
-        `<div class="wspr-chip-group" role="group" aria-label="Color scale">${styleChips}</div>` +
+        `<div class="wspr-chip-group" role="group" aria-label="Look">${styleChips}</div>` +
         '</div>';
 }
 
@@ -468,7 +395,7 @@ function renderMatrix() {
         const focus = captureFocus(body);
         body.innerHTML = renderSourceChips() +
             `<div class="text-muted small">${empty}</div>` +
-            legendHtml();
+            lookLegendHtml(runtime.style, payloadHas(data), runtime.sources.includes('pskr'));
         attachSourceChipHandlers(body);
         restoreFocus(body, focus);
         return;
@@ -499,17 +426,18 @@ function renderMatrix() {
     const hidden = new Set(extras?.hiddenRegions || []);
     const regions = WSPR_REGIONS.filter((r) => !hidden.has(r));
 
-    // Fingerprint for skip-rebuild (theme included: a toggle re-shades chips;
-    // drill-down included: it sets aria-selected and the tab stop; region
-    // names included: they are in the cell names).
-    const theme = currentTheme();
+    // Fingerprint for skip-rebuild (drill-down included: it sets
+    // aria-selected and the tab stop; region names included: they are in the
+    // cell names; the payload time included: the looks draw normals, day
+    // curves and trends, so every new payload repaints). The marks draw in
+    // currentColor, so a theme toggle needs no rebuild.
     const regionNames = (data && data.region_names) || {};
-    const renderKey = `${theme}|${runtime.style}|${runtime.sources.join(',')}` +
+    const renderKey = `${runtime.style}|${runtime.sources.join(',')}|t${data?.now ?? ''}` +
         `|x:${extras ? extras.key(activeBands) : ''}` +
         `|${state.drillDownBand}×${state.drillDownRegion}` +
         `|${WSPR_REGIONS.map((r) => regionNames[r] || '').join(',')}|${activeBands
         .map((b) => `${b}:${Array.from(matrix.get(b).entries()).sort().map(([r, c]) =>
-            `${r}${c.spot_count}${c.ssb_open ? 'S' : ''}${c.cw_open ? 'C' : ''}${c.rising ? 'R' : ''}` +
+            `${r}${c.spot_count}${c.ssb_open ? 'S' : ''}${c.cw_open ? 'C' : ''}${c.rising ? 'R' : ''}${c.silent ? 'Q' : ''}` +
             `${c.atypical ? `${c.atypical.z_score}~${c.atypical.confidence}` : ''}` +
             `${(c.active_sources || []).join('+')}@${c.open_agreement ?? ''}~${c.atypical_agreement ?? ''}`
         ).join('')}`)
@@ -517,14 +445,18 @@ function renderMatrix() {
     if (renderKey === runtime.lastRenderKey) return;
     runtime.lastRenderKey = renderKey;
 
-    const maxCount = Math.max(...cells.map((c) => c.spot_count || 0), 1);
     const extraHead = extras ? extras.columns.map((c) => `<th scope="col" role="columnheader" class="${c.className || ''}">${c.label}</th>`).join('') : '';
+    const strip = runtime.style === 'dots';
 
     let html = renderSourceChips();
-    html += '<table class="wspr-matrix-table" role="grid" aria-label="Propagation by band and region">' +
+    html += `<table class="wspr-matrix-table wspr-look-${runtime.style}" role="grid" aria-label="Propagation by band and region">` +
         '<thead><tr role="row"><th scope="col" role="columnheader"><span class="wspr-sr-only">Band</span></th>' + extraHead;
-    for (const region of regions) {
-        html += `<th scope="col" role="columnheader" title="${escapeHtml(regionNames[region] || region)}">${region}</th>`;
+    if (strip) {
+        html += `<th scope="col" role="columnheader" class="wspr-strip-head"><span class="wspr-sr-only">Regions against their normal</span>${stripAxisHtml()}</th>`;
+    } else {
+        for (const region of regions) {
+            html += `<th scope="col" role="columnheader" title="${escapeHtml(regionNames[region] || region)}">${region}</th>`;
+        }
     }
     html += '</tr></thead><tbody>';
 
@@ -533,17 +465,29 @@ function renderMatrix() {
         const color = bandColors[band] || bandColors.all || '#555';
         html += `<tr role="row"><th scope="row" role="rowheader" class="wspr-matrix-band" style="border-left: 3px solid ${color}">${band}${extras?.rowHeader ? extras.rowHeader(band) : ''}</th>`;
         if (extras) html += extras.cells(band);
-        for (const region of regions) {
-            const cell = bandMap.get(region);
-            html += renderCell(band, region, cell, maxCount, theme, regionNames);
+        if (strip) {
+            const dots = regions.filter((r) => bandMap.has(r)).map((region) => {
+                const cell = bandMap.get(region);
+                return { region, cell, attrs: cellAttrs(band, region, cell, regionNames) };
+            });
+            html += `<td class="wspr-strip-td" role="presentation">${stripRowHtml(dots)}</td>`;
+        } else {
+            for (const region of regions) {
+                const cell = bandMap.get(region);
+                html += renderLookCell(band, region, cell, data, regionNames);
+            }
         }
         html += '</tr>';
     }
     html += '</tbody></table>';
-    html += legendHtml(theme);
+    html += lookLegendHtml(runtime.style, payloadHas(data), runtime.sources.includes('pskr'));
 
     const focus = captureFocus(body);
     body.innerHTML = html;
+    if (strip) {
+        layoutStripLabels(body);
+        watchStripWidth(body);
+    }
 
     attachSourceChipHandlers(body);
     const table = body.querySelector('.wspr-matrix-table');
@@ -553,6 +497,26 @@ function renderMatrix() {
     if (drill || first) setRovingCell(drill || first);
     restoreFocus(body, focus);
     extras?.after(body);
+}
+
+// The strip's dot and label placement depends on its width, which changes
+// with the window, the dock splitter and the row headers (verdict text
+// arrives separately): lay it out again when the first strip resizes.
+function watchStripWidth(body) {
+    if (typeof ResizeObserver !== 'function') return;
+    const strip = body.querySelector('.wspr-strip');
+    if (!runtime.stripObserver) {
+        runtime.stripObserver = new ResizeObserver((entries) => {
+            const w = Math.round(entries[entries.length - 1]?.contentRect?.width || 0);
+            if (w === runtime.stripWidth) return;
+            runtime.stripWidth = w;
+            const root = document.getElementById(BODY_ID);
+            if (root && runtime.style === 'dots') layoutStripLabels(root);
+        });
+    }
+    runtime.stripObserver.disconnect();
+    runtime.stripWidth = strip ? Math.round(strip.getBoundingClientRect().width) : 0;
+    if (strip) runtime.stripObserver.observe(strip);
 }
 
 // "20m to Japan: 1,234 spots" (full region name from the payload's
@@ -580,9 +544,12 @@ function expectedLine(cell) {
     return `PSKReporter: ${now.toLocaleString('en-US')} now, normal about ${Math.round(e).toLocaleString('en-US')} at this hour (\u00d7${factor})`;
 }
 
-// Accessible name for a data cell: path, spot count and the marks it shows
-// (top mode badge, rising arrow, surge glyph or ring).
+// Accessible name for a data cell: path, spot count, top mode, rising and
+// surge.
 function cellLabel(band, region, cell, regionNames = {}) {
+    if (isSilent(cell)) {
+        return `${band} to ${regionNames[region] || region}: no reports now, usually about ${Math.round(Number(cell.expected)).toLocaleString('en-US')} at this hour`;
+    }
     const parts = [pathSummary(band, region, cell, regionNames)];
     if (cell.ssb_open) parts.push('SSB open');
     else if (cell.cw_open) parts.push('CW open');
@@ -593,40 +560,24 @@ function cellLabel(band, region, cell, regionNames = {}) {
     return parts.join(', ');
 }
 
-function renderCell(band, region, cell, maxCount, theme, regionNames = runtime.cache?.region_names || {}) {
-    if (!cell || cell.spot_count === 0) {
-        // Nothing to drill into: a plain grid cell, outside the tab order.
-        return `<td role="gridcell" class="wspr-matrix-cell-empty" data-band="${band}" data-region="${region}"></td>`;
-    }
-    const style = runtime.style;
-    const intensity = Math.min(1, cell.spot_count / maxCount);
-    const bgRgb = styleFill(style, intensity, theme);
-    const bg = `rgb(${bgRgb.join(', ')})`;
-    const ink = cellInk(bgRgb);
-    let badges = topModeBadges(cell);
-    if (cell.rising) badges += '<span class="wspr-badge wspr-badge-rising">&uarr;</span>';
-    let atypicalMark = '';
-    let ring = '';
-    let surgeLine = '';
-    if (cell.atypical) {
-        const conf = Math.round(Math.max(0, Math.min(1, Number(cell.atypical.confidence ?? 0))) * 100);
-        const multi = (cell.atypical_agreement ?? 0) >= 0.5;
-        surgeLine = `Surge: z=${cell.atypical.z_score}, confidence ${conf}%`;
-        const tip = `${surgeLine}${multi ? `, ${Math.round((cell.atypical_agreement ?? 0) * 100)}% of sources agree` : ''}`;
-        // Heat styles speak in geometry, not badges (round-3 decision 02).
-        // The v2 backend only flags surges, so glyphs only point up.
-        const strong = surgeStrength(cell) === 2;
-        if (style === 'inferno') {
-            ring = ringShadow(strong, ringColor(theme, ink));
-        } else {
-            atypicalMark = `<span title="${tip}">${chevronGlyph(strong, ink)}</span>`;
-        }
-    }
+// A cell with no reports now that usually has some at this hour (backend
+// silent=1).
+function isSilent(cell) {
+    return Boolean(cell?.silent) && !(Number(cell.spot_count) > 0);
+}
+
+// Tooltip lines for a data cell: path and count, modes, rising, surge, the
+// from-here normal and one line per source.
+function cellTitle(band, region, cell, regionNames = {}) {
+    if (isSilent(cell)) return cellLabel(band, region, cell, regionNames);
     const titleParts = [pathSummary(band, region, cell, regionNames)];
     if (cell.ssb_open) titleParts.push('SSB open');
     if (cell.cw_open) titleParts.push('CW open');
     if (cell.rising) titleParts.push('Rising');
-    if (surgeLine) titleParts.push(surgeLine);
+    if (cell.atypical) {
+        const conf = Math.round(Math.max(0, Math.min(1, Number(cell.atypical.confidence ?? 0))) * 100);
+        titleParts.push(`Surge: z=${cell.atypical.z_score}, confidence ${conf}%`);
+    }
     if (hasNormal(cell)) titleParts.push(expectedLine(cell));
     if (Array.isArray(cell.sources) && cell.sources.length) {
         for (const s of cell.sources) {
@@ -639,22 +590,30 @@ function renderCell(band, region, cell, maxCount, theme, regionNames = runtime.c
             titleParts.push(line);
         }
     }
-    const styleAttr = `background: ${bg}; color: ${ink}${ring ? `; box-shadow: ${ring}` : ''}`;
-    const selected = state.drillDownBand === band && state.drillDownRegion === region;
-    const label = escapeHtml(cellLabel(band, region, cell, regionNames));
-    const title = escapeHtml(titleParts.join('\n'));
-    return `<td role="gridcell" class="wspr-matrix-cell" style="${styleAttr}" title="${title}" aria-label="${label}" aria-selected="${selected}" tabindex="-1" data-band="${band}" data-region="${region}">${runtime.rowExtras?.hideCounts ? '' : cell.spot_count}${badges}${atypicalMark}</td>`;
+    return titleParts.join('\n');
 }
 
-function legendHtml(theme = currentTheme()) {
-    const style = runtime.style;
-    const stops = rampStops(style, theme);
-    // The ring swatch's border follows the theme in style.css (amber on dark,
-    // currentColor on light — the same ink rule the chips use).
-    const anomaly = style === 'inferno'
-        ? '<span class="wspr-ring-swatch"></span>=surge ring (thicker = strong / multi-source)'
-        : `<span class="wspr-chev">${chevSvg('currentColor')}</span>=surge <span class="wspr-chev">${chevSvg('currentColor')}${chevSvg('currentColor')}</span>=strong / multi-source`;
-    return `<div class="wspr-matrix-legend small text-muted"><span class="wspr-heat-scale" style="background: linear-gradient(90deg, ${stops.join(', ')})" aria-hidden="true"></span>=spots: few &rarr; many <span class="wspr-badge wspr-badge-ssb">S</span>=SSB <span class="wspr-badge wspr-badge-cw">C</span>=CW (top mode) <span class="wspr-badge wspr-badge-rising">&uarr;</span>=rising ${anomaly}</div>`;
+// Shared gridcell attributes (role, name, tooltip, selection, roving tab
+// stop, band × region) for a look's mark.
+function cellAttrs(band, region, cell, regionNames) {
+    const selected = state.drillDownBand === band && state.drillDownRegion === region;
+    return `role="gridcell" title="${escapeHtml(cellTitle(band, region, cell, regionNames))}" ` +
+        `aria-label="${escapeHtml(cellLabel(band, region, cell, regionNames))}" aria-selected="${selected}" tabindex="-1" ` +
+        `data-band="${band}" data-region="${region}"`;
+}
+
+// Day strip / sparkline cell (wspr-matrix-looks.js draws the SVG).
+function renderLookCell(band, region, cell, data, regionNames) {
+    if (!cell || (!(cell.spot_count > 0) && !isSilent(cell))) {
+        return `<td role="gridcell" class="wspr-matrix-cell-empty" data-band="${band}" data-region="${region}"></td>`;
+    }
+    const label = cellLabel(band, region, cell, regionNames);
+    const now = Number(data?.now) || Math.floor(Date.now() / 1000);
+    const minutes = Number(data?.minutes) || 15;
+    const svg = runtime.style === 'day'
+        ? dayStripSvg(cell, now, minutes, label)
+        : sparklineSvg(cell, now, minutes, Number(data?.trend_bin_minutes) || 5, label);
+    return `<td class="wspr-matrix-cell wspr-look-cell${isSilent(cell) ? ' is-silent' : ''}" ${cellAttrs(band, region, cell, regionNames)}>${svg}</td>`;
 }
 
 function attachSourceChipHandlers(body) {
@@ -670,7 +629,9 @@ function attachSourceChipHandlers(body) {
 
 // --- Grid keyboard model ----------------------------------------------------
 // Roving tabindex over the data cells (.wspr-matrix-cell); empty cells are
-// never focusable, so every move skips them.
+// never focusable, so every move skips them. A data cell is a <td>, or in the
+// dot strip a dot inside the row's one strip cell: its row is the enclosing
+// <tr> and its column the dot's position (data-col).
 function setRovingCell(td) {
     const table = td.closest('table');
     if (!table) return;
@@ -684,17 +645,25 @@ function dataCells(row) {
     return Array.from(row.querySelectorAll('.wspr-matrix-cell'));
 }
 
+function rowOf(el) {
+    return el.closest('tr');
+}
+
+function colOf(el) {
+    return el.tagName === 'TD' ? el.cellIndex : Number(el.getAttribute('data-col')) || 0;
+}
+
 // Data cell in `row` whose column is closest to `col` (ties go left).
 function closestInRow(row, col) {
     let best = null;
     for (const td of dataCells(row)) {
-        if (!best || Math.abs(td.cellIndex - col) < Math.abs(best.cellIndex - col)) best = td;
+        if (!best || Math.abs(colOf(td) - col) < Math.abs(colOf(best) - col)) best = td;
     }
     return best;
 }
 
 function cellInRowStep(td, dir) {
-    const cells = dataCells(td.parentElement);
+    const cells = dataCells(rowOf(td));
     return cells[cells.indexOf(td) + dir] || null;
 }
 
@@ -702,9 +671,9 @@ function cellInRowStep(td, dir) {
 // they land on the closest data cell of the next row that has any.
 function cellInColumnStep(table, td, dir) {
     const rows = Array.from(table.tBodies[0]?.rows || []);
-    const start = rows.indexOf(td.parentElement);
-    const col = td.cellIndex;
-    for (let i = start + dir; i >= 0 && i < rows.length; i += dir) {
+    const start = rows.indexOf(rowOf(td));
+    const col = colOf(td);
+    for (let i = start + dir; td.tagName === 'TD' && i >= 0 && i < rows.length; i += dir) {
         const c = rows[i].cells[col];
         if (c && c.classList.contains('wspr-matrix-cell')) return c;
     }
@@ -726,12 +695,12 @@ function onGridKeydown(e) {
         case 'ArrowDown': next = cellInColumnStep(table, td, 1); break;
         case 'ArrowUp': next = cellInColumnStep(table, td, -1); break;
         case 'Home': {
-            const cells = e.ctrlKey ? Array.from(table.querySelectorAll('.wspr-matrix-cell')) : dataCells(td.parentElement);
+            const cells = e.ctrlKey ? Array.from(table.querySelectorAll('.wspr-matrix-cell')) : dataCells(rowOf(td));
             next = cells[0] || null;
             break;
         }
         case 'End': {
-            const cells = e.ctrlKey ? Array.from(table.querySelectorAll('.wspr-matrix-cell')) : dataCells(td.parentElement);
+            const cells = e.ctrlKey ? Array.from(table.querySelectorAll('.wspr-matrix-cell')) : dataCells(rowOf(td));
             next = cells[cells.length - 1] || null;
             break;
         }
@@ -815,9 +784,7 @@ export function clearDrillDown() {
 // cells(band) -> '<td>…</td>' per column, optional rowHeader(band) -> HTML
 // stacked under the band name in the row header, key(bands) -> string that
 // changes when the extra markup would, after(body) -> draw into the fresh DOM,
-// optional hiddenRegions -> region codes left out of the table, optional
-// hideCounts -> cells show colour and badges only (the count stays in the
-// tooltip and the accessible name) }.
+// optional hiddenRegions -> region codes left out of the table }.
 export function setRowExtras(extras) {
     runtime.rowExtras = extras || null;
     runtime.lastRenderKey = '';
@@ -831,28 +798,17 @@ export function refreshMatrix() {
 
 // Test hooks.
 export const __test = {
-    cellInk,
-    rgbLuminance,
-    topModeBadges,
-    renderCell,
     cellLabel,
+    cellTitle,
     toggleDrillDown,
-    styleFill,
-    rampAt,
-    rampStops,
-    legendHtml,
     surgeStrength,
     hasNormal,
     expectedLine,
-    chevronGlyph,
-    ringShadow,
-    ringColor,
     setStyle,
-    VIRIDIS_STOPS,
-    INFERNO_STOPS,
-    VIRIDIS_LIGHT_STOPS,
-    INFERNO_LIGHT_STOPS,
-    RING_COLOR,
+    renderLookCell,
+    scheduleDetailRetry,
+    DETAIL_RETRY_MS,
+    DEFAULT_STYLE,
     STYLES,
     runtime,
     reset() {
@@ -864,8 +820,9 @@ export const __test = {
         runtime.lastQth = '';
         runtime.lastRenderKey = '';
         runtime.sources = [...DEFAULT_SOURCES];
-        runtime.style = 'viridis';
+        runtime.style = DEFAULT_STYLE;
         runtime.rowExtras = null;
+        runtime.detailRetryKey = '';
     },
     invalidateCache,
     toggleSource,

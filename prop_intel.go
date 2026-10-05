@@ -46,6 +46,19 @@ const (
 	// propIntelRegionBaselineNegCacheTTL bounds how long a failed query is
 	// remembered before retrying Postgres.
 	propIntelRegionBaselineNegCacheTTL int64 = 30
+	// The FT8 climatology (propIntelEngine.loadFT8Baselines) aggregates 30 days
+	// of dx_region_baseline_daily: 23M rows, 8-19 s on prod and ~1.4 GB of temp
+	// spill, against the 1.5 s request deadline it used to run under, so it
+	// timed out every time and the atypical-flavor cross-reference never had
+	// data (and every refresh of /api/prop_intel/summary waited the 1.5 s out).
+	// It now loads in the background, so requests never wait on it; the heavy
+	// part is a 30-day climatology that moves slowly, so it is refreshed every
+	// half hour.
+	propIntelFT8BaselineTTL int64 = 1800
+	// propIntelFT8RefreshTimeout is the background refresh deadline.
+	propIntelFT8RefreshTimeout = 3 * time.Minute
+	// propIntelFT8RetryAfter spaces out retries after a failed refresh.
+	propIntelFT8RetryAfter int64 = 300
 	// propIntelRegionBaselineQueryTimeout is the per-query deadline.
 	propIntelRegionBaselineQueryTimeout = 1500 * time.Millisecond
 	// propIntelRegionBaselineRefreshTimeout is the deadline of the background
@@ -142,6 +155,9 @@ type propIntelEngine struct {
 	ft8Cache      map[regionBaselineKey]regionCalendarStatRow
 	ft8CacheAt    int64
 	ft8CacheErrAt int64
+	ft8Refreshing bool // a background refresh is in flight (guarded by ft8CacheMu)
+	// queryFT8 replaces the store query (test seam; nil = the store's).
+	queryFT8 func(ctx context.Context, st *dxPostgresStore, daysBack int, now int64) ([]regionCalendarStatRow, error)
 }
 
 // propIntel is the package-level singleton, mirroring dxBaseline. It is wired
@@ -428,6 +444,7 @@ func scanPropIntelWindow(history []MQTTMessage, qthSet []string, now, cutoff, mi
 	nBands, nRegions := len(inScopeBandNames), len(region.AllRegions())
 	cells := make([]*propIntelCellAcc, nBands*nRegions)
 	regions := newRawRegionMemo()
+	pm := newPropRemoteMatcher(qthSet, nil)
 
 	for i := range history {
 		m := &history[i]
@@ -448,7 +465,7 @@ func scanPropIntelWindow(history []MQTTMessage, qthSet []string, now, cutoff, mi
 		// the receiver locator (SL) is the region key — "where the path
 		// landed". Shared with the v2 engine via propIntelRemote (receiverSide
 		// "sc" = this exact behavior).
-		remoteLoc, remoteIsRecv, matchedEnd := propIntelRemote(m, qthSet, nil, "sc")
+		remoteLoc, remoteIsRecv, matchedEnd := pm.resolve(m, "sc")
 		ri := regions.get(remoteLoc)
 		if ri < 0 {
 			continue
@@ -574,51 +591,69 @@ func (e *propIntelEngine) loadFT8Baselines(now int64) map[regionBaselineKey]regi
 		return nil
 	}
 	e.ft8CacheMu.RLock()
-	if e.ft8Cache != nil && now-e.ft8CacheAt < propIntelRegionBaselineCacheTTL {
-		cached := e.ft8Cache
-		e.ft8CacheMu.RUnlock()
+	cached, at := e.ft8Cache, e.ft8CacheAt
+	e.ft8CacheMu.RUnlock()
+	if cached != nil && now-at < propIntelFT8BaselineTTL {
 		return cached
 	}
-	if e.ft8Cache == nil && e.ft8CacheErrAt != 0 && now-e.ft8CacheErrAt < propIntelRegionBaselineNegCacheTTL {
-		e.ft8CacheMu.RUnlock()
-		return nil
-	}
-	e.ft8CacheMu.RUnlock()
+	// Stale or cold: refresh in the background and answer with what there is
+	// (nil before the first load lands, which assignFlavor reads as
+	// "unavailable"). The query takes seconds; a request must not wait on it.
+	e.refreshFT8Async(now)
+	return cached
+}
 
-	e.ft8CacheMu.Lock()
-	defer e.ft8CacheMu.Unlock()
-	if e.ft8Cache != nil && now-e.ft8CacheAt < propIntelRegionBaselineCacheTTL {
-		return e.ft8Cache
+// refreshFT8Async reloads the FT8 climatology from Postgres in the background:
+// one refresh at a time, none within propIntelFT8RetryAfter of a failure.
+func (e *propIntelEngine) refreshFT8Async(now int64) {
+	if e == nil || e.baseline == nil {
+		return
 	}
-	if e.ft8Cache == nil && e.ft8CacheErrAt != 0 && now-e.ft8CacheErrAt < propIntelRegionBaselineNegCacheTTL {
-		return nil
-	}
-
 	e.baseline.mu.RLock()
 	st := e.baseline.store
 	e.baseline.mu.RUnlock()
 	if st == nil {
-		return nil
+		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), propIntelRegionBaselineQueryTimeout)
-	defer cancel()
-	rows, err := st.regionCalendarStats(ctx, propIntelRegionBaselineDaysBack, now)
-	if err != nil {
-		e.ft8CacheErrAt = now
-		if e.ft8Cache != nil {
-			return e.ft8Cache
+	e.ft8CacheMu.Lock()
+	if e.ft8Refreshing || (e.ft8CacheErrAt != 0 && now-e.ft8CacheErrAt >= 0 && now-e.ft8CacheErrAt < propIntelFT8RetryAfter) {
+		e.ft8CacheMu.Unlock()
+		return
+	}
+	e.ft8Refreshing = true
+	e.ft8CacheMu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), propIntelFT8RefreshTimeout)
+		defer cancel()
+		var rows []regionCalendarStatRow
+		var err error
+		if e.queryFT8 != nil {
+			rows, err = e.queryFT8(ctx, st, propIntelRegionBaselineDaysBack, now)
+		} else {
+			rows, err = st.regionCalendarStats(ctx, propIntelRegionBaselineDaysBack, now)
 		}
-		return nil
-	}
-	out := make(map[regionBaselineKey]regionCalendarStatRow, len(rows))
-	for _, r := range rows {
-		out[regionBaselineKey{r.Band, r.Region, r.SlotOfDay}] = r
-	}
-	e.ft8Cache = out
-	e.ft8CacheAt = now
-	e.ft8CacheErrAt = 0
-	return out
+		var out map[regionBaselineKey]regionCalendarStatRow
+		if err == nil {
+			out = make(map[regionBaselineKey]regionCalendarStatRow, len(rows))
+			for _, r := range rows {
+				out[regionBaselineKey{r.Band, r.Region, r.SlotOfDay}] = r
+			}
+		}
+		e.ft8CacheMu.Lock()
+		defer e.ft8CacheMu.Unlock()
+		e.ft8Refreshing = false
+		if err != nil {
+			logDebug("FT8 climatology refresh failed (keeping the previous copy): %v", err)
+			e.ft8CacheErrAt = now
+			return
+		}
+		e.ft8Cache, e.ft8CacheAt, e.ft8CacheErrAt = out, now, 0
+	}()
 }
+
+// WarmFT8 starts the first FT8 climatology load in the background.
+func (e *propIntelEngine) WarmFT8() { e.refreshFT8Async(time.Now().Unix()) }
 
 // propIntelRegionDisplayNames maps the 11-region codes to the display names
 // used in surge labels (e.g., "tune to 10m, surge to Caribbean"). The codes

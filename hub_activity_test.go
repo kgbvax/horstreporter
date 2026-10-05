@@ -34,7 +34,9 @@ func TestHubCoversWindow(t *testing.T) {
 		{"no constraint recorded", 0, 0, 0, 60, 15, true},
 		{"longer than retention", now - 7200, 0, 0, 60, 90, false},
 		{"history younger than the window", now - 300, 0, 0, 60, 15, false},
-		{"gap inside the window", now - 3600, now - 600, now - 540, 60, 15, false},
+		// A restart gap does not make the hub differ from Postgres (both lack the
+		// downtime), so it must not send the window to Postgres.
+		{"gap inside the window", now - 3600, now - 600, now - 540, 60, 15, true},
 		{"gap older than the window", now - 3600, now - 2000, now - 1900, 60, 15, true},
 		{"zero minutes", 0, 0, 0, 60, 0, false},
 		{"unlimited retention", 0, 0, 0, 0, 120, true},

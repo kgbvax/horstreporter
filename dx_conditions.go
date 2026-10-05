@@ -948,12 +948,29 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 	}
 	qthSet := qthSquares(qth, surroundings)
 
-	// pos, when non-nil, lists the only positions of history worth visiting.
+	// The live side comes from hub.history, which holds at most
+	// liveHistoryRetentionMinutes (and nothing from before a restart it
+	// couldn't backfill), so live windows start no earlier than that and live
+	// rates divide by the span actually covered — dividing a ≤60-min count by
+	// a 120-min window halved every rate.
+	liveStart := now - int64(liveRateWindowMinutes(minutes))*60
+	if since := liveHistoryCompleteSince.Load(); since > liveStart && since < now {
+		liveStart = since
+	}
+
+	// pos, when non-nil, lists the only positions of history worth visiting
+	// for the area match and the activity series. regionalIdx, when set, holds
+	// the regional counts the index kept for [liveStart, now], so the walk
+	// below does not have to count the cluster block's ends itself.
 	var pos []uint32
 	usePos := false
+	var regionalIdx [clusterBandSlots]int
+	regionalFromIndex := false
 	if areaIndexEnabled && win.firstSeq != 0 {
 		if key, ok := areaIndexKeyFor(qth, surroundings, matchArea, operatorCluster); ok {
-			pos, usePos = areaIdx.positions(key, win)
+			r := areaIdx.lookup(key, win, liveStart, now)
+			pos, usePos = r.pos, r.ok
+			regionalIdx, regionalFromIndex = r.regional, r.ok && r.regionalOK
 		}
 	}
 
@@ -1058,15 +1075,6 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 	// including the common "genuinely quiet grid" case that returns before the
 	// loop and would never consume the ~ring-size copy.
 
-	// The live side comes from hub.history, which holds at most
-	// liveHistoryRetentionMinutes (and nothing from before a restart it
-	// couldn't backfill), so live windows start no earlier than that and live
-	// rates divide by the span actually covered — dividing a ≤60-min count by
-	// a 120-min window halved every rate.
-	liveStart := now - int64(liveRateWindowMinutes(minutes))*60
-	if since := liveHistoryCompleteSince.Load(); since > liveStart && since < now {
-		liveStart = since
-	}
 	liveSegs := liveSegments(liveStart, now)
 	liveSpanSec := int64(0)
 	for _, seg := range liveSegs {
@@ -1085,13 +1093,24 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 	localCount := make(map[string]int)
 	clusterX, clusterY, clusterOK := locatorSquareXY(operatorCluster)
 
+	if regionalFromIndex {
+		for i, n := range regionalIdx {
+			if n > 0 {
+				regionalCount[inScopeBandNames[i]] = n
+			}
+		}
+	}
+	// With the regional counts from the index the walk only needs the area's
+	// messages; without them (index skipped, or its counts unusable) it visits
+	// the whole window and counts the cluster block's ends itself.
+	walkPos := usePos && regionalFromIndex
 	visits := len(history)
-	if usePos {
+	if walkPos {
 		visits = len(pos)
 	}
 	for vi := 0; vi < visits; vi++ {
 		hi := vi
-		if usePos {
+		if walkPos {
 			hi = int(pos[vi])
 		}
 		m := history[hi]
@@ -1099,7 +1118,7 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 			continue
 		}
 		conditionsMode := !isNonConditionsMode(m.MD)
-		if clusterOK && conditionsMode && feedsClusterBaseline(m) {
+		if !regionalFromIndex && clusterOK && conditionsMode && feedsClusterBaseline(m) {
 			if n := clusterEndCount(m, clusterX, clusterY); n > 0 {
 				if band := normalizeBand(m.B); band != "" {
 					regionalCount[band] += n
@@ -1895,19 +1914,23 @@ func normalizeSeriesTo100(series []float64) []float64 {
 // activityBins is the number of bars in a band's activity series.
 const activityBins = 12
 
-// hubCoversWindow reports whether hub.history holds every ingested spot of the
-// last `minutes` minutes: the window fits the retention, starts after the
-// moment the history became complete (process start or backfill start), and
-// does not overlap the hole a restart leaves (liveHistoryGapStart/End).
+// hubCoversWindow reports whether hub.history holds every spot Postgres holds
+// for the last `minutes` minutes: the window fits the retention and starts
+// after the moment the history became complete (process start, or the start
+// of the startup backfill that loaded it from dx_raw_spots).
+//
+// The restart gap (liveHistoryGapStart/End, the downtime between the newest
+// backfilled spot and the moment ingest resumed) is deliberately not checked:
+// live rates must skip it because the baseline they are compared with
+// expects spots there, but for a count of what was recorded the hub and
+// dx_raw_spots are missing exactly the same spots, so the series is the same.
+// Checking it sent every window that overlapped the gap to Postgres for up to
+// an hour after each restart (250-650 ms instead of tens of ms).
 func hubCoversWindow(now int64, minutes int) bool {
 	if minutes <= 0 || (liveHistoryRetentionMinutes > 0 && minutes > liveHistoryRetentionMinutes) {
 		return false
 	}
-	start := now - int64(minutes)*60
-	if since := liveHistoryCompleteSince.Load(); since > start {
-		return false
-	}
-	if gs, ge := liveHistoryGapStart.Load(), liveHistoryGapEnd.Load(); ge > gs && ge > start && gs < now {
+	if since := liveHistoryCompleteSince.Load(); since > now-int64(minutes)*60 {
 		return false
 	}
 	return true
@@ -2196,7 +2219,11 @@ func liveSegments(start, end int64) [][2]int64 {
 // WSPR share hub.history but never reach Observe — excluded by source, not
 // just by mode, since an RBN digital feed can carry FT8.
 func feedsClusterBaseline(m MQTTMessage) bool {
-	return m.Source != "rbn" && m.Source != "wspr"
+	return sourceFeedsClusterBaseline(m.Source)
+}
+
+func sourceFeedsClusterBaseline(source string) bool {
+	return source != "rbn" && source != "wspr"
 }
 
 // liveRateWindowMinutes is the span a live rate can cover: the requested

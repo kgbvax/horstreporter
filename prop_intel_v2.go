@@ -90,6 +90,18 @@ type propIntelV2Cell struct {
 	// ExpectedSpots / Expected is the cell against its normal.
 	Expected      *float64 `json:"expected,omitempty"`
 	ExpectedSpots *int     `json:"expected_spots,omitempty"`
+	// Silent marks a from-here cell with no live spots whose normal is at
+	// least fromHereSilentMinExpected ("usually open at this hour, nothing
+	// now"). Only on request (silent=1).
+	Silent bool `json:"silent,omitempty"`
+	// NormalDay is the area normal over the whole UTC day: 48 means, one per
+	// 30-minute slot from 00:00 UTC, of the count behind Expected (per slot,
+	// not per window). Only on request (normal_day=1) and once the area's day
+	// curves are loaded (prop_intel_fromhere_detail.go).
+	NormalDay []float64 `json:"normal_day,omitempty"`
+	// Trend counts the spots behind ExpectedSpots in 12 five-minute bins
+	// ending now, oldest first. Only on request (trend=1).
+	Trend []int `json:"trend,omitempty"`
 }
 
 // propIntelV2FromHere switches the evaluator to the from-here view: only spots
@@ -97,6 +109,13 @@ type propIntelV2Cell struct {
 // area's own normal instead of the global climatology.
 type propIntelV2FromHere struct {
 	normals *fromHereNormals // nil: no normal available
+	// Optional detail (prop_intel_fromhere_detail.go): silent cells, day
+	// curves (nil: not requested or not loaded yet) and the trend, counted
+	// over trendHistory (the last hour).
+	withSilent   bool
+	dayCurves    *fromHereDayCurves
+	trend        bool
+	trendHistory []MQTTMessage
 }
 
 // propIntelV2Response is the JSON envelope for /api/prop_intel/v2.
@@ -116,6 +135,8 @@ type propIntelV2Response struct {
 	Regions          []string          `json:"regions"`
 	RegionNames      map[string]string `json:"region_names"`
 	Cells            []propIntelV2Cell `json:"cells"`
+	// TrendBinMinutes is the width of a cell trend bin, set with trend=1.
+	TrendBinMinutes int `json:"trend_bin_minutes,omitempty"`
 }
 
 // propIntelV2CellKey indexes accumulators by (band × region × source).
@@ -234,6 +255,83 @@ func propIntelRemote(m *MQTTMessage, qthSet []string, area *liveArea, receiverSi
 	return recvLoc, true, false
 }
 
+// propRemoteMatcher is propIntelRemote with the per-scan work hoisted out of
+// the per-message loop. For a locator qth the token set is a block of 4-char
+// squares (own square, or 3x3 with surroundings); testing a message against
+// 9 string tokens meant 18 matchCall plus 18 prefix comparisons, which made the
+// scan ~250 ms on prod whenever the live area sat at radius 1 (the qthSet
+// path). Here the squares are integer coordinates, compared in the original
+// token order (when both ends of a spot are inside the block, the first token
+// either end matches decides which end is the remote one), behind a bounding-
+// box test that rejects spots with no end near the block.
+//
+// A callsign can never equal a grid square, so the callsign comparisons the
+// token loop also made for locator tokens are dropped. qth sets that are not
+// a plain list of 4-char squares (a callsign qth, longer locators, a mix) keep
+// the original loop.
+type propRemoteMatcher struct {
+	area                   *liveArea
+	qthSet                 []string
+	sq                     [][2]int
+	minX, maxX, minY, maxY int
+	exact                  bool
+}
+
+func newPropRemoteMatcher(qthSet []string, area *liveArea) propRemoteMatcher {
+	pm := propRemoteMatcher{area: area, qthSet: qthSet}
+	if area != nil || len(qthSet) == 0 {
+		return pm
+	}
+	sq := make([][2]int, 0, len(qthSet))
+	for _, t := range qthSet {
+		if len(t) != 4 || !isLocator(t) {
+			return pm
+		}
+		x, y, _ := locatorSquareXY(t)
+		sq = append(sq, [2]int{x, y})
+	}
+	pm.sq, pm.exact = sq, true
+	pm.minX, pm.maxX, pm.minY, pm.maxY = sq[0][0], sq[0][0], sq[0][1], sq[0][1]
+	for _, p := range sq[1:] {
+		pm.minX, pm.maxX = min(pm.minX, p[0]), max(pm.maxX, p[0])
+		pm.minY, pm.maxY = min(pm.minY, p[1]), max(pm.maxY, p[1])
+	}
+	return pm
+}
+
+func (pm *propRemoteMatcher) inBox(x, y int) bool {
+	return x >= pm.minX && x <= pm.maxX && y >= pm.minY && y <= pm.maxY
+}
+
+// resolve is propIntelRemote(m, qthSet, area, receiverSide).
+func (pm *propRemoteMatcher) resolve(m *MQTTMessage, receiverSide string) (remoteLoc string, remoteIsRecv, matchedEnd bool) {
+	if !pm.exact {
+		return propIntelRemote(m, pm.qthSet, pm.area, receiverSide)
+	}
+	sl := strings.TrimSpace(m.SL)
+	rl := strings.TrimSpace(m.RL)
+	recvLoc, otherLoc := sl, rl
+	if receiverSide == "rc" {
+		recvLoc, otherLoc = rl, sl
+	}
+	rx, ry, rok := locatorSquareXYFold(recvLoc)
+	ox, oy, ook := locatorSquareXYFold(otherLoc)
+	rok = rok && pm.inBox(rx, ry)
+	ook = ook && pm.inBox(ox, oy)
+	if !rok && !ook {
+		return recvLoc, true, false
+	}
+	for _, t := range pm.sq {
+		if rok && rx == t[0] && ry == t[1] {
+			return otherLoc, false, true
+		}
+		if ook && ox == t[0] && oy == t[1] {
+			return recvLoc, true, true
+		}
+	}
+	return recvLoc, true, false
+}
+
 // propIntelRemoteCall is the upper-cased callsign of the end propIntelRemote
 // picked as the remote one.
 func propIntelRemoteCall(m *MQTTMessage, receiverSide string, remoteIsRecv bool) string {
@@ -277,6 +375,7 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 		fhm = newFromHereMatcher(qthSet, matchArea)
 	}
 	regions := newRawRegionMemo()
+	pm := newPropRemoteMatcher(qthSet, matchArea)
 
 	for i := range history {
 		m := &history[i]
@@ -317,7 +416,7 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 				nEnds++
 			}
 		} else {
-			ends[0], _, matchedEnd = propIntelRemote(m, qthSet, matchArea, prof.ReceiverSide)
+			ends[0], _, matchedEnd = pm.resolve(m, prof.ReceiverSide)
 			nEnds = 1
 		}
 		for k := 0; k < nEnds; k++ {
@@ -426,9 +525,18 @@ func (e *propIntelV2Engine) EvaluateV2Area(qth string, surroundings bool, minute
 // PSKReporter count with the area's normal; without, there is no atypical (the
 // global climatology does not describe paths from one area).
 func (e *propIntelV2Engine) EvaluateV2FromHere(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea, normals *fromHereNormals) propIntelV2Response {
-	resp := e.evaluateV2(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, area,
-		&propIntelV2FromHere{normals: normals})
+	return e.EvaluateV2FromHereDetail(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, area,
+		propIntelV2FromHere{normals: normals})
+}
+
+// EvaluateV2FromHereDetail is EvaluateV2FromHere with the optional detail in
+// fh (silent cells, day curves, trend).
+func (e *propIntelV2Engine) EvaluateV2FromHereDetail(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea, fh propIntelV2FromHere) propIntelV2Response {
+	resp := e.evaluateV2(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, area, &fh)
 	resp.FromHere = true
+	if fh.trend {
+		resp.TrendBinMinutes = fromHereTrendBinSec / 60
+	}
 	return resp
 }
 
@@ -497,6 +605,10 @@ func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes in
 		if p.InternalTag == "mqtt" {
 			pskrSelected = true
 		}
+	}
+	var trend map[propIntelCellKey][]int
+	if fh != nil && fh.trend && pskrSelected {
+		trend = fromHereTrend(fh.trendHistory, profiles, qthSet, matchArea, now)
 	}
 
 	for ck, acc := range cellAccs {
@@ -626,8 +738,15 @@ func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes in
 		}
 		if fh != nil && pskrSelected {
 			applyFromHereNormal(&cell, fh.normals, normalSpots[cellKey], atypicalThreshold)
+			applyFromHereDetail(&cell, fh, trend)
 		}
 		cells = append(cells, cell)
+	}
+	if fh != nil && fh.withSilent && pskrSelected {
+		for _, c := range fromHereSilentCells(fh.normals, byCell) {
+			applyFromHereDetail(&c, fh, trend)
+			cells = append(cells, c)
+		}
 	}
 
 	sort.Slice(cells, func(i, j int) bool {
@@ -699,9 +818,27 @@ func propIntelV2Handler(w http.ResponseWriter, r *http.Request) {
 	var resp propIntelV2Response
 	if p.fromHere {
 		// From-here view: only spots touching the area, compared with the
-		// area's own normal (prop_intel_fromhere.go).
-		normals := fromHereNormalsFor(fromHereAreaGrids(p.qth, p.surroundings, area), now, p.minutes)
-		resp = propIntelV2.EvaluateV2FromHere(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area, normals)
+		// area's own normal (prop_intel_fromhere.go), plus the optional detail
+		// the experimental matrix looks ask for (prop_intel_fromhere_detail.go).
+		q := r.URL.Query()
+		grids := fromHereAreaGrids(p.qth, p.surroundings, area)
+		wantDay := q.Get("normal_day") == "1"
+		if wantDay {
+			fromHereDayCurvesFor(grids, now, 0) // start the fetch alongside the window normals
+		}
+		fh := propIntelV2FromHere{
+			normals:    fromHereNormalsFor(grids, now, p.minutes),
+			withSilent: q.Get("silent") == "1",
+		}
+		if wantDay {
+			fh.dayCurves = fromHereDayCurvesFor(grids, now, fromHereDayWait)
+		}
+		if q.Get("trend") == "1" {
+			trendHistory, releaseTrend := snapshotPropIntelHistory(now, fromHereTrendBins*fromHereTrendBinSec/60)
+			defer releaseTrend()
+			fh.trend, fh.trendHistory = true, trendHistory
+		}
+		resp = propIntelV2.EvaluateV2FromHereDetail(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area, fh)
 	} else {
 		resp = propIntelV2.EvaluateV2Area(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area)
 	}

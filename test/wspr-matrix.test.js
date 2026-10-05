@@ -16,9 +16,7 @@ import { initWsprMatrix, setWsprMatrixVisible, setRowExtras, refreshMatrix, __te
 import { state } from '../static/state.js';
 
 const {
-    cellInk,
-    topModeBadges,
-    renderCell,
+    renderLookCell,
     reset,
     runtime,
     toggleSource,
@@ -27,27 +25,14 @@ const {
     PANEL_ID,
     BODY_ID,
     SOURCES_KEY,
+    STYLE_KEY,
 } = __test;
 
-// WCAG relative luminance + contrast ratio, for asserting that every step of
-// the heat ramp keeps the white spot count readable (AA, >=4.5:1).
-function luminance([r, g, b]) {
-    const lin = (c) => {
-        const s = c / 255;
-        return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-    };
-    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-}
+// Payload envelope for renderLookCell: 22:30 UTC, 15-minute window.
+const LOOK_DATA = { now: Date.UTC(2026, 9, 4, 22, 30) / 1000, minutes: 15, trend_bin_minutes: 5 };
 
-function parseRgb(str) {
-    const m = str.match(/^rgb\((\d+), (\d+), (\d+)\)$/);
-    if (!m) throw new Error(`not an rgb() string: ${str}`);
-    return [Number(m[1]), Number(m[2]), Number(m[3])];
-}
-
-describe('wspr-matrix heat styles (viridis / inferno)', () => {
-    const { styleFill, rampStops, legendHtml, surgeStrength, setStyle, ringColor, RING_COLOR } = __test;
-    const { VIRIDIS_STOPS, INFERNO_STOPS, VIRIDIS_LIGHT_STOPS, INFERNO_LIGHT_STOPS } = __test;
+describe('wspr-matrix looks (dots / day / trend)', () => {
+    const { setStyle, STYLES, DEFAULT_STYLE } = __test;
     let store;
 
     beforeEach(() => {
@@ -57,227 +42,30 @@ describe('wspr-matrix heat styles (viridis / inferno)', () => {
         reset();
     });
 
-    it('dark theme: viridis hits its reference endpoints', () => {
-        expect(styleFill('viridis', 0, 'dark')).toEqual([68, 1, 84]);   // #440154
-        expect(styleFill('viridis', 1, 'dark')).toEqual([253, 231, 37]); // #fde725
+    it('offers the three looks, dot strip first and default', () => {
+        expect(STYLES.map((s) => s.key)).toEqual(['dots', 'day', 'trend']);
+        expect(DEFAULT_STYLE).toBe('dots');
+        expect(runtime.style).toBe('dots');
     });
 
-    it('dark theme: inferno hits its reference endpoints', () => {
-        expect(styleFill('inferno', 0, 'dark')).toEqual([0, 0, 4]);        // #000004
-        expect(styleFill('inferno', 1, 'dark')).toEqual([252, 255, 164]);  // #fcffa4
-    });
-
-    it('light theme: both ramps start pale and end on the reference dark stop', () => {
-        // Sparse = a faint tint next to the white panel, peak = the deep end
-        // of the same colormap; inferno stops short of the #000004 tail.
-        expect(styleFill('viridis', 0, 'light')).toEqual([254, 248, 190]); // #fef8be
-        expect(styleFill('viridis', 1, 'light')).toEqual([68, 1, 84]);     // #440154
-        expect(styleFill('inferno', 0, 'light')).toEqual([253, 255, 196]); // #fdffc4
-        expect(styleFill('inferno', 1, 'light')).toEqual([27, 12, 65]);    // #1b0c41
-    });
-
-    it('theme defaults to body[data-theme] (light unless dark)', () => {
-        expect(styleFill('viridis', 0)).toEqual(styleFill('viridis', 0, 'light'));
-        document.body.setAttribute('data-theme', 'dark');
-        expect(styleFill('viridis', 0)).toEqual(styleFill('viridis', 0, 'dark'));
-    });
-
-    it('visual weight tracks activity in both themes: chips brighten on dark, darken on light', () => {
-        // Sequential ramps must be lightness-monotone in the direction that
-        // moves AWAY from the panel: dark theme low → high gets lighter, light
-        // theme low → high gets darker. A dark chip on the least active path
-        // of a white panel was the bug this guards.
-        for (const style of ['viridis', 'inferno']) {
-            for (const theme of ['dark', 'light']) {
-                let prev = luminance(styleFill(style, 0, theme));
-                for (let i = 1; i <= 40; i++) {
-                    const l = luminance(styleFill(style, i / 40, theme));
-                    if (theme === 'dark') expect(l, `${style}/${theme} @${i / 40}`).toBeGreaterThanOrEqual(prev - 1e-9);
-                    else expect(l, `${style}/${theme} @${i / 40}`).toBeLessThanOrEqual(prev + 1e-9);
-                    prev = l;
-                }
-            }
-            // Light theme: the sparse end sits close to the white page, the
-            // peak carries real weight.
-            expect(luminance(styleFill(style, 0, 'light'))).toBeGreaterThan(0.85);
-            expect(luminance(styleFill(style, 1, 'light'))).toBeLessThan(0.05);
-        }
-    });
-
-    it('rampStops picks the theme table, unknown styles fall back to viridis', () => {
-        expect(rampStops('viridis', 'dark')).toBe(VIRIDIS_STOPS);
-        expect(rampStops('inferno', 'dark')).toBe(INFERNO_STOPS);
-        expect(rampStops('viridis', 'light')).toBe(VIRIDIS_LIGHT_STOPS);
-        expect(rampStops('inferno', 'light')).toBe(INFERNO_LIGHT_STOPS);
-        expect(rampStops('aqua', 'light')).toBe(VIRIDIS_LIGHT_STOPS);
-        expect(rampStops('aqua', 'dark')).toBe(VIRIDIS_STOPS);
-    });
-
-    it('keeps spot-count numerals at WCAG AA across both heat ramps in both themes', () => {
-        for (const style of ['viridis', 'inferno']) {
-            for (const theme of ['dark', 'light']) {
-                for (let i = 0; i <= 40; i++) {
-                    const bg = styleFill(style, i / 40, theme);
-                    const ink = parseRgb(cellInk(bg));
-                    const bgL = luminance(bg), inkL = luminance(ink);
-                    const ratio = (Math.max(bgL, inkL) + 0.05) / (Math.min(bgL, inkL) + 0.05);
-                    expect(ratio, `${style}/${theme} intensity ${i / 40} on rgb(${bg})`).toBeGreaterThanOrEqual(4.5);
-                }
-            }
-        }
-    });
-
-    it('clamps out-of-range intensities', () => {
-        for (const theme of ['dark', 'light']) {
-            expect(styleFill('viridis', -1, theme)).toEqual(styleFill('viridis', 0, theme));
-            expect(styleFill('inferno', 5, theme)).toEqual(styleFill('inferno', 1, theme));
-        }
-    });
-
-    it('legend scale follows the theme ramp', () => {
-        runtime.style = 'inferno';
-        expect(legendHtml('dark')).toContain(`linear-gradient(90deg, ${INFERNO_STOPS.join(', ')})`);
-        expect(legendHtml('light')).toContain(`linear-gradient(90deg, ${INFERNO_LIGHT_STOPS.join(', ')})`);
-        runtime.style = 'viridis';
-        expect(legendHtml('light')).toContain(`linear-gradient(90deg, ${VIRIDIS_LIGHT_STOPS.join(', ')})`);
-    });
-
-    it('ring color: amber on the dark theme, the chip ink on the light theme', () => {
-        expect(ringColor('dark', 'rgb(0, 0, 0)')).toBe(RING_COLOR);
-        expect(ringColor('light', 'rgb(0, 0, 0)')).toBe('rgb(0, 0, 0)');
-        expect(ringColor('light', 'rgb(255, 255, 255)')).toBe('rgb(255, 255, 255)');
-    });
-
-    it('surgeStrength: z >= 4 or >=50% source agreement is the strong mark', () => {
-        expect(surgeStrength({ atypical: null })).toBe(0);
-        expect(surgeStrength({ atypical: { z_score: 2.4 } })).toBe(1);
-        expect(surgeStrength({ atypical: { z_score: 4.2 } })).toBe(2);
-        expect(surgeStrength({ atypical: { z_score: 3.1 }, atypical_agreement: 0.5 })).toBe(2);
-        expect(surgeStrength({ atypical: { z_score: 3.1 }, atypical_agreement: 0.25 })).toBe(1);
-    });
-
-    it('viridis style: atypical renders up-chevrons, never the ! badge', () => {
-        runtime.style = 'viridis';
-        const html = renderCell('10m', 'CAR', makeCell({
-            band: '10m', region: 'CAR', atypical: { z_score: 4.2, confidence: 0.9 },
-        }), 12, 'light');
-        expect(html).toContain('class="wspr-chev"');
-        expect(html).toContain('<polygon points="0,4.5 4.5,0.5 9,4.5"'); // apex up
-        expect((html.match(/wspr-chev/g) || []).length).toBeGreaterThanOrEqual(1);
-        expect(html).not.toContain('wspr-badge-atypical');
-        expect(html).not.toContain('wspr-matrix-surge');
-    });
-
-    it('inferno style (dark theme): atypical renders an amber ring, thicker when strong', () => {
-        runtime.style = 'inferno';
-        const mild = renderCell('10m', 'CAR', makeCell({
-            band: '10m', region: 'CAR', atypical: { z_score: 2.4, confidence: 0.5 },
-        }), 12, 'dark');
-        expect(mild).toContain('box-shadow: inset 0 0 0 2px #f5b83d');
-        const strong = renderCell('10m', 'CAR', makeCell({
-            band: '10m', region: 'CAR', atypical: { z_score: 3.1, confidence: 0.9 },
-            active_sources: ['wspr', 'pskr'], atypical_agreement: 1.0,
-        }), 12, 'dark');
-        expect(strong).toContain('box-shadow: inset 0 0 0 3px #f5b83d');
-        expect(strong).not.toContain('wspr-badge-atypical');
-    });
-
-    it('inferno style (light theme): the surge ring takes the chip ink, never amber', () => {
-        runtime.style = 'inferno';
-        // Peak chip (12 of 12): deep purple, white ink → white ring.
-        const peak = renderCell('10m', 'CAR', makeCell({
-            band: '10m', region: 'CAR', atypical: { z_score: 2.4, confidence: 0.5 },
-        }), 12, 'light');
-        expect(peak).toContain('color: rgb(255, 255, 255); box-shadow: inset 0 0 0 2px rgb(255, 255, 255)');
-        // Sparse chip (1 of 400): pale cream, black ink → black ring.
-        const sparse = renderCell('10m', 'CAR', makeCell({
-            band: '10m', region: 'CAR', spot_count: 1, atypical: { z_score: 4.2, confidence: 0.9 },
-        }), 400, 'light');
-        expect(sparse).toContain('color: rgb(0, 0, 0); box-shadow: inset 0 0 0 3px rgb(0, 0, 0)');
-        expect(sparse).not.toContain('#f5b83d');
-    });
-
-    it('viridis chevrons take the chip ink in both themes', () => {
-        runtime.style = 'viridis';
-        const cell = makeCell({ band: '10m', region: 'CAR', spot_count: 1, atypical: { z_score: 2.4, confidence: 0.5 } });
-        // 1 of 400 on the light theme: pale chip, black ink.
-        expect(renderCell('10m', 'CAR', cell, 400, 'light')).toContain('fill="rgb(0, 0, 0)"');
-        // Same cell on the dark theme: deep purple chip, white ink.
-        expect(renderCell('10m', 'CAR', cell, 400, 'dark')).toContain('fill="rgb(255, 255, 255)"');
-    });
-
-    it('setStyle persists, resets the render fingerprint, rejects unknown styles', () => {
-        runtime.lastRenderKey = 'stale';
-        runtime.style = 'inferno'; // reset() default is viridis; start elsewhere
-        setStyle('viridis');
-        expect(runtime.style).toBe('viridis');
-        expect(store.getItem(__test.STYLE_KEY)).toBe('viridis');
+    it('setStyle persists, resets the render fingerprint, rejects unknown looks', () => {
+        runtime.lastRenderKey = 'x';
+        setStyle('day');
+        expect(runtime.style).toBe('day');
+        expect(store.getItem(STYLE_KEY)).toBe('day');
         expect(runtime.lastRenderKey).toBe('');
-        setStyle('plasma');
-        expect(runtime.style).toBe('viridis');
+        setStyle('viridis');
+        expect(runtime.style).toBe('day');
     });
 
-    it('a stored style survives a re-init', () => {
-        store.setItem(__test.STYLE_KEY, 'inferno');
+    it('a stored look survives a re-init; a retired one falls back to the default', () => {
+        store.setItem(STYLE_KEY, 'trend');
         initWsprMatrix();
-        expect(runtime.style).toBe('inferno');
-    });
-});
-
-describe('wspr-matrix topModeBadges', () => {
-    it('shows only SSB when both SSB and CW are open', () => {
-        expect(topModeBadges({ ssb_open: true, cw_open: true }))
-            .toBe('<span class="wspr-badge wspr-badge-ssb">S</span>');
-    });
-
-    it('shows CW when SSB is closed', () => {
-        expect(topModeBadges({ ssb_open: false, cw_open: true }))
-            .toBe('<span class="wspr-badge wspr-badge-cw">C</span>');
-    });
-
-    it('shows no mode badge when neither mode is open', () => {
-        expect(topModeBadges({ ssb_open: false, cw_open: false })).toBe('');
-    });
-});
-
-// The .wspr-badge-* flag chips sit ON the teal heat cells, so each bg/fg pair
-// in style.css must hold WCAG AA on its own (0.65rem bold = normal-size text).
-// Guards the dark-ink badge fix (white on green/teal/orange was 2.6-3.1:1).
-describe('wspr-matrix badge contrast (style.css)', () => {
-    const css = readFileSync('static/style.css', 'utf8'); // vitest runs from the repo root
-    const section = css.slice(css.indexOf('/* WSPR matrix flag badges'), css.indexOf('.wspr-matrix-legend'));
-    const rules = [...section.matchAll(/\.wspr-badge[\w-]*\s*\{[^}]*\}/g)]
-        .map((m) => m[0])
-        .filter((rule) => !rule.includes('inline-block')); // skip the sizing-only base rule
-
-    const parseColor = (rule, prop) => {
-        const m = rule.match(new RegExp(`${prop}:\\s*([^;]+)`));
-        if (!m) return null;
-        const v = m[1].trim();
-        if (v.startsWith('#')) {
-            const h = v.slice(1);
-            if (h.length === 3) return [0, 1, 2].map((i) => parseInt(h[i] + h[i], 16));
-            return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
-        }
-        return null; // var() etc. — not asserted here
-    };
-
-    it('covers every badge variant', () => {
-        // ssb/cw/rising — the !/!! atypical badges and the flavor variants are
-        // gone (v2 merge: anomalies are glyphs/rings, v2 has no flavor field).
-        expect(rules.length).toBeGreaterThanOrEqual(3);
-    });
-
-    it('keeps badge text at WCAG AA against its own background', () => {
-        for (const rule of rules) {
-            const bg = parseColor(rule, 'background');
-            const fg = parseColor(rule, 'color');
-            expect(bg, rule).not.toBeNull();
-            expect(fg, rule).not.toBeNull();
-            const fgL = luminance(fg);
-            const ratio = (Math.max(fgL, luminance(bg)) + 0.05) / (Math.min(fgL, luminance(bg)) + 0.05);
-            expect(ratio, rule).toBeGreaterThanOrEqual(4.5);
-        }
+        expect(runtime.style).toBe('trend');
+        reset();
+        store.setItem(STYLE_KEY, 'inferno');
+        initWsprMatrix();
+        expect(runtime.style).toBe('dots');
     });
 });
 
@@ -398,15 +186,15 @@ describe('wspr-matrix (Propagation) panel', () => {
         expect(document.getElementById(BODY_ID).textContent).toBe('Propagation data unavailable.');
     });
 
-    it('labels the source and color scale chips as separate groups', async () => {
+    it('labels the source and look chips as separate groups', async () => {
         mockFetch({ cells: [] });
         initWsprMatrix();
         setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
         const groups = Array.from(document.querySelectorAll('.wspr-src-chips [role="group"]'));
-        expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['Sources', 'Color scale']);
+        expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['Sources', 'Look']);
         expect(groups[0].querySelectorAll('[data-source]').length).toBe(4);
-        expect(groups[1].querySelectorAll('[data-style]').length).toBe(2);
+        expect(Array.from(groups[1].querySelectorAll('[data-style]')).map((c) => c.textContent)).toEqual(['Dots', 'Day', 'Trend']);
         expect(groups[0].querySelector('[data-source="rbn"]').getAttribute('aria-pressed')).toBe('true');
         expect(groups[0].querySelector('[data-source="dxcluster"]').getAttribute('aria-pressed')).toBe('false');
     });
@@ -451,6 +239,70 @@ describe('wspr-matrix (Propagation) panel', () => {
         expect(calls[0]).toContain('from_here=true');
         expect(calls[0]).toContain('surroundings=true');
         expect(calls[0]).toContain('sources=wspr%2Cpskr%2Crbn'); // dxcluster off by default
+        // What the looks draw: silent cells, the usual day, the last hour.
+        expect(calls[0]).toContain('silent=1');
+        expect(calls[0]).toContain('normal_day=1');
+        expect(calls[0]).toContain('trend=1');
+    });
+
+    it('switching looks repaints from cache without a refetch', async () => {
+        const calls = [];
+        global.fetch = vi.fn(async (url) => {
+            calls.push(url);
+            return { ok: true, status: 200, json: async () => ({ cells: [makeCell({ band: '20m', region: 'EU' })] }) };
+        });
+        initWsprMatrix();
+        setWsprMatrixVisible(true);
+        await new Promise((r) => setTimeout(r, 0));
+        expect(document.querySelector('.wspr-strip-dot')).not.toBeNull();
+        document.querySelector('.wspr-src-chip[data-style="trend"]').click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(calls.length).toBe(1);
+        expect(document.querySelector('.wspr-strip-dot')).toBeNull();
+        expect(document.querySelector('.wspr-look-cell svg')).not.toBeNull();
+        expect(document.querySelector('.wspr-matrix-table').classList.contains('wspr-look-trend')).toBe(true);
+    });
+
+    it('refetches once, a few seconds later, while the normal is still loading', async () => {
+        vi.useFakeTimers();
+        try {
+            const calls = [];
+            let payload = { now: 1, cells: [makeCell({ band: '20m', region: 'EU' })] };
+            global.fetch = vi.fn(async (url) => {
+                calls.push(url);
+                return { ok: true, status: 200, json: async () => payload };
+            });
+            initWsprMatrix();
+            setWsprMatrixVisible(true);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(calls.length).toBe(1);
+            expect(document.querySelector('.wspr-look-note').textContent).toBe('The normal for your area is loading.');
+
+            await vi.advanceTimersByTimeAsync(__test.DETAIL_RETRY_MS);
+            expect(calls.length).toBe(2);
+            // Still missing: no second retry for the same request.
+            await vi.advanceTimersByTimeAsync(__test.DETAIL_RETRY_MS * 2);
+            expect(calls.length).toBe(2);
+
+            // Once everything is there no retry is scheduled.
+            payload = { now: 2, cells: [{ ...makeCell({ band: '20m', region: 'EU' }), expected: 5, expected_spots: 6, normal_day: new Array(48).fill(1), trend: new Array(12).fill(0) }] };
+            runtime.detailRetryKey = '';
+            __test.invalidateCache();
+            toggleSource('rbn');
+            await vi.advanceTimersByTimeAsync(0);
+            const n = calls.length;
+            expect(document.querySelector('.wspr-look-note')).toBeNull();
+            await vi.advanceTimersByTimeAsync(__test.DETAIL_RETRY_MS);
+            expect(calls.length).toBe(n);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('asks to select PSKR when it is off, and does not retry', () => {
+        runtime.sources = ['wspr', 'rbn'];
+        __test.scheduleDetailRetry({ cells: [makeCell()] }, 'k');
+        expect(runtime.detailRetryTimer).toBeNull();
     });
 
     it('TTL cache: a second update within 15s does not refetch', async () => {
@@ -536,16 +388,29 @@ describe('wspr-matrix (Propagation) panel', () => {
         expect(runtime.sources).toEqual(['wspr', 'dxcluster']); // canonical order
     });
 
-    it('anomalies never render the retired !/!! badges or ×n source mark', () => {
-        const html = renderCell('10m', 'CAR', makeCell({
-            band: '10m', region: 'CAR',
-            atypical: { z_score: 3.1, confidence: 0.9 },
-            active_sources: ['wspr', 'pskr'], atypical_agreement: 1.0,
-        }), 12, 'light');
-        expect(html).not.toContain('wspr-badge-atypical');
-        expect(html).not.toContain('wspr-matrix-src');
-        expect(html).toContain('wspr-chev'); // viridis default: up-chevrons
+    it('a surge is drawn as a ring in the look, named in the cell, never a badge', () => {
+        runtime.style = 'day';
+        const html = renderLookCell('10m', 'CAR', {
+            ...makeCell({
+                band: '10m', region: 'CAR',
+                atypical: { z_score: 3.1, confidence: 0.9 },
+                active_sources: ['wspr', 'pskr'], atypical_agreement: 1.0,
+            }),
+            expected: 2, expected_spots: 12, normal_day: new Array(48).fill(4),
+        }, LOOK_DATA, {});
+        expect(html).not.toContain('wspr-badge');
         expect(html).not.toContain('⚡');
+        expect(html).toContain('strong surge');
+        expect((html.match(/<circle/g) || []).length).toBe(2); // dot + surge ring
+    });
+
+    it('a silent cell is drawn and named as usually open, silent now', () => {
+        runtime.style = 'day';
+        const silent = { band: '15m', region: 'JA', spot_count: 0, silent: true, expected: 12.4, expected_spots: 0, normal_day: new Array(48).fill(20), sources: [], active_sources: [] };
+        const html = renderLookCell('15m', 'JA', silent, LOOK_DATA, { JA: 'Japan' });
+        expect(html).toContain('class="wspr-matrix-cell wspr-look-cell is-silent"');
+        expect(html).toContain('aria-label="15m to Japan: no reports now, usually about 12 at this hour"');
+        expect(html).toContain('stroke-dasharray="1.4 1.2"');
     });
 
     it('min-snr=none sends no thresholds; cw/ssb modes send the active one', async () => {
@@ -598,7 +463,7 @@ describe('wspr-matrix (Propagation) panel', () => {
 
     it('renders empty cells as inert grid cells (no button role, no tab stop)', () => {
         for (const cell of [null, makeCell({ band: '20m', region: 'AF', spot_count: 0 })]) {
-            const html = renderCell('20m', 'AF', cell, 12, 'light');
+            const html = renderLookCell('20m', 'AF', cell, LOOK_DATA, {});
             expect(html).toContain('class="wspr-matrix-cell-empty"');
             expect(html).toContain('role="gridcell"');
             expect(html).not.toContain('role="button"');
@@ -608,14 +473,15 @@ describe('wspr-matrix (Propagation) panel', () => {
     });
 
     it('per-source breakdown lands in the cell tooltip', () => {
-        const html = renderCell('20m', 'NA', makeCell({
+        runtime.style = 'trend';
+        const html = renderLookCell('20m', 'NA', makeCell({
             band: '20m', region: 'NA',
             active_sources: ['wspr', 'rbn'],
             sources: [
                 { source: 'wspr', spot_count: 30, open: true, open_basis: 'budget' },
                 { source: 'rbn', spot_count: 4, open: true, open_basis: 'snr_floor', atypical: { z_score: 3.3 } },
             ],
-        }), 30, 'light');
+        }), LOOK_DATA, {});
         expect(html).toContain('WSPR: 30 spots, open (link budget)');
         expect(html).toContain('RBN: 4 spots, open (SNR floor), z=3.3');
     });
@@ -728,11 +594,14 @@ describe('wspr-matrix keyboard grid', () => {
         await new Promise((r) => setTimeout(r, 0));
     }
 
+    // The day look keeps one <td> per region; the dot strip's keyboard model
+    // has its own tests below.
     beforeEach(() => {
         originalFetch = global.fetch;
         installLocalStorageMock();
         setupDom();
         reset();
+        runtime.style = 'day';
         state.drillDownBand = '';
         state.drillDownRegion = '';
         window.__horstScheduleRender = vi.fn();
@@ -805,7 +674,7 @@ describe('wspr-matrix keyboard grid', () => {
     });
 
     it('escapes server-supplied region names in names and titles', () => {
-        const html = renderCell('20m', 'EU', makeCell(), 12, 'light', { EU: 'Europe "<b>"' });
+        const html = renderLookCell('20m', 'EU', makeCell(), LOOK_DATA, { EU: 'Europe "<b>"' });
         expect(html).toContain('aria-label="20m to Europe &quot;&lt;b&gt;&quot;: 12 spots, SSB open"');
         expect(html).not.toContain('<b>');
     });
@@ -967,13 +836,13 @@ describe('wspr-matrix keyboard grid', () => {
         expect(now.getAttribute('aria-pressed')).toBe('false');
     });
 
-    it('keeps focus on a color scale chip when the look changes', async () => {
+    it('keeps focus on a look chip when the look changes', async () => {
         await openWith(payload());
-        const chip = document.querySelector('.wspr-src-chip[data-style="inferno"]');
+        const chip = document.querySelector('.wspr-src-chip[data-style="trend"]');
         chip.focus();
         chip.click();
-        expect(runtime.style).toBe('inferno');
-        expect(document.activeElement.getAttribute('data-style')).toBe('inferno');
+        expect(runtime.style).toBe('trend');
+        expect(document.activeElement.getAttribute('data-style')).toBe('trend');
         expect(document.activeElement.getAttribute('aria-pressed')).toBe('true');
     });
 
@@ -1008,6 +877,7 @@ describe('wspr-matrix row extras (Conditions dock)', () => {
         document.body.insertAdjacentHTML('beforeend',
             '<input type="checkbox" class="band-enable" value="20m" checked><input type="checkbox" class="band-enable" value="40m" checked>');
         reset();
+        runtime.style = 'day';
         after = vi.fn();
         Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     });
@@ -1050,21 +920,19 @@ describe('wspr-matrix row extras (Conditions dock)', () => {
         expect(document.querySelectorAll('#wspr-matrix-body tbody tr')).toHaveLength(2);
     });
 
-    it('hideCounts leaves the number out of the cell but keeps it in the tooltip and name', async () => {
-        mockFetch({ cells: [makeCell({ band: '20m', region: 'EU', spot_count: 1234 })], region_names: {} });
+    it('the dot strip puts one strip cell per row after the extras', async () => {
+        runtime.style = 'dots';
+        mockFetch({ cells: [makeCell({ band: '20m', region: 'EU' }), makeCell({ band: '20m', region: 'AN' })], region_names: {} });
         initWsprMatrix();
-        setRowExtras({ ...extras(), hideCounts: true });
+        setRowExtras(extras());
         setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
-        const cell = document.querySelector('#wspr-matrix-body .wspr-matrix-cell');
-        expect(cell.textContent).not.toContain('1234');
-        expect(cell.querySelector('.wspr-badge')).not.toBeNull();
-        expect(cell.getAttribute('title')).toContain('1,234 spots');
-        expect(cell.getAttribute('aria-label')).toContain('1,234 spots');
-        // Without the option the count is shown.
-        setRowExtras(extras());
-        refreshMatrix();
-        expect(document.querySelector('#wspr-matrix-body .wspr-matrix-cell').textContent).toContain('1234');
+        const body = document.getElementById(BODY_ID);
+        const row = Array.from(body.querySelectorAll('tbody tr')).find((tr) => tr.querySelector('th').firstChild.textContent === '20m');
+        expect(Array.from(row.children).map((c) => c.className)).toEqual(['wspr-matrix-band', 'x-cell', 'wspr-strip-td']);
+        // Hidden regions get no dot.
+        expect(Array.from(row.querySelectorAll('.wspr-strip-dot')).map((d) => d.dataset.region)).toEqual(['EU']);
+        expect(body.querySelector('thead .wspr-strip-head .wspr-strip-ticks')).not.toBeNull();
     });
 
     it('rebuilds only when the extras key changes', async () => {
@@ -1127,9 +995,111 @@ describe('wspr-matrix from-here normal in the tooltip', () => {
     });
 
     it('the cell title carries the normal only when the backend sent one', () => {
-        const withNormal = renderCell('20m', 'NA', { ...makeCell({ band: '20m', region: 'NA', spot_count: 800 }), expected: 4515.3, expected_spots: 771 }, 1000, 'light');
+        const { cellTitle } = __test;
+        const withNormal = cellTitle('20m', 'NA', { ...makeCell({ band: '20m', region: 'NA', spot_count: 800 }), expected: 4515.3, expected_spots: 771 });
         expect(withNormal).toContain('normal about 4,515 at this hour');
-        const without = renderCell('20m', 'NA', makeCell({ band: '20m', region: 'NA', spot_count: 800 }), 1000, 'light');
+        const without = cellTitle('20m', 'NA', makeCell({ band: '20m', region: 'NA', spot_count: 800 }));
         expect(without).not.toContain('PSKReporter:');
+        expect(cellTitle('20m', 'NA', { ...makeCell({ spot_count: 0 }), silent: true, expected: 40, expected_spots: 0 }, { NA: 'North America' }))
+            .toBe('20m to North America: no reports now, usually about 40 at this hour');
+    });
+});
+
+describe('wspr-matrix dot strip keyboard grid', () => {
+    let originalFetch;
+    const at = (el) => `${el.getAttribute('data-band')}/${el.getAttribute('data-region')}`;
+    const dot = (band, region) =>
+        document.querySelector(`.wspr-strip-dot[data-band="${band}"][data-region="${region}"]`);
+    const press = (key, opts = {}) => {
+        const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...opts });
+        document.activeElement.dispatchEvent(ev);
+        return ev;
+    };
+    const withNormal = (band, region, es, e, extra = {}) => ({
+        ...makeCell({ band, region, spot_count: es + 3, ...extra }), expected: e, expected_spots: es,
+    });
+    // 20m: JA ×⅛ (silent), NA ×½, EU ×1, SA ×4    15m: AS ×2, EU ×1
+    const payload = () => ({
+        cells: [
+            withNormal('20m', 'EU', 9, 9),
+            withNormal('20m', 'NA', 4, 9),
+            withNormal('20m', 'SA', 39, 9),
+            { band: '20m', region: 'JA', spot_count: 0, silent: true, expected: 30, expected_spots: 0, sources: [], active_sources: [] },
+            withNormal('15m', 'EU', 9, 9),
+            withNormal('15m', 'AS', 19, 9, { atypical: { z_score: 4.5 } }),
+        ],
+    });
+
+    beforeEach(() => {
+        originalFetch = global.fetch;
+        installLocalStorageMock();
+        setupDom();
+        reset();
+        state.drillDownBand = '';
+        state.drillDownRegion = '';
+        window.__horstScheduleRender = vi.fn();
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    });
+
+    afterEach(() => {
+        reset();
+        state.drillDownBand = '';
+        state.drillDownRegion = '';
+        delete window.__horstScheduleRender;
+        global.fetch = originalFetch;
+        vi.restoreAllMocks();
+    });
+
+    async function open() {
+        mockFetch(payload());
+        initWsprMatrix();
+        setWsprMatrixVisible(true);
+        await new Promise((r) => setTimeout(r, 0));
+    }
+
+    it('one axis column, dots in x order with their state classes', async () => {
+        await open();
+        const heads = document.querySelectorAll('thead th[role="columnheader"]');
+        expect(heads.length).toBe(2);
+        expect(heads[1].textContent).toContain('×1');
+        const row20 = Array.from(document.querySelectorAll('tbody tr'))[0];
+        expect(Array.from(row20.querySelectorAll('.wspr-strip-dot')).map((d) => d.dataset.region)).toEqual(['JA', 'NA', 'EU', 'SA']);
+        expect(dot('20m', 'JA').classList.contains('is-silent')).toBe(true);
+        expect(dot('20m', 'NA').classList.contains('is-below')).toBe(true);
+        expect(dot('15m', 'AS').className).toContain('is-surge is-strong');
+        expect(dot('20m', 'EU').getAttribute('role')).toBe('gridcell');
+        expect(dot('20m', 'EU').closest('td').getAttribute('role')).toBe('presentation');
+        expect(document.querySelectorAll('#wspr-matrix-body [tabindex="0"]')).toHaveLength(1);
+        expect(dot('20m', 'JA').getAttribute('tabindex')).toBe('0');
+    });
+
+    it('arrow keys walk the dots by position, up/down to the nearest dot', async () => {
+        await open();
+        dot('20m', 'EU').focus();
+        press('ArrowRight');
+        expect(at(document.activeElement)).toBe('20m/SA');
+        press('ArrowLeft');
+        press('ArrowLeft');
+        expect(at(document.activeElement)).toBe('20m/NA');
+        press('ArrowDown'); // ×½ → nearest in 15m is EU (×1)
+        expect(at(document.activeElement)).toBe('15m/EU');
+        press('ArrowUp');
+        expect(at(document.activeElement)).toBe('20m/EU');
+        press('End');
+        expect(at(document.activeElement)).toBe('20m/SA');
+        press('Home');
+        expect(at(document.activeElement)).toBe('20m/JA');
+    });
+
+    it('Enter on a dot toggles the drill-down and keeps focus on it', async () => {
+        await open();
+        dot('15m', 'AS').focus();
+        press('Enter');
+        expect(state.drillDownBand).toBe('15m');
+        expect(state.drillDownRegion).toBe('AS');
+        expect(at(document.activeElement)).toBe('15m/AS');
+        expect(document.activeElement.getAttribute('aria-selected')).toBe('true');
+        dot('20m', 'EU').click();
+        expect(state.drillDownRegion).toBe('EU');
     });
 });

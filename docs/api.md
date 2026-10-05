@@ -479,6 +479,24 @@ Params: v1's (`qth` required, `surroundings`, `minutes`, `surge_threshold`,
   request waits at most 1.2 s for it (a slower read fills the cache for the
   next poll; until then cells have no `expected`).
 
+- From-here detail, each opt-in (`prop_intel_fromhere_detail.go`; the web
+  panel sends all three, the default payload is unchanged). All need
+  PSKReporter selected:
+  - `silent=1` adds **silent cells**: band × far-end regions with no live
+    from-here spots whose `expected` is at least 5 ("usually open at this
+    hour, nothing now"). They carry `"silent": true`, `spot_count` 0,
+    `expected`, `expected_spots` 0 and empty `sources` / `active_sources`.
+  - `normal_day=1` adds `normal_day` to every from-here cell: 48 numbers, the
+    mean count behind `expected` per 30-minute UTC slot from 00:00 (per slot,
+    not per window), over the same reference days with ingest in that slot.
+    Read once per area and UTC day (a few seconds warm on prod, up to ~20 s
+    cold, 60 s timeout) in the background; a request waits 0.3 s after the
+    window normal, so the first poll of the day may come without it.
+  - `trend=1` adds `trend` to every from-here cell: the spots behind
+    `expected_spots` in 12 five-minute bins ending now, oldest first (the last
+    three are the 15-minute window), and `trend_bin_minutes: 5` to the
+    envelope.
+
 - `sources`: source selection, CSV or repeated (`?sources=wspr,pskr` or
   `?sources=wspr&sources=rbn`). Public names: `wspr` (WSPR beacons),
   `pskr` (PSKReporter FT8/FT4), `rbn` (RBN CW/RTTY skimmers),
@@ -528,6 +546,8 @@ region):
   over the area's squares; and the live count of those same spots. Their
   ratio is the cell against its own normal. `expected` is 0 for a path the
   reference days never saw.
+- `silent`, `normal_day`, `trend` (from-here view, on request): see the
+  from-here detail params above.
 - `open_agreement` is vacuously 1.0 with a single active source — render
   the `active_sources` count, not the fraction.
 - Atypical cells fan out Web Push like v1 (adapted to the v1 push payload;

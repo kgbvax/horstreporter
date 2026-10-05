@@ -598,22 +598,15 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 }
 
 .wspr-matrix-cell {
-    /* Ink comes inline per chip (white/black at the ramp crossover). */
-    font-weight: 600;
     border-radius: 3px;
     cursor: pointer;
-    /* Faint ring keeps low-activity chips defined against the panel; the ramp
-       itself always carries AA-safe numerals. */
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 14%, transparent);
 }
 
-/* Drill-down cell (aria-selected) and keyboard focus. Chips touch their
-   neighbours (border-collapse), so a plain outline lands on the next chip and
-   can vanish on a similar heat shade. Draw each state as a two-tone ring
-   (colour + page-colour halo) in a pseudo-element stacked above the
-   neighbours; the two use different insets so a selected AND focused cell
-   shows both. The inferno surge ring is an inline inset box-shadow on the
-   cell itself and stays visible underneath. */
+/* Drill-down cell (aria-selected) and keyboard focus. Cells sit close to
+   their neighbours, so a plain outline lands on the next cell. Draw each
+   state as a two-tone ring (colour + page-colour halo) in a pseudo-element
+   stacked above the neighbours; the two use different insets so a selected
+   AND focused cell shows both. */
 .wspr-matrix-cell {
     position: relative;
 }
@@ -643,43 +636,132 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     color: transparent;
 }
 
-/* Dark theme: the heat chips' dark low-activity end (viridis purple, inferno
-   near-black) barely separates from the dark panel, so the 14% ring above is
-   too faint to mark the chip boundary; 45% keeps it >=3:1 against those dark
-   chips (WCAG 1.4.11; brighter chips stand off the panel on their own)
-   without touching the light theme. The light theme runs the ramps the other
-   way (pale low end, see rampStops in wspr-matrix.js), so its faint chips are
-   near-white on white and the 14% ring is what draws their boundary. */
-body[data-theme="dark"] .wspr-matrix-cell {
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 45%, transparent);
+.wspr-matrix-legend { margin-top: 4px; padding: 2px 4px; }
+
+/* The looks (wspr-matrix-looks.js): one ink, no fill. The marks draw in
+   currentColor, so they follow the theme's text colour. */
+.wspr-matrix-table .wspr-look-cell {
+    color: var(--text-color);
+    padding: 2px 1px;
+}
+.wspr-look-box {
+    position: relative;
+    display: block;
+    height: 34px;
+    min-width: 18px;
+}
+.wspr-look-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    max-width: 64px;
+    height: 100%;
+    margin: 0 auto;
+    overflow: visible;
+}
+.wspr-look-cell.is-silent .wspr-look-svg {
+    opacity: 0.75;
+}
+.wspr-look-key {
+    vertical-align: middle;
+    color: var(--text-color);
+}
+.wspr-look-note {
+    font-weight: 600;
+    color: var(--text-color);
 }
 
-/* WSPR matrix flag badges. Badges sit ON the heat chips, so each needs
-   (a) >=4.5:1 text-vs-own-bg (dark ink on the light badge fills) and (b) a
-   silhouette distinct from the chip (hairline light ring). */
-.wspr-badge {
-    display: inline-block;
-    font-size: 0.65rem;
-    font-weight: 700;
-    padding: 0 2px;
-    margin-left: 1px;
-    border-radius: 2px;
-    line-height: 1.2;
-    vertical-align: middle;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+/* Dot strip: one factor axis per band row, regions as labelled dots. */
+.wspr-matrix-table .wspr-strip-head {
+    width: 100%;
+    padding: 0 6px;
 }
-.wspr-badge-ssb { background: #28a745; color: #1a1a1a; }        /* 5.6:1 */
-.wspr-badge-cw { background: #17a2b8; color: #1a1a1a; }         /* 5.7:1 */
-.wspr-badge-rising { background: #ffc107; color: #333; }        /* 7.8:1 */
-.wspr-matrix-legend { margin-top: 4px; padding: 2px 4px; }
-/* Sparse → peak heat scale thumbnail; gradient comes inline per look. */
-.wspr-heat-scale {
-    display: inline-block;
-    width: 64px;
-    height: 8px;
-    border-radius: 2px;
-    vertical-align: middle;
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-color) 20%, transparent);
+.wspr-strip-ticks {
+    position: relative;
+    height: 14px;
+}
+.wspr-strip-tick {
+    position: absolute;
+    transform: translateX(-50%);
+    font-weight: 400;
+    font-size: 0.66rem;
+}
+.wspr-strip-tick.is-centre {
+    font-weight: 700;
+    color: var(--text-color);
+}
+.wspr-matrix-table td.wspr-strip-td {
+    padding: 0 6px;
+}
+.wspr-strip {
+    position: relative;
+    height: 48px;
+    color: var(--text-color);
+}
+.wspr-strip-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: color-mix(in srgb, var(--text-color) 10%, transparent);
+}
+.wspr-strip-line.is-centre {
+    background: color-mix(in srgb, var(--text-color) 45%, transparent);
+}
+.wspr-matrix-table .wspr-strip-dot {
+    position: absolute;
+    top: calc(50% + var(--dy, 0px));
+    width: var(--d);
+    height: var(--d);
+    margin: calc(var(--d) / -2) 0 0 calc(var(--d) / -2);
+    border-radius: 50%;
+    background: currentColor;
+    z-index: 1;
+}
+.wspr-strip-dot.is-below {
+    background: color-mix(in srgb, currentColor 50%, transparent);
+}
+.wspr-strip-dot.is-cw {
+    background: none;
+    border: 1.5px solid currentColor;
+}
+.wspr-strip-dot.is-cw.is-below {
+    border-color: color-mix(in srgb, currentColor 55%, transparent);
+}
+.wspr-matrix-table .wspr-strip-dot.is-silent,
+.wspr-matrix-table .wspr-strip-dot.is-unknown {
+    background: none;
+    border: 1.5px dashed color-mix(in srgb, currentColor 60%, transparent);
+}
+.wspr-strip-dot.is-silent .wspr-strip-label,
+.wspr-strip-dot.is-unknown .wspr-strip-label {
+    color: color-mix(in srgb, var(--text-color) 65%, transparent);
+}
+/* Surge: a ring around the dot (thicker when strong). */
+.wspr-strip-dot.is-surge {
+    outline: 1px solid currentColor;
+    outline-offset: 2px;
+}
+.wspr-strip-dot.is-surge.is-strong {
+    outline-width: 2px;
+}
+.wspr-strip-dot[aria-selected="true"]::before,
+.wspr-strip-dot:focus-visible::after {
+    border-radius: 50%;
+}
+.wspr-strip-label {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 1px);
+    transform: translateX(-50%);
+    font-size: 0.62rem;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+    pointer-events: none;
+}
+.wspr-strip-label.is-hidden {
+    display: none;
 }
 
 /* Typical openings view (almanac.js), the "Typical" horizon of the Conditions dock. */
@@ -971,8 +1053,8 @@ body[data-theme="dark"] .wspr-matrix-cell {
     background: none;
 }
 
-/* Chip row: source multi-select (WSPR / PSKR / RBN / DXC) and the color
-   scale pair (Viridis / Inferno), each its own labelled group. */
+/* Chip row: source multi-select (WSPR / PSKR / RBN / DXC) and the look
+   (Dots / Day / Trend), each its own labelled group. */
 .wspr-src-chips {
     display: flex;
     flex-wrap: wrap;
@@ -1006,38 +1088,13 @@ body[data-theme="dark"] .wspr-matrix-cell {
     border-color: var(--accent);
     color: var(--accent-strong);
 }
-/* Separator between the source chips and the color scale chips on the same
-   row. */
+/* Separator between the source chips and the look chips on the same row. */
 .wspr-chip-sep {
     align-self: center;
     width: 1px;
     height: 12px;
     margin: 0 3px;
     background: var(--control-border);
-}
-/* Heat-style anomaly glyphs: stacked chevrons (viridis) and the legend's
-   ring swatch (inferno). Glyphs ride the numeral ink flip via currentColor;
-   the ring is amber on the dark theme and ink-colored on the light theme
-   (wspr-matrix.js ringColor), and the swatch mirrors that. */
-.wspr-chev {
-    display: inline-flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 1px;
-    vertical-align: middle;
-    margin: 0 2px;
-    line-height: 0;
-}
-.wspr-ring-swatch {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: 2px;
-    border: 2px solid currentColor;
-    vertical-align: middle;
-}
-body[data-theme="dark"] .wspr-ring-swatch {
-    border-color: #f5b83d;
 }
 .wspr-sr-only {
     position: absolute;
@@ -1236,7 +1293,7 @@ body[data-theme="dark"] .wspr-ring-swatch {
     font-size: 0.72rem;
 }
 .cond-now-matrix .wspr-matrix-table tbody tr {
-    /* Even rows: tall enough for a cell's count plus two stacked badges. */
+    /* Even rows: tall enough for the strip's dots with two label rows. */
     height: 60px;
 }
 .cond-band-verdict,

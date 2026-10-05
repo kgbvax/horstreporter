@@ -23,6 +23,7 @@
     <link rel="modulepreload" href="ui.js">
     <link rel="modulepreload" href="band-lab.js">
     <link rel="modulepreload" href="wspr-matrix.js">
+    <link rel="modulepreload" href="wspr-matrix-looks.js">
     <link rel="modulepreload" href="almanac.js">
     <link rel="modulepreload" href="hot-band-indicator.js">
     <link rel="modulepreload" href="cond-now.js">
@@ -396,7 +397,7 @@
                 <div id="band-lab-legend-help" class="band-lab-legend-help" style="display:none;" role="status" aria-live="polite">
                     <div><strong>Activity:</strong> the region's reports over the selected time range against its normal for the same time of day. lively = 1.5× or more, quiet = 0.67× or less, blank = normal. low sample = fewer than 20 reports observed and expected. not scored = live reports but none at or above -15 dB from FT8. no reports = none at all. longer / shorter reach = P90 path length at least 30% above / below normal.</div>
                     <div><strong>Distance / SNR:</strong> each dot is a report that passes the signal filter (every report with <em>All spots</em>), on the same axes for every band: distance up to the 95th percentile (square-root scale), SNR from -25 dB up. Orange dashed = SSB threshold, green dashed = CW threshold, both set under Display.</div>
-                    <div><strong>Region cells:</strong> reports from your area over the last 15 minutes, independent of the time range.</div>
+                    <div><strong>Region cells:</strong> reports from your area over the last 15 minutes against their normal for this hour, independent of the time range. <em>Dots</em> places each region on a scale from ×⅛ to ×8 of its normal, <em>Day</em> draws each path's usual day with a dot for now, <em>Trend</em> shows the last hour in 5-minute steps against the normal.</div>
                 </div>
                 <div id="cond-area" class="cond-area small" role="status" hidden></div>
                 <div id="band-lab-content" class="cond-now-summary">

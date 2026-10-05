@@ -290,20 +290,53 @@ var fromHereSource = func() fromHereCountsSource {
 
 // --- Cache --------------------------------------------------------------------
 
-type fromHereEntry struct {
+// fromHereCounts is one fetch of area-summed slot counts with their coverage.
+type fromHereCounts struct {
+	rows     []fromHereCountRow
+	coverage map[fromHereDaySlot]bool
+}
+
+// asyncEntry is one cached background fetch; done closes when val/err are set.
+type asyncEntry[T any] struct {
 	done      chan struct{}
-	rows      []fromHereCountRow
-	coverage  map[fromHereDaySlot]bool
+	val       T
 	err       error
 	fetchedAt time.Time
 }
 
-type fromHereCacheT struct {
-	mu      sync.Mutex
-	entries map[string]*fromHereEntry
+// wait reports whether the fetch finished successfully within d.
+func (e *asyncEntry[T]) wait(d time.Duration) bool {
+	if d <= 0 {
+		select {
+		case <-e.done:
+		default:
+			return false
+		}
+	} else {
+		select {
+		case <-e.done:
+		case <-time.After(d):
+			return false
+		}
+	}
+	return e.err == nil
 }
 
-var fromHereCache = &fromHereCacheT{entries: map[string]*fromHereEntry{}}
+// asyncCache shares one background fetch per key between concurrent callers,
+// keeps results until evicted and failures for fromHereErrorTTL.
+type asyncCache[T any] struct {
+	mu      sync.Mutex
+	entries map[string]*asyncEntry[T]
+	cap     int
+	timeout time.Duration
+	what    string
+}
+
+func newAsyncCache[T any](capacity int, timeout time.Duration, what string) *asyncCache[T] {
+	return &asyncCache[T]{entries: map[string]*asyncEntry[T]{}, cap: capacity, timeout: timeout, what: what}
+}
+
+var fromHereCache = newAsyncCache[fromHereCounts](fromHereCacheCap, fromHereQueryTimeout, "from-here normals")
 
 // fromHereNormalsFor returns the per-cell normals for the area and window, or
 // nil when there is no store, no area, or the data is not ready within
@@ -343,24 +376,20 @@ func fromHereNormalsFor(grids []string, now int64, minutes int) *fromHereNormals
 	kb.WriteString(strconv.FormatInt(today, 10))
 	key := kb.String()
 
-	e := fromHereCache.get(key, func(ctx context.Context) ([]fromHereCountRow, map[fromHereDaySlot]bool, error) {
-		return src.FromHereCounts(ctx, sortedGrids, slots, dayFrom, dayTo)
+	e := fromHereCache.get(key, func(ctx context.Context) (fromHereCounts, error) {
+		rows, cov, err := src.FromHereCounts(ctx, sortedGrids, slots, dayFrom, dayTo)
+		return fromHereCounts{rows: rows, coverage: cov}, err
 	})
-	select {
-	case <-e.done:
-	case <-time.After(fromHereWait):
+	if !e.wait(fromHereWait) {
 		return nil
 	}
-	if e.err != nil {
-		return nil
-	}
-	n := computeFromHereNormals(e.rows, e.coverage, now, minutes)
+	n := computeFromHereNormals(e.val.rows, e.val.coverage, now, minutes)
 	return &n
 }
 
 // get returns the entry for key, starting one fetch when it is missing or a
 // failed fetch has aged out. Concurrent callers share the fetch.
-func (c *fromHereCacheT) get(key string, fetch func(context.Context) ([]fromHereCountRow, map[fromHereDaySlot]bool, error)) *fromHereEntry {
+func (c *asyncCache[T]) get(key string, fetch func(context.Context) (T, error)) *asyncEntry[T] {
 	c.mu.Lock()
 	if e, ok := c.entries[key]; ok {
 		select {
@@ -374,34 +403,34 @@ func (c *fromHereCacheT) get(key string, fetch func(context.Context) ([]fromHere
 			return e
 		}
 	}
-	if len(c.entries) >= fromHereCacheCap {
+	if len(c.entries) >= c.cap {
 		c.evictOldestLocked()
 	}
-	e := &fromHereEntry{done: make(chan struct{})}
+	e := &asyncEntry[T]{done: make(chan struct{})}
 	c.entries[key] = e
 	c.mu.Unlock()
 
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				e.err = fromHereStoreError("from-here normals fetch panicked")
-				logInfo("from-here normals fetch panic: %v", r)
+				e.err = fromHereStoreError(c.what + " fetch panicked")
+				logInfo("%s fetch panic: %v", c.what, r)
 			}
 			e.fetchedAt = time.Now()
 			close(e.done)
 		}()
-		ctx, cancel := context.WithTimeout(context.Background(), fromHereQueryTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 		defer cancel()
-		e.rows, e.coverage, e.err = fetch(ctx)
+		e.val, e.err = fetch(ctx)
 		if e.err != nil {
-			logDebug("from-here normals fetch failed: %v", e.err)
+			logDebug("%s fetch failed: %v", c.what, e.err)
 		}
 	}()
 	return e
 }
 
 // evictOldestLocked drops the oldest finished entry (in-flight ones stay).
-func (c *fromHereCacheT) evictOldestLocked() {
+func (c *asyncCache[T]) evictOldestLocked() {
 	var oldestKey string
 	var oldest time.Time
 	for k, e := range c.entries {
@@ -420,9 +449,9 @@ func (c *fromHereCacheT) evictOldestLocked() {
 }
 
 // reset empties the cache (tests).
-func (c *fromHereCacheT) reset() {
+func (c *asyncCache[T]) reset() {
 	c.mu.Lock()
-	c.entries = map[string]*fromHereEntry{}
+	c.entries = map[string]*asyncEntry[T]{}
 	c.mu.Unlock()
 }
 
