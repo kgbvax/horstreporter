@@ -9,19 +9,22 @@ import (
 // Per-area index over hub.history.
 //
 // dx_conditions and hot_bands scan the whole requested window on every
-// request (each message is tested against the area and the operator's cluster
-// block), but only a few percent of the window can matter to any one area.
+// request, but only a few percent of the window can matter to any one area.
 // The index remembers, per (area, cluster) key, which history sequence
-// numbers matched. Hub history is append-only with stable sequence numbers
-// (hub.go), so a request only has to test the messages that arrived since the
-// previous request for that key, and hands the evaluation the positions of the
-// matching messages to walk. Cost per request goes from the whole window to the
-// new arrivals plus the matches.
+// numbers have an end in the area block. Hub history is append-only with
+// stable sequence numbers (hub.go), so a request only has to classify the
+// messages that arrived since the previous request for that key, and hands the
+// evaluation the positions of the matching messages to walk. Cost per request
+// goes from the whole window to the new arrivals plus the matches.
 //
-// The predicate is a superset of every test the evaluation applies to a
-// message (see areaIndexKey.wants), so evaluating the filtered slice gives the
-// same result as walking the whole window; area_index_test.go checks that on
-// random data.
+// The same pass keeps per-second counts of the ends that fall in the operator's
+// cluster block (cluster_counts.go): those are a far larger share of the feed
+// than the area itself, and the evaluation only needs their per-band totals.
+//
+// The position predicate is a superset of every per-message test the
+// evaluation applies other than the regional count (see areaIndexKey.wants),
+// so evaluating the filtered slice gives the same result as walking the whole
+// window; area_index_test.go checks that on random data.
 
 // historyWindow is a read-only view of hub history plus the sequence numbers
 // the area index needs. firstSeq == 0 marks a window without sequence info
@@ -53,27 +56,51 @@ type areaIndexKey struct {
 	cx, cy       int // operator cluster anchor (valid when clusterOK)
 }
 
-func (k areaIndexKey) endIn(loc string) bool {
-	x, y, ok := locatorSquareXYFold(loc)
-	if !ok {
-		return false
-	}
-	if absInt(x-k.x) <= k.radius && absInt(y-k.y) <= k.radius {
-		return true
-	}
-	if k.clusterOK {
-		ax, ay := clusterAnchorXY(x, y)
-		return ax == k.cx && ay == k.cy
-	}
-	return false
+func (k areaIndexKey) inArea(x, y int) bool {
+	return absInt(x-k.x) <= k.radius && absInt(y-k.y) <= k.radius
 }
 
-// wants reports whether a message can influence an evaluation for this key:
-// one of its ends lies in the area block (the area/qthSet match and the
-// activity series) or in the cluster block (the regional count). Locators are
-// trimmed like the evaluation trims them.
+// classify looks at one message the way the evaluation does (locators
+// trimmed, case folded in place): hit says an end lies in the area block, and
+// n ends lie in the cluster block, counted in slot's band, exactly as the
+// regional count of EvaluateAreaWindow would count them (a conditions-mode
+// message from a source that feeds the cluster baseline, both locators
+// present, in-scope band). slot is -1 when n is 0.
+func (k areaIndexKey) classify(m *MQTTMessage) (hit bool, slot, n int) {
+	sl := strings.TrimSpace(m.SL)
+	rl := strings.TrimSpace(m.RL)
+	sx, sy, sok := locatorSquareXYFold(sl)
+	rx, ry, rok := locatorSquareXYFold(rl)
+	hit = (sok && k.inArea(sx, sy)) || (rok && k.inArea(rx, ry))
+	slot = -1
+	if !k.clusterOK || sl == "" || rl == "" || !sourceFeedsClusterBaseline(m.Source) || isNonConditionsMode(m.MD) {
+		return hit, slot, 0
+	}
+	if sok {
+		if ax, ay := clusterAnchorXY(sx, sy); ax == k.cx && ay == k.cy {
+			n++
+		}
+	}
+	if rok {
+		if ax, ay := clusterAnchorXY(rx, ry); ax == k.cx && ay == k.cy {
+			n++
+		}
+	}
+	if n > 0 {
+		if slot = feedBandIndex(m.B); slot < 0 {
+			n = 0
+		}
+	}
+	return hit, slot, n
+}
+
+// wants reports whether a message can influence an evaluation for this key
+// apart from the regional count: one of its ends lies in the area block (the
+// area/qthSet match and the activity series). Locators are trimmed like the
+// evaluation trims them.
 func (k areaIndexKey) wants(m *MQTTMessage) bool {
-	return k.endIn(strings.TrimSpace(m.SL)) || k.endIn(strings.TrimSpace(m.RL))
+	hit, _, _ := k.classify(m)
+	return hit
 }
 
 type areaIndexEntry struct {
@@ -83,6 +110,18 @@ type areaIndexEntry struct {
 	scanned  uint64   // newest seq examined; covered range is [from, scanned]
 	offs     []uint32 // ascending offsets (seq - base) of matching messages
 	lastUsed uint64   // areaIndexCache.tick at last use, for eviction; guarded by areaIndexCache.mu
+
+	cc       secondCounts // cluster-block ends per second and band, over [from, scanned]
+	ccBad    bool         // cc overflowed: unusable until the message that did it leaves the hub
+	ccBadSeq uint64
+}
+
+// reset empties the entry so it is rebuilt from a window starting at seq.
+func (e *areaIndexEntry) reset(seq uint64) {
+	e.base, e.from, e.scanned = seq, seq, seq-1
+	e.offs = e.offs[:0]
+	e.cc.reset()
+	e.ccBad = false
 }
 
 type areaIndexCache struct {
@@ -121,9 +160,27 @@ func (c *areaIndexCache) entry(k areaIndexKey) *areaIndexEntry {
 // when the area matches a large share of the window: walking all of it is then
 // as cheap as walking the matches, and the evaluation skips the rest itself.
 func (c *areaIndexCache) positions(k areaIndexKey, win historyWindow) (pos []uint32, ok bool) {
+	r := c.lookup(k, win, 0, 0)
+	return r.pos, r.ok
+}
+
+// areaLookup is the result of areaIdx.lookup.
+type areaLookup struct {
+	pos []uint32
+	ok  bool // pos is usable; otherwise walk the whole window
+	// regional counts the cluster-block ends per in-scope band for messages
+	// timed in [liveStart, now]; regionalOK says it can replace the walk's own
+	// count (always true when the key has no cluster, where that count is zero).
+	regional   [clusterBandSlots]int
+	regionalOK bool
+}
+
+// lookup is positions plus the regional counts for [liveStart, now] (skipped
+// when now is 0).
+func (c *areaIndexCache) lookup(k areaIndexKey, win historyWindow, liveStart, now int64) (res areaLookup) {
 	n := len(win.msgs)
 	if n == 0 {
-		return nil, false
+		return res
 	}
 	e := c.entry(k)
 	last := win.firstSeq + uint64(n) - 1
@@ -133,11 +190,13 @@ func (c *areaIndexCache) positions(k areaIndexKey, win historyWindow) (pos []uin
 
 	// Coverage must reach back to the window start and connect to it.
 	// Anything else (first use, a longer window than before, a gap after the
-	// entry went unused) is rebuilt from the window.
-	if e.scanned == 0 || win.firstSeq < e.from || win.firstSeq > e.scanned+1 || last < e.scanned || last-e.base >= 1<<31 {
-		e.base, e.from, e.scanned = win.firstSeq, win.firstSeq, win.firstSeq-1
-		e.offs = e.offs[:0]
+	// entry went unused, counts that overflowed and whose cause has left the
+	// hub) is rebuilt from the window. A snapshot older than the entry's
+	// newest message (a concurrent request) is answered from the entry as is.
+	if e.scanned == 0 || win.firstSeq < e.from || win.firstSeq > e.scanned+1 || last-e.base >= 1<<31 || (e.ccBad && win.hubFirst > e.ccBadSeq) {
+		e.reset(win.firstSeq)
 	}
+	e.cc.setSpan()
 	// Forget what hub history no longer retains.
 	if win.hubFirst > e.from {
 		cut := sort.Search(len(e.offs), func(i int) bool { return e.base+uint64(e.offs[i]) >= win.hubFirst })
@@ -147,28 +206,45 @@ func (c *areaIndexCache) positions(k areaIndexKey, win historyWindow) (pos []uin
 			e.scanned = e.from - 1
 		}
 	}
-	// Test only what arrived since the last request for this key.
+	// Classify only what arrived since the last request for this key.
 	for seq := e.scanned + 1; seq <= last; seq++ {
 		if seq < win.firstSeq {
 			continue
 		}
-		if k.wants(&win.msgs[seq-win.firstSeq]) {
+		hit, slot, cnt := k.classify(&win.msgs[seq-win.firstSeq])
+		if hit {
 			e.offs = append(e.offs, uint32(seq-e.base))
 		}
+		if cnt > 0 && !e.ccBad && !e.cc.add(win.msgs[seq-win.firstSeq].T, slot, int32(cnt)) {
+			e.ccBad, e.ccBadSeq = true, seq
+		}
 	}
-	e.scanned = last
+	if last > e.scanned {
+		e.scanned = last
+	}
+	e.cc.trim(now)
+
+	switch {
+	case !k.clusterOK:
+		res.regionalOK = true
+	case now != 0 && !e.ccBad:
+		res.regional = e.cc.sum(liveStart, now)
+		res.regionalOK = true
+	}
 
 	lo := sort.Search(len(e.offs), func(i int) bool { return e.base+uint64(e.offs[i]) >= win.firstSeq })
-	matches := e.offs[lo:]
+	hi := sort.Search(len(e.offs), func(i int) bool { return e.base+uint64(e.offs[i]) > last })
+	matches := e.offs[lo:hi]
 	if len(matches)*areaIndexMaxShareDen > n*areaIndexMaxShareNum {
-		return nil, false
+		return res
 	}
-	pos = make([]uint32, len(matches))
+	res.pos = make([]uint32, len(matches))
 	shift := win.firstSeq - e.base // seq - firstSeq == off - shift
 	for i, off := range matches {
-		pos[i] = uint32(uint64(off) - shift)
+		res.pos[i] = uint32(uint64(off) - shift)
 	}
-	return pos, true
+	res.ok = true
+	return res
 }
 
 // areaIndexKeyFor decides whether an evaluation can use the index and with
