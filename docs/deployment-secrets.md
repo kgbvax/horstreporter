@@ -29,32 +29,46 @@ Reads these from the environment (flags still win when passed):
 | `DX_POSTGRES_DSN` | `-dx-postgres-dsn` | Postgres DSN incl. password. Logged **masked** (`maskDSN`), with a `DSN source:` provenance line. |
 | `QRZ_USERNAME` / `QRZ_PASSWORD` | `-qrz-username` / `-qrz-password` | QRZ callsign→locator enrichment. |
 | `DXCLUSTER_USERNAME` / `DXCLUSTER_PASSWORD` | `-dxcluster-username` / `-dxcluster-password` | DX cluster login. |
+| `PUSH_VAPID_PRIVATE_KEY` / `PUSH_VAPID_PUBLIC_KEY` | `-push-vapid-private-key` / `-push-vapid-public-key` | Web Push signing pair; only used with `-push-enable`. Create with `scripts/generate-vapid-keys.sh` (see below). Rotating the pair invalidates every browser subscription. |
 
-`/etc/horstreporter/horstreporter.env` (`root:root`, `0600`):
+`/etc/default/horstreporter` (`root:root`, `0600`) holds both: the secrets as
+env vars and the non-secret flags in `ARGS`:
 
 ```
+# horstreporter args (non-secret) + secrets as env vars; mode 0600
 DX_POSTGRES_DSN=postgres://dxuser:CHANGEME@localhost:5432/dxdata?sslmode=disable
 QRZ_USERNAME=YOURCALL
 QRZ_PASSWORD=CHANGEME
 DXCLUSTER_USERNAME=YOURCALL
 DXCLUSTER_PASSWORD=CHANGEME
+PUSH_VAPID_PRIVATE_KEY=…
+PUSH_VAPID_PUBLIC_KEY=…
+ARGS="-port 443 -domain horstreporter.kgbvax.net -pprof -compress -max-clients 150 \
+  -log-file /home/hk/horst.log -log-level=INFO -opmode-agent-url http://127.0.0.1:9955 \
+  -push-enable -push-vapid-subscriber https://horstreporter.kgbvax.net …"
 ```
 
-Unit `[Service]` section:
+Unit `[Service]` section (`/etc/systemd/system/horstreporter.service`):
 
 ```ini
 [Service]
-EnvironmentFile=/etc/horstreporter/horstreporter.env
-# ExecStart carries only NON-secret flags:
-ExecStart=/opt/horstreporter/horstreporter-linux-x64 -port 443 -domain horstreporter.kgbvax.net \
-  -pprof -compress -max-clients 150 -dxcluster-enable \
-  -dxcluster-endpoint dx.da0bcc.de:7300 -log-file /home/hk/horst.log \
-  -log-level=INFO -opmode-agent-url http://127.0.0.1:9955
+User=hk
+Group=hk
+WorkingDirectory=/opt/horstreporter
+EnvironmentFile=-/etc/default/horstreporter
+ExecStart=/opt/horstreporter/horstreporter-linux-x64 $ARGS
+```
+
+The VAPID pair has no generator on the host (no Go toolchain); create it locally
+and stream it in over SSH so the private key is never printed:
+
+```
+scripts/generate-vapid-keys.sh | ssh root@horstreporter.kgbvax.net 'cat >> /etc/default/horstreporter'
 ```
 
 `deploy.sh` ships the binary only; it does **not** touch the unit or the env
 file. Edit those on the host, then `systemctl daemon-reload && systemctl restart
-horstreporter`. Keep a `.bak` of the unit and verify `systemctl is-active`
+horstreporter`. Keep a `.bak` of the unit / env file and verify `systemctl is-active`
 before walking away.
 
 ---

@@ -316,6 +316,24 @@ describe('push.js UI: feature detection hides the panel when unsupported', () =>
             installMockServiceWorker({ existingSubscription: null });
         }
     });
+
+    it('hides the push settings and section when the server has push disabled', async () => {
+        const section = document.createElement('div');
+        section.id = 'notifications-section';
+        document.body.appendChild(section);
+        const baseFetch = global.fetch;
+        global.fetch = vi.fn(async (url, opts) => {
+            if (String(url).startsWith('/api/push/vapid-public-key')) {
+                return { ok: false, status: 503, json: async () => ({}) };
+            }
+            return baseFetch(url, opts);
+        });
+        const mod = await import('../static/push.js');
+        const result = await mod.initPushUI();
+        expect(result).toBeNull();
+        expect(document.getElementById('push-settings-root').hidden).toBe(true);
+        expect(section.hidden).toBe(true);
+    });
 });
 
 describe('push.js UI: urlBase64ToUint8Array converts VAPID key', () => {

@@ -102,6 +102,25 @@ func resetPushStoreForTest() {
 	pushRateLimiter.Unlock()
 }
 
+// webpush-go prepends "mailto:" to any non-https subscriber, so the store
+// must hold the bare address or the JWT "sub" becomes "mailto:mailto:…".
+func TestPushSubscriberHasNoMailtoPrefix(t *testing.T) {
+	defer resetPushStoreForTest()
+	if strings.HasPrefix(pushVAPIDSubscriber, "mailto:") {
+		t.Fatalf("default subscriber %q must not carry mailto:", pushVAPIDSubscriber)
+	}
+	for in, want := range map[string]string{
+		"mailto:op@example.com":         "op@example.com",
+		" op@example.com ":              "op@example.com",
+		"https://horstreporter.example": "https://horstreporter.example",
+	} {
+		pushStore.configure("k", "p", in, true)
+		if got := pushStore.vapidSubscriber; got != want {
+			t.Errorf("configure(%q): vapidSubscriber = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // makeSub builds a valid pushSubscription for tests.
 func makeSub(endpoint string, prefs map[string]bool) *pushSubscription {
 	if prefs == nil {

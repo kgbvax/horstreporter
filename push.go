@@ -49,10 +49,11 @@ const (
 	// the /api/prop_intel response; the surge path runs push sends
 	// asynchronously with this per-send timeout.
 	pushSendTimeout = 10 * time.Second
-	// pushVAPIDSubscriber is the mailto: used in the VAPID JWT. Operators
-	// do not see this; it identifies the sending server to the push
-	// service. Override via -push-vapid-subscriber if needed.
-	pushVAPIDSubscriber = "mailto:horstreporter@example.com"
+	// pushVAPIDSubscriber is the VAPID JWT "sub": an e-mail address or an
+	// https: URL. Operators do not see this; it identifies the sending
+	// server to the push service. Override via -push-vapid-subscriber.
+	// No "mailto:" here: webpush-go adds it to anything that is not https:.
+	pushVAPIDSubscriber = "horstreporter@example.com"
 )
 
 // pushSubscription is one stored browser Push API subscription. The store
@@ -106,7 +107,7 @@ type pushSubscriptionStore struct {
 	// never logged or served.
 	vapidPrivateKey string
 	vapidPublicKey  string
-	// vapidSubscriber is the mailto: in the VAPID JWT.
+	// vapidSubscriber is the VAPID JWT "sub" (e-mail address or https: URL).
 	vapidSubscriber string
 	// httpClient sends the push POSTs. Overridable in tests; defaults
 	// to a 10s-timeout http.Client in production.
@@ -201,7 +202,8 @@ func (s *pushSubscriptionStore) configure(privateKey, publicKey, subscriber stri
 	defer s.Unlock()
 	s.vapidPrivateKey = strings.TrimSpace(privateKey)
 	s.vapidPublicKey = strings.TrimSpace(publicKey)
-	if subscriber = strings.TrimSpace(subscriber); subscriber != "" {
+	// Accept "mailto:x" too; webpush-go prepends its own "mailto:".
+	if subscriber = strings.TrimPrefix(strings.TrimSpace(subscriber), "mailto:"); subscriber != "" {
 		s.vapidSubscriber = subscriber
 	}
 	// Push is enabled only if both keys are present AND the operator
