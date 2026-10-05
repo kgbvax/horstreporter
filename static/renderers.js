@@ -314,6 +314,41 @@ function renderWsprMarkers(wsprSpots) {
     });
 }
 
+// Auto-zoom fits the spread of the visible spots, not their full extent: a
+// handful of long-haul spots (one ZL, a few VK/W) would otherwise stretch the
+// box to the whole world while nearly all activity sits in one region, and the
+// toggle would appear to do nothing. With enough spots, drop the outer
+// AUTO_ZOOM_TRIM of each axis; small sets keep every spot.
+const AUTO_ZOOM_TRIM = 0.05;
+const AUTO_ZOOM_TRIM_MIN_SPOTS = 20;
+
+export function computeAutoZoomBox(spots, filterCtx) {
+    const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands } = filterCtx;
+    const lats = [];
+    const lngs = [];
+    for (const spot of spots) {
+        if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) continue;
+        if (minSnrMode === 'cw' && spot.snr < cwMinDb) continue;
+        if (!enabledBands.has(spot.band)) continue;
+        if (selectedBand !== 'all' && spot.band !== selectedBand) continue;
+        if (!Number.isFinite(spot.lat) || !Number.isFinite(spot.lng)) continue;
+        lats.push(spot.lat);
+        lngs.push(spot.lng);
+    }
+    if (lats.length === 0) return null;
+
+    lats.sort((a, b) => a - b);
+    lngs.sort((a, b) => a - b);
+    const n = lats.length;
+    const cut = n >= AUTO_ZOOM_TRIM_MIN_SPOTS ? Math.floor(n * AUTO_ZOOM_TRIM) : 0;
+    return {
+        minLat: lats[cut],
+        maxLat: lats[n - 1 - cut],
+        minLng: lngs[cut],
+        maxLng: lngs[n - 1 - cut]
+    };
+}
+
 export function updateMapVisualization(spots, maxMinutes) {
     if (!map) return;
 
@@ -403,29 +438,12 @@ export function updateMapVisualization(spots, maxMinutes) {
         }
 
         const autoZoomCalcTimer = startPerfTimer();
-        // Item 3: use filterCtx instead of re-reading DOM
-        const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands } = filterCtx;
-
-        let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
-        let found = false;
-
-        spots.forEach(spot => {
-            if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
-            if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
-            if (!enabledBands.has(spot.band)) return;
-            if (selectedBand !== 'all' && spot.band !== selectedBand) return;
-
-            if (spot.lat < minLat) minLat = spot.lat;
-            if (spot.lat > maxLat) maxLat = spot.lat;
-            if (spot.lng < minLng) minLng = spot.lng;
-            if (spot.lng > maxLng) maxLng = spot.lng;
-            found = true;
-        });
+        const box = computeAutoZoomBox(spots, filterCtx);
         endPerfTimer('mercator.autozoom.bounds_calc_ms', autoZoomCalcTimer);
 
-        if (found) {
+        if (box) {
             const fitBoundsTimer = startPerfTimer();
-            const bounds = L.latLngBounds([minLat, minLng], [maxLat, maxLng]);
+            const bounds = L.latLngBounds([box.minLat, box.minLng], [box.maxLat, box.maxLng]);
             const center = bounds.getCenter();
             const minBounds = center.toBounds(2000000); // minimum 2000km
             bounds.extend(minBounds);
