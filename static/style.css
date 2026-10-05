@@ -1617,41 +1617,43 @@ body[data-theme="dark"] .band-row {
     opacity: 0.3;
 }
 
-/* Time anchor above the rail: same grid as a band row (checkbox, then the
-   solo button's name / count / sparkline / icon columns), so the bracket
-   under the two labels spans exactly the sparkline column. */
-.band-rail-axis {
+/* Time scale of the sparklines: a hairline down the whole rail at their
+   start, with the duration at its foot. The row below the bands uses the
+   band row grid, so its third column is the sparkline column; the hairline is
+   absolutely placed against the rail with no left set, so it starts at that
+   column's left edge (nudged into the column gap). */
+.band-rail {
+    position: relative;
+}
+.band-rail-time {
     display: grid;
     grid-template-columns: 14px 1fr;
     column-gap: 8px;
-    padding: 0 6px 5px;
+    padding: 2px 6px 0;
     font-size: 0.72rem;
     line-height: 1.2;
     color: var(--status-color);
 }
-.band-rail-axis-grid {
+.band-rail-time-grid {
     display: grid;
     grid-template-columns: 3.2rem 2.4rem 1fr auto;
-    align-items: end;
     column-gap: 8px;
 }
-.band-rail-axis-span {
-    position: relative;
-    display: flex;
-    justify-content: space-between;
+.band-rail-time-span {
+    display: block;
+    padding-left: 2px;
     white-space: nowrap;
 }
-.band-rail-axis-span::after {
+.band-rail-time-span::before {
     content: "";
     position: absolute;
-    left: 0;
-    right: 0;
-    bottom: -4px;
-    height: 3px;
-    border: 1px solid color-mix(in srgb, var(--text-color) 35%, transparent);
-    border-bottom: 0;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    margin-left: -5px;
+    border-left: 1px solid color-mix(in srgb, var(--text-color) 40%, transparent);
 }
-.band-rail-axis .band-focus-icon {
+.band-rail-time .band-focus-icon {
     visibility: hidden;
 }
 
