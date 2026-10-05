@@ -1386,6 +1386,14 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
     width: 1px;
     white-space: nowrap;
 }
+/* The band column is as narrow as its band name and reports line allow: the
+   verdict ("lively, shorter reach") wraps between words instead of setting
+   the width (about 20% narrower on a typical evening, rows grow a line where
+   a verdict wraps). */
+.cond-now-matrix th.wspr-matrix-band,
+.cond-now-matrix .cond-band-verdict {
+    white-space: normal;
+}
 canvas.cond-mini {
     display: block;
     width: 96px;
