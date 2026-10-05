@@ -1386,6 +1386,14 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
     width: 1px;
     white-space: nowrap;
 }
+/* The band column is as narrow as its band name and reports line allow: the
+   verdict ("lively, shorter reach") wraps between words instead of setting
+   the width (about 20% narrower on a typical evening, rows grow a line where
+   a verdict wraps). */
+.cond-now-matrix th.wspr-matrix-band,
+.cond-now-matrix .cond-band-verdict {
+    white-space: normal;
+}
 canvas.cond-mini {
     display: block;
     width: 96px;
@@ -1627,13 +1635,16 @@ body[data-theme="dark"] .band-row {
     opacity: 0.3;
 }
 
-/* Time scale of the sparklines: a hairline down the whole rail at their
-   start, with the duration at its foot. The row below the bands uses the
-   band row grid, so its third column is the sparkline column; the hairline is
-   absolutely placed against the rail with no left set, so it starts at that
-   column's left edge (nudged into the column gap). */
-.band-rail {
-    position: relative;
+/* Time scale of the sparklines: a dotted hairline at their start, one short
+   segment per band row (broken between rows), with the duration at its foot
+   in the row below the bands. That row uses the band row grid, so its third
+   column is the sparkline column. */
+.band-row .band-spark,
+.band-rail-time-span {
+    border-left: 1px dotted color-mix(in srgb, var(--text-color) 45%, transparent);
+}
+.band-row .band-spark {
+    box-sizing: border-box;
 }
 .band-rail-time {
     display: grid;
@@ -1651,17 +1662,8 @@ body[data-theme="dark"] .band-row {
 }
 .band-rail-time-span {
     display: block;
-    padding-left: 2px;
+    padding-left: 3px;
     white-space: nowrap;
-}
-.band-rail-time-span::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 0;
-    margin-left: -5px;
-    border-left: 1px solid color-mix(in srgb, var(--text-color) 40%, transparent);
 }
 .band-rail-time .band-focus-icon {
     visibility: hidden;
