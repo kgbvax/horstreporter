@@ -948,12 +948,29 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 	}
 	qthSet := qthSquares(qth, surroundings)
 
-	// pos, when non-nil, lists the only positions of history worth visiting.
+	// The live side comes from hub.history, which holds at most
+	// liveHistoryRetentionMinutes (and nothing from before a restart it
+	// couldn't backfill), so live windows start no earlier than that and live
+	// rates divide by the span actually covered — dividing a ≤60-min count by
+	// a 120-min window halved every rate.
+	liveStart := now - int64(liveRateWindowMinutes(minutes))*60
+	if since := liveHistoryCompleteSince.Load(); since > liveStart && since < now {
+		liveStart = since
+	}
+
+	// pos, when non-nil, lists the only positions of history worth visiting
+	// for the area match and the activity series. regionalIdx, when set, holds
+	// the regional counts the index kept for [liveStart, now], so the walk
+	// below does not have to count the cluster block's ends itself.
 	var pos []uint32
 	usePos := false
+	var regionalIdx [clusterBandSlots]int
+	regionalFromIndex := false
 	if areaIndexEnabled && win.firstSeq != 0 {
 		if key, ok := areaIndexKeyFor(qth, surroundings, matchArea, operatorCluster); ok {
-			pos, usePos = areaIdx.positions(key, win)
+			r := areaIdx.lookup(key, win, liveStart, now)
+			pos, usePos = r.pos, r.ok
+			regionalIdx, regionalFromIndex = r.regional, r.ok && r.regionalOK
 		}
 	}
 
@@ -1058,15 +1075,6 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 	// including the common "genuinely quiet grid" case that returns before the
 	// loop and would never consume the ~ring-size copy.
 
-	// The live side comes from hub.history, which holds at most
-	// liveHistoryRetentionMinutes (and nothing from before a restart it
-	// couldn't backfill), so live windows start no earlier than that and live
-	// rates divide by the span actually covered — dividing a ≤60-min count by
-	// a 120-min window halved every rate.
-	liveStart := now - int64(liveRateWindowMinutes(minutes))*60
-	if since := liveHistoryCompleteSince.Load(); since > liveStart && since < now {
-		liveStart = since
-	}
 	liveSegs := liveSegments(liveStart, now)
 	liveSpanSec := int64(0)
 	for _, seg := range liveSegs {
@@ -1085,13 +1093,24 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 	localCount := make(map[string]int)
 	clusterX, clusterY, clusterOK := locatorSquareXY(operatorCluster)
 
+	if regionalFromIndex {
+		for i, n := range regionalIdx {
+			if n > 0 {
+				regionalCount[inScopeBandNames[i]] = n
+			}
+		}
+	}
+	// With the regional counts from the index the walk only needs the area's
+	// messages; without them (index skipped, or its counts unusable) it visits
+	// the whole window and counts the cluster block's ends itself.
+	walkPos := usePos && regionalFromIndex
 	visits := len(history)
-	if usePos {
+	if walkPos {
 		visits = len(pos)
 	}
 	for vi := 0; vi < visits; vi++ {
 		hi := vi
-		if usePos {
+		if walkPos {
 			hi = int(pos[vi])
 		}
 		m := history[hi]
@@ -1099,7 +1118,7 @@ func (e *DxBaselineEngine) EvaluateAreaWindow(qth string, surroundings bool, min
 			continue
 		}
 		conditionsMode := !isNonConditionsMode(m.MD)
-		if clusterOK && conditionsMode && feedsClusterBaseline(m) {
+		if !regionalFromIndex && clusterOK && conditionsMode && feedsClusterBaseline(m) {
 			if n := clusterEndCount(m, clusterX, clusterY); n > 0 {
 				if band := normalizeBand(m.B); band != "" {
 					regionalCount[band] += n
@@ -2200,7 +2219,11 @@ func liveSegments(start, end int64) [][2]int64 {
 // WSPR share hub.history but never reach Observe — excluded by source, not
 // just by mode, since an RBN digital feed can carry FT8.
 func feedsClusterBaseline(m MQTTMessage) bool {
-	return m.Source != "rbn" && m.Source != "wspr"
+	return sourceFeedsClusterBaseline(m.Source)
+}
+
+func sourceFeedsClusterBaseline(source string) bool {
+	return source != "rbn" && source != "wspr"
 }
 
 // liveRateWindowMinutes is the span a live rate can cover: the requested
