@@ -671,6 +671,25 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     color: var(--text-color);
 }
 
+/* Time anchor in the matrix's top-left corner (Trend: how far back the lines
+   go; Day: the clock span of the curves). */
+.wspr-matrix-table .wspr-matrix-corner {
+    text-align: left;
+    vertical-align: bottom;
+    padding-left: 6px;
+}
+.wspr-time-anchor {
+    /* Zero width: the label never widens the band column, so the columns sit
+       in the same place in every look; it reads into the cell's spare room. */
+    display: inline-block;
+    width: 0;
+    overflow: visible;
+    font-size: calc(0.72rem * var(--now-type, 1));
+    font-weight: 400;
+    white-space: nowrap;
+    color: var(--status-color);
+}
+
 /* Heat overlay (Heat chip): cells tinted by reports now on CET-R2, mixed
    into the panel so the ink marks stay readable on every shade (the dark
    panel takes more colour to stay visible). */
@@ -1355,9 +1374,13 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
 .cond-cell-plot {
     padding: 2px 4px;
 }
-/* The plot column keeps its content width (one header line at the larger
-   Now type size), so the full-width table gives its spare room to the region
-   columns; the plot is centred under its heading either way. */
+/* The band and plot columns keep their content width (one line each at the
+   larger Now type size), so the full-width table gives its spare room to the
+   region columns only, and both columns sit in the same place in every look
+   (Dots has one wide strip column, Day / Trend nine narrow ones); the plot is
+   centred under its heading. */
+.cond-now-matrix .wspr-matrix-corner,
+.cond-now-matrix th.wspr-matrix-band,
 .cond-now-matrix th.cond-col-plot,
 .cond-now-matrix td.cond-cell-plot {
     width: 1px;
@@ -1602,6 +1625,46 @@ body[data-theme="dark"] .band-row {
     font-size: 0.95rem;
     line-height: 1;
     opacity: 0.3;
+}
+
+/* Time scale of the sparklines: a hairline down the whole rail at their
+   start, with the duration at its foot. The row below the bands uses the
+   band row grid, so its third column is the sparkline column; the hairline is
+   absolutely placed against the rail with no left set, so it starts at that
+   column's left edge (nudged into the column gap). */
+.band-rail {
+    position: relative;
+}
+.band-rail-time {
+    display: grid;
+    grid-template-columns: 14px 1fr;
+    column-gap: 8px;
+    padding: 2px 6px 0;
+    font-size: 0.72rem;
+    line-height: 1.2;
+    color: var(--status-color);
+}
+.band-rail-time-grid {
+    display: grid;
+    grid-template-columns: 3.2rem 2.4rem 1fr auto;
+    column-gap: 8px;
+}
+.band-rail-time-span {
+    display: block;
+    padding-left: 2px;
+    white-space: nowrap;
+}
+.band-rail-time-span::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    margin-left: -5px;
+    border-left: 1px solid color-mix(in srgb, var(--text-color) 40%, transparent);
+}
+.band-rail-time .band-focus-icon {
+    visibility: hidden;
 }
 
 .band-row[data-state="live"] .band-count {

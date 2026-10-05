@@ -213,6 +213,19 @@
                         </button>
                         <span class="visually-hidden" id="band-desc-2m"></span>
                     </div>
+                    <!-- Time scale of the sparklines: a hairline down the rail at
+                         their start, its duration (the max spot age, Display) at
+                         the foot. renderers.js updateBandLabels keeps it current;
+                         laid out on the band row grid so the line sits on the
+                         sparkline column's left edge. -->
+                    <div class="band-rail-time" aria-hidden="true">
+                        <span></span>
+                        <span class="band-rail-time-grid">
+                            <span></span><span></span>
+                            <span class="band-rail-time-span">15 min</span>
+                            <span class="band-focus-icon">&#9678;</span>
+                        </span>
+                    </div>
                 </div>
             </div>
             </div>

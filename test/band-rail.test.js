@@ -9,7 +9,7 @@ vi.mock('../static/perf.js', () => ({
 vi.mock('../static/map.js', () => ({ map: {} }));
 
 import { readFileSync } from 'node:fs';
-import { bandActivity, updateBandLabels, refreshBandLabels, setBandNormalRateProvider } from '../static/renderers.js';
+import { bandActivity, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, sparkSpanLabel } from '../static/renderers.js';
 
 const ctx = { minSnrMode: 'all', ssbMinDb: 0, cwMinDb: -15 };
 
@@ -143,5 +143,39 @@ describe('band rail sparkline normal line', () => {
         setBandNormalRateProvider(() => 1);
         refreshBandLabels();
         expect(normalOf('20m').hasAttribute('data-off')).toBe(false);
+    });
+});
+
+describe('band rail time scale', () => {
+    it('sparkSpanLabel: minutes, whole hours, sane fallback', () => {
+        expect(sparkSpanLabel(15)).toBe('15 min');
+        expect(sparkSpanLabel('5')).toBe('5 min');
+        expect(sparkSpanLabel(60)).toBe('1 h');
+        expect(sparkSpanLabel(90)).toBe('90 min');
+        expect(sparkSpanLabel(undefined)).toBe('15 min');
+    });
+
+    it('index.html: one scale row under the last band, hidden from assistive tech', () => {
+        document.body.innerHTML = readFileSync('static/index.html', 'utf8');
+        const rows = document.querySelectorAll('.band-rail .band-rail-time');
+        expect(rows).toHaveLength(1);
+        expect(rows[0].getAttribute('aria-hidden')).toBe('true');
+        expect(rows[0].previousElementSibling.dataset.band).toBe('2m');
+        expect(rows[0].nextElementSibling).toBeNull();
+        expect(rows[0].querySelector('.band-rail-time-span').textContent).toBe('15 min');
+    });
+
+    it('follows the max spot age on render and on slider input', () => {
+        document.body.innerHTML = `<input id="minutes" value="5">
+            <div class="band-rail-time"><span class="band-rail-time-span"></span></div>
+            <div id="band-container" data-focus-band="">${row('20m', true)}</div>`;
+        updateBandLabels([{ band: '20m', snr: 0, t: 1000 }]);
+        expect(document.querySelector('.band-rail-time-span').textContent).toBe('5 min');
+        expect(document.querySelector('.band-rail-time').title).toBe('Sparklines: the last 5 min');
+
+        const slider = document.getElementById('minutes');
+        slider.value = '60';
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+        expect(document.querySelector('.band-rail-time-span').textContent).toBe('1 h');
     });
 });

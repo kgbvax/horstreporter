@@ -58,6 +58,19 @@ describe('wspr-matrix looks (dots / day / trend)', () => {
         expect(runtime.style).toBe('day');
     });
 
+    it('the top-left corner anchors time for the looks that draw it', () => {
+        const { timeAnchor } = __test;
+        runtime.style = 'trend';
+        expect(timeAnchor({ trend_bin_minutes: 5, cells: [{ trend: new Array(12).fill(0) }] })).toContain('>last 1 h<');
+        expect(timeAnchor({ trend_bin_minutes: 5, cells: [{ trend: new Array(6).fill(0) }] })).toContain('>last 30 min<');
+        expect(timeAnchor(null)).toContain('>last 1 h<'); // before the first payload
+        expect(timeAnchor({})).toContain('aria-hidden="true"');
+        runtime.style = 'day';
+        expect(timeAnchor({})).toContain('>00\u201324 UTC<');
+        runtime.style = 'dots';
+        expect(timeAnchor({})).toBe('');
+    });
+
     it('a stored look survives a re-init; a retired one falls back to the default', () => {
         store.setItem(STYLE_KEY, 'trend');
         initWsprMatrix();
