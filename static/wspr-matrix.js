@@ -3,7 +3,7 @@ import { WSPR_REGIONS, bandColors, getEnabledBands, getMinSnrMode } from './util
 import { escapeHtml } from './ui-helpers.js';
 import {
     LOOKS, payloadHas, stripAxisHtml, stripRowHtml, layoutStripLabels,
-    dayStripSvg, sparklineSvg, lookLegendHtml,
+    dayStripSvg, sparklineSvg, lookLegendHtml, heatCss,
 } from './wspr-matrix-looks.js';
 
 // wspr-matrix.js — the unified Propagation panel: band × region propagation-
@@ -37,6 +37,8 @@ const PANEL_ID = 'wspr-matrix-window';
 const BODY_ID = 'wspr-matrix-body';
 const SOURCES_KEY = 'wsprMatrixSources';
 const STYLE_KEY = 'wsprMatrixStyle';
+// Heat chip: colour the cells by reports now (wspr-matrix-looks.js heatCss).
+const HEAT_KEY = 'wsprMatrixHeat';
 // Legacy localStorage key from the removed from-here/unfiltered toggle —
 // the matrix is from-here-only now; clean up the stale pref once.
 const LEGACY_FROM_HERE_KEY = 'wsprMatrixFromHere';
@@ -94,6 +96,7 @@ const runtime = {
     lastRenderKey: '',
     sources: [...DEFAULT_SOURCES],
     style: DEFAULT_STYLE,
+    heat: false,
     detailRetryTimer: null,
     detailRetryKey: '',
     stripObserver: null,
@@ -117,6 +120,8 @@ export function initWsprMatrix() {
         parsed.sort((a, b) => ALL_SOURCES.indexOf(a) - ALL_SOURCES.indexOf(b));
         if (parsed.length > 0) runtime.sources = parsed;
     }
+
+    runtime.heat = localStorage.getItem(HEAT_KEY) === '1';
 
     const storedStyle = localStorage.getItem(STYLE_KEY);
     if (storedStyle && ALL_STYLES.includes(storedStyle)) {
@@ -305,6 +310,14 @@ function setStyle(key) {
     renderMatrix();
 }
 
+// Toggle the Heat overlay. Render-only, like the look.
+function toggleHeat() {
+    runtime.heat = !runtime.heat;
+    localStorage.setItem(HEAT_KEY, runtime.heat ? '1' : '0');
+    runtime.lastRenderKey = '';
+    renderMatrix();
+}
+
 // When the data the looks need was not ready (no normal yet, or no day
 // curves) the panel refetches once a few seconds later instead of waiting
 // for the next 30 s poll.
@@ -332,10 +345,14 @@ function renderSourceChips() {
         const on = runtime.style === s.key;
         return `<button type="button" class="wspr-src-chip${on ? ' is-on' : ''}" data-style="${s.key}" aria-pressed="${on}" title="${s.title}">${s.label}</button>`;
     }).join('');
+    const heatChip = `<button type="button" class="wspr-src-chip${runtime.heat ? ' is-on' : ''}" data-toggle="heat" aria-pressed="${runtime.heat}" ` +
+        'title="Colour each cell by its reports now: blue few, red many">Heat</button>';
     return '<div class="wspr-src-chips">' +
         `<div class="wspr-chip-group" role="group" aria-label="Sources">${chips}</div>` +
         '<span class="wspr-chip-sep" aria-hidden="true"></span>' +
         `<div class="wspr-chip-group" role="group" aria-label="Look">${styleChips}</div>` +
+        '<span class="wspr-chip-sep" aria-hidden="true"></span>' +
+        `<div class="wspr-chip-group" role="group" aria-label="Overlay">${heatChip}</div>` +
         '</div>';
 }
 
@@ -350,7 +367,7 @@ function captureFocus(body) {
         return { band: el.getAttribute('data-band'), region: el.getAttribute('data-region') };
     }
     if (el.classList.contains('wspr-src-chip')) {
-        return { source: el.getAttribute('data-source'), style: el.getAttribute('data-style') };
+        return { source: el.getAttribute('data-source'), style: el.getAttribute('data-style'), toggle: el.getAttribute('data-toggle') };
     }
     return {};
 }
@@ -367,9 +384,10 @@ function restoreFocus(body, focus) {
     let target = null;
     if (focus.band) {
         target = findCell(body, focus.band, focus.region);
-    } else if (focus.source || focus.style) {
+    } else if (focus.source || focus.style || focus.toggle) {
         target = Array.from(body.querySelectorAll('.wspr-src-chip')).find((chip) =>
-            chip.getAttribute('data-source') === focus.source && chip.getAttribute('data-style') === focus.style) || null;
+            chip.getAttribute('data-source') === focus.source && chip.getAttribute('data-style') === focus.style &&
+            chip.getAttribute('data-toggle') === focus.toggle) || null;
     }
     // The cell may be gone (band disabled, path closed): keep focus in the
     // grid on its tab stop rather than losing it to <body>.
@@ -432,7 +450,7 @@ function renderMatrix() {
     // curves and trends, so every new payload repaints). The marks draw in
     // currentColor, so a theme toggle needs no rebuild.
     const regionNames = (data && data.region_names) || {};
-    const renderKey = `${runtime.style}|${runtime.sources.join(',')}|t${data?.now ?? ''}` +
+    const renderKey = `${runtime.style}|${runtime.heat ? 'h' : ''}|${runtime.sources.join(',')}|t${data?.now ?? ''}` +
         `|x:${extras ? extras.key(activeBands) : ''}` +
         `|${state.drillDownBand}×${state.drillDownRegion}` +
         `|${WSPR_REGIONS.map((r) => regionNames[r] || '').join(',')}|${activeBands
@@ -447,6 +465,13 @@ function renderMatrix() {
 
     const extraHead = extras ? extras.columns.map((c) => `<th scope="col" role="columnheader" class="${c.className || ''}">${c.label}</th>`).join('') : '';
     const strip = runtime.style === 'dots';
+    // Heat overlay: the busiest cell on screen sets the red end of the scale.
+    let heatMax = 0;
+    if (runtime.heat) {
+        for (const band of activeBands) {
+            for (const region of regions) heatMax = Math.max(heatMax, Number(matrix.get(band).get(region)?.spot_count) || 0);
+        }
+    }
 
     let html = renderSourceChips();
     html += `<table class="wspr-matrix-table wspr-look-${runtime.style}" role="grid" aria-label="Propagation by band and region">` +
@@ -470,17 +495,17 @@ function renderMatrix() {
                 const cell = bandMap.get(region);
                 return { region, cell, attrs: cellAttrs(band, region, cell, regionNames) };
             });
-            html += `<td class="wspr-strip-td" role="presentation">${stripRowHtml(dots)}</td>`;
+            html += `<td class="wspr-strip-td" role="presentation">${stripRowHtml(dots, heatMax)}</td>`;
         } else {
             for (const region of regions) {
                 const cell = bandMap.get(region);
-                html += renderLookCell(band, region, cell, data, regionNames);
+                html += renderLookCell(band, region, cell, data, regionNames, heatMax);
             }
         }
         html += '</tr>';
     }
     html += '</tbody></table>';
-    html += lookLegendHtml(runtime.style, payloadHas(data), runtime.sources.includes('pskr'));
+    html += lookLegendHtml(runtime.style, payloadHas(data), runtime.sources.includes('pskr'), heatMax);
 
     const focus = captureFocus(body);
     body.innerHTML = html;
@@ -602,8 +627,9 @@ function cellAttrs(band, region, cell, regionNames) {
         `data-band="${band}" data-region="${region}"`;
 }
 
-// Day strip / sparkline cell (wspr-matrix-looks.js draws the SVG).
-function renderLookCell(band, region, cell, data, regionNames) {
+// Day strip / sparkline cell (wspr-matrix-looks.js draws the SVG). heatMax > 0:
+// the Heat overlay tints the cell by its reports now.
+function renderLookCell(band, region, cell, data, regionNames, heatMax = 0) {
     if (!cell || (!(cell.spot_count > 0) && !isSilent(cell))) {
         return `<td role="gridcell" class="wspr-matrix-cell-empty" data-band="${band}" data-region="${region}"></td>`;
     }
@@ -613,7 +639,9 @@ function renderLookCell(band, region, cell, data, regionNames) {
     const svg = runtime.style === 'day'
         ? dayStripSvg(cell, now, minutes, label)
         : sparklineSvg(cell, now, minutes, Number(data?.trend_bin_minutes) || 5, label);
-    return `<td class="wspr-matrix-cell wspr-look-cell${isSilent(cell) ? ' is-silent' : ''}" ${cellAttrs(band, region, cell, regionNames)}>${svg}</td>`;
+    const heat = isSilent(cell) ? '' : heatCss(cell.spot_count, heatMax);
+    return `<td class="wspr-matrix-cell wspr-look-cell${isSilent(cell) ? ' is-silent' : ''}${heat ? ' has-heat' : ''}"${heat ? ` style="--heat:${heat}"` : ''} ` +
+        `${cellAttrs(band, region, cell, regionNames)}>${svg}</td>`;
 }
 
 function attachSourceChipHandlers(body) {
@@ -623,6 +651,7 @@ function attachSourceChipHandlers(body) {
             if (source) toggleSource(source);
             const styleKey = chip.getAttribute('data-style');
             if (styleKey) setStyle(styleKey);
+            if (chip.getAttribute('data-toggle') === 'heat') toggleHeat();
         });
     });
 }
@@ -805,6 +834,8 @@ export const __test = {
     hasNormal,
     expectedLine,
     setStyle,
+    toggleHeat,
+    HEAT_KEY,
     renderLookCell,
     scheduleDetailRetry,
     DETAIL_RETRY_MS,
@@ -821,6 +852,7 @@ export const __test = {
         runtime.lastRenderKey = '';
         runtime.sources = [...DEFAULT_SOURCES];
         runtime.style = DEFAULT_STYLE;
+        runtime.heat = false;
         runtime.rowExtras = null;
         runtime.detailRetryKey = '';
     },

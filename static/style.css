@@ -671,6 +671,26 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     color: var(--text-color);
 }
 
+/* Heat overlay (Heat chip): cells tinted by reports now on CET-R2, mixed
+   into the panel so the ink marks stay readable on every shade (the dark
+   panel takes more colour to stay visible). */
+.wspr-matrix-table .wspr-look-cell.has-heat {
+    background: color-mix(in srgb, var(--heat) 40%, var(--bg-color));
+}
+body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
+    background: color-mix(in srgb, var(--heat) 50%, var(--bg-color));
+}
+.wspr-heat-key {
+    white-space: nowrap;
+}
+.wspr-heat-bar {
+    display: inline-block;
+    width: 72px;
+    height: 8px;
+    border-radius: 2px;
+    vertical-align: middle;
+}
+
 /* Dot strip: one factor axis per band row, regions as labelled dots. */
 .wspr-matrix-table .wspr-strip-head {
     width: 100%;
@@ -736,6 +756,19 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 .wspr-strip-dot.is-silent .wspr-strip-label,
 .wspr-strip-dot.is-unknown .wspr-strip-label {
     color: color-mix(in srgb, var(--text-color) 65%, transparent);
+}
+/* Heat overlay on the strip: the dot takes the colour, a thin ink ring keeps
+   the pale yellows visible on the light panel. */
+.wspr-matrix-table .wspr-strip-dot.has-heat {
+    background: var(--heat);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-color) 55%, transparent);
+}
+.wspr-matrix-table .wspr-strip-dot.has-heat.is-below {
+    background: color-mix(in srgb, var(--heat) 55%, transparent);
+}
+.wspr-matrix-table .wspr-strip-dot.has-heat.is-cw {
+    background: none;
+    border-color: var(--heat);
 }
 /* Surge: a ring around the dot (thicker when strong). */
 .wspr-strip-dot.is-surge {

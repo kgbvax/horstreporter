@@ -192,7 +192,8 @@ describe('wspr-matrix (Propagation) panel', () => {
         setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
         const groups = Array.from(document.querySelectorAll('.wspr-src-chips [role="group"]'));
-        expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['Sources', 'Look']);
+        expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['Sources', 'Look', 'Overlay']);
+        expect(groups[2].querySelector('[data-toggle="heat"]').getAttribute('aria-pressed')).toBe('false');
         expect(groups[0].querySelectorAll('[data-source]').length).toBe(4);
         expect(Array.from(groups[1].querySelectorAll('[data-style]')).map((c) => c.textContent)).toEqual(['Dots', 'Day', 'Trend']);
         expect(groups[0].querySelector('[data-source="rbn"]').getAttribute('aria-pressed')).toBe('true');
@@ -261,6 +262,54 @@ describe('wspr-matrix (Propagation) panel', () => {
         expect(document.querySelector('.wspr-strip-dot')).toBeNull();
         expect(document.querySelector('.wspr-look-cell svg')).not.toBeNull();
         expect(document.querySelector('.wspr-matrix-table').classList.contains('wspr-look-trend')).toBe(true);
+    });
+
+    it('the Heat chip tints cells by reports now, persists and needs no refetch', async () => {
+        const calls = [];
+        global.fetch = vi.fn(async (url) => {
+            calls.push(url);
+            return {
+                ok: true, status: 200, json: async () => ({
+                    cells: [
+                        makeCell({ band: '20m', region: 'EU', spot_count: 1000 }),
+                        makeCell({ band: '20m', region: 'NA', spot_count: 1 }),
+                        { band: '20m', region: 'JA', spot_count: 0, silent: true, expected: 30, expected_spots: 0, sources: [], active_sources: [] },
+                    ],
+                }),
+            };
+        });
+        runtime.style = 'day';
+        initWsprMatrix();
+        setWsprMatrixVisible(true);
+        await new Promise((r) => setTimeout(r, 0));
+        expect(document.querySelector('.has-heat')).toBeNull();
+
+        const chip = document.querySelector('.wspr-src-chip[data-toggle="heat"]');
+        chip.focus();
+        chip.click();
+        expect(calls.length).toBe(1);
+        expect(store.getItem(__test.HEAT_KEY)).toBe('1');
+        expect(document.activeElement.getAttribute('data-toggle')).toBe('heat');
+        expect(document.activeElement.getAttribute('aria-pressed')).toBe('true');
+        const eu = document.querySelector('.wspr-look-cell[data-region="EU"]');
+        const na = document.querySelector('.wspr-look-cell[data-region="NA"]');
+        expect(eu.classList.contains('has-heat')).toBe(true);
+        expect(eu.style.getPropertyValue('--heat')).toBe('rgb(253, 48, 0)'); // busiest: red end
+        expect(na.style.getPropertyValue('--heat')).toBe('rgb(0, 52, 245)'); // one report: blue end
+        expect(document.querySelector('.wspr-look-cell[data-region="JA"]').classList.contains('has-heat')).toBe(false);
+        expect(document.querySelector('.wspr-heat-key').textContent).toContain('1 to 1.0k');
+
+        // The strip colours its dots the same way.
+        document.querySelector('.wspr-src-chip[data-style="dots"]').click();
+        expect(document.querySelectorAll('.wspr-strip-dot.has-heat')).toHaveLength(2);
+
+        // Off again; a re-init restores the stored choice.
+        document.querySelector('.wspr-src-chip[data-toggle="heat"]').click();
+        expect(document.querySelector('.has-heat')).toBeNull();
+        expect(store.getItem(__test.HEAT_KEY)).toBe('0');
+        store.setItem(__test.HEAT_KEY, '1');
+        initWsprMatrix();
+        expect(runtime.heat).toBe(true);
     });
 
     it('refetches once, a few seconds later, while the normal is still loading', async () => {

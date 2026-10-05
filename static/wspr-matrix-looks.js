@@ -24,6 +24,56 @@ export const LOOKS = [
     { key: 'trend', label: 'Trend', title: 'Sparkline: the last hour in 5-minute steps against the normal' },
 ];
 
+// --- Heat overlay (Heat chip) ----------------------------------------------------
+// Optional colour on top of every look: reports now (absolute, all selected
+// sources) on a rainbow scale, so the busiest paths stand out at a glance
+// while the marks keep showing each path against its normal. CET-R2
+// (colorcet rainbow_bgyr_35-85_c72), 17 of its 256 samples: blue few, red many.
+export const CET_R2 = [
+    '#0034f5', '#0059c9', '#00739d', '#318476', '#3f944e', '#42a51b', '#6aaf12', '#91b919', '#b5c120',
+    '#d5c927', '#f5cd2c', '#fdbb26', '#ffa51d', '#ff8e14', '#ff740a', '#ff5802', '#fd3000',
+];
+const CET_R2_RGB = CET_R2.map((h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)));
+
+// Colour at t in 0..1 (linear between the samples).
+export function heatRgb(t) {
+    const x = Math.max(0, Math.min(1, Number(t) || 0)) * (CET_R2_RGB.length - 1);
+    const i = Math.min(CET_R2_RGB.length - 2, Math.floor(x));
+    const f = x - i;
+    return CET_R2_RGB[i].map((v, k) => Math.round(v + (CET_R2_RGB[i + 1][k] - v) * f));
+}
+
+// Position on the scale: log of the reports now against the busiest cell on
+// screen, so one report is the blue end and the busiest path is red whatever
+// the hour. 0 reports has no colour (-1).
+export function heatT(n, max) {
+    const v = Number(n) || 0;
+    const m = Number(max) || 0;
+    if (v <= 0 || m <= 0) return -1;
+    if (m <= 1) return 1;
+    return Math.max(0, Math.min(1, Math.log10(v) / Math.log10(m)));
+}
+
+// CSS colour for a cell's reports now, '' without reports or without heat.
+export function heatCss(n, max) {
+    const t = heatT(n, max);
+    return t < 0 ? '' : `rgb(${heatRgb(t).join(', ')})`;
+}
+
+function fmtCount(n) {
+    const v = Math.round(Number(n) || 0);
+    if (v < 1000) return String(v);
+    if (v < 10000) return `${(v / 1000).toFixed(1)}k`;
+    return `${Math.round(v / 1000)}k`;
+}
+
+// Legend line for the overlay: the scale from one report to the busiest cell.
+export function heatLegendHtml(max) {
+    if (!(max > 0)) return '';
+    return `<span class="wspr-heat-key"><span class="wspr-heat-bar" style="background: linear-gradient(90deg, ${CET_R2.join(', ')})" aria-hidden="true"></span>` +
+        ` colour = reports now, 1 to ${fmtCount(max)} (log scale)</span>`;
+}
+
 // The log2 factor is clamped to three doublings either way.
 export const LF_MAX = 3;
 const SLOT_SEC = 1800;
@@ -102,7 +152,7 @@ export function stripDotSize(step) {
 // gridcell attribute string wspr-matrix.js builds (role, label, title,
 // aria-selected, tabindex, data-band/region). Dots come out in x order so the
 // arrow keys walk left to right.
-export function stripRowHtml(dots) {
+export function stripRowHtml(dots, heatMax = 0) {
     const placed = dots.map((d) => {
         const m = cellModel(d.cell);
         // Silent: far left. No normal: the centre, drawn as unknown.
@@ -118,8 +168,10 @@ export function stripRowHtml(dots) {
         else if (m.lf <= -0.5) cls.push('is-below');
         if (!m.silent && m.cwOnly) cls.push('is-cw');
         if (m.surge) cls.push(m.surge === 2 ? 'is-surge is-strong' : 'is-surge');
+        const heat = m.silent ? '' : heatCss(m.n, heatMax);
+        if (heat) cls.push('has-heat');
         const size = m.silent ? 7 : stripDotSize(m.step);
-        return `<span class="${cls.join(' ')}" style="left:${x.toFixed(1)}%;--d:${size.toFixed(1)}px" data-col="${Math.round(x * 10)}" ${attrs}>` +
+        return `<span class="${cls.join(' ')}" style="left:${x.toFixed(1)}%;--d:${size.toFixed(1)}px${heat ? `;--heat:${heat}` : ''}" data-col="${Math.round(x * 10)}" ${attrs}>` +
             `<span class="wspr-strip-label" aria-hidden="true">${escapeHtml(region)}</span></span>`;
     }).join('');
     return `<div class="wspr-strip">${grid}${marks}</div>`;
@@ -303,8 +355,9 @@ function keySvg(w, h, body) {
     return `<svg class="wspr-look-key" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">${body}</svg>`;
 }
 
-// Legend line for a look, with a note when its data is missing.
-export function lookLegendHtml(style, has, pskrSelected) {
+// Legend line for a look, with a note when its data is missing and the
+// overlay's scale when the Heat chip is on (heatMax > 0).
+export function lookLegendHtml(style, has, pskrSelected, heatMax = 0) {
     let note = '';
     if (!pskrSelected) note = 'Select PSKR to compare with the normal.';
     else if (!has.normal) note = 'The normal for your area is loading.';
@@ -325,5 +378,6 @@ export function lookLegendHtml(style, has, pskrSelected) {
             '<path d="M2 14 L12 13 L22 11 L32 7 L42 3" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="42" cy="3" r="1.9" fill="currentColor"/>');
         text = `${key} line = PSKReporter reports per 5 minutes over the last hour; dashed = normal; heavier line = more reports; dotted = CW only, ring = surge`;
     }
-    return `<div class="wspr-matrix-legend wspr-look-legend small text-muted">${note ? `<span class="wspr-look-note">${escapeHtml(note)}</span> ` : ''}${text}</div>`;
+    const heat = heatLegendHtml(heatMax);
+    return `<div class="wspr-matrix-legend wspr-look-legend small text-muted">${note ? `<span class="wspr-look-note">${escapeHtml(note)}</span> ` : ''}${text}${heat ? `; ${heat}` : ''}</div>`;
 }

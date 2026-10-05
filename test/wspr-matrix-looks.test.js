@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     LOOKS, LF_MAX, STRIP_LANES, volumeStep, cellModel, payloadHas, stripX, stripAxisHtml, stripDotSize,
     stripRowHtml, placeStrip, layoutStripLabels, dayStripSvg, trendNormals, sparklineSvg, lookLegendHtml,
+    CET_R2, heatRgb, heatT, heatCss, heatLegendHtml,
 } from '../static/wspr-matrix-looks.js';
 
 const NOW = Date.UTC(2026, 9, 4, 18, 0) / 1000; // 18:00 UTC: slot 36
@@ -208,5 +209,49 @@ describe('wspr-matrix-looks legend', () => {
         expect(lookLegendHtml('dots', { ...all, normal: false }, true)).toContain('The normal for your area is loading.');
         expect(lookLegendHtml('day', { ...all, day: false }, true)).toContain('The usual day for your area is loading.');
         expect(lookLegendHtml('trend', { ...all, day: false }, true)).not.toContain('wspr-look-note');
+    });
+});
+
+describe('wspr-matrix-looks heat overlay', () => {
+    it('uses CET-R2 from blue to red', () => {
+        expect(CET_R2).toHaveLength(17);
+        expect(heatRgb(0)).toEqual([0, 52, 245]);   // #0034f5
+        expect(heatRgb(1)).toEqual([253, 48, 0]);   // #fd3000
+        expect(heatRgb(0.5)).toEqual([181, 193, 32]); // #b5c120, the middle sample
+        expect(heatRgb(-1)).toEqual(heatRgb(0));
+        expect(heatRgb(7)).toEqual(heatRgb(1));
+        // Halfway between two samples is their mean.
+        expect(heatRgb(0.5 / 16)).toEqual([0, 71, 223]);
+    });
+
+    it('heatT: log of reports now against the busiest cell; none without reports', () => {
+        expect(heatT(1, 10000)).toBe(0);
+        expect(heatT(100, 10000)).toBe(0.5);
+        expect(heatT(10000, 10000)).toBe(1);
+        expect(heatT(0, 10000)).toBe(-1);
+        expect(heatT(5, 0)).toBe(-1);
+        expect(heatT(1, 1)).toBe(1);
+        expect(heatCss(0, 100)).toBe('');
+        expect(heatCss(100, 100)).toBe('rgb(253, 48, 0)');
+    });
+
+    it('colours strip dots with reports, never silent ones', () => {
+        const html = stripRowHtml([
+            { region: 'EU', cell: cell({ spot_count: 100, expected: 9, expected_spots: 9 }), attrs: 'data-region="EU"' },
+            { region: 'JA', cell: { spot_count: 0, silent: true, expected: 30, expected_spots: 0 }, attrs: 'data-region="JA"' },
+        ], 100);
+        expect(html).toContain('wspr-strip-dot has-heat" style="left:50.0%;--d:10.8px;--heat:rgb(253, 48, 0)"');
+        expect((html.match(/has-heat/g) || []).length).toBe(1);
+        expect(stripRowHtml([{ region: 'EU', cell: cell(), attrs: '' }])).not.toContain('has-heat');
+    });
+
+    it('adds the scale to the legend only when the overlay is on', () => {
+        expect(heatLegendHtml(0)).toBe('');
+        expect(heatLegendHtml(12345)).toContain('1 to 12k (log scale)');
+        expect(heatLegendHtml(2500)).toContain('1 to 2.5k');
+        expect(heatLegendHtml(40)).toContain('1 to 40 ');
+        const all = { normal: true, day: true, trend: true };
+        expect(lookLegendHtml('day', all, true, 900)).toContain('wspr-heat-bar');
+        expect(lookLegendHtml('day', all, true)).not.toContain('wspr-heat-bar');
     });
 });
