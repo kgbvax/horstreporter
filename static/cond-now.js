@@ -123,8 +123,9 @@ function drawPlots(body = document.getElementById('wspr-matrix-body')) {
 
 const extras = {
     columns: COLUMNS,
-    // Antarctica adds a mostly empty column; the Now table leaves it out.
-    hiddenRegions: ['AN'],
+    // Antarctica and Hawaii add mostly empty columns; the Now table leaves
+    // them out.
+    hiddenRegions: ['AN', 'KH6'],
     // Band \n verdict \n count · factor, stacked in the row header so the
     // table stays narrow. Empty lines are left out; the exact numbers are in the
     // reports line's tooltip.

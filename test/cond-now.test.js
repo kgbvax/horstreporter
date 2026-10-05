@@ -180,3 +180,10 @@ describe('row extras', () => {
         getBandNormalRate.mockReturnValue(null);
     });
 });
+
+describe('cond-now hidden regions', () => {
+    it('leaves Antarctica and Hawaii out of the Now table', async () => {
+        const { __test } = await import('../static/cond-now.js');
+        expect(__test.extras.hiddenRegions).toEqual(['AN', 'KH6']);
+    });
+});

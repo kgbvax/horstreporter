@@ -500,7 +500,7 @@ body[data-theme="dark"] {
 
 .band-lab-decision-badge {
     display: inline-block;
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--now-type, 1));
     font-weight: 700;
     border-radius: 999px;
     padding: 2px 8px;
@@ -530,7 +530,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 }
 
 .band-lab-confidence {
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--now-type, 1));
     opacity: 0.85;
 }
 
@@ -541,7 +541,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 #band-lab-time-range {
     width: 84px;
     min-width: 84px;
-    font-size: 0.74rem;
+    font-size: calc(0.74rem * var(--now-type, 1));
     padding: 0.1rem 1.5rem 0.1rem 0.45rem;
     line-height: 1.15;
 }
@@ -552,7 +552,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     border: 1px solid var(--control-border);
     border-radius: 8px;
     background: var(--surface-1);
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--now-type, 1));
     line-height: 1.35;
     box-shadow: 0 2px 8px color-mix(in srgb, var(--shadow-color) 70%, transparent);
 }
@@ -572,7 +572,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 .wspr-matrix-table {
     width: auto;
     border-collapse: collapse;
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--now-type, 1));
 }
 
 .wspr-matrix-table th {
@@ -684,7 +684,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     position: absolute;
     transform: translateX(-50%);
     font-weight: 400;
-    font-size: 0.66rem;
+    font-size: calc(0.66rem * var(--now-type, 1));
 }
 .wspr-strip-tick.is-centre {
     font-weight: 700;
@@ -754,7 +754,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     left: 50%;
     bottom: calc(100% + 1px);
     transform: translateX(-50%);
-    font-size: 0.62rem;
+    font-size: calc(0.62rem * var(--now-type, 1));
     font-weight: 600;
     line-height: 1;
     white-space: nowrap;
@@ -1068,7 +1068,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 /* Off: muted ink (--status-color, >= 4.5:1). On: the unified selected look
    (accent tint + accent text, see "Unified control system"). */
 .wspr-src-chip {
-    font-size: 0.66rem;
+    font-size: calc(0.66rem * var(--now-type, 1));
     font-weight: 700;
     padding: 1px 6px;
     border-radius: 3px;
@@ -1273,6 +1273,19 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     margin-bottom: 6px;
     color: color-mix(in srgb, var(--text-color) 72%, var(--bg-color));
 }
+/* Now view type scale. The band label matches the rail's band pills (0.9rem,
+   was 0.72rem + 1px); every other size in the view grows by the same factor,
+   0.9rem / (0.72rem + 1px) = 1.15. Rules used inside the view multiply their
+   size by --now-type (1 elsewhere); Bootstrap's .small / .btn-sm get it here. */
+#cond-now {
+    --now-type: 1.15;
+}
+#cond-now .small {
+    font-size: calc(0.875em * var(--now-type));
+}
+#cond-now .btn-sm {
+    --bs-btn-font-size: calc(0.875rem * var(--now-type));
+}
 .cond-now-matrix .wspr-matrix-body {
     padding: 0;
     overflow: visible;
@@ -1283,14 +1296,14 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     border-collapse: separate;
     border-spacing: 3px 0;
 }
-/* Headings and the band label one point larger than the table text; the
+/* Headings and the band label at the band rail's pill size (0.9rem); the
    verdict and reports / normal lines under the band keep the table size. */
 .cond-now-matrix .wspr-matrix-table th {
-    font-size: calc(0.72rem + 1px);
+    font-size: 0.9rem;
 }
 .cond-now-matrix .cond-band-verdict,
 .cond-now-matrix .cond-band-pair {
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--now-type, 1));
 }
 .cond-now-matrix .wspr-matrix-table tbody tr {
     /* Even rows: tall enough for the strip's dots with two label rows. */
@@ -1308,6 +1321,10 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 }
 .cond-cell-plot {
     padding: 2px 4px;
+}
+/* One header line at the larger Now type size. */
+.cond-now-matrix th.cond-col-plot {
+    white-space: nowrap;
 }
 canvas.cond-mini {
     display: block;
