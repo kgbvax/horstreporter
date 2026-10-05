@@ -48,7 +48,7 @@ const clusterHost = document.getElementById('cluster-root');
 if (clusterHost) new Range({ target: clusterHost, props: { id: 'cluster-distance', valId: 'cluster-dist-val', label: 'Max cluster dist', unit: 'km', key: 'clusterDistance', min: 100, max: 2000, step: 50 } });
 
 const autoZoomHost = document.getElementById('auto-zoom-root');
-if (autoZoomHost) new Toggle({ target: autoZoomHost, props: { id: 'auto-zoom', label: 'Auto-zoom', key: 'autoZoom' } });
+if (autoZoomHost) new Toggle({ target: autoZoomHost, props: { id: 'auto-zoom', label: 'Auto-zoom', key: 'autoZoom', hook: '__horstAutoZoomChanged' } });
 
 const surroundingsHost = document.getElementById('surroundings-root');
 if (surroundingsHost) new Toggle({ target: surroundingsHost, props: { id: 'surroundings', label: 'Adj. squares', key: 'surroundings', render: false, hook: '__horstSurroundingsChanged' } });

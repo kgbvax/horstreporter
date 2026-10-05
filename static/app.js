@@ -1777,6 +1777,14 @@ window.__horstSurroundingsChanged = () => {
     horstKevin?.refresh();
 };
 
+// Turning Auto-zoom on should refit now, not after the cooldown left by the
+// user's last pan/zoom (Toggle schedules the render right before this hook).
+window.__horstAutoZoomChanged = () => {
+    if (!document.getElementById('auto-zoom')?.checked) return;
+    state.lastMercatorInteractionAt = 0;
+    state.lastMercatorAutoZoomAt = 0;
+};
+
 window.__horstCountryColoringChanged = () => {
     const enabled = document.getElementById('show-country-coloring')?.checked;
     if (!isAzimuthEnabled()) {
