@@ -4,7 +4,7 @@
 // HORST_CONCURRENCY_SECONDS, HORST_CONCURRENCY_INGEST_PER_SEC.
 import { spawnSync } from 'node:child_process';
 
-const r = spawnSync('go', ['test', '-run', '^TestConcurrentLoadHarness$', '-count=1', '-v', '.'], {
+const r = spawnSync('go', ['test', '-run', '^TestConcurrentLoadHarness$', '-count=1', '-v', './cmd/horstreporter'], {
   stdio: 'pipe',
   env: { ...process.env, HORST_CONCURRENCY_HARNESS: '1' },
   timeout: 600_000,

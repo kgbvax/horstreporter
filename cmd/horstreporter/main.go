@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"embed"
 	"flag"
 	"io/fs"
 	"log"
@@ -22,6 +21,7 @@ import (
 
 	"dxlens"
 
+	"horstreporter"
 	"horstreporter/internal/cty"
 
 	"golang.org/x/crypto/acme/autocert"
@@ -73,24 +73,14 @@ func loadCtyResolver(path string) *cty.Resolver {
 			logInfo("DX cluster cty.dat not readable (%s): %v — falling back to embedded", path, err)
 		}
 	}
-	r, err := cty.Parse(bytes.NewReader(embeddedCtyData))
+	r, err := cty.Parse(bytes.NewReader(horstreporter.CtyData))
 	if err != nil {
 		logInfo("DX cluster embedded cty.dat parse failed: %v (labelling disabled)", err)
 		return nil
 	}
-	logInfo("DX cluster cty.dat: using embedded (%d bytes)", len(embeddedCtyData))
+	logInfo("DX cluster cty.dat: using embedded (%d bytes)", len(horstreporter.CtyData))
 	return r
 }
-
-//go:embed static
-var staticFiles embed.FS
-
-// cty.dat is embedded so DX-cluster country/flag labelling works out of the box
-// (no file to deploy). Refreshed whenever the binary is rebuilt; -cty-path can
-// override it with a newer file at runtime.
-//
-//go:embed cty.dat
-var embeddedCtyData []byte
 
 var compressStream bool
 var dxBaseline *DxBaselineEngine
@@ -679,7 +669,7 @@ func main() {
 		fileServer = http.FileServer(http.Dir("static"))
 		appMux.Handle("/", noCache(fileServer))
 	} else {
-		staticFS, err := fs.Sub(staticFiles, "static")
+		staticFS, err := fs.Sub(horstreporter.StaticFiles, "static")
 		if err != nil {
 			logFatal("Failed to load embedded static files: %v", err)
 		}

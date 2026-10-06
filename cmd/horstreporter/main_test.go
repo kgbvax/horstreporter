@@ -2032,7 +2032,7 @@ func TestPropIntelV2HandlerStructureAndFromHere(t *testing.T) {
 // content ETags plus Cache-Control: no-cache on known assets, a 304 on a
 // matching If-None-Match, and no ETag for unknown paths.
 func TestCachedStaticHandlerEtagAndConditional(t *testing.T) {
-	staticFS := os.DirFS("static")
+	staticFS := os.DirFS("../../static")
 	server := httptest.NewServer(cachedStaticHandler(staticFS))
 	defer server.Close()
 

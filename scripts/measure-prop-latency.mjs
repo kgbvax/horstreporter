@@ -24,7 +24,7 @@ const log = (msg) => process.stderr.write(`[measure] ${msg}\n`);
 log('running latency harness (go test, in-process)...');
 {
   const env = { ...process.env, HORST_LATENCY_HARNESS: '1' };
-  const r = spawnSync('go', ['test', '-run', '^TestPropLatencyHarness$', '-count=1', '-v', '.'], {
+  const r = spawnSync('go', ['test', '-run', '^TestPropLatencyHarness$', '-count=1', '-v', './cmd/horstreporter'], {
     cwd: root,
     stdio: 'pipe',
     env,

@@ -74,7 +74,7 @@ func benchEngine(b *testing.B, hist []MQTTMessage) *DxBaselineEngine {
 	return eng
 }
 
-// Compare: go test -run xxx -bench EvaluateArea -benchtime 40x .
+// Compare: go test -run xxx -bench EvaluateArea -benchtime 40x ./cmd/horstreporter
 func BenchmarkEvaluateAreaFullScan(b *testing.B) {
 	hist := realisticWindow(250_000, 15)
 	eng := benchEngine(b, hist)
@@ -128,7 +128,7 @@ func BenchmarkEvaluateOwnSquareIndexed(b *testing.B) {
 // 60-minute windows are the heaviest hot_bands / dx_conditions requests: the
 // whole hour (~1.4M messages on a busy feed) is in range. Compare
 //
-//	go test -run xxx -bench 'Evaluate60' -benchtime 10x -cpuprofile tmp/e60.prof .
+//	go test -run xxx -bench 'Evaluate60' -benchtime 10x -cpuprofile tmp/e60.prof ./cmd/horstreporter
 func bench60(b *testing.B, qth string, area *liveArea) {
 	bench60Eu(b, qth, area, 0)
 }

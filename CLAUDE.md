@@ -6,22 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Run backend
-go run . -dev -port 8080
+go run ./cmd/horstreporter -dev -port 8080
 
 # Run with DX cluster ingest. Most clusters (e.g. DB0ERF) require a registered
 # callsign + individually-assigned password — pass via env so secrets stay out of
 # the shell history / process args (flags -dxcluster-username/-password also work).
 DXCLUSTER_USERNAME=<yourcall> DXCLUSTER_PASSWORD=<password> \
-  go run . -dev -port 8080 -dxcluster-enable -dxcluster-endpoint db0erf.de:7300
+  go run ./cmd/horstreporter -dev -port 8080 -dxcluster-enable -dxcluster-endpoint db0erf.de:7300
 # Optional: QRZ_USERNAME/QRZ_PASSWORD enable callsign→locator enrichment (dx_locator),
 # shared by DX-cluster and RBN ingests.
 # Optional RBN (Reverse Beacon Network) CW/RTTY telnet ingest — public relay, no password,
 # but it prompts for a callsign before streaming (set -rbn-callsign / RBN_CALLSIGN). Fills the
 # activity chart/live stream during CW/SSB contests when FT8 thins out. Minimal scope:
 # activity + live only, kept out of the FT8-SNR conditions baseline (rbn.go).
-#   go run . -dev -port 8080 -rbn-enable -rbn-callsign <yourcall>
+#   go run ./cmd/horstreporter -dev -port 8080 -rbn-enable -rbn-callsign <yourcall>
 # Optional WSPR ingest — wspr.live ClickHouse HTTP poller (reference-only, like RBN):
-#   go run . -dev -port 8080 -wspr-enable
+#   go run ./cmd/horstreporter -dev -port 8080 -wspr-enable
 
 # Run local operator agent
 go run ./cmd/horstoperator-agent -listen 127.0.0.1:9955 -station-locator JO62qm
@@ -47,7 +47,7 @@ go run ./cmd/horstprop -listen 127.0.0.1:9970
 go test ./...
 
 # Backend coverage gate (unit U8): runs `go test ./... -cover` itself and fails
-# when an in-scope package (horstreporter, cmd/horstoperator-agent) drops below
+# when an in-scope package (cmd/horstreporter, cmd/horstoperator-agent) drops below
 # .coverage-baseline.json by more than 0.5pp. internal/awards*/awardcontract are
 # out of scope by design. This is the Go side of the local coverage floor.
 npm run test:go:coverage   # (= node scripts/coverage-check.mjs)
@@ -81,7 +81,7 @@ npm run perf:gate:mercator
 # that touches hub.history readers or per-request allocation. See docs/performance.md.
 node scripts/measure-concurrency.mjs
 
-# UI profiling (headless Chromium, needs a running `go run . -dev`): per-scenario CPU,
+# UI profiling (headless Chromium, needs a running `go run ./cmd/horstreporter -dev`): per-scenario CPU,
 # frame times and long tasks for load/idle/zoom/pan/style/projection switches. For a
 # contest-scale feed run scripts/stress-proxy.mjs and point URL at it.
 node scripts/profile-ui.mjs [label]
@@ -98,7 +98,8 @@ npm run perf:gate:mercator
 
 Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 
-**Backend core files:**
+**Backend core files** (`cmd/horstreporter/`, `package main`; run commands from the repo root so `-dev` finds `static/`):
+- `embed.go` (repo root, `package horstreporter`) — `//go:embed` for `static/` and `cty.dat`; go:embed cannot reach parent dirs, so the embeds live at the module root
 - `main.go` — flags, server wiring, static serving, TLS, history pruning
 - `mqtt.go` — MQTT ingest (`pskr/filter/v2/#`), topic parsing, FT8/FT4 mode filtering
 - `hub.go` — in-memory client hub + rolling spot history (fan-out to SSE clients); history messages have implicit sequence numbers (`baseSeq`, `hubEpoch`) that back stream resume
@@ -138,7 +139,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `MQTTMessage` is on the order of a million resident values: keep it at or under 152 bytes (`TestMQTTMessageStaysCompact`). DX-cluster/RBN-only annotations live behind `X *DXExtra` (read via `m.extra()`, build with `newDXExtra`); like everything in a history message they are immutable after the append.
 - `area_index.go` pre-filters the history window for `dx_conditions` / `hot_bands` (`EvaluateAreaWindow`). Its position predicate (an end in the area block) must stay a superset of every per-message test the evaluation applies except the regional count; if you add a message filter to `EvaluateArea` that can accept a message the index would reject, extend `areaIndexKey.wants` (the equivalence test will catch most omissions). The regional count (ends in the operator's cluster block) is not read from the positions: `cluster_counts.go` keeps it per second and band beside the index, and `areaIndexKey.classify` must keep applying the same rule as the walk's own count (conditions mode, feeding source, both locators, in-scope band).
 - Hot per-message paths (`matchBandEvent`, `extractMatchedBandEventArea`, `matchAndCreateSpot`, `liveArea.contains`) must stay allocation-free (the window scan builds its dedup key in a stack buffer and counts uniques through `keySet`, a set of 128-bit hashes; `hot_bands` evaluates in lite mode and must not read the per-band diagnostics the full evaluation adds): the feed's locators are mixed case, so use `locatorSquareXYFold` / `hasPrefixFold` instead of `strings.ToUpper` on every message, and build keys without `fmt`. Equivalence tests against the old implementations live in `extract_matched_equiv_test.go` / `match_equiv_test.go`.
-- Production embeds `static/` via `//go:embed static`; `-dev` serves from disk with no-cache
+- Production embeds `static/` via `//go:embed static` in the root `embed.go`; `-dev` serves from disk with no-cache
 - The map fetches `static/world-slim.geojson` (generated from `static/vendor/world.geojson` by `scripts/slim-world-geojson.mjs`; re-run it after adding a reader of another Natural Earth property). The live stream must not wait on that download: Mercator boot starts the stream without awaiting the overlay sync (`overlaysReady` in `app.js`)
 - The `dxlens` module is a sibling directory (`../dxlens`), referenced via `go.mod replace`
 - Browser opmode calls `http://127.0.0.1:9955/v1/*` directly; the backend never proxies to the local agent

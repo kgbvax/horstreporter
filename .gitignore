@@ -7,7 +7,9 @@
 *.dll
 *.so
 *.dylib
-horstreporter*
+# server build artifacts (root-anchored so it can't match cmd/horstreporter/)
+/horstreporter*
+/cmd/horstreporter/horstreporter
 
 # Test binary, built with `go test -c`
 *.test
