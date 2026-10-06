@@ -15,7 +15,7 @@
 - WSPR propagation-intelligence engine (`prop_intel.go`) nowcasts per (band x 11 DXPulse region) from WSPR spots: SSB/CW openness (SNR+Power budget), rising slope, atypical z-score (vs WSPR climatology), three-flavor atypical label (FT8 cross-reference), and a from-here view. Served via `/api/prop_intel`.
 
 ## Architecture boundaries
-- Backend core files:
+- Backend core files (`cmd/horstreporter/`; static/cty.dat embeds in root `embed.go`):
   - `main.go` (flags, server wiring, static serving, TLS, pruning/save loops)
   - `mqtt.go` (MQTT ingest + topic/message parsing + mode filtering)
   - `hub.go` (in-memory client hub + spot history)
@@ -55,7 +55,7 @@
 
 ## Runtime and ops notes
 - Static file serving:
-  - Production mode uses embedded files via `//go:embed static`.
+  - Production mode uses embedded files via `//go:embed static` (root `embed.go`).
   - `-dev` serves from disk with no-cache middleware.
   - If frontend changes do not appear, verify `-dev` and whether a stale prebuilt binary is running.
 - Main flags commonly used:
@@ -71,7 +71,7 @@
 ## Quick commands agents should use
 - Backend tests: `go test ./...`
 - Frontend tests: `npm test` (runs `vitest run`)
-- Dev run: `go run . -dev -port 8080`
+- Dev run: `go run ./cmd/horstreporter -dev -port 8080`
 
 ## Editing guidance
 - Backend logic changes should generally happen in `main.go`, `mqtt.go`, `hub.go`, `spot.go`, `server.go`, `dx_conditions.go`.

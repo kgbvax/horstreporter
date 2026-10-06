@@ -15,7 +15,7 @@ npm run build
 case "$MODE" in
 	static)
 		echo "Building statically linked binary for Linux x64 (CGO disabled)..."
-		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags '-extldflags "-static"' -o "$STATIC_BIN" .
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags '-extldflags "-static"' -o "$STATIC_BIN" ./cmd/horstreporter
 		echo "Build complete: $STATIC_BIN"
 		;;
 	*)

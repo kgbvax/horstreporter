@@ -10,7 +10,7 @@
 // Writes tmp/prof/<label>.json (+ .png, and .cpuprofile with CPUPROF=1; the
 // latter loads in Chrome DevTools or scripts/cpuprofile-report.mjs).
 // Headless Chromium has no GPU: compare runs against each other, not against
-// a real browser. Needs a running server (go run . -dev).
+// a real browser. Needs a running server (go run ./cmd/horstreporter -dev).
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 fs.mkdirSync('tmp/prof', { recursive: true });

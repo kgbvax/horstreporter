@@ -33,12 +33,12 @@ in-memory history (persistence, replay baselines and the raw-spot store want
 Postgres).
 
 ```bash
-go run . -dev -port 8080
+go run ./cmd/horstreporter -dev -port 8080
 ```
 
 Then open `http://localhost:8080`: a Mercator map of recent FT8 spots around
 your locator, with per-band status chips and recommendations. All flags
-and their defaults: `go run . -h`.
+and their defaults: `go run ./cmd/horstreporter -h`.
 
 Tests: `go test ./...` (backend), `npm run check` (frontend typecheck + tests).
 
@@ -55,13 +55,13 @@ baseline; only RBN/WSPR contribute to the activity chart and live stream.
 # individually-assigned password; login is prompt-aware. Parsed spots persist
 # to Postgres dx_raw_spots; only spots with usable locators enter the live map.
 DXCLUSTER_USERNAME=<yourcall> DXCLUSTER_PASSWORD=<password> \
-  go run . -dev -port 8080 -dxcluster-enable -dxcluster-endpoint db0erf.de:7300
+  go run ./cmd/horstreporter -dev -port 8080 -dxcluster-enable -dxcluster-endpoint db0erf.de:7300
 
 # RBN (Reverse Beacon Network): public CW/RTTY telnet relay, prompts for a callsign
-go run . -dev -port 8080 -rbn-enable -rbn-callsign <yourcall>
+go run ./cmd/horstreporter -dev -port 8080 -rbn-enable -rbn-callsign <yourcall>
 
 # WSPR (wspr.live ClickHouse poller): reference-only
-go run . -dev -port 8080 -wspr-enable
+go run ./cmd/horstreporter -dev -port 8080 -wspr-enable
 ```
 
 `QRZ_USERNAME` / `QRZ_PASSWORD` enable callsign→locator enrichment, shared by the

@@ -11,7 +11,7 @@ import path from 'node:path';
 // runs, so sub-tolerance drift is not treated as a regression.
 //
 // Accounting scope: only the packages covered by the test-coverage work
-// (horstreporter, cmd/horstoperator-agent) are recorded. internal/awards* and
+// (cmd/horstreporter, cmd/horstoperator-agent) are recorded. internal/awards* and
 // internal/awardcontract are intentionally out of scope (award logic stays
 // operator-local), and packages reporting 0.0% ("no statements") are skipped,
 // never recorded as 0.

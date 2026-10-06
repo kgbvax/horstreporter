@@ -363,7 +363,7 @@ Mapping to the existing visual vocabulary: **A/B → "go" (green)**, **C → "wa
 **Wired in the prototype** (`tmp/dx-cluster-proto/index.html`): each card fetches its live grade +
 score from `:9970`, recolours the meter, shows a grade badge, re-renders the hero dial, and a status
 pill reports the live/offline state (mock values are kept when horstprop is down). To run the demo:
-`go run . -dev -port 8080 -dx-postgres-fail-fast=false` and `go run ./cmd/horstprop -horst-url
+`go run ./cmd/horstreporter -dev -port 8080 -dx-postgres-fail-fast=false` and `go run ./cmd/horstprop -horst-url
 http://127.0.0.1:8080 -area-rings 12`, then open the prototype.
 
 ---

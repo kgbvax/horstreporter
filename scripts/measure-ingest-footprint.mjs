@@ -28,7 +28,7 @@ if (!process.env.MEASURE_SKIP_GATES) {
 }
 
 // --- harness run ----------------------------------------------------------
-const out = run('go', ['test', '-run', '^TestIngestFootprintHarness$', '-count=1', '-v', '.'], {
+const out = run('go', ['test', '-run', '^TestIngestFootprintHarness$', '-count=1', '-v', './cmd/horstreporter'], {
   [HARNESS_ENV.split('=')[0]]: HARNESS_ENV.split('=')[1],
 });
 
