@@ -1,4 +1,6 @@
-package main
+// Package httpx holds HTTP middleware shared by the server: transparent gzip
+// of JSON/text responses and precompressed static-asset variants.
+package httpx
 
 import (
 	"bytes"
@@ -48,7 +50,7 @@ func gzipCompressibleType(ct string) bool {
 	return false
 }
 
-func acceptsGzip(r *http.Request) bool {
+func AcceptsGzip(r *http.Request) bool {
 	for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
 		name, params, _ := strings.Cut(strings.TrimSpace(part), ";")
 		if !strings.EqualFold(strings.TrimSpace(name), "gzip") {
@@ -63,17 +65,17 @@ func acceptsGzip(r *http.Request) bool {
 	return false
 }
 
-// gzipMiddleware compresses compressible responses of at least gzipMinSize
+// Middleware compresses compressible responses of at least gzipMinSize
 // for clients that accept gzip. It never touches the SSE stream (which does
 // its own per-flush gzip), the reverse-proxied pathscope mount, HEAD or Range
 // requests, upgrades, or responses that already carry a Content-Encoding
 // (e.g. the pre-gzipped /api/history bundles).
-func gzipMiddleware(next http.Handler) http.Handler {
+func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodHead || r.URL.Path == "/api/stream" ||
 			strings.HasPrefix(r.URL.Path, "/pathscope/") ||
 			r.Header.Get("Range") != "" || r.Header.Get("Upgrade") != "" ||
-			!acceptsGzip(r) {
+			!AcceptsGzip(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -223,30 +225,30 @@ func (g *gzipResponseWriter) close() {
 	}
 }
 
-// gzipStaticVariant is a precompressed embedded asset.
-type gzipStaticVariant struct {
-	body        []byte
-	etag        string
-	contentType string
+// StaticVariant is a precompressed embedded asset.
+type StaticVariant struct {
+	Body        []byte
+	ETag        string
+	ContentType string
 }
 
-// buildGzipStaticVariant compresses b when its type is compressible and the
+// BuildStaticVariant compresses b when its type is compressible and the
 // result is meaningfully smaller (under 90% of the original).
-func buildGzipStaticVariant(name string, b []byte, etag string) (gzipStaticVariant, bool) {
+func BuildStaticVariant(name string, b []byte, etag string) (StaticVariant, bool) {
 	ct := mime.TypeByExtension(path.Ext(name))
 	if ct == "" || !gzipCompressibleType(ct) || len(b) < gzipMinSize {
-		return gzipStaticVariant{}, false
+		return StaticVariant{}, false
 	}
 	var out bytes.Buffer
 	zw, _ := gzip.NewWriterLevel(&out, gzip.BestCompression)
 	zw.Write(b)
 	zw.Close()
 	if out.Len() >= len(b)*9/10 {
-		return gzipStaticVariant{}, false
+		return StaticVariant{}, false
 	}
-	return gzipStaticVariant{
-		body:        out.Bytes(),
-		etag:        strings.TrimSuffix(etag, `"`) + `-gz"`,
-		contentType: ct,
+	return StaticVariant{
+		Body:        out.Bytes(),
+		ETag:        strings.TrimSuffix(etag, `"`) + `-gz"`,
+		ContentType: ct,
 	}, true
 }

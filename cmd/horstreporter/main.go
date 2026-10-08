@@ -23,6 +23,7 @@ import (
 
 	"horstreporter"
 	"horstreporter/internal/cty"
+	"horstreporter/internal/httpx"
 
 	"golang.org/x/crypto/acme/autocert"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -805,7 +806,7 @@ func main() {
 
 	var appHandler http.Handler = appMux
 	if compressStream {
-		appHandler = gzipMiddleware(appMux)
+		appHandler = httpx.Middleware(appMux)
 	}
 
 	if *domain != "" {
