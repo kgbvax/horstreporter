@@ -55,7 +55,7 @@ Frontend (headless Chromium against a local dev server unless noted):
 
 - First spots on a throttled link (80 ms RTT, 3 Mbit/s): 3.6 s to 1.85 s from this change alone (the 3.6 s already had the slim outline file and module hints). The live stream used to start only after the country-outline download finished (`await` chain in the boot IIFE); Mercator boot no longer waits.
 - First-load transfer 1456 KB to 968 KB: `world-slim.geojson` (570 KB gzip, was 1046 KB), mascot image resized to its 2x display size (112 KB to 36 KB).
-- `.geojson` had no MIME type, so production served it as `text/plain`, skipped the precompressed static variants and gzipped it on every request (~36 ms CPU each). Registered in `gzip.go`.
+- `.geojson` had no MIME type, so production served it as `text/plain`, skipped the precompressed static variants and gzipped it on every request (~36 ms CPU each). Registered in `internal/httpx/gzip.go`.
 - Grayline overlay build 77 ms to 16 ms in a Node microbenchmark (`static/grayline.js`; 75 ms of the load-time long task in the browser profile). It runs on the main thread at load and each 5-minute bucket.
 - `modulepreload` hints for the 32 ES modules (about 170 ms at 80 ms RTT); `test/index-modulepreload.test.js` keeps the list in step with `app.js`.
 - Favicon and status line no longer rewritten every frame.

@@ -12,6 +12,7 @@ import (
 
 	"horstreporter/internal/cty"
 	"horstreporter/internal/maidenhead"
+	"horstreporter/internal/qrzlookup"
 )
 
 // Reverse Beacon Network (RBN) ingest. RBN is the CW/RTTY analog of PSKReporter: a fleet
@@ -59,7 +60,7 @@ type rbnConfig struct {
 	ReconnectDelay time.Duration
 	Verbose        bool
 	Callsign       string // required-in-practice: the relay prompts "enter your call" before streaming
-	Resolver       CallsignLocatorResolver
+	Resolver       qrzlookup.Resolver
 	CtyResolver    *cty.Resolver // DXCC entity + country flag (cty.dat); may be nil
 }
 
@@ -255,7 +256,7 @@ func parseRBNSpot(line string, observedAt int64) (rbnSpot, bool) {
 	}, true
 }
 
-func handleRBNSpot(spot rbnSpot, resolver CallsignLocatorResolver, ctyResolver *cty.Resolver) {
+func handleRBNSpot(spot rbnSpot, resolver qrzlookup.Resolver, ctyResolver *cty.Resolver) {
 	band := bandFromFrequencyKHz(spot.FrequencyKHz)
 	skimmerLocator := ""
 	dxLocator := ""

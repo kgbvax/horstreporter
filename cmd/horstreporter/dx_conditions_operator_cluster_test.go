@@ -6,6 +6,7 @@ import (
 
 	"horstreporter/internal/cty"
 	"horstreporter/internal/maidenhead"
+	"horstreporter/internal/qrzlookup"
 )
 
 // testCtyDat is a two-entity cty.dat fixture: Germany (centroid 51N 10E,
@@ -30,7 +31,7 @@ func testCtyResolver(t *testing.T) *cty.Resolver {
 
 func TestDeriveOperatorClusterCharacterization(t *testing.T) {
 	ctyRes := testCtyResolver(t)
-	qrz := &stubResolver{infos: map[string]CallsignInfo{
+	qrz := &stubResolver{infos: map[string]qrzlookup.Info{
 		"DL1ABC": {Locator: "JO62"},
 		"DL2BAD": {Locator: "notaloc"}, // invalid QRZ locator → cty fallback
 		"ZZ1ZZ":  {Locator: ""},        // empty → cty (zero centroid) → ""

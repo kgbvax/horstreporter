@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"horstreporter/internal/qrzlookup"
 )
 
 func TestParseDXClusterSpot(t *testing.T) {
@@ -94,11 +96,11 @@ func TestBandFromFrequencyKHz(t *testing.T) {
 	}
 }
 
-// stubResolver is a fake CallsignLocatorResolver so handleDXClusterSpot /
+// stubResolver is a fake qrzlookup.Resolver so handleDXClusterSpot /
 // handleRBNSpot locator enrichment can be driven without QRZ.
 type stubResolver struct {
 	locators map[string]string
-	infos    map[string]CallsignInfo
+	infos    map[string]qrzlookup.Info
 }
 
 func (s *stubResolver) LookupLocator(callsign string) (string, error) {
@@ -108,11 +110,11 @@ func (s *stubResolver) LookupLocator(callsign string) (string, error) {
 	return "", io.EOF
 }
 
-func (s *stubResolver) LookupInfo(callsign string) (CallsignInfo, error) {
+func (s *stubResolver) LookupInfo(callsign string) (qrzlookup.Info, error) {
 	if info, ok := s.infos[callsign]; ok {
 		return info, nil
 	}
-	return CallsignInfo{}, io.EOF
+	return qrzlookup.Info{}, io.EOF
 }
 
 // isolateHubForIngest replaces hub.clients/history with fresh empties for the
@@ -173,7 +175,7 @@ func TestHandleDXClusterSpotPopulatesLiveFields(t *testing.T) {
 
 	resolver := &stubResolver{
 		locators: map[string]string{"W3LPL-#": "FM18"},
-		infos: map[string]CallsignInfo{
+		infos: map[string]qrzlookup.Info{
 			"K1XYZ": {Locator: "fn31pr", Name: "Joe", Country: "United States"},
 		},
 	}
@@ -270,7 +272,7 @@ func TestHandleDXClusterSpotDropsOffBandFrequency(t *testing.T) {
 
 	// 14.074 MHz is in-band, 14.9 MHz sits in the 20m→12m gap → band "" → unusable.
 	resolver := &stubResolver{
-		infos: map[string]CallsignInfo{"K1XYZ": {Locator: "FN31"}},
+		infos: map[string]qrzlookup.Info{"K1XYZ": {Locator: "FN31"}},
 	}
 	_, _, _, _, _, _, droppedBefore := dxClusterAccounting.snapshot()
 	handleDXClusterSpot(dxClusterSpot{

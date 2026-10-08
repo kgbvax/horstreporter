@@ -104,8 +104,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `mqtt.go` — MQTT ingest (`pskr/filter/v2/#`), topic parsing, FT8/FT4 mode filtering
 - `hub.go` — in-memory client hub + rolling spot history (fan-out to SSE clients); history messages have implicit sequence numbers (`baseSeq`, `hubEpoch`) that back stream resume
 - `stream.go` / `stream_wire.go` — `/api/stream` handler (batched flushes, heartbeat, v2 tuple frames, resume/`prev_*` delta dump)
-- `gzip.go` — gzip middleware for JSON/static responses + precompressed embedded assets
-- `spot.go` — spot model, matching/locator utilities
+- `spot.go` — spot model and spot-to-client matching
 - `server.go` — HTTP handlers
 - `dx_conditions.go` — DX baseline scoring engine
 - `live_area.go` — adaptive live area (`rings=auto`): widens a sparse home square ring by ring, cached per grid4, shared by stream / dx_conditions / hot_bands / prop_intel v2
@@ -116,6 +115,10 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `opmode.go` — operator mode endpoint wiring (browser calls local agent directly; backend never proxies)
 - `dxlens_mount.go` — mounts the `dxlens` sibling module at `/dxlens/`
 - `dx_cellfeed.go` — `CellBucketFeed`: midpoint-cell bucket accumulator + 60s persistence tick + retention pruning (writes `proplab_cell_buckets` for pathscope; all that remains of the removed Propagation Lab)
+- `internal/httpx/` — gzip middleware for JSON/static responses + precompressed embedded assets
+- `internal/maidenhead/` — Maidenhead locator arithmetic (validation, square XY, rings/clusters, lat/lng)
+- `internal/qrzlookup/` — QRZ.com callsign→locator/name/country client (`Resolver` interface)
+- `internal/proxy/` — same-origin reverse proxies for the local horstprop / pathscope services
 - `internal/proplab/` — primitives for that feed: `buckets.go` (`CellBucketEngine`), plus `geo.go`, `band.go`, `time.go`, `spot.go`, `region.go`, `stats.go`, `dx_midpoint.go`, `lane.go`, `types.go` (engines were deleted; name kept for stability)
 - `sw_ingest.go` — optional NOAA SWPC / OVATION polling into `proplab_sw_series` (consumed by pathscope)
 - `cmd/horstoperator-agent/` — standalone local agent bridging browser opmode to PSTrotator UDP; resolves Wavelog attributes for the Chase Queue and computes award "wanted" in-process via `internal/awards` (operator log stays local)

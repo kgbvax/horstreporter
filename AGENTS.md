@@ -19,7 +19,7 @@
   - `main.go` (flags, server wiring, static serving, TLS, pruning/save loops)
   - `mqtt.go` (MQTT ingest + topic/message parsing + mode filtering)
   - `hub.go` (in-memory client hub + spot history)
-  - `spot.go` (spot model + matching/locator utilities)
+  - `spot.go` (spot model + matching; locator maths in `internal/maidenhead`)
   - `server.go` (HTTP handlers)
   - `dx_conditions.go` (DX baseline + scoring engine)
   - `wspr_climatology.go` (WSPR climatology accumulator + Postgres/JSONL persistence)

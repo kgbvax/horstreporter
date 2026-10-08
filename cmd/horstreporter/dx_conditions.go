@@ -17,6 +17,7 @@ import (
 
 	"horstreporter/internal/cty"
 	"horstreporter/internal/maidenhead"
+	"horstreporter/internal/qrzlookup"
 	"horstreporter/internal/region"
 )
 
@@ -142,7 +143,7 @@ type DxBaselineEngine struct {
 	// callsignResolver enables QRZ locator lookup for callsign QTH so the
 	// cluster baseline can be derived (cluster anchor from the resolved locator).
 	// Optional — when nil, callsign QTH falls back to ctyResolver, then global.
-	callsignResolver CallsignLocatorResolver
+	callsignResolver qrzlookup.Resolver
 	// ctyResolver provides DXCC entity centroids (lat/lon) as a last-resort
 	// cluster derivation when QRZ has no locator for a callsign QTH.
 	ctyResolver *cty.Resolver
@@ -334,7 +335,7 @@ func newDxBaselineEngine(path string) *DxBaselineEngine {
 // callsign targets try QRZ first, then fall back to the DXCC entity centroid.
 // A nil argument leaves the existing resolver unchanged (so QRZ can be wired
 // later without clobbering the cty resolver set at startup).
-func (e *DxBaselineEngine) SetResolvers(callsign CallsignLocatorResolver, ctyRes *cty.Resolver) {
+func (e *DxBaselineEngine) SetResolvers(callsign qrzlookup.Resolver, ctyRes *cty.Resolver) {
 	if e == nil {
 		return
 	}
@@ -861,7 +862,7 @@ const (
 //  4. otherwise ok=false.
 //
 // No normalization is applied here; callers own that. qrz and ctyRes may be nil.
-func resolveQTHLocator(qth string, qrz CallsignLocatorResolver, ctyRes *cty.Resolver) (loc string, source qthLocationSource, ok bool) {
+func resolveQTHLocator(qth string, qrz qrzlookup.Resolver, ctyRes *cty.Resolver) (loc string, source qthLocationSource, ok bool) {
 	if qth == "" {
 		return "", "", false
 	}

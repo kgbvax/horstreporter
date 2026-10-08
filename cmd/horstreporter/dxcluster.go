@@ -12,6 +12,7 @@ import (
 
 	"horstreporter/internal/cty"
 	"horstreporter/internal/maidenhead"
+	"horstreporter/internal/qrzlookup"
 )
 
 type dxClusterAccountingState struct {
@@ -44,7 +45,7 @@ type dxClusterConfig struct {
 	Verbose        bool
 	Username       string
 	Password       string
-	Resolver       CallsignLocatorResolver
+	Resolver       qrzlookup.Resolver
 	CtyResolver    *cty.Resolver // DXCC entity + country flag (cty.dat); may be nil
 }
 
@@ -287,7 +288,7 @@ func parseDXClusterSpot(line string, observedAt int64) (dxClusterSpot, bool) {
 	}, true
 }
 
-func handleDXClusterSpot(spot dxClusterSpot, resolver CallsignLocatorResolver, ctyResolver *cty.Resolver) {
+func handleDXClusterSpot(spot dxClusterSpot, resolver qrzlookup.Resolver, ctyResolver *cty.Resolver) {
 	band := bandFromFrequencyKHz(spot.FrequencyKHz)
 	spotterLocator := ""
 	dxLocator := ""

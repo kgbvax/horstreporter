@@ -14,6 +14,7 @@ import (
 
 	"horstreporter/internal/cty"
 	"horstreporter/internal/maidenhead"
+	"horstreporter/internal/qrzlookup"
 )
 
 // wsprUserAgent identifies HorstReporter to the volunteer-run wspr.live
@@ -143,7 +144,7 @@ type wsprConfig struct {
 	Endpoint    string
 	PollSeconds int
 	Verbose     bool
-	Resolver    CallsignLocatorResolver
+	Resolver    qrzlookup.Resolver
 	CtyResolver *cty.Resolver
 }
 
