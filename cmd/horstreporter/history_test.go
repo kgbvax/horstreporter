@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // withHistoryState snapshots the package-level state /api/history touches
@@ -102,9 +104,9 @@ func TestHistoryHandlerFallbackFiltersLikeStream(t *testing.T) {
 		hub.Lock()
 		hub.history = []MQTTMessage{
 			{T: now - 100, SC: "W1AW", RC: "DL1ABC", SL: "FN31", RL: "JO32", RP: -5, B: "20m", MD: "FT8", Source: "mqtt"},
-			{T: now - 90, SC: "W1AW", RC: "DL1XYZ", SL: "FN31", RL: "JO43", RP: -5, B: "20m", MD: "FT8", Source: "mqtt"}, // no match
+			{T: now - 90, SC: "W1AW", RC: "DL1XYZ", SL: "FN31", RL: "JO43", RP: -5, B: "20m", MD: "FT8", Source: "mqtt"},   // no match
 			{T: now - 80, SC: "W1AW", RC: "DL1WEAK", SL: "FN31", RL: "JO32", RP: -30, B: "20m", MD: "FT8", Source: "mqtt"}, // below cw floor
-			{T: now - 70, SC: "W1AW", RC: "DL1ABC", SL: "FN31", RL: "JO32", RP: -5, B: "2m", MD: "FT8", Source: "mqtt"}, // filtered band
+			{T: now - 70, SC: "W1AW", RC: "DL1ABC", SL: "FN31", RL: "JO32", RP: -5, B: "2m", MD: "FT8", Source: "mqtt"},    // filtered band
 		}
 		hub.Unlock()
 
@@ -284,10 +286,10 @@ func TestHistoryMessagesFromHubSortsChronologically(t *testing.T) {
 // TestHistoryTargetTokensDedups: qthSet (surroundings expands to 9 squares)
 // must reduce to distinct tokens for the SQL pushdown.
 func TestHistoryTargetTokensDedups(t *testing.T) {
-	client := &Client{qthSet: getSurroundingSquares("JO32")}
+	client := &Client{qthSet: maidenhead.SurroundingSquares("JO32")}
 	tokens := historyTargetTokens(client)
-	if len(tokens) != len(getSurroundingSquares("JO32")) {
-		t.Fatalf("expected %d tokens, got %d", len(getSurroundingSquares("JO32")), len(tokens))
+	if len(tokens) != len(maidenhead.SurroundingSquares("JO32")) {
+		t.Fatalf("expected %d tokens, got %d", len(maidenhead.SurroundingSquares("JO32")), len(tokens))
 	}
 	seen := make(map[string]bool)
 	for _, tok := range tokens {

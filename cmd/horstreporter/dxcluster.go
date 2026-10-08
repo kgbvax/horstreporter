@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"horstreporter/internal/cty"
+	"horstreporter/internal/maidenhead"
 )
 
 type dxClusterAccountingState struct {
@@ -331,17 +332,17 @@ func handleDXClusterSpot(spot dxClusterSpot, resolver CallsignLocatorResolver, c
 	}
 
 	m := MQTTMessage{
-		RP:         0,
-		T:          spot.ObservedAt,
-		SC:         spot.Spotter,
-		SL:         spotterLocator,
-		RC:         spot.DXCall,
-		RL:         dxLocator,
-		B:          band,
-		MD:         "DXCLUSTER",
-		F:          spot.FrequencyKHz,
-		X:          newDXExtra(spot.Comment, dxName, dxCountry, dxCountryISO),
-		Source:     "dxcluster",
+		RP:     0,
+		T:      spot.ObservedAt,
+		SC:     spot.Spotter,
+		SL:     spotterLocator,
+		RC:     spot.DXCall,
+		RL:     dxLocator,
+		B:      band,
+		MD:     "DXCLUSTER",
+		F:      spot.FrequencyKHz,
+		X:      newDXExtra(spot.Comment, dxName, dxCountry, dxCountryISO),
+		Source: "dxcluster",
 	}
 
 	if dxBaseline != nil {
@@ -374,7 +375,7 @@ func isDXClusterSpotUsableForLive(m MQTTMessage) bool {
 	rl := strings.ToUpper(strings.TrimSpace(m.RL))
 	// DX cluster spots only need the DX call (RX) locator for mapping.
 	// Spotter locator is a nice-to-have, but not required.
-	return isLocator(rl)
+	return maidenhead.IsLocator(rl)
 }
 
 func bandFromFrequencyKHz(freq float64) string {

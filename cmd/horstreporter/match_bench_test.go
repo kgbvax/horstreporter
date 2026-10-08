@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"horstreporter/internal/maidenhead"
+)
 
 func benchMsgs() []MQTTMessage {
 	locs := []string{"JO31lk", "IO91wx", "FN20ab", "JO32gu", "EM73ss", "PM95tq", "JN48rl", "QF22le"}
@@ -13,8 +17,8 @@ func benchMsgs() []MQTTMessage {
 
 func BenchmarkMatchAndCreateSpotArea(b *testing.B) {
 	msgs := benchMsgs()
-	c := &Client{qthSet: qthSquares("JO32", false), areaActive: true, areaRings: 2}
-	c.areaX, c.areaY, _ = locatorSquareXY("JO32")
+	c := &Client{qthSet: maidenhead.QTHSquares("JO32", false), areaActive: true, areaRings: 2}
+	c.areaX, c.areaY, _ = maidenhead.SquareXY("JO32")
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -24,7 +28,7 @@ func BenchmarkMatchAndCreateSpotArea(b *testing.B) {
 
 func BenchmarkMatchAndCreateSpotQthOnly(b *testing.B) {
 	msgs := benchMsgs()
-	c := &Client{qthSet: qthSquares("JO32", true)}
+	c := &Client{qthSet: maidenhead.QTHSquares("JO32", true)}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

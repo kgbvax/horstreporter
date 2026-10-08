@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // matchAndCreateSpotRef is the pre-optimisation implementation (upper-cases
@@ -21,10 +23,10 @@ func matchAndCreateSpotRef(client *Client, m MQTTMessage, now int64) (Spot, bool
 	isReceiver := false
 
 	for _, t := range client.qthSet {
-		if matchCall(sc, t) || (isLocator(t) && sl != "" && strings.HasPrefix(sl, t)) {
+		if matchCall(sc, t) || (maidenhead.IsLocator(t) && sl != "" && strings.HasPrefix(sl, t)) {
 			isSender = true
 		}
-		if matchCall(rc, t) || (isLocator(t) && rl != "" && strings.HasPrefix(rl, t)) {
+		if matchCall(rc, t) || (maidenhead.IsLocator(t) && rl != "" && strings.HasPrefix(rl, t)) {
 			isReceiver = true
 		}
 	}
@@ -32,10 +34,10 @@ func matchAndCreateSpotRef(client *Client, m MQTTMessage, now int64) (Spot, bool
 	// Area-of-interest match (O(1), additive): a sender/receiver locator within
 	// areaRings grid-squares of the area centre also counts. Backs region feeds.
 	if client.areaActive {
-		if x, y, ok := locatorSquareXY(sl); ok && absInt(x-client.areaX) <= client.areaRings && absInt(y-client.areaY) <= client.areaRings {
+		if x, y, ok := maidenhead.SquareXY(sl); ok && absInt(x-client.areaX) <= client.areaRings && absInt(y-client.areaY) <= client.areaRings {
 			isSender = true
 		}
-		if x, y, ok := locatorSquareXY(rl); ok && absInt(x-client.areaX) <= client.areaRings && absInt(y-client.areaY) <= client.areaRings {
+		if x, y, ok := maidenhead.SquareXY(rl); ok && absInt(x-client.areaX) <= client.areaRings && absInt(y-client.areaY) <= client.areaRings {
 			isReceiver = true
 		}
 	}
@@ -65,7 +67,7 @@ func matchAndCreateSpotRef(client *Client, m MQTTMessage, now int64) (Spot, bool
 		return Spot{}, false
 	}
 
-	lat, lng := locatorToLatLng(remoteLocator)
+	lat, lng := maidenhead.ToLatLng(remoteLocator)
 	age := ageClamped(now, m.T)
 
 	if logLevel == "DEBUG" {
@@ -91,7 +93,7 @@ func TestMatchAndCreateSpotMatchesReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
 	locs := []string{"JO32", "jo32lk", "JO32LK", "JO31", "jo33", "IO91wx", "FN20", "fn21XA", "RR99", "SS00", "J", "JO3", "", "AA00aa", "Jo32", "JO3x"}
 	calls := []string{"DK3JF", "dk3jf", "W1AW", "DK3JF/P", "F/DK3JF", "DK3JF/M/QRP", "", "N0CALL", "dl1abc"}
-	qthSets := [][]string{nil, {"JO32"}, {"DK3JF"}, {"JO32", "JO33", "JO31"}, {"FN20", "W1AW"}, qthSquares("JO32", true)}
+	qthSets := [][]string{nil, {"JO32"}, {"DK3JF"}, {"JO32", "JO33", "JO31"}, {"FN20", "W1AW"}, maidenhead.QTHSquares("JO32", true)}
 	pick := func(xs []string) string { return xs[rng.Intn(len(xs))] }
 	for i := 0; i < 300000; i++ {
 		m := MQTTMessage{T: rng.Int63n(2_000_000_000), RP: rng.Intn(60) - 30, B: "20m", MD: "FT8", SC: pick(calls), RC: pick(calls), SL: pick(locs), RL: pick(locs), Source: pick([]string{"", "mqtt", "wspr", "rbn", "dxcluster"})}
@@ -99,7 +101,7 @@ func TestMatchAndCreateSpotMatchesReference(t *testing.T) {
 		if rng.Intn(2) == 0 {
 			c.areaActive = true
 			c.areaRings = rng.Intn(4)
-			c.areaX, c.areaY, _ = locatorSquareXY(strings.ToUpper(pick(locs)))
+			c.areaX, c.areaY, _ = maidenhead.SquareXY(strings.ToUpper(pick(locs)))
 		}
 		got, gok := matchAndCreateSpot(c, m, 2_000_000_100)
 		want, wok := matchAndCreateSpotRef(c, m, 2_000_000_100)
@@ -172,7 +174,7 @@ func TestLocatorToLatLngFoldMatchesReference(t *testing.T) {
 		}
 		loc := b.String()
 		la, lo := locatorToLatLngFold(loc)
-		wa, wo := locatorToLatLng(loc)
+		wa, wo := maidenhead.ToLatLng(loc)
 		if la != wa || lo != wo {
 			t.Fatalf("locatorToLatLngFold(%q) = %v,%v want %v,%v", loc, la, lo, wa, wo)
 		}
@@ -181,7 +183,7 @@ func TestLocatorToLatLngFoldMatchesReference(t *testing.T) {
 
 // A locator qth is matched through its own-square live area in the window
 // scan; that must pick the same messages, with the same events, as the token
-// set (qthSquares) the scan used before. (The token set also matched a
+// set (maidenhead.QTHSquares) the scan used before. (The token set also matched a
 // callsign spelled like the locator token itself, which no station can have;
 // the area index has always ignored that case too.)
 func TestOwnSquareAreaMatchesQthSquares(t *testing.T) {
@@ -191,7 +193,7 @@ func TestOwnSquareAreaMatchesQthSquares(t *testing.T) {
 	pick := func(xs []string) string { return xs[rng.Intn(len(xs))] }
 	for _, qth := range []string{"JO32", "JO32QM", "FN20", "IO91WX"} {
 		for _, surr := range []bool{false, true} {
-			set := qthSquares(qth, surr)
+			set := maidenhead.QTHSquares(qth, surr)
 			area := ownSquareArea(qth, surr)
 			hits := 0
 			for i := 0; i < 50000; i++ {

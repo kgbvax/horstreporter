@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"horstreporter/internal/maidenhead"
 	"horstreporter/internal/region"
 )
 
@@ -40,7 +41,7 @@ func scanPropIntelV2WindowRef(history []MQTTMessage, profiles []propIntelSourceP
 			continue
 		}
 		remoteLocator, _, matchedEnd := resolvePropIntelRemoteEndArea(m, qthSet, matchArea, prof.ReceiverSide)
-		if remoteLocator == "" || !isLocator(remoteLocator) {
+		if remoteLocator == "" || !maidenhead.IsLocator(remoteLocator) {
 			continue
 		}
 		reg := regions.get(remoteLocator)
@@ -102,7 +103,7 @@ func TestScanPropIntelV2WindowMatchesReference(t *testing.T) {
 		}
 	}
 	profileSets := [][]propIntelSourceProfile{propIntelSourceProfiles, propIntelSourceProfiles[:1], propIntelSourceProfiles[1:3], {propIntelSourceProfiles[3], propIntelSourceProfiles[0]}}
-	qthSets := [][]string{qthSquares("JO32", false), qthSquares("JO32", true), qthSquares("DK3JF", false), qthSquares("FN20", false)}
+	qthSets := [][]string{maidenhead.QTHSquares("JO32", false), maidenhead.QTHSquares("JO32", true), maidenhead.QTHSquares("DK3JF", false), maidenhead.QTHSquares("FN20", false)}
 	areas := []*liveArea{nil, explicitLiveArea("JO32", 2), explicitLiveArea("FN20", 3)}
 
 	cutoff := now - 900
@@ -136,7 +137,7 @@ func TestRawRegionMemoMatchesCachedLookup(t *testing.T) {
 		b := []byte{letters[rng.Intn(19)], letters[rng.Intn(19)], byte('0' + rng.Intn(10)), byte('0' + rng.Intn(10)), letters[rng.Intn(18)] + 32*byte(rng.Intn(2)), letters[rng.Intn(18)] + 32*byte(rng.Intn(2))}
 		raw := string(b[:4+2*rng.Intn(2)])
 		want := -1
-		if up := strings.ToUpper(raw); isLocator(up) {
+		if up := strings.ToUpper(raw); maidenhead.IsLocator(up) {
 			if reg := regionFromLocatorCached(up); reg != region.Unknown {
 				want = regionIndex[reg]
 			}
@@ -217,7 +218,7 @@ func scanPropIntelWindowRef(history []MQTTMessage, qthSet []string, now, cutoff,
 			continue
 		}
 		remoteLocator, remoteCall, matchedEnd := resolvePropIntelRemoteEnd(m, qthSet, "sc")
-		if remoteLocator == "" || !isLocator(remoteLocator) {
+		if remoteLocator == "" || !maidenhead.IsLocator(remoteLocator) {
 			continue
 		}
 		reg := regions.get(remoteLocator)
@@ -273,7 +274,7 @@ func TestScanPropIntelWindowMatchesReference(t *testing.T) {
 	}
 	cutoff := now - 900
 	midpoint := cutoff + (now-cutoff)/2
-	for _, qs := range [][]string{qthSquares("JO32", false), qthSquares("JO32", true), qthSquares("DK3JF", false), qthSquares("FN20", true), nil} {
+	for _, qs := range [][]string{maidenhead.QTHSquares("JO32", false), maidenhead.QTHSquares("JO32", true), maidenhead.QTHSquares("DK3JF", false), maidenhead.QTHSquares("FN20", true), nil} {
 		g1, g2 := scanPropIntelWindow(msgs, qs, now, cutoff, midpoint)
 		w1, w2 := scanPropIntelWindowRef(msgs, qs, now, cutoff, midpoint)
 		if !reflect.DeepEqual(g1, w1) || !reflect.DeepEqual(g2, w2) {
@@ -308,8 +309,8 @@ func TestPropRemoteMatcherMatchesTokenLoop(t *testing.T) {
 		return l
 	}
 	qthSets := [][]string{
-		qthSquares("JO32", false), qthSquares("JO32", true), qthSquares("RR99", true), qthSquares("AA00", true),
-		qthSquares("DK3JF", false), {"JO32QM"}, {"JO32", "DK3JF"}, nil,
+		maidenhead.QTHSquares("JO32", false), maidenhead.QTHSquares("JO32", true), maidenhead.QTHSquares("RR99", true), maidenhead.QTHSquares("AA00", true),
+		maidenhead.QTHSquares("DK3JF", false), {"JO32QM"}, {"JO32", "DK3JF"}, nil,
 	}
 	areas := []*liveArea{nil, explicitLiveArea("JO32", 2)}
 	matched := 0

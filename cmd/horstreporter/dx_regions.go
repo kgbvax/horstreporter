@@ -1,5 +1,7 @@
 package main
 
+import "horstreporter/internal/maidenhead"
+
 // dx_regions.go holds the DXPulse region classification primitives that
 // outlived the DXPulse feature itself: the coarse band-of-Earth regions used
 // by the DX baseline's region counts (dx_conditions), the persisted
@@ -38,10 +40,10 @@ var dxPulseAllRegions = []dxPulseRegion{
 }
 
 func dxPulseRegionForLocator(loc string) dxPulseRegion {
-	if !isLocator(loc) {
+	if !maidenhead.IsLocator(loc) {
 		return dxPulseRegionUnknown
 	}
-	lat, lng := locatorToLatLng(loc)
+	lat, lng := maidenhead.ToLatLng(loc)
 	return dxPulseRegionForLatLng(lat, lng)
 }
 

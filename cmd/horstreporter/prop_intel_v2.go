@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"horstreporter/internal/maidenhead"
 	"horstreporter/internal/region"
 )
 
@@ -196,11 +197,11 @@ func resolvePropIntelRemoteEndArea(m MQTTMessage, qthSet []string, area *liveAre
 	}
 
 	for _, t := range qthSet {
-		if matchCall(recvCall, t) || (isLocator(t) && recvLoc != "" && strings.HasPrefix(recvLoc, t)) {
+		if matchCall(recvCall, t) || (maidenhead.IsLocator(t) && recvLoc != "" && strings.HasPrefix(recvLoc, t)) {
 			// Operator is the receiver → remote is the other end.
 			return otherLoc, otherCall, true
 		}
-		if matchCall(otherCall, t) || (isLocator(t) && otherLoc != "" && strings.HasPrefix(otherLoc, t)) {
+		if matchCall(otherCall, t) || (maidenhead.IsLocator(t) && otherLoc != "" && strings.HasPrefix(otherLoc, t)) {
 			// Operator is the remote end → remote is the receiver.
 			return recvLoc, recvCall, true
 		}
@@ -245,10 +246,10 @@ func propIntelRemote(m *MQTTMessage, qthSet []string, area *liveArea, receiverSi
 		}
 	}
 	for _, t := range qthSet {
-		if matchCall(recvCall, t) || (isLocator(t) && hasPrefixFold(recvLoc, t)) {
+		if matchCall(recvCall, t) || (maidenhead.IsLocator(t) && hasPrefixFold(recvLoc, t)) {
 			return otherLoc, false, true
 		}
-		if matchCall(otherCall, t) || (isLocator(t) && hasPrefixFold(otherLoc, t)) {
+		if matchCall(otherCall, t) || (maidenhead.IsLocator(t) && hasPrefixFold(otherLoc, t)) {
 			return recvLoc, true, true
 		}
 	}
@@ -284,10 +285,10 @@ func newPropRemoteMatcher(qthSet []string, area *liveArea) propRemoteMatcher {
 	}
 	sq := make([][2]int, 0, len(qthSet))
 	for _, t := range qthSet {
-		if len(t) != 4 || !isLocator(t) {
+		if len(t) != 4 || !maidenhead.IsLocator(t) {
 			return pm
 		}
-		x, y, _ := locatorSquareXY(t)
+		x, y, _ := maidenhead.SquareXY(t)
 		sq = append(sq, [2]int{x, y})
 	}
 	pm.sq, pm.exact = sq, true
@@ -314,8 +315,8 @@ func (pm *propRemoteMatcher) resolve(m *MQTTMessage, receiverSide string) (remot
 	if receiverSide == "rc" {
 		recvLoc, otherLoc = rl, sl
 	}
-	rx, ry, rok := locatorSquareXYFold(recvLoc)
-	ox, oy, ook := locatorSquareXYFold(otherLoc)
+	rx, ry, rok := maidenhead.SquareXYFold(recvLoc)
+	ox, oy, ook := maidenhead.SquareXYFold(otherLoc)
 	rok = rok && pm.inBox(rx, ry)
 	ook = ook && pm.inBox(ox, oy)
 	if !rok && !ook {
@@ -572,7 +573,7 @@ func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes in
 	if area != nil && matchArea == nil {
 		surroundings = area.Radius == 1
 	}
-	qthSet := qthSquares(qth, surroundings)
+	qthSet := maidenhead.QTHSquares(qth, surroundings)
 
 	cutoff := now - int64(minutes)*60
 	midpoint := cutoff + (now-cutoff)/2

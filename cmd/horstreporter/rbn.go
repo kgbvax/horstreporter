@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"horstreporter/internal/cty"
+	"horstreporter/internal/maidenhead"
 )
 
 // Reverse Beacon Network (RBN) ingest. RBN is the CW/RTTY analog of PSKReporter: a fleet
@@ -300,17 +301,17 @@ func handleRBNSpot(spot rbnSpot, resolver CallsignLocatorResolver, ctyResolver *
 	// draws skimmer→DX paths and activity_by_bin matches callsign-targets on
 	// receiver_callsign (the DX being heard).
 	m := MQTTMessage{
-		RP:         spot.DB,
-		T:          spot.ObservedAt,
-		SC:         spot.Skimmer,
-		SL:         skimmerLocator,
-		RC:         spot.DXCall,
-		RL:         dxLocator,
-		B:          band,
-		MD:         spot.Mode,
-		F:          spot.FrequencyKHz,
-		X:          newDXExtra("", dxName, dxCountry, dxCountryISO),
-		Source:     "rbn",
+		RP:     spot.DB,
+		T:      spot.ObservedAt,
+		SC:     spot.Skimmer,
+		SL:     skimmerLocator,
+		RC:     spot.DXCall,
+		RL:     dxLocator,
+		B:      band,
+		MD:     spot.Mode,
+		F:      spot.FrequencyKHz,
+		X:      newDXExtra("", dxName, dxCountry, dxCountryISO),
+		Source: "rbn",
 	}
 
 	// Persist unconditionally with full fidelity (real frequency, mode, dB, skimmer) so the
@@ -344,5 +345,5 @@ func isRBNSpotUsableForLive(m MQTTMessage) bool {
 	if strings.TrimSpace(m.B) == "" {
 		return false
 	}
-	return isLocator(strings.ToUpper(strings.TrimSpace(m.RL)))
+	return maidenhead.IsLocator(strings.ToUpper(strings.TrimSpace(m.RL)))
 }

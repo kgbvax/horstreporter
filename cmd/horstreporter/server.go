@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"horstreporter/internal/httpx"
+	"horstreporter/internal/maidenhead"
 )
 
 // pushSubscribeRequest is the JSON body of POST /api/push/subscribe.
@@ -276,7 +277,7 @@ func squareDetailsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "locator required", http.StatusBadRequest)
 		return
 	}
-	if !isLocator(locator) {
+	if !maidenhead.IsLocator(locator) {
 		http.Error(w, "valid locator required", http.StatusBadRequest)
 		return
 	}
@@ -468,7 +469,7 @@ func buildSquareDetailsResponse(qth string, surroundings bool, locator string, m
 		return resp
 	}
 
-	client := &Client{qthSet: qthSquares(qth, surroundings)}
+	client := &Client{qthSet: maidenhead.QTHSquares(qth, surroundings)}
 	cutoff := now - int64(minutes*60)
 	seenPairs := make(map[string]struct{})
 	var sumSNR int

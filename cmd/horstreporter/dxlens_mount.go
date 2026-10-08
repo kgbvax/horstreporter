@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"horstreporter/internal/maidenhead"
+
 	"dxlens"
 )
 
@@ -118,7 +120,7 @@ func (p *dxlensProvider) TargetBucketsMulti(tokens []string) map[string]*dxlens.
 		// Convert locators to their cluster anchor; callsigns pass through
 		// (they won't match cluster-anchored rows, but the heatmap is
 		// locator-driven).
-		if anchor, ok := locatorClusterAnchor(u); ok {
+		if anchor, ok := maidenhead.ClusterAnchor(u); ok {
 			u = anchor
 		}
 		if _, dup := seen[u]; dup {
@@ -214,7 +216,7 @@ func (p *dxlensProvider) TargetBuckets(token string) map[string]*dxlens.Bucket {
 		return nil
 	}
 	// Convert locator to cluster anchor; callsigns pass through.
-	if anchor, ok := locatorClusterAnchor(token); ok {
+	if anchor, ok := maidenhead.ClusterAnchor(token); ok {
 		token = anchor
 	}
 

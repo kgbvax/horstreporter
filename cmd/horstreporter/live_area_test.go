@@ -3,6 +3,8 @@ package main
 import (
 	"net/http/httptest"
 	"testing"
+
+	"horstreporter/internal/maidenhead"
 )
 
 const laNow = int64(1_800_000_000)
@@ -10,8 +12,8 @@ const laNow = int64(1_800_000_000)
 // laMsgs returns n FT8 reports on band whose sender sits d squares east of
 // FN76 (the receiver is far away, in JO32).
 func laMsgs(band string, d, n int) []MQTTMessage {
-	cx, cy, _ := locatorSquareXY("FN76")
-	loc := squareXYToLocator(cx+d, cy)
+	cx, cy, _ := maidenhead.SquareXY("FN76")
+	loc := maidenhead.SquareXYToLocator(cx+d, cy)
 	out := make([]MQTTMessage, n)
 	for i := range out {
 		out[i] = MQTTMessage{T: laNow - 60, B: band, MD: "FT8", SC: "K1ABC", SL: loc + "AA", RC: "DL1XYZ", RL: "JO32AB", RP: -10}

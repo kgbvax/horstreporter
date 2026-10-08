@@ -4,12 +4,14 @@ import (
 	"hash/maphash"
 	"strconv"
 	"strings"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // ownSquareArea is the live area a locator qth stands for when no wider area
 // applies: its own 4-char square, or the 3x3 block with surroundings. The
-// caller has checked isLocator(qth). Matching through it equals matching the
-// qthSquares tokens, apart from a callsign spelled like a locator token, which
+// caller has checked maidenhead.IsLocator(qth). Matching through it equals matching the
+// maidenhead.QTHSquares tokens, apart from a callsign spelled like a locator token, which
 // no station can have.
 func ownSquareArea(qth string, surroundings bool) *liveArea {
 	radius := 0
@@ -17,7 +19,7 @@ func ownSquareArea(qth string, surroundings bool) *liveArea {
 		radius = 1
 	}
 	// explicitLiveArea refuses radius 0; the own square is a block too.
-	x, y, ok := locatorSquareXY(qth[:4])
+	x, y, ok := maidenhead.SquareXY(qth[:4])
 	if !ok {
 		return nil
 	}
@@ -143,7 +145,7 @@ func appendUpperTrim(dst []byte, s string) []byte {
 	return dst
 }
 
-// locatorToLatLngFold is locatorToLatLng(strings.ToUpper(locator)) without the
+// locatorToLatLngFold is maidenhead.ToLatLng(strings.ToUpper(locator)) without the
 // upper-cased copy.
 func locatorToLatLngFold(locator string) (float64, float64) {
 	if len(locator) < 2 {
@@ -151,7 +153,7 @@ func locatorToLatLngFold(locator string) (float64, float64) {
 	}
 	for i := 0; i < len(locator); i++ {
 		if locator[i] >= 0x80 {
-			return locatorToLatLng(locator)
+			return maidenhead.ToLatLng(locator)
 		}
 	}
 	up := func(c byte) byte {
@@ -217,7 +219,7 @@ type squareSet struct {
 	n    int
 }
 
-// add records the square of an upper-cased locator that isLocator accepted.
+// add records the square of an upper-cased locator that maidenhead.IsLocator accepted.
 func (s *squareSet) add(loc []byte) {
 	i := (int(loc[0]-'A')*10+int(loc[2]-'0'))*180 + int(loc[1]-'A')*10 + int(loc[3]-'0')
 	w, b := i>>6, uint64(1)<<(uint(i)&63)

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"horstreporter/internal/cty"
+	"horstreporter/internal/maidenhead"
 )
 
 // testCtyDat is a two-entity cty.dat fixture: Germany (centroid 51N 10E,
@@ -37,8 +38,8 @@ func TestDeriveOperatorClusterCharacterization(t *testing.T) {
 	e := newDxBaselineEngine("")
 	e.SetResolvers(qrz, ctyRes)
 
-	ctyAnchor, _ := locatorClusterAnchor(latLngToLocator(51, 10, 4))
-	jo62Anchor, _ := locatorClusterAnchor("JO62")
+	ctyAnchor, _ := maidenhead.ClusterAnchor(maidenhead.FromLatLng(51, 10, 4))
+	jo62Anchor, _ := maidenhead.ClusterAnchor("JO62")
 	cases := []struct {
 		qth, want string
 	}{

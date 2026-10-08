@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // countingResolver wraps stubResolver and counts LookupInfo calls so the
@@ -85,7 +87,7 @@ func TestResolveAlmanacAreaCallsign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dxcc path err = %v", err)
 	}
-	want := latLngToLocator(51, 10, 4)
+	want := maidenhead.FromLatLng(51, 10, 4)
 	if area.Grid4 != want || area.Source != qthSourceDXCC || !area.Approximate() {
 		t.Errorf("dxcc path = %+v, want %s/dxcc/approximate", area, want)
 	}

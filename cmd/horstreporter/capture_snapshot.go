@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 type captureSnapshotResponse struct {
@@ -53,7 +55,7 @@ func captureSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 	includeRbn := parseIncludeFlag(r.URL.Query(), "include_rbn")
 	includeWspr := parseIncludeFlag(r.URL.Query(), "include_wspr")
 
-	client := &Client{qthSet: qthSquares(qth, surroundings)}
+	client := &Client{qthSet: maidenhead.QTHSquares(qth, surroundings)}
 
 	cutoff := snapshotAt - int64(windowMinutes*60)
 

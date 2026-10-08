@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 func TestIsLocator(t *testing.T) {
@@ -34,8 +36,8 @@ func TestIsLocator(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isLocator(tt.loc); got != tt.want {
-				t.Errorf("isLocator(%q) = %v, want %v", tt.loc, got, tt.want)
+			if got := maidenhead.IsLocator(tt.loc); got != tt.want {
+				t.Errorf("maidenhead.IsLocator(%q) = %v, want %v", tt.loc, got, tt.want)
 			}
 		})
 	}
@@ -80,17 +82,17 @@ func TestLocatorToLatLng(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lat, lng := locatorToLatLng(tt.locator)
+			lat, lng := maidenhead.ToLatLng(tt.locator)
 			// Using a small tolerance for floating-point comparison
 			if math.Abs(lat-tt.wantLat) > 0.001 || math.Abs(lng-tt.wantLng) > 0.001 {
-				t.Errorf("locatorToLatLng(%q) = (%v, %v), want (%v, %v)", tt.locator, lat, lng, tt.wantLat, tt.wantLng)
+				t.Errorf("maidenhead.ToLatLng(%q) = (%v, %v), want (%v, %v)", tt.locator, lat, lng, tt.wantLat, tt.wantLng)
 			}
 		})
 	}
 }
 
 func TestGetSurroundingSquares(t *testing.T) {
-	res := getSurroundingSquares("JO32")
+	res := maidenhead.SurroundingSquares("JO32")
 	if len(res) != 9 {
 		t.Fatalf("expected 9 squares, got %d: %v", len(res), res)
 	}

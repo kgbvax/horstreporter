@@ -4,6 +4,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // Per-area index over hub.history.
@@ -69,20 +71,20 @@ func (k areaIndexKey) inArea(x, y int) bool {
 func (k areaIndexKey) classify(m *MQTTMessage) (hit bool, slot, n int) {
 	sl := strings.TrimSpace(m.SL)
 	rl := strings.TrimSpace(m.RL)
-	sx, sy, sok := locatorSquareXYFold(sl)
-	rx, ry, rok := locatorSquareXYFold(rl)
+	sx, sy, sok := maidenhead.SquareXYFold(sl)
+	rx, ry, rok := maidenhead.SquareXYFold(rl)
 	hit = (sok && k.inArea(sx, sy)) || (rok && k.inArea(rx, ry))
 	slot = -1
 	if !k.clusterOK || sl == "" || rl == "" || !sourceFeedsClusterBaseline(m.Source) || isNonConditionsMode(m.MD) {
 		return hit, slot, 0
 	}
 	if sok {
-		if ax, ay := clusterAnchorXY(sx, sy); ax == k.cx && ay == k.cy {
+		if ax, ay := maidenhead.ClusterAnchorXY(sx, sy); ax == k.cx && ay == k.cy {
 			n++
 		}
 	}
 	if rok {
-		if ax, ay := clusterAnchorXY(rx, ry); ax == k.cx && ay == k.cy {
+		if ax, ay := maidenhead.ClusterAnchorXY(rx, ry); ax == k.cx && ay == k.cy {
 			n++
 		}
 	}
@@ -260,8 +262,8 @@ func areaIndexKeyFor(qth string, surroundings bool, matchArea *liveArea, operato
 			return k, false
 		}
 		k.x, k.y, k.radius = matchArea.x, matchArea.y, matchArea.Radius
-	case isLocator(qth):
-		x, y, ok := locatorSquareXY(qth[:4])
+	case maidenhead.IsLocator(qth):
+		x, y, ok := maidenhead.SquareXY(qth[:4])
 		if !ok {
 			return k, false
 		}
@@ -272,7 +274,7 @@ func areaIndexKeyFor(qth string, surroundings bool, matchArea *liveArea, operato
 	default:
 		return k, false
 	}
-	if cx, cy, ok := locatorSquareXY(operatorCluster); ok {
+	if cx, cy, ok := maidenhead.SquareXY(operatorCluster); ok {
 		k.clusterOK, k.cx, k.cy = true, cx, cy
 	}
 	return k, true

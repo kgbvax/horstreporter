@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"horstreporter/internal/maidenhead"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -997,7 +999,7 @@ func (s *dxPostgresStore) ensureDxBaselineCluster(ctx context.Context) error {
 		distTier := distanceTierForLocators(senderLoc, receiverLoc)
 		snrt := snrTierFromDb(snr)
 		for _, loc := range [2]string{senderLoc, receiverLoc} {
-			anchor, ok := locatorClusterAnchor(loc)
+			anchor, ok := maidenhead.ClusterAnchor(loc)
 			if !ok {
 				continue
 			}
@@ -1137,7 +1139,7 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 	// cluster anchors so either operator's Evaluate benefits. This is the
 	// Postgres mirror of the in-memory clusterBuckets write in Observe.
 	for _, loc := range [2]string{m.SL, m.RL} {
-		anchor, ok := locatorClusterAnchor(loc)
+		anchor, ok := maidenhead.ClusterAnchor(loc)
 		if !ok {
 			continue
 		}
@@ -1587,7 +1589,7 @@ func quantilesFromPairs(pairs []baselinePair) (q25, q75 float64, ok bool) {
 // this may match the locator columns of dx_raw_spots: the charset excludes
 // SQL LIKE metacharacters (%/_/backslash — a raw-qth qth of "%" must not
 // become a wildcard), and byte-range bounds derived from it reproduce
-// exactly the live stream's isLocator+HasPrefix semantics (a token matches
+// exactly the live stream's maidenhead.IsLocator+HasPrefix semantics (a token matches
 // locators that extend it). Everything else (callsigns, malformed input)
 // is matched only against the callsign columns with plain equality.
 var locatorTargetRE = regexp.MustCompile(`^[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2}(?:[A-X]{2})?)?)?$`)
@@ -1680,7 +1682,7 @@ func appendTargetArmsOpt(arms []string, args []any, idx int, locators, calls []s
 // activityByBinForTargets returns raw spots/min per (band, time-bin) over the
 // selected `minutes` window, target-filtered the same way the live stream
 // matches (callsign or locator prefix, mirroring strings.HasPrefix in
-// extractMatchedBandEvent). Callers pass qthSquares(), so locator targets are
+// extractMatchedBandEvent). Callers pass maidenhead.QTHSquares(), so locator targets are
 // 4-char squares; a longer target would still match locators extending it.
 // This is the Postgres-backed source for the Band Stats "Reports over time"
 // chart bars.

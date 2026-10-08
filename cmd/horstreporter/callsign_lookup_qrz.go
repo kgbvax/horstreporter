@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 type CallsignLocatorResolver interface {
@@ -297,7 +299,7 @@ func (c *qrzLookupClient) lookupCall(call string) (info CallsignInfo, sessionExp
 		out.Name = strings.TrimSpace(data.Callsign.Name)
 	}
 	grid := strings.ToUpper(strings.TrimSpace(data.Callsign.Grid))
-	if len(grid) >= 4 && isLocator(grid[:4]) {
+	if len(grid) >= 4 && maidenhead.IsLocator(grid[:4]) {
 		out.Locator = grid[:4]
 	}
 	return out, false, nil

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // Tunables (package variables so tests can shorten them).
@@ -174,7 +176,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	qthSet := qthSquares(req.qth, req.surroundings)
+	qthSet := maidenhead.QTHSquares(req.qth, req.surroundings)
 
 	client := &Client{
 		qthSet: qthSet,

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // prop_intel_fromhere.go: the per-area "normal for this hour" behind the
@@ -189,19 +191,19 @@ func computeFromHereNormals(rows []fromHereCountRow, coverage map[fromHereDaySlo
 // nil for a callsign QTH or an area wider than fromHereMaxRadius.
 func fromHereAreaGrids(qth string, surroundings bool, area *liveArea) []string {
 	qth = normalizeQTHToken(qth)
-	if !isLocator(qth) {
+	if !maidenhead.IsLocator(qth) {
 		return nil
 	}
 	if area != nil && area.Radius > 1 {
 		if area.Radius > fromHereMaxRadius {
 			return nil
 		}
-		return getSquaresWithinRings(area.Centre, area.Radius)
+		return maidenhead.SquaresWithinRings(area.Centre, area.Radius)
 	}
 	if area != nil {
 		surroundings = area.Radius == 1
 	}
-	return qthSquares(qth, surroundings)
+	return maidenhead.QTHSquares(qth, surroundings)
 }
 
 // --- Store ------------------------------------------------------------------
@@ -470,7 +472,7 @@ func newFromHereMatcher(qthSet []string, area *liveArea) fromHereMatcher {
 		return f
 	}
 	for _, t := range qthSet {
-		if isLocator(t) {
+		if maidenhead.IsLocator(t) {
 			f.squares = append(f.squares, t)
 		} else {
 			f.calls = append(f.calls, t)

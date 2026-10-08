@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // historyMaxSpanSeconds is the hard cap on a single /api/history window: the
@@ -189,13 +191,13 @@ func historyClientFilter(r *http.Request) *Client {
 	qth, surroundings := resolveQTHQuery(r)
 	client := &Client{}
 	if qth != "" {
-		client.qthSet = qthSquares(qth, surroundings)
+		client.qthSet = maidenhead.QTHSquares(qth, surroundings)
 	}
-	if rings := parseIntDefault(r.URL.Query().Get("rings"), 0); rings > 0 && isLocator(qth) {
+	if rings := parseIntDefault(r.URL.Query().Get("rings"), 0); rings > 0 && maidenhead.IsLocator(qth) {
 		if rings > maxAreaRings {
 			rings = maxAreaRings
 		}
-		if cx, cy, ok := locatorSquareXY(qth); ok {
+		if cx, cy, ok := maidenhead.SquareXY(qth); ok {
 			client.areaActive = true
 			client.areaX, client.areaY, client.areaRings = cx, cy, rings
 		}

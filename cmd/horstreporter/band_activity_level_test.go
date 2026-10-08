@@ -4,6 +4,8 @@ import (
 	"math"
 	"path/filepath"
 	"testing"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // slotAlignedNow is 25 minutes into a 30-min UTC slot, so a 20-min window
@@ -377,7 +379,7 @@ func TestClassifyActivityLevel(t *testing.T) {
 }
 
 func TestClusterEndCount(t *testing.T) {
-	ax, ay, _ := locatorSquareXY("JN68")
+	ax, ay, _ := maidenhead.SquareXY("JN68")
 	cases := []struct {
 		sl, rl string
 		want   int

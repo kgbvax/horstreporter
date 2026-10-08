@@ -16,6 +16,7 @@ import (
 	"unsafe"
 
 	"horstreporter/internal/cty"
+	"horstreporter/internal/maidenhead"
 	"horstreporter/internal/region"
 )
 
@@ -586,12 +587,12 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 	// instead of the global average. Both ends' clusters are written (a spot
 	// between cluster JN68 and cluster EM46 increments both) so either
 	// operator's Evaluate benefits.
-	if anchor, ok := locatorClusterAnchor(sl); ok {
+	if anchor, ok := maidenhead.ClusterAnchor(sl); ok {
 		buf = append(append(kb[:0], anchor...), '|')
 		buf = appendBaselineKey(buf, band, hour, distTier, snrTier)
 		e.observeBucket(e.clusterBuckets, stackString(buf), band, hour, distTier, snrTier)
 	}
-	if anchor, ok := locatorClusterAnchor(rl); ok {
+	if anchor, ok := maidenhead.ClusterAnchor(rl); ok {
 		buf = append(append(kb[:0], anchor...), '|')
 		buf = appendBaselineKey(buf, band, hour, distTier, snrTier)
 		e.observeBucket(e.clusterBuckets, stackString(buf), band, hour, distTier, snrTier)
@@ -818,10 +819,10 @@ func remapBucketsForLoad(src map[string]*baselineBucket, legacy bool) map[string
 // deriveOperatorCluster determines the grid-cluster anchor locator for the
 // operator's QTH, used to key the cluster baseline (the middle tier of the
 // cluster → global fallback). Resolution order:
-//  1. Locator QTH → locatorClusterAnchor directly.
-//  2. Callsign QTH → QRZ locator → locatorClusterAnchor.
+//  1. Locator QTH → maidenhead.ClusterAnchor directly.
+//  2. Callsign QTH → QRZ locator → maidenhead.ClusterAnchor.
 //  3. Callsign QTH, QRZ fails → DXCC entity centroid (cty.dat) →
-//     centroidLatLng → locatorClusterAnchor.
+//     centroidLatLng → maidenhead.ClusterAnchor.
 //  4. All fail → "" (cluster tier skipped; falls back to global).
 func (e *DxBaselineEngine) deriveOperatorCluster(qth string) string {
 	if qth == "" {
@@ -835,7 +836,7 @@ func (e *DxBaselineEngine) deriveOperatorCluster(qth string) string {
 	if !ok {
 		return ""
 	}
-	if anchor, ok := locatorClusterAnchor(loc); ok {
+	if anchor, ok := maidenhead.ClusterAnchor(loc); ok {
 		return anchor
 	}
 	return ""
@@ -854,7 +855,7 @@ const (
 // resolveQTHLocator is the shared QTH → locator resolution used by the
 // cluster baseline (deriveOperatorCluster) and the Almanac area resolver.
 // Resolution order:
-//  1. qth is a locator (isLocator) → returned unchanged, source=locator.
+//  1. qth is a locator (maidenhead.IsLocator) → returned unchanged, source=locator.
 //  2. QRZ lookup yields a valid locator → that locator, source=qrz.
 //  3. cty.dat entity with a non-zero centroid → its 4-char square, source=dxcc.
 //  4. otherwise ok=false.
@@ -864,17 +865,17 @@ func resolveQTHLocator(qth string, qrz CallsignLocatorResolver, ctyRes *cty.Reso
 	if qth == "" {
 		return "", "", false
 	}
-	if isLocator(qth) {
+	if maidenhead.IsLocator(qth) {
 		return qth, qthSourceLocator, true
 	}
 	if qrz != nil {
-		if info, err := qrz.LookupInfo(qth); err == nil && isLocator(info.Locator) {
+		if info, err := qrz.LookupInfo(qth); err == nil && maidenhead.IsLocator(info.Locator) {
 			return info.Locator, qthSourceQRZ, true
 		}
 	}
 	if ctyRes != nil {
 		if ent, _, ok := ctyRes.Resolve(qth); ok && ent.Lat != 0 && ent.Lon != 0 {
-			if l := latLngToLocator(ent.Lat, ent.Lon, 4); isLocator(l) {
+			if l := maidenhead.FromLatLng(ent.Lat, ent.Lon, 4); maidenhead.IsLocator(l) {
 				return l, qthSourceDXCC, true
 			}
 		}
@@ -956,7 +957,7 @@ func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, min
 	if area != nil && matchArea == nil {
 		surroundings = area.Radius == 1
 	}
-	qthSet := qthSquares(qth, surroundings)
+	qthSet := maidenhead.QTHSquares(qth, surroundings)
 
 	// The live side comes from hub.history, which holds at most
 	// liveHistoryRetentionMinutes (and nothing from before a restart it
@@ -1112,7 +1113,7 @@ func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, min
 	// block with surroundings), which is a live area of radius 0 or 1: matching
 	// that skips the token loop and the upper-casing of four strings per message.
 	loopArea := matchArea
-	if loopArea == nil && isLocator(qth) {
+	if loopArea == nil && maidenhead.IsLocator(qth) {
 		loopArea = ownSquareArea(qth, surroundings)
 	}
 
@@ -1122,7 +1123,7 @@ func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, min
 	// source) so the chart's baseline line can be scaled into bar units.
 	regionalCount := make(map[string]int)
 	localCount := make(map[string]int)
-	clusterX, clusterY, clusterOK := locatorSquareXY(operatorCluster)
+	clusterX, clusterY, clusterOK := maidenhead.SquareXY(operatorCluster)
 
 	if regionalFromIndex {
 		for i, n := range regionalIdx {
@@ -1229,7 +1230,7 @@ func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, min
 		acc.uniqueTx.note(ev.tx)
 		acc.uniqueRx.note(ev.rx)
 		var remote4 []byte
-		if isLocator(string(ev.remote)) { // upper-cased already; no copy for the test
+		if maidenhead.IsLocator(string(ev.remote)) { // upper-cased already; no copy for the test
 			remote4 = ev.remote[:4]
 			acc.uniqueRemote.add(remote4)
 		}
@@ -1872,10 +1873,10 @@ func extractMatchedBandEventArea(m MQTTMessage, qthSet []string, area *liveArea)
 
 	if area == nil {
 		for _, t := range qthSet {
-			if matchCall(sc, t) || (isLocator(t) && strings.HasPrefix(sl, t)) {
+			if matchCall(sc, t) || (maidenhead.IsLocator(t) && strings.HasPrefix(sl, t)) {
 				isSender = true
 			}
-			if matchCall(rc, t) || (isLocator(t) && strings.HasPrefix(rl, t)) {
+			if matchCall(rc, t) || (maidenhead.IsLocator(t) && strings.HasPrefix(rl, t)) {
 				isReceiver = true
 			}
 		}
@@ -1895,8 +1896,8 @@ func extractMatchedBandEventArea(m MQTTMessage, qthSet []string, area *liveArea)
 	// locator decoded once instead of three times.
 	distanceKm := 0.0
 	direction := ""
-	lat1, lon1 := locatorToLatLng(localLocator)
-	lat2, lon2 := locatorToLatLng(remoteLocator)
+	lat1, lon1 := maidenhead.ToLatLng(localLocator)
+	lat2, lon2 := maidenhead.ToLatLng(remoteLocator)
 	if !(lat1 == 0 && lon1 == 0) && !(lat2 == 0 && lon2 == 0) {
 		distanceKm = haversineKm(lat1, lon1, lat2, lon2)
 		direction = bearingDirection(lat1, lon1, lat2, lon2)
@@ -1912,7 +1913,7 @@ func extractMatchedBandEventArea(m MQTTMessage, qthSet []string, area *liveArea)
 	dedupKey := string(kb)
 	qualityKey := band + "|" + sc + "|" + rc + "|" + remoteLocator
 	remote4 := ""
-	if isLocator(remoteLocator) {
+	if maidenhead.IsLocator(remoteLocator) {
 		remote4 = remoteLocator[:4]
 	}
 
@@ -1996,7 +1997,7 @@ func hubCoversWindow(now int64, minutes int) bool {
 // Like the Postgres version it returns nil when nothing matched, which tells
 // the caller to fall back to the in-memory event ring.
 func hubActivityByBin(qth string, surroundings bool, history []MQTTMessage, pos []uint32, usePos bool, cwMinDb, minutes int, now int64) (map[string][]float64, bool) {
-	if !isLocator(qth) || !hubCoversWindow(now, minutes) {
+	if !maidenhead.IsLocator(qth) || !hubCoversWindow(now, minutes) {
 		return nil, false
 	}
 	area := ownSquareArea(qth, surroundings)
@@ -2122,7 +2123,7 @@ func eventMatchesTargets(e dxObservedEvent, targets []string) bool {
 		if matchCall(e.SC, t) || matchCall(e.RC, t) {
 			return true
 		}
-		if isLocator(t) && (strings.HasPrefix(e.SL, t) || strings.HasPrefix(e.RL, t)) {
+		if maidenhead.IsLocator(t) && (strings.HasPrefix(e.SL, t) || strings.HasPrefix(e.RL, t)) {
 			return true
 		}
 	}
@@ -2293,10 +2294,10 @@ func clusterEndCount(m MQTTMessage, ax, ay int) int {
 		return 0
 	}
 	n := 0
-	if locatorInCluster(sl, ax, ay) { // case-insensitive, no upper-cased copy
+	if maidenhead.InCluster(sl, ax, ay) { // case-insensitive, no upper-cased copy
 		n++
 	}
-	if locatorInCluster(rl, ax, ay) {
+	if maidenhead.InCluster(rl, ax, ay) {
 		n++
 	}
 	return n
@@ -2743,7 +2744,7 @@ func baselineClusterKeyFromBase(anchor, baseKey string) string {
 // normalizeQTHToken uppercases and trims a QTH token without collapsing
 // locators to a block. It is the identity normalization for the QTH param
 // (callsigns and locators pass through as-is); the cluster derivation
-// (locatorClusterAnchor) is a separate step.
+// (maidenhead.ClusterAnchor) is a separate step.
 func normalizeQTHToken(t string) string {
 	return strings.ToUpper(strings.TrimSpace(t))
 }
@@ -2782,8 +2783,8 @@ func distanceTierFromKm(km float64) int {
 }
 
 func distanceKmForLocators(a, b string) float64 {
-	la1, lo1 := locatorToLatLng(strings.ToUpper(strings.TrimSpace(a)))
-	la2, lo2 := locatorToLatLng(strings.ToUpper(strings.TrimSpace(b)))
+	la1, lo1 := maidenhead.ToLatLng(strings.ToUpper(strings.TrimSpace(a)))
+	la2, lo2 := maidenhead.ToLatLng(strings.ToUpper(strings.TrimSpace(b)))
 	if (la1 == 0 && lo1 == 0) || (la2 == 0 && lo2 == 0) {
 		return 0
 	}
