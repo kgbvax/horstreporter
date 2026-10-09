@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // ---------------------------------------------------------------------------
@@ -702,7 +704,7 @@ func denseAggStore() *fakeAggStore {
 	today := aggToday()
 	f := newFakeAggStore(today - 3)
 	f.setIngest(today-31, today, 1000)
-	grids := getSquaresWithinRings("JO32", 2)
+	grids := maidenhead.SquaresWithinRings("JO32", 2)
 	regions := allRegionStrings()
 	win := almanacWindowFor(aggTestNow.Unix())
 	for _, g := range grids {

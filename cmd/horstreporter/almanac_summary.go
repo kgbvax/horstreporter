@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"strings"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // almanac_summary.go: the optional "almanac" field of
@@ -49,7 +51,7 @@ type propIntelSummaryAlmanacEntry struct {
 // earlier /api/almanac requests). ok=false means "don't know yet".
 func almanacSummaryArea(qth string) (almanacArea, bool) {
 	q := normalizeQTHToken(qth)
-	if isAlmanacLocatorShape(q) || isLocator(q) {
+	if isAlmanacLocatorShape(q) || maidenhead.IsLocator(q) {
 		area, err := resolveAlmanacAreaWith(q, nil, nil)
 		return area, err == nil
 	}

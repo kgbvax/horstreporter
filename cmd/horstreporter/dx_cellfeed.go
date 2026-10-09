@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"horstreporter/internal/maidenhead"
 	"horstreporter/internal/proplab"
 )
 
@@ -318,7 +319,7 @@ func (s *CellBucketFeed) Observe(m MQTTMessage) {
 	if band == "" || !bandInScope(band) {
 		return
 	}
-	if !isLocator(m.SL) || !isLocator(m.RL) || len(m.SL) < 4 || len(m.RL) < 4 {
+	if !maidenhead.IsLocator(m.SL) || !maidenhead.IsLocator(m.RL) || len(m.SL) < 4 || len(m.RL) < 4 {
 		return
 	}
 

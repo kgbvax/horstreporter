@@ -1,4 +1,4 @@
-package main
+package qrzlookup
 
 import "testing"
 
@@ -16,7 +16,7 @@ func TestQRZLookupCandidates(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := qrzLookupCandidates(tt.call)
+			got := lookupCandidates(tt.call)
 			if len(got) != len(tt.want) {
 				t.Fatalf("%s: expected %d candidates got %d (%v)", tt.call, len(tt.want), len(got), got)
 			}

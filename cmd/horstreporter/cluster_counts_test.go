@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // bruteRegional is the walk's own regional count (EvaluateAreaWindow before the
@@ -109,9 +111,9 @@ func TestAreaIndexRegionalCountsMatchWalk(t *testing.T) {
 			msgs[i].T = now + 7200 // bad clock
 		}
 	}
-	cx, cy, _ := locatorSquareXY("JO30")
-	cx, cy = clusterAnchorXY(cx, cy)
-	k, ok := areaIndexKeyFor("JO32", false, explicitLiveArea("JO32", 0), squareXYToLocator(cx, cy))
+	cx, cy, _ := maidenhead.SquareXY("JO30")
+	cx, cy = maidenhead.ClusterAnchorXY(cx, cy)
+	k, ok := areaIndexKeyFor("JO32", false, explicitLiveArea("JO32", 0), maidenhead.SquareXYToLocator(cx, cy))
 	if !ok || !k.clusterOK {
 		t.Fatal("key without a cluster")
 	}
@@ -163,9 +165,9 @@ func TestAreaIndexRegionalCountsUnusableAfterOverflow(t *testing.T) {
 		// Distinct seconds a day ahead, spread wider than the dense range.
 		msgs[i] = MQTTMessage{T: now + 86400 + int64(i)*10, B: "20m", MD: "FT8", Source: "mqtt", SC: "A", RC: "B", SL: "JO32aa", RL: "JO32bb"}
 	}
-	cx, cy, _ := locatorSquareXY("JO32")
-	cx, cy = clusterAnchorXY(cx, cy)
-	k, _ := areaIndexKeyFor("JO32", false, explicitLiveArea("JO32", 0), squareXYToLocator(cx, cy))
+	cx, cy, _ := maidenhead.SquareXY("JO32")
+	cx, cy = maidenhead.ClusterAnchorXY(cx, cy)
+	k, _ := areaIndexKeyFor("JO32", false, explicitLiveArea("JO32", 0), maidenhead.SquareXYToLocator(cx, cy))
 	c := &areaIndexCache{m: map[areaIndexKey]*areaIndexEntry{}}
 	win := historyWindow{msgs: msgs, firstSeq: 1, hubFirst: 1}
 	r := c.lookup(k, win, now-3600, now)

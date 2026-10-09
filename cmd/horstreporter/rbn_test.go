@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"horstreporter/internal/qrzlookup"
 )
 
 func TestParseRBNSpot(t *testing.T) {
@@ -79,7 +81,7 @@ func TestParseRBNSpot(t *testing.T) {
 			wantOk: true,
 			want: rbnSpot{
 				Skimmer:      "W3LPL-#",
-				DXCall:      "N0CALL",
+				DXCall:       "N0CALL",
 				FrequencyKHz: 14078.0,
 				Mode:         "JS8",
 				DB:           12,
@@ -92,7 +94,7 @@ func TestParseRBNSpot(t *testing.T) {
 			wantOk: true,
 			want: rbnSpot{
 				Skimmer:      "W3LPL-#",
-				DXCall:      "N0CALL",
+				DXCall:       "N0CALL",
 				FrequencyKHz: 14072.0,
 				Mode:         "OLIVIA",
 				DB:           14,
@@ -105,7 +107,7 @@ func TestParseRBNSpot(t *testing.T) {
 			wantOk: true,
 			want: rbnSpot{
 				Skimmer:      "W3LPL-#",
-				DXCall:      "N0CALL",
+				DXCall:       "N0CALL",
 				FrequencyKHz: 50260.0,
 				Mode:         "MSK144",
 				DB:           9,
@@ -337,7 +339,7 @@ func TestHandleRBNSpotPopulatesLiveFields(t *testing.T) {
 
 	resolver := &stubResolver{
 		locators: map[string]string{"W3LPL-#": "FM18"},
-		infos:    map[string]CallsignInfo{"N0CALL": {Locator: "fn31pr", Name: "Bob", Country: "United States"}},
+		infos:    map[string]qrzlookup.Info{"N0CALL": {Locator: "fn31pr", Name: "Bob", Country: "United States"}},
 	}
 
 	_, _, _, _, _, forwardedBefore, droppedBefore := rbnAccounting.snapshot()

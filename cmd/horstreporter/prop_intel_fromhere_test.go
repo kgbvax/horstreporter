@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // unixAt is day dayIndex at hh:mm UTC.
@@ -108,7 +110,7 @@ func TestComputeFromHereNormalsWithoutCoverage(t *testing.T) {
 }
 
 func TestFromHereRemoteEnds(t *testing.T) {
-	qthSet := qthSquares("JO32", true)
+	qthSet := maidenhead.QTHSquares("JO32", true)
 	pskr := func(sl, rl string) *MQTTMessage {
 		return &MQTTMessage{SC: "TX", SL: sl, RC: "RX", RL: rl}
 	}

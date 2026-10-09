@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"horstreporter/internal/maidenhead"
 	"horstreporter/internal/region"
 )
 
@@ -225,7 +226,7 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 		return resp
 	}
 
-	qthSet := qthSquares(qth, surroundings)
+	qthSet := maidenhead.QTHSquares(qth, surroundings)
 
 	cutoff := now - int64(minutes)*60
 	midpoint := cutoff + (now-cutoff)/2
@@ -565,7 +566,7 @@ func (m rawRegionMemo) get(raw string) int {
 		return int(i)
 	}
 	idx := -1
-	if up := strings.ToUpper(raw); up != "" && isLocator(up) {
+	if up := strings.ToUpper(raw); up != "" && maidenhead.IsLocator(up) {
 		if reg := regionFromLocatorCached(up); reg != region.Unknown {
 			if i, ok := regionIndex[reg]; ok {
 				idx = i

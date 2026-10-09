@@ -5,6 +5,8 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // extractMatchedBandEventAreaRef is the pre-optimization implementation,
@@ -28,10 +30,10 @@ func extractMatchedBandEventAreaRef(m MQTTMessage, qthSet []string, area *liveAr
 		isReceiver = area.contains(rl)
 	} else {
 		for _, t := range qthSet {
-			if matchCall(sc, t) || (isLocator(t) && strings.HasPrefix(sl, t)) {
+			if matchCall(sc, t) || (maidenhead.IsLocator(t) && strings.HasPrefix(sl, t)) {
 				isSender = true
 			}
-			if matchCall(rc, t) || (isLocator(t) && strings.HasPrefix(rl, t)) {
+			if matchCall(rc, t) || (maidenhead.IsLocator(t) && strings.HasPrefix(rl, t)) {
 				isReceiver = true
 			}
 		}
@@ -49,8 +51,8 @@ func extractMatchedBandEventAreaRef(m MQTTMessage, qthSet []string, area *liveAr
 		return matchedBandEvent{}, false
 	}
 	distanceKm := distanceKmForLocators(localLocator, remoteLocator)
-	lat1, lon1 := locatorToLatLng(localLocator)
-	lat2, lon2 := locatorToLatLng(remoteLocator)
+	lat1, lon1 := maidenhead.ToLatLng(localLocator)
+	lat2, lon2 := maidenhead.ToLatLng(remoteLocator)
 	direction := ""
 	if !(lat1 == 0 && lon1 == 0) && !(lat2 == 0 && lon2 == 0) {
 		direction = bearingDirection(lat1, lon1, lat2, lon2)
@@ -59,7 +61,7 @@ func extractMatchedBandEventAreaRef(m MQTTMessage, qthSet []string, area *liveAr
 	dedupKey := fmt.Sprintf("%d|%s|%s|%s|%s|%s", dedupBucket, band, sc, rc, sl, rl)
 	qualityKey := band + "|" + sc + "|" + rc + "|" + remoteLocator
 	remote4 := ""
-	if isLocator(remoteLocator) {
+	if maidenhead.IsLocator(remoteLocator) {
 		remote4 = remoteLocator[:4]
 	}
 	return matchedBandEvent{
@@ -100,12 +102,12 @@ func TestLiveAreaContainsCaseInsensitive(t *testing.T) {
 	}
 }
 
-// locatorSquareXY dropped its redundant ToUpper, and clusterEndCount /
-// locatorInCluster now fold case in place: they must agree with the
+// maidenhead.SquareXY dropped its redundant ToUpper, and clusterEndCount /
+// maidenhead.InCluster now fold case in place: they must agree with the
 // upper-casing versions on any input.
 func TestLocatorHelpersAgreeWithUpperCasingReference(t *testing.T) {
 	refXY := func(locator string) (int, int, bool) {
-		if !isLocator(locator) {
+		if !maidenhead.IsLocator(locator) {
 			return 0, 0, false
 		}
 		loc := strings.ToUpper(locator[:4])
@@ -120,21 +122,21 @@ func TestLocatorHelpersAgreeWithUpperCasingReference(t *testing.T) {
 			b[j] = alphabet[rng.Intn(len(alphabet))]
 		}
 		loc := string(b)
-		x, y, ok := locatorSquareXY(loc)
+		x, y, ok := maidenhead.SquareXY(loc)
 		rx, ry, rok := refXY(loc)
 		if x != rx || y != ry || ok != rok {
-			t.Fatalf("locatorSquareXY(%q) = %d,%d,%v want %d,%d,%v", loc, x, y, ok, rx, ry, rok)
+			t.Fatalf("maidenhead.SquareXY(%q) = %d,%d,%v want %d,%d,%v", loc, x, y, ok, rx, ry, rok)
 		}
 		up := strings.ToUpper(loc)
 		ax, ay := rng.Intn(180), rng.Intn(180)
 		cx, cy, cok := refXY(up)
 		want := false
 		if cok {
-			px, py := clusterAnchorXY(cx, cy)
+			px, py := maidenhead.ClusterAnchorXY(cx, cy)
 			want = px == ax && py == ay
 		}
-		if got := locatorInCluster(loc, ax, ay); got != want {
-			t.Fatalf("locatorInCluster(%q, %d, %d) = %v want %v", loc, ax, ay, got, want)
+		if got := maidenhead.InCluster(loc, ax, ay); got != want {
+			t.Fatalf("maidenhead.InCluster(%q, %d, %d) = %v want %v", loc, ax, ay, got, want)
 		}
 	}
 	for _, md := range []string{"", "FT8", "ft8", " Ft4 ", "dxcluster", "WSPR", "CW", "rtty", "FT8 "} {

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // Preliminary SNR-floor views: while fewer than M_min days carry SNR data, a
@@ -170,7 +172,7 @@ func TestAlmanacPreliminaryRadiusUnchanged(t *testing.T) {
 	f.snrSince, f.hasSNRSince = today-3, true
 	// Centre JO32 sparse (5 days); the ring-1 neighbours fill the window.
 	f.activeAllBands("JO32", today-5, today-1, allSlots())
-	for _, sq := range getSquaresWithinRings("JO32", 1) {
+	for _, sq := range maidenhead.SquaresWithinRings("JO32", 1) {
 		if sq != "JO32" {
 			f.activeAllBands(sq, today-30, today-1, allSlots())
 		}

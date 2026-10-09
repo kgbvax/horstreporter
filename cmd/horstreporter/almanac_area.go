@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"horstreporter/internal/cty"
+	"horstreporter/internal/maidenhead"
+	"horstreporter/internal/qrzlookup"
 )
 
 // Almanac area resolution (plan U1, R4/R5, KTD3): turn a QTH (locator or
@@ -61,7 +63,7 @@ func isAlmanacLocatorShape(s string) bool {
 // validAlmanacLocator is strict Maidenhead on an uppercased locator-shaped
 // token: fields A–R, squares 0–9, subsquares A–X, extended 0–9.
 func validAlmanacLocator(s string) bool {
-	if !isAlmanacLocatorShape(s) || !isLocator(s) {
+	if !isAlmanacLocatorShape(s) || !maidenhead.IsLocator(s) {
 		return false
 	}
 	if len(s) >= 6 && (s[4] > 'X' || s[5] > 'X') {
@@ -95,7 +97,7 @@ func isAlmanacCallsignShape(s string) bool {
 // resolveAlmanacAreaWith resolves qth without caching. Locators are validated
 // strictly and truncated to grid4; callsigns go through resolveQTHLocator
 // (QRZ, then cty.dat centroid). qrz and ctyRes may be nil.
-func resolveAlmanacAreaWith(qth string, qrz CallsignLocatorResolver, ctyRes *cty.Resolver) (almanacArea, error) {
+func resolveAlmanacAreaWith(qth string, qrz qrzlookup.Resolver, ctyRes *cty.Resolver) (almanacArea, error) {
 	q := normalizeQTHToken(qth)
 	if q == "" {
 		return almanacArea{}, fmt.Errorf("%w: empty", errAlmanacInvalidQTH)
@@ -106,9 +108,9 @@ func resolveAlmanacAreaWith(qth string, qrz CallsignLocatorResolver, ctyRes *cty
 		}
 		return almanacArea{Grid4: q[:4], Source: qthSourceLocator}, nil
 	}
-	if isLocator(q) {
+	if maidenhead.IsLocator(q) {
 		// Locator prefix with a malformed tail ("JO32A", "JO32AB1"): reject
-		// rather than let the lenient isLocator path accept it downstream.
+		// rather than let the lenient maidenhead.IsLocator path accept it downstream.
 		return almanacArea{}, fmt.Errorf("%w: %q is not a valid Maidenhead locator", errAlmanacInvalidQTH, q)
 	}
 	if !isAlmanacCallsignShape(q) {
@@ -140,9 +142,9 @@ func newAlmanacAreaCache() *almanacAreaCache {
 	return &almanacAreaCache{entries: map[string]almanacAreaCacheEntry{}, now: time.Now}
 }
 
-func (c *almanacAreaCache) resolve(qth string, qrz CallsignLocatorResolver, ctyRes *cty.Resolver) (almanacArea, error) {
+func (c *almanacAreaCache) resolve(qth string, qrz qrzlookup.Resolver, ctyRes *cty.Resolver) (almanacArea, error) {
 	key := normalizeQTHToken(qth)
-	if key == "" || isLocator(key) || !isAlmanacCallsignShape(key) {
+	if key == "" || maidenhead.IsLocator(key) || !isAlmanacCallsignShape(key) {
 		return resolveAlmanacAreaWith(key, qrz, ctyRes)
 	}
 	now := c.now()
@@ -232,7 +234,7 @@ func chooseAlmanacRadius(center string, known [almanacLevels][]int, minSlots int
 	c := almanacNormalizeCentre(center)
 	need := almanacBandsNeeded(len(almanacInScopeBands))
 	for r := 0; r <= almanacMaxWidenRadius; r++ {
-		squares = getSquaresWithinRings(c, r)
+		squares = maidenhead.SquaresWithinRings(c, r)
 		if almanacBandsKnown(known[r], minSlots) >= need {
 			return r, squares
 		}

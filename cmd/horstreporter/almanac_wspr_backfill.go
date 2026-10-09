@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"horstreporter/internal/maidenhead"
 	"horstreporter/internal/region"
 
 	"github.com/jackc/pgx/v5"
@@ -537,7 +538,7 @@ func (b *almanacWSPRBackfill) run(ctx context.Context) error {
 	}
 	months := almanacWSPRBackfillMonths(b.clock.Now(), b.years)
 	for _, area := range b.areas {
-		ring := getSquaresWithinRings(area, almanacMaxWidenRadius)
+		ring := maidenhead.SquaresWithinRings(area, almanacMaxWidenRadius)
 		sort.Strings(ring)
 		for _, ym := range months {
 			done, err := b.store.metaExists(ctx, almanacWSPRMonthDoneKey(area, ym))

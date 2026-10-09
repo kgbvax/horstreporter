@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 func withLiveHistoryState(t *testing.T, since, gapStart, gapEnd int64, retention int) {
@@ -78,7 +80,7 @@ func TestHubActivityByBinMatchesFullScanAndAreaIndex(t *testing.T) {
 		if tc.surroundings {
 			radius = 1
 		}
-		x, y, _ := locatorSquareXY(tc.qth[:4])
+		x, y, _ := maidenhead.SquareXY(tc.qth[:4])
 		want := buildActivityByBinFromHistory(msgs, &liveArea{Centre: tc.qth[:4], BaseRadius: radius, Radius: radius, x: x, y: y}, -15, 15, now)
 		if len(want) == 0 {
 			if full != nil {

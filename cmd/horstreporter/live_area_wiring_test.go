@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // withHubHistory swaps hub.history for the test and resets the live-area
@@ -185,9 +187,9 @@ func TestBuildActivityByBinFromHistory(t *testing.T) {
 
 func TestEvaluateV2AreaMatchesWideBlock(t *testing.T) {
 	now := time.Now().Unix()
-	cx, cy, _ := locatorSquareXY("FN76")
-	near := squareXYToLocator(cx+1, cy) + "AA"
-	far := squareXYToLocator(cx+2, cy) + "AA"
+	cx, cy, _ := maidenhead.SquareXY("FN76")
+	near := maidenhead.SquareXYToLocator(cx+1, cy) + "AA"
+	far := maidenhead.SquareXYToLocator(cx+2, cy) + "AA"
 	// PSKReporter FT8 paths from the neighbourhood of FN76 to Europe.
 	history := []MQTTMessage{
 		{T: now - 60, B: "20m", MD: "FT8", SC: "K1AAA", SL: near, RC: "DL1XYZ", RL: "JO32AB", RP: -8},
@@ -276,11 +278,11 @@ func TestStreamHandlerAnnouncesAreaBeforeHistory(t *testing.T) {
 
 func TestStreamAutoAreaMatchesNeighbourSquares(t *testing.T) {
 	now := time.Now().Unix()
-	cx, cy, _ := locatorSquareXY("FN76")
+	cx, cy, _ := maidenhead.SquareXY("FN76")
 	var h []MQTTMessage
 	for _, b := range []string{"20m", "40m", "15m"} {
 		for i := 0; i < 30; i++ {
-			h = append(h, MQTTMessage{SC: "K1AAA", RC: "DL1XYZ", SL: squareXYToLocator(cx+2, cy) + "AA", RL: "JO32AB", RP: -10, T: now - 10, B: b, MD: "FT8"})
+			h = append(h, MQTTMessage{SC: "K1AAA", RC: "DL1XYZ", SL: maidenhead.SquareXYToLocator(cx+2, cy) + "AA", RL: "JO32AB", RP: -10, T: now - 10, B: b, MD: "FT8"})
 		}
 	}
 	withHubHistory(t, h)
@@ -312,11 +314,11 @@ func TestDxConditionsHandlerReturnsArea(t *testing.T) {
 	dxBaseline = newDxBaselineEngine("")
 
 	now := time.Now().Unix()
-	cx, cy, _ := locatorSquareXY("FN76")
+	cx, cy, _ := maidenhead.SquareXY("FN76")
 	var h []MQTTMessage
 	for _, b := range []string{"20m", "40m", "15m"} {
 		for i := 0; i < 30; i++ {
-			h = append(h, MQTTMessage{SC: "K1AAA", RC: "DL1XYZ", SL: squareXYToLocator(cx+1, cy) + "AA", RL: "JO32AB", RP: -10, T: now - 10, B: b, MD: "FT8"})
+			h = append(h, MQTTMessage{SC: "K1AAA", RC: "DL1XYZ", SL: maidenhead.SquareXYToLocator(cx+1, cy) + "AA", RL: "JO32AB", RP: -10, T: now - 10, B: b, MD: "FT8"})
 		}
 	}
 	withHubHistory(t, h)

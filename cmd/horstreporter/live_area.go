@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // live_area.go is the adaptive "area of interest" of the live views. The live
@@ -58,7 +60,7 @@ type liveArea struct {
 // contains reports whether locator's 4-char square lies in the block
 // (Chebyshev distance ≤ Radius, the same test the stream's area filter uses).
 func (a *liveArea) contains(locator string) bool {
-	x, y, ok := locatorSquareXYFold(locator)
+	x, y, ok := maidenhead.SquareXYFold(locator)
 	if !ok {
 		return false
 	}
@@ -74,7 +76,7 @@ func (a *liveArea) widenedBand(band string) bool {
 // explicitLiveArea is the area of an explicit rings=N request: fixed radius,
 // never widened, no decision involved.
 func explicitLiveArea(qth string, rings int) *liveArea {
-	x, y, ok := locatorSquareXY(qth)
+	x, y, ok := maidenhead.SquareXY(qth)
 	if !ok || rings <= 0 {
 		return nil
 	}
@@ -104,7 +106,7 @@ func parseRingsParam(r *http.Request) (rings int, auto bool) {
 // liveAreaForRequest resolves the area a request asked for, or nil when it
 // asked for none (no rings param, or a callsign QTH: only locators widen).
 func liveAreaForRequest(r *http.Request, qth string, surroundings bool, now int64) *liveArea {
-	if !isLocator(qth) {
+	if !maidenhead.IsLocator(qth) {
 		return nil
 	}
 	rings, auto := parseRingsParam(r)
@@ -124,7 +126,7 @@ func liveAreaForRequest(r *http.Request, qth string, surroundings bool, now int6
 // liveAreaFullSampleLinks links (a dead or barely started feed). Those cases
 // stay at the base radius rather than widening on no data.
 func resolveLiveAreaFrom(qth string, surroundings bool, now int64, history []MQTTMessage) (*liveArea, bool) {
-	cx, cy, ok := locatorSquareXY(qth)
+	cx, cy, ok := maidenhead.SquareXY(qth)
 	if !ok {
 		return nil, false
 	}
@@ -155,8 +157,8 @@ func resolveLiveAreaFrom(qth string, surroundings bool, now int64, history []MQT
 		if band == "" || !bandInScope(band) {
 			continue
 		}
-		sx, sy, sok := locatorSquareXY(strings.ToUpper(strings.TrimSpace(m.SL)))
-		rx, ry, rok := locatorSquareXY(strings.ToUpper(strings.TrimSpace(m.RL)))
+		sx, sy, sok := maidenhead.SquareXY(strings.ToUpper(strings.TrimSpace(m.SL)))
+		rx, ry, rok := maidenhead.SquareXY(strings.ToUpper(strings.TrimSpace(m.RL)))
 		if !sok || !rok {
 			continue
 		}
@@ -236,7 +238,7 @@ func liveAreaCached(key string, now int64) (*liveArea, bool) {
 // liveAreaFor is the cached resolver the handlers use: one decision per
 // (grid4, base radius) shared by every endpoint for liveAreaCacheTTLSeconds.
 func liveAreaFor(qth string, surroundings bool, now int64) *liveArea {
-	if !isLocator(qth) {
+	if !maidenhead.IsLocator(qth) {
 		return nil
 	}
 	key := qth[:4] + "|0"

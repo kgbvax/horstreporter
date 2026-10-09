@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // almanac.go is the pure core of the 30-day Almanac (plan U2, KTD2/KTD4/
@@ -84,24 +86,24 @@ func almanacWindowFor(now int64) almanacWindow {
 // almanacNormalizeCentre uppercases and truncates a locator to grid4.
 func almanacNormalizeCentre(centre string) string {
 	c := normalizeQTHToken(centre)
-	if len(c) >= 4 && isLocator(c) {
+	if len(c) >= 4 && maidenhead.IsLocator(c) {
 		c = c[:4]
 	}
 	return c
 }
 
 // almanacRingSquares lists the squares within almanacMaxWidenRadius of the
-// centre (edge-clipped, getSquaresWithinRings order) with each square's ring
-// level: the smallest r whose getSquaresWithinRings(centre, r) contains it.
+// centre (edge-clipped, maidenhead.SquaresWithinRings order) with each square's ring
+// level: the smallest r whose maidenhead.SquaresWithinRings(centre, r) contains it.
 func almanacRingSquares(centre string) ([]string, []int32) {
 	c := almanacNormalizeCentre(centre)
 	level := map[string]int32{}
 	for r := almanacMaxWidenRadius; r >= 0; r-- {
-		for _, sq := range getSquaresWithinRings(c, r) {
+		for _, sq := range maidenhead.SquaresWithinRings(c, r) {
 			level[sq] = int32(r)
 		}
 	}
-	squares := getSquaresWithinRings(c, almanacMaxWidenRadius)
+	squares := maidenhead.SquaresWithinRings(c, almanacMaxWidenRadius)
 	rings := make([]int32, len(squares))
 	for i, sq := range squares {
 		rings[i] = level[sq]

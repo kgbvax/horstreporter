@@ -5,6 +5,9 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"horstreporter/internal/maidenhead"
+	"horstreporter/internal/qrzlookup"
 )
 
 // countingResolver wraps stubResolver and counts LookupInfo calls so the
@@ -14,7 +17,7 @@ type countingResolver struct {
 	calls int
 }
 
-func (c *countingResolver) LookupInfo(callsign string) (CallsignInfo, error) {
+func (c *countingResolver) LookupInfo(callsign string) (qrzlookup.Info, error) {
 	c.calls++
 	return c.stubResolver.LookupInfo(callsign)
 }
@@ -70,7 +73,7 @@ func TestResolveAlmanacAreaNearLocatorIsCallsign(t *testing.T) {
 
 func TestResolveAlmanacAreaCallsign(t *testing.T) {
 	ctyRes := testCtyResolver(t)
-	qrz := &stubResolver{infos: map[string]CallsignInfo{"DL1ABC": {Locator: "JO32"}}}
+	qrz := &stubResolver{infos: map[string]qrzlookup.Info{"DL1ABC": {Locator: "JO32"}}}
 
 	area, err := resolveAlmanacAreaWith("dl1abc", qrz, ctyRes)
 	if err != nil {
@@ -85,7 +88,7 @@ func TestResolveAlmanacAreaCallsign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dxcc path err = %v", err)
 	}
-	want := latLngToLocator(51, 10, 4)
+	want := maidenhead.FromLatLng(51, 10, 4)
 	if area.Grid4 != want || area.Source != qthSourceDXCC || !area.Approximate() {
 		t.Errorf("dxcc path = %+v, want %s/dxcc/approximate", area, want)
 	}
@@ -109,7 +112,7 @@ func TestResolveAlmanacAreaCallsign(t *testing.T) {
 
 func TestAlmanacAreaCacheTTL(t *testing.T) {
 	ctyRes := testCtyResolver(t)
-	qrz := &countingResolver{stubResolver: stubResolver{infos: map[string]CallsignInfo{"DL1ABC": {Locator: "JO32"}}}}
+	qrz := &countingResolver{stubResolver: stubResolver{infos: map[string]qrzlookup.Info{"DL1ABC": {Locator: "JO32"}}}}
 	now := time.Unix(1_800_000_000, 0)
 	c := newAlmanacAreaCache()
 	c.now = func() time.Time { return now }

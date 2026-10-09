@@ -14,6 +14,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"horstreporter/internal/httpx"
+	"horstreporter/internal/maidenhead"
 )
 
 // pushSubscribeRequest is the JSON body of POST /api/push/subscribe.
@@ -274,7 +277,7 @@ func squareDetailsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "locator required", http.StatusBadRequest)
 		return
 	}
-	if !isLocator(locator) {
+	if !maidenhead.IsLocator(locator) {
 		http.Error(w, "valid locator required", http.StatusBadRequest)
 		return
 	}
@@ -466,7 +469,7 @@ func buildSquareDetailsResponse(qth string, surroundings bool, locator string, m
 		return resp
 	}
 
-	client := &Client{qthSet: qthSquares(qth, surroundings)}
+	client := &Client{qthSet: maidenhead.QTHSquares(qth, surroundings)}
 	cutoff := now - int64(minutes*60)
 	seenPairs := make(map[string]struct{})
 	var sumSNR int
@@ -908,7 +911,7 @@ func noCache(h http.Handler) http.Handler {
 // up immediately. ETags are precomputed once at startup.
 func cachedStaticHandler(staticFS fs.FS) http.Handler {
 	etags := make(map[string]string)
-	gzVariants := make(map[string]gzipStaticVariant)
+	gzVariants := make(map[string]httpx.StaticVariant)
 	_ = fs.WalkDir(staticFS, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
@@ -921,7 +924,7 @@ func cachedStaticHandler(staticFS fs.FS) http.Handler {
 		etag := `"` + hex.EncodeToString(sum[:16]) + `"`
 		etags["/"+p] = etag
 		if compressStream {
-			if v, ok := buildGzipStaticVariant(p, b, etag); ok {
+			if v, ok := httpx.BuildStaticVariant(p, b, etag); ok {
 				gzVariants["/"+p] = v
 			}
 		}
@@ -941,12 +944,12 @@ func cachedStaticHandler(staticFS fs.FS) http.Handler {
 		if v, ok := gzVariants[lookup]; ok {
 			// Same content under two representations: tell caches.
 			w.Header().Add("Vary", "Accept-Encoding")
-			if r.Header.Get("Range") == "" && acceptsGzip(r) && (r.URL.Path == lookup || r.URL.Path == "/") {
-				w.Header().Set("ETag", v.etag)
-				w.Header().Set("Content-Type", v.contentType)
+			if r.Header.Get("Range") == "" && httpx.AcceptsGzip(r) && (r.URL.Path == lookup || r.URL.Path == "/") {
+				w.Header().Set("ETag", v.ETag)
+				w.Header().Set("Content-Type", v.ContentType)
 				w.Header().Set("Content-Encoding", "gzip")
 				// ServeContent handles If-None-Match against the gz ETag.
-				http.ServeContent(w, r, lookup, time.Time{}, bytes.NewReader(v.body))
+				http.ServeContent(w, r, lookup, time.Time{}, bytes.NewReader(v.Body))
 				return
 			}
 		}

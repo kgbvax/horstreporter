@@ -3,7 +3,7 @@ package region
 import "strings"
 
 // IsLocator reports whether s looks like a valid Maidenhead locator (at least
-// two letters followed by two digits). Mirrors the legacy isLocator in
+// two letters followed by two digits). Mirrors the legacy maidenhead.IsLocator in
 // package main.
 func IsLocator(s string) bool {
 	if len(s) < 4 {
@@ -21,7 +21,7 @@ func IsLocator(s string) bool {
 
 // LocatorCentroid returns the centre (lat, lng) of the 4-character square for
 // a locator. 6-character locators are honoured to give a more accurate
-// midpoint; shorter inputs return ok=false. Mirrors locatorToLatLng.
+// midpoint; shorter inputs return ok=false. Mirrors maidenhead.ToLatLng.
 func LocatorCentroid(locator string) (lat, lng float64, ok bool) {
 	locator = strings.ToUpper(locator)
 	if len(locator) < 2 {

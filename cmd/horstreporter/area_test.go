@@ -1,15 +1,19 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"horstreporter/internal/maidenhead"
+)
 
 func TestGetSquaresWithinRings(t *testing.T) {
-	if got := getSquaresWithinRings("JO32", 0); len(got) != 1 || got[0] != "JO32" {
+	if got := maidenhead.SquaresWithinRings("JO32", 0); len(got) != 1 || got[0] != "JO32" {
 		t.Fatalf("rings=0 => %v (want [JO32])", got)
 	}
-	if got := getSquaresWithinRings("JO32", 1); len(got) != 9 {
+	if got := maidenhead.SquaresWithinRings("JO32", 1); len(got) != 9 {
 		t.Fatalf("rings=1 => %d squares (want 9)", len(got))
 	}
-	got := getSquaresWithinRings("JO32", 2)
+	got := maidenhead.SquaresWithinRings("JO32", 2)
 	if len(got) != 25 {
 		t.Fatalf("rings=2 => %d squares (want 25)", len(got))
 	}
@@ -22,14 +26,14 @@ func TestGetSquaresWithinRings(t *testing.T) {
 	if !found {
 		t.Error("center JO32 missing from rings=2 block")
 	}
-	if got := getSquaresWithinRings("W1AW", 3); len(got) != 1 || got[0] != "W1AW" {
+	if got := maidenhead.SquaresWithinRings("W1AW", 3); len(got) != 1 || got[0] != "W1AW" {
 		t.Errorf("non-locator passthrough => %v", got)
 	}
 }
 
 func TestMatchAndCreateSpotArea(t *testing.T) {
 	now := int64(100000)
-	cx, cy, _ := locatorSquareXY("JO31")
+	cx, cy, _ := maidenhead.SquareXY("JO31")
 	client := &Client{areaActive: true, areaX: cx, areaY: cy, areaRings: 1}
 
 	// DX (sender) far away, heard by a receiver in JO30 (neighbour of JO31) →

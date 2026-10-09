@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"horstreporter/internal/cty"
+	"horstreporter/internal/maidenhead"
+	"horstreporter/internal/qrzlookup"
 )
 
 // wsprUserAgent identifies HorstReporter to the volunteer-run wspr.live
@@ -142,7 +144,7 @@ type wsprConfig struct {
 	Endpoint    string
 	PollSeconds int
 	Verbose     bool
-	Resolver    CallsignLocatorResolver
+	Resolver    qrzlookup.Resolver
 	CtyResolver *cty.Resolver
 }
 
@@ -382,7 +384,7 @@ func isWSPRSpotUsableForLive(m MQTTMessage) bool {
 	if strings.TrimSpace(m.B) == "" {
 		return false
 	}
-	return isLocator(strings.ToUpper(strings.TrimSpace(m.RL)))
+	return maidenhead.IsLocator(strings.ToUpper(strings.TrimSpace(m.RL)))
 }
 
 // parseWSPRTime parses the ClickHouse DateTime string "2006-01-02 15:04:05"

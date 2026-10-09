@@ -10,13 +10,15 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 func TestComputeFromHereDayCurves(t *testing.T) {
 	sums := []fromHereSlotSum{
 		{Band: "20m", Region: "NA", Slot: 0, Sum: 280},
 		{Band: "20m", Region: "NA", Slot: 47, Sum: 14},
-		{Band: "20m", Region: "NA", Slot: 5, Sum: 99}, // no covered day: stays 0
+		{Band: "20m", Region: "NA", Slot: 5, Sum: 99},  // no covered day: stays 0
 		{Band: "70cm", Region: "EU", Slot: 3, Sum: 50}, // out of scope
 		{Band: "20m", Region: "JA", Slot: 48, Sum: 1},  // bad slot
 	}
@@ -44,7 +46,7 @@ func TestFromHereTrendBins(t *testing.T) {
 		{Source: "wspr", T: now - 20, B: "20m", SC: "RX", SL: "JO32CD", RC: "TX", RL: "FN31AB", RP: -10, TXPower: 37},
 		{Source: "dxcluster", T: now - 40, B: "20m", SC: "DX", SL: "FN31AB", RC: "SPOTTER", RL: "JO32AA"},
 	}
-	trend := fromHereTrend(history, v2Spots("wspr", "pskr", "dxcluster"), qthSquares("JO32", true), nil, now)
+	trend := fromHereTrend(history, v2Spots("wspr", "pskr", "dxcluster"), maidenhead.QTHSquares("JO32", true), nil, now)
 	na := trend[propIntelCellKey{band: "20m", region: "NA"}]
 	want := []int{1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 2}
 	if len(na) != fromHereTrendBins {
@@ -61,7 +63,7 @@ func TestFromHereTrendBins(t *testing.T) {
 	if len(trend) != 2 {
 		t.Fatalf("only cells with spots: %v", trend)
 	}
-	if got := fromHereTrend(history, v2Spots("wspr", "rbn"), qthSquares("JO32", true), nil, now); len(got) != 0 {
+	if got := fromHereTrend(history, v2Spots("wspr", "rbn"), maidenhead.QTHSquares("JO32", true), nil, now); len(got) != 0 {
 		t.Fatalf("no normal sources selected, no trend: %v", got)
 	}
 }

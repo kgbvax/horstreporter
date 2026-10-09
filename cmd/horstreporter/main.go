@@ -23,6 +23,9 @@ import (
 
 	"horstreporter"
 	"horstreporter/internal/cty"
+	"horstreporter/internal/httpx"
+	"horstreporter/internal/proxy"
+	"horstreporter/internal/qrzlookup"
 
 	"golang.org/x/crypto/acme/autocert"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -581,9 +584,9 @@ func main() {
 		if qrzPassword == "" {
 			qrzPassword = strings.TrimSpace(os.Getenv("QRZ_PASSWORD"))
 		}
-		resolver := CallsignLocatorResolver(nil)
+		resolver := qrzlookup.Resolver(nil)
 		if qrzUsername != "" && qrzPassword != "" {
-			resolver = newQRZLookupClient(qrzUsername, qrzPassword)
+			resolver = qrzlookup.NewClient(qrzUsername, qrzPassword)
 			logInfo("QRZ callsign enrichment enabled (shared by DX-cluster + RBN + regional baseline)")
 			// Wire QRZ into the baseline engine so the regional baseline can
 			// resolve callsign targets to a locator (→ region). The cty
@@ -706,18 +709,22 @@ func main() {
 	// Reverse-proxy /horstprop/* to the local horstprop scoring service so the
 	// Chase Queue reaches it same-origin (horstprop itself stays bound to
 	// localhost). Thin passthrough; no scoring logic lives here.
-	if proxy, ok := newHorstpropProxy(*horstpropURL); ok {
-		appMux.Handle("/horstprop/", proxy)
+	if h, err := proxy.Horstprop(*horstpropURL); err != nil {
+		logInfo("horstprop proxy disabled: %v", err)
+	} else if h != nil {
+		appMux.Handle("/horstprop/", h)
 		logInfo("horstprop proxy mounted at /horstprop/ -> %s", *horstpropURL)
 	}
 
 	// Reverse-proxy /pathscope/* to the local pathscope scoring service.
 	// pathscope exposes its own static assets AND an SSE stream; the
-	// proxy uses FlushInterval: -1 (set in newPathscopeProxy) so the
+	// proxy uses FlushInterval: -1 (set in proxy.Pathscope) so the
 	// SSE bytes flush per event rather than buffering. Thin passthrough;
 	// no scoring logic lives here.
-	if proxy, ok := newPathscopeProxy(*pathscopeURL); ok {
-		appMux.Handle("/pathscope/", proxy)
+	if h, err := proxy.Pathscope(*pathscopeURL); err != nil {
+		logInfo("pathscope proxy disabled: %v", err)
+	} else if h != nil {
+		appMux.Handle("/pathscope/", h)
 		logInfo("pathscope proxy mounted at /pathscope/ -> %s", *pathscopeURL)
 	}
 
@@ -805,7 +812,7 @@ func main() {
 
 	var appHandler http.Handler = appMux
 	if compressStream {
-		appHandler = gzipMiddleware(appMux)
+		appHandler = httpx.Middleware(appMux)
 	}
 
 	if *domain != "" {

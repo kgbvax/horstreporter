@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // TestLocatorClusterAnchor pins the 6×6 grid-cluster anchor computation.
@@ -14,22 +16,22 @@ func TestLocatorClusterAnchor(t *testing.T) {
 		in, want string
 		ok       bool
 	}{
-		{"JO62", "JN68", true},  // Berlin
+		{"JO62", "JN68", true},   // Berlin
 		{"JO62QM", "JN68", true}, // 6-char subsquare → same cluster
-		{"FN31", "EM86", true},  // New York
-		{"CM87", "CM46", true},  // San Francisco
-		{"AA00", "AA00", true},  // origin
-		{"W1AW", "", false},     // callsign → not a locator
-		{"", "", false},         // empty
+		{"FN31", "EM86", true},   // New York
+		{"CM87", "CM46", true},   // San Francisco
+		{"AA00", "AA00", true},   // origin
+		{"W1AW", "", false},      // callsign → not a locator
+		{"", "", false},          // empty
 	}
 	for _, c := range cases {
-		got, ok := locatorClusterAnchor(c.in)
+		got, ok := maidenhead.ClusterAnchor(c.in)
 		if ok != c.ok {
-			t.Errorf("locatorClusterAnchor(%q) ok = %v, want %v", c.in, ok, c.ok)
+			t.Errorf("maidenhead.ClusterAnchor(%q) ok = %v, want %v", c.in, ok, c.ok)
 			continue
 		}
 		if ok && got != c.want {
-			t.Errorf("locatorClusterAnchor(%q) = %q, want %q", c.in, got, c.want)
+			t.Errorf("maidenhead.ClusterAnchor(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

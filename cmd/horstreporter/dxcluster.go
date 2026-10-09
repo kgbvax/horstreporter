@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"horstreporter/internal/cty"
+	"horstreporter/internal/maidenhead"
+	"horstreporter/internal/qrzlookup"
 )
 
 type dxClusterAccountingState struct {
@@ -43,7 +45,7 @@ type dxClusterConfig struct {
 	Verbose        bool
 	Username       string
 	Password       string
-	Resolver       CallsignLocatorResolver
+	Resolver       qrzlookup.Resolver
 	CtyResolver    *cty.Resolver // DXCC entity + country flag (cty.dat); may be nil
 }
 
@@ -286,7 +288,7 @@ func parseDXClusterSpot(line string, observedAt int64) (dxClusterSpot, bool) {
 	}, true
 }
 
-func handleDXClusterSpot(spot dxClusterSpot, resolver CallsignLocatorResolver, ctyResolver *cty.Resolver) {
+func handleDXClusterSpot(spot dxClusterSpot, resolver qrzlookup.Resolver, ctyResolver *cty.Resolver) {
 	band := bandFromFrequencyKHz(spot.FrequencyKHz)
 	spotterLocator := ""
 	dxLocator := ""
@@ -331,17 +333,17 @@ func handleDXClusterSpot(spot dxClusterSpot, resolver CallsignLocatorResolver, c
 	}
 
 	m := MQTTMessage{
-		RP:         0,
-		T:          spot.ObservedAt,
-		SC:         spot.Spotter,
-		SL:         spotterLocator,
-		RC:         spot.DXCall,
-		RL:         dxLocator,
-		B:          band,
-		MD:         "DXCLUSTER",
-		F:          spot.FrequencyKHz,
-		X:          newDXExtra(spot.Comment, dxName, dxCountry, dxCountryISO),
-		Source:     "dxcluster",
+		RP:     0,
+		T:      spot.ObservedAt,
+		SC:     spot.Spotter,
+		SL:     spotterLocator,
+		RC:     spot.DXCall,
+		RL:     dxLocator,
+		B:      band,
+		MD:     "DXCLUSTER",
+		F:      spot.FrequencyKHz,
+		X:      newDXExtra(spot.Comment, dxName, dxCountry, dxCountryISO),
+		Source: "dxcluster",
 	}
 
 	if dxBaseline != nil {
@@ -374,7 +376,7 @@ func isDXClusterSpotUsableForLive(m MQTTMessage) bool {
 	rl := strings.ToUpper(strings.TrimSpace(m.RL))
 	// DX cluster spots only need the DX call (RX) locator for mapping.
 	// Spotter locator is a nice-to-have, but not required.
-	return isLocator(rl)
+	return maidenhead.IsLocator(rl)
 }
 
 func bandFromFrequencyKHz(freq float64) string {

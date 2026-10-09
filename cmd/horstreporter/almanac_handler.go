@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"horstreporter/internal/maidenhead"
 )
 
 // almanac_handler.go serves GET /api/almanac (plan U2) and owns the two-part
@@ -95,7 +97,7 @@ func almanacWSPRCoverage(areas []string) map[string]bool {
 	}
 	cov := map[string]bool{}
 	for _, a := range areas {
-		for _, sq := range getSquaresWithinRings(almanacNormalizeCentre(a), almanacMaxWidenRadius) {
+		for _, sq := range maidenhead.SquaresWithinRings(almanacNormalizeCentre(a), almanacMaxWidenRadius) {
 			cov[sq] = true
 		}
 	}
