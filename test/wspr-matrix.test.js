@@ -194,7 +194,7 @@ describe('wspr-matrix (Propagation) panel', () => {
         const groups = Array.from(document.querySelectorAll('.wspr-src-chips [role="group"]'));
         expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['Sources', 'Look']);
         expect(groups[0].querySelectorAll('[data-source]').length).toBe(4);
-        expect(Array.from(groups[1].querySelectorAll('[data-style]')).map((c) => c.textContent)).toEqual(['Dots', 'Day', 'Trend']);
+        expect(Array.from(groups[1].querySelectorAll('[data-style]')).map((c) => c.textContent)).toEqual(['vs Normal', 'Day', 'Trend']);
         expect(groups[0].querySelector('[data-source="rbn"]').getAttribute('aria-pressed')).toBe('true');
         expect(groups[0].querySelector('[data-source="dxcluster"]').getAttribute('aria-pressed')).toBe('false');
     });
@@ -1018,7 +1018,7 @@ describe('wspr-matrix dot strip keyboard grid', () => {
     const withNormal = (band, region, es, e, extra = {}) => ({
         ...makeCell({ band, region, spot_count: es + 3, ...extra }), expected: e, expected_spots: es,
     });
-    // 20m: JA ×⅛ (silent), NA ×½, EU ×1, SA ×4    15m: AS ×2, EU ×1
+    // 20m: JA silent (far left), NA below, EU ×1, SA ≈×4    15m: AS ≈×2, EU ×1
     const payload = () => ({
         cells: [
             withNormal('20m', 'EU', 9, 9),

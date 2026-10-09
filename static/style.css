@@ -695,7 +695,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 }
 .wspr-strip {
     position: relative;
-    height: 48px;
+    height: 60px;
     color: var(--text-color);
 }
 .wspr-strip-line {
@@ -1054,7 +1054,7 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 }
 
 /* Chip row: source multi-select (WSPR / PSKR / RBN / DXC) and the look
-   (Dots / Day / Trend), each its own labelled group. */
+   (vs Normal / Day / Trend), each its own labelled group. */
 .wspr-src-chips {
     display: flex;
     flex-wrap: wrap;
@@ -1306,8 +1306,12 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     font-size: calc(0.72rem * var(--now-type, 1));
 }
 .cond-now-matrix .wspr-matrix-table tbody tr {
-    /* Even rows: tall enough for the strip's dots with two label rows. */
+    /* Even rows for the Day / Trend looks (34px plots). */
     height: 60px;
+}
+.cond-now-matrix .wspr-matrix-table.wspr-look-dots tbody tr {
+    /* vs Normal: tall enough for the 60px strip's dots with two label rows. */
+    height: 75px;
 }
 .cond-band-verdict,
 .cond-band-pair {
