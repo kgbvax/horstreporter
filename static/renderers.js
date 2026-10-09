@@ -504,6 +504,8 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
         }
     }
 
+    updateRailTimeAnchor();
+
     document.querySelectorAll('.band-pill').forEach(pill => {
         const band = pill.dataset.band;
         if (!band) return;
@@ -558,6 +560,31 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
 }
 
 const SPARK_BINS = 15;
+
+// "15 min", "1 h": the span of the sparklines (max spot age).
+export function sparkSpanLabel(minutes) {
+    const m = Math.max(1, Math.round(Number(minutes) || 15));
+    return m >= 60 && m % 60 === 0 ? `${m / 60} h` : `${m} min`;
+}
+
+// The rail's time scale: the label at the foot of the hairline that marks
+// where the sparklines start.
+function updateRailTimeAnchor() {
+    const span = sparkSpanLabel(document.getElementById('minutes')?.value);
+    const label = document.querySelector('.band-rail-time-span');
+    if (label) label.textContent = span;
+    const row = document.querySelector('.band-rail-time');
+    if (row) row.title = `Sparklines: the last ${span}`;
+}
+
+// The label also follows the slider directly (the next render may be a while
+// off, or never come without spots) and is set once the controls exist.
+if (typeof document !== 'undefined') {
+    document.addEventListener('input', (e) => {
+        if (e.target?.id === 'minutes') updateRailTimeAnchor();
+    });
+    document.addEventListener('DOMContentLoaded', updateRailTimeAnchor);
+}
 
 // Per-band spot count + a SPARK_BINS histogram over the max-spot-age window,
 // anchored on the newest spot so it also works for a timeline moment.

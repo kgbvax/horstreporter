@@ -671,6 +671,45 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
     color: var(--text-color);
 }
 
+/* Time anchor in the matrix's top-left corner (Trend: how far back the lines
+   go; Day: the clock span of the curves). */
+.wspr-matrix-table .wspr-matrix-corner {
+    text-align: left;
+    vertical-align: bottom;
+    padding-left: 6px;
+}
+.wspr-time-anchor {
+    /* Zero width: the label never widens the band column, so the columns sit
+       in the same place in every look; it reads into the cell's spare room. */
+    display: inline-block;
+    width: 0;
+    overflow: visible;
+    font-size: calc(0.72rem * var(--now-type, 1));
+    font-weight: 400;
+    white-space: nowrap;
+    color: var(--status-color);
+}
+
+/* Heat overlay (Heat chip): cells tinted by reports now on CET-R2, mixed
+   into the panel so the ink marks stay readable on every shade (the dark
+   panel takes more colour to stay visible). */
+.wspr-matrix-table .wspr-look-cell.has-heat {
+    background: color-mix(in srgb, var(--heat) 40%, var(--bg-color));
+}
+body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
+    background: color-mix(in srgb, var(--heat) 50%, var(--bg-color));
+}
+.wspr-heat-key {
+    white-space: nowrap;
+}
+.wspr-heat-bar {
+    display: inline-block;
+    width: 72px;
+    height: 8px;
+    border-radius: 2px;
+    vertical-align: middle;
+}
+
 /* Dot strip: one factor axis per band row, regions as labelled dots. */
 .wspr-matrix-table .wspr-strip-head {
     width: 100%;
@@ -736,6 +775,19 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 .wspr-strip-dot.is-silent .wspr-strip-label,
 .wspr-strip-dot.is-unknown .wspr-strip-label {
     color: color-mix(in srgb, var(--text-color) 65%, transparent);
+}
+/* Heat overlay on the strip: the dot takes the colour, a thin ink ring keeps
+   the pale yellows visible on the light panel. */
+.wspr-matrix-table .wspr-strip-dot.has-heat {
+    background: var(--heat);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-color) 55%, transparent);
+}
+.wspr-matrix-table .wspr-strip-dot.has-heat.is-below {
+    background: color-mix(in srgb, var(--heat) 55%, transparent);
+}
+.wspr-matrix-table .wspr-strip-dot.has-heat.is-cw {
+    background: none;
+    border-color: var(--heat);
 }
 /* Surge: a ring around the dot (thicker when strong). */
 .wspr-strip-dot.is-surge {
@@ -1326,14 +1378,31 @@ body[data-theme="dark"] .band-lab-decision-badge.is-wait {
 .cond-cell-plot {
     padding: 2px 4px;
 }
-/* One header line at the larger Now type size. */
-.cond-now-matrix th.cond-col-plot {
+/* The band and plot columns keep their content width (one line each at the
+   larger Now type size), so the full-width table gives its spare room to the
+   region columns only, and both columns sit in the same place in every look
+   (vs Normal has one wide strip column, Day / Trend nine narrow ones); the plot is
+   centred under its heading. */
+.cond-now-matrix .wspr-matrix-corner,
+.cond-now-matrix th.wspr-matrix-band,
+.cond-now-matrix th.cond-col-plot,
+.cond-now-matrix td.cond-cell-plot {
+    width: 1px;
     white-space: nowrap;
+}
+/* The band column is as narrow as its band name and reports line allow: the
+   verdict ("lively, shorter reach") wraps between words instead of setting
+   the width (about 20% narrower on a typical evening, rows grow a line where
+   a verdict wraps). */
+.cond-now-matrix th.wspr-matrix-band,
+.cond-now-matrix .cond-band-verdict {
+    white-space: normal;
 }
 canvas.cond-mini {
     display: block;
     width: 96px;
     height: 44px;
+    margin: 0 auto;
 }
 .cond-collapsed {
     position: absolute;
@@ -1568,6 +1637,40 @@ body[data-theme="dark"] .band-row {
     font-size: 0.95rem;
     line-height: 1;
     opacity: 0.3;
+}
+
+/* Time scale of the sparklines: a dotted hairline at their start, one short
+   segment per band row (broken between rows), with the duration at its foot
+   in the row below the bands. That row uses the band row grid, so its third
+   column is the sparkline column. */
+.band-row .band-spark,
+.band-rail-time-span {
+    border-left: 1px dotted color-mix(in srgb, var(--text-color) 45%, transparent);
+}
+.band-row .band-spark {
+    box-sizing: border-box;
+}
+.band-rail-time {
+    display: grid;
+    grid-template-columns: 14px 1fr;
+    column-gap: 8px;
+    padding: 2px 6px 0;
+    font-size: 0.72rem;
+    line-height: 1.2;
+    color: var(--status-color);
+}
+.band-rail-time-grid {
+    display: grid;
+    grid-template-columns: 3.2rem 2.4rem 1fr auto;
+    column-gap: 8px;
+}
+.band-rail-time-span {
+    display: block;
+    padding-left: 3px;
+    white-space: nowrap;
+}
+.band-rail-time .band-focus-icon {
+    visibility: hidden;
 }
 
 .band-row[data-state="live"] .band-count {
