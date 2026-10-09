@@ -174,9 +174,12 @@ func pskrSpot(ts int64, band, senderLoc, receiverLoc string, snr int) MQTTMessag
 
 func fromHereFixture(now int64) []MQTTMessage {
 	h := []MQTTMessage{}
-	// Six weak from-here reports, JO32 heard in North America.
+	// Six weak from-here reports, JO32 heard in North America by three
+	// stations (a surge needs fromHereSurgeMinStations distinct far ends).
 	for i := 0; i < 6; i++ {
-		h = append(h, pskrSpot(now-int64(10+i), "20m", "JO32AB", "FN31AB", -20))
+		s := pskrSpot(now-int64(10+i), "20m", "JO32AB", "FN31AB", -20)
+		s.RC = []string{"K1AA", "W2BB", "N3CC"}[i%3]
+		h = append(h, s)
 	}
 	// Strong global-mesh reports into North America from outside the area.
 	for i := 0; i < 50; i++ {
@@ -292,6 +295,31 @@ func TestEvaluateV2FromHereNormalAndSurge(t *testing.T) {
 	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, few, now, propIntelAtypicalZThreshold, nil, sparse), "20m", "NA")
 	if c.Atypical != nil {
 		t.Fatalf("%d reports must not make a surge (min %d): %+v", 2, fromHereSurgeMinSpots, c.Atypical)
+	}
+
+	// Enough reports but one far-end station: one lucky path, not an opening.
+	var lone []MQTTMessage
+	for i := 0; i < 6; i++ {
+		lone = append(lone, pskrSpot(now-int64(10+i), "20m", "JO32AB", "FN31AB", -20))
+	}
+	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, lone, now, propIntelAtypicalZThreshold, nil, sparse), "20m", "NA")
+	if c.Atypical != nil {
+		t.Fatalf("6 reports from one station must not make a surge (min %d stations): %+v", fromHereSurgeMinStations, c.Atypical)
+	}
+	if c.ExpectedSpots == nil || *c.ExpectedSpots != 6 {
+		t.Fatalf("the station gate leaves expected_spots alone: %+v", c.ExpectedSpots)
+	}
+	// Two stations, case-insensitive duplicates folded: still under the minimum.
+	lone[1].RC, lone[2].RC = "w2bb", "W2BB"
+	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, lone, now, propIntelAtypicalZThreshold, nil, sparse), "20m", "NA")
+	if c.Atypical != nil {
+		t.Fatalf("2 distinct stations must not make a surge: %+v", c.Atypical)
+	}
+	// A third station tips it.
+	lone[3].RC = "N3CC"
+	c = findV2Cell(t, propIntelV2.EvaluateV2FromHere("JO32", true, 15, v2Spots("pskr"), nil, nil, lone, now, propIntelAtypicalZThreshold, nil, sparse), "20m", "NA")
+	if c.Atypical == nil {
+		t.Fatal("6 reports from 3 stations on a quiet path must make a surge")
 	}
 
 	// Too few reference days: no normal at all.
