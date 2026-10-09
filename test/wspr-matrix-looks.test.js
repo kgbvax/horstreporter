@@ -10,7 +10,7 @@ const cell = (o = {}) => ({ band: '20m', region: 'EU', spot_count: 20, ssb_open:
 
 describe('wspr-matrix-looks model', () => {
     it('lists three looks with plain titles', () => {
-        expect(LOOKS.map((l) => [l.key, l.label])).toEqual([['dots', 'Dots'], ['day', 'Day'], ['trend', 'Trend']]);
+        expect(LOOKS.map((l) => [l.key, l.label])).toEqual([['dots', 'vs Normal'], ['day', 'Day'], ['trend', 'Trend']]);
         for (const l of LOOKS) expect(l.title).not.toMatch(/experiment/i);
     });
 
@@ -19,14 +19,18 @@ describe('wspr-matrix-looks model', () => {
         expect(volumeStep(undefined)).toBe(0);
     });
 
-    it('cellModel: smoothed log2 factor, clamped to three doublings', () => {
+    it('cellModel: smoothed log2 factor, clamped to two doublings', () => {
         expect(cellModel(cell({ expected: 9, expected_spots: 9 })).lf).toBe(0);
-        expect(cellModel(cell({ expected: 9, expected_spots: 19 })).lf).toBe(1);
-        expect(cellModel(cell({ expected: 9, expected_spots: 4 })).lf).toBe(-1);
+        expect(cellModel(cell({ expected: 9, expected_spots: 21 })).lf).toBe(1);
+        expect(cellModel(cell({ expected: 9, expected_spots: 3 })).lf).toBe(-1);
         expect(cellModel(cell({ expected: 2000, expected_spots: 3 })).lf).toBe(-LF_MAX);
         expect(cellModel(cell({ expected: 0.2, expected_spots: 40 })).lf).toBe(LF_MAX);
-        // Normally under one report, one now: barely above normal, not ×8.
-        expect(cellModel(cell({ expected: 0.3, expected_spots: 1 })).lf).toBeCloseTo(Math.log2(2 / 1.3));
+        // Normally under one report, one now: barely above normal, not at the edge.
+        expect(cellModel(cell({ expected: 0.3, expected_spots: 1 })).lf).toBeCloseTo(Math.log2(4 / 3.3));
+        // A usually silent path: one report ≈ ×1.3, three ×2, nine ×4.
+        expect(cellModel(cell({ expected: 0, expected_spots: 1 })).lf).toBeCloseTo(Math.log2(4 / 3));
+        expect(cellModel(cell({ expected: 0, expected_spots: 3 })).lf).toBe(1);
+        expect(cellModel(cell({ expected: 0, expected_spots: 9 })).lf).toBe(2);
         const none = cellModel(cell());
         expect(none.lf).toBeNull();
         expect(none.hasNormal).toBe(false);
@@ -76,7 +80,7 @@ describe('wspr-matrix-looks dot strip', () => {
         expect(html).toContain('wspr-matrix-cell wspr-strip-dot is-unknown');
         expect(html).toContain('&lt;X&gt;');
         expect(html).toContain('data-col="500"');
-        expect((html.match(/wspr-strip-line/g) || []).length).toBe(7);
+        expect((html.match(/wspr-strip-line/g) || []).length).toBe(5);
     });
 
     it('placeStrip: overlapping dots step into lanes, labels avoid each other', () => {

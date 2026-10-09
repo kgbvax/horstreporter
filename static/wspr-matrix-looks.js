@@ -6,8 +6,8 @@ import { escapeHtml } from './ui-helpers.js';
 // against its normal for this hour instead of its raw count, in one ink
 // (currentColor), no hue:
 //
-//   - dots:  dot strip. One axis per band row from ×⅛ to ×8; every region is a
-//            labelled dot placed where it stands against its normal.
+//   - dots:  "vs Normal" dot strip. One axis per band row from ×¼ to ×4; every
+//            region is a labelled dot placed where it stands against its normal.
 //   - day:   day strip. Each cell draws its path's usual day (the area normal
 //            per 30-minute slot), a cursor at now and a dot for now.
 //   - trend: sparkline. The last hour in five-minute bins against the normal.
@@ -19,13 +19,19 @@ import { escapeHtml } from './ui-helpers.js';
 // keyboard model and the tooltips; this module only draws.
 
 export const LOOKS = [
-    { key: 'dots', label: 'Dots', title: 'Dot strip: each region placed by its reports now against the normal for this hour' },
+    { key: 'dots', label: 'vs Normal', title: 'vs Normal: each region placed by its reports now against the normal for this hour' },
     { key: 'day', label: 'Day', title: 'Day strip: each path\'s usual day with a dot for now' },
     { key: 'trend', label: 'Trend', title: 'Sparkline: the last hour in 5-minute steps against the normal' },
 ];
 
-// The log2 factor is clamped to three doublings either way.
-export const LF_MAX = 3;
+// The log2 factor is clamped to two doublings either way (×¼ to ×4).
+export const LF_MAX = 2;
+
+// LF_PRIOR is the pseudo-count added to both sides of the ratio. A path that is
+// normally near empty needs about three times the prior to look doubled, so a
+// stray report or two on a quiet band stays near ×1: one report ≈ ×1.3, three
+// ≈ ×2, nine ≈ ×4. Busy paths (tens of reports) are barely affected.
+export const LF_PRIOR = 3;
 const SLOT_SEC = 1800;
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -43,16 +49,16 @@ export function volumeStep(n) {
 }
 
 // cellModel: what every look needs from a v2 cell. lf is log2 of reports now
-// against the normal, smoothed by one report on both sides so a path that is
-// normally near empty does not swing to ×8 on one stray report; null without a
-// normal (PSKReporter not selected, or the area normal not loaded yet).
+// against the normal, smoothed by LF_PRIOR reports on both sides so a path that
+// is normally near empty does not swing to the edge on a few stray reports; null
+// without a normal (PSKReporter not selected, or the area normal not loaded yet).
 export function cellModel(cell) {
     const n = Number(cell?.spot_count) || 0;
     const hasNormal = cell?.expected != null && cell?.expected_spots != null &&
         Number.isFinite(Number(cell.expected)) && Number.isFinite(Number(cell.expected_spots));
     const e = hasNormal ? Number(cell.expected) : null;
     const es = hasNormal ? Number(cell.expected_spots) : null;
-    const lf = hasNormal ? clamp(Math.log2((es + 1) / (e + 1)), -LF_MAX, LF_MAX) : null;
+    const lf = hasNormal ? clamp(Math.log2((es + LF_PRIOR) / (e + LF_PRIOR)), -LF_MAX, LF_MAX) : null;
     const surge = cell?.atypical ? (((Number(cell.atypical.z_score) || 0) >= 4 || (cell.atypical_agreement ?? 0) >= 0.5) ? 2 : 1) : 0;
     return {
         n,
@@ -84,7 +90,7 @@ export function stripX(lf) {
     return 3 + 94 * (clamp(lf, -LF_MAX, LF_MAX) + LF_MAX) / (2 * LF_MAX);
 }
 
-const STRIP_TICKS = [[-3, '×⅛'], [-2, '×¼'], [-1, '×½'], [0, '×1'], [1, '×2'], [2, '×4'], [3, '×8']];
+const STRIP_TICKS = [[-2, '×¼'], [-1, '×½'], [0, '×1'], [1, '×2'], [2, '×4']];
 
 // Column header: the factor axis.
 export function stripAxisHtml() {
@@ -132,7 +138,7 @@ export function stripRowHtml(dots) {
 // above, further below, avoiding every other label and dot, or is left out
 // (slot -1; the region stays in the dot's name and tooltip). Returns per item
 // the lane offset dy and the label's top relative to the dot's top edge.
-export const STRIP_LANES = [0, -9, 9];
+export const STRIP_LANES = [0, -11, 11];
 
 function overlaps(a, b, pad) {
     return a.l < b.r + pad && b.l < a.r + pad && a.t < b.b + pad && b.t < a.b + pad;

@@ -44,6 +44,11 @@ const (
 	// on a path that is normally near empty, a stddev under one report would
 	// otherwise turn one or two stray reports into a surge (and a push).
 	fromHereSurgeMinSpots = 5
+	// fromHereSurgeMinStations is the fewest distinct far-end stations a
+	// from-here surge needs: one station spotting (or being spotted) over and
+	// over on a usually quiet band is one lucky path, not an opening, yet its
+	// reports alone would clear fromHereSurgeMinSpots and a near-zero spread.
+	fromHereSurgeMinStations = 3
 )
 
 // fromHereWait is how long a request waits for a cache miss; a slower query
@@ -529,6 +534,37 @@ func (f *fromHereMatcher) ends(m *MQTTMessage, receiverSide string) (a, b string
 	return a, b
 }
 
+// fromHereRemoteCalls returns the callsigns of the far ends ends reports for
+// the same spot: the other station for end a, the receiver for end b (trimmed
+// feed strings, not upper-cased; compare with strings.EqualFold).
+func fromHereRemoteCalls(m *MQTTMessage, receiverSide string) (forA, forB string) {
+	recvCall, otherCall := m.SC, m.RC
+	if receiverSide == "rc" {
+		recvCall, otherCall = otherCall, recvCall
+	}
+	return strings.TrimSpace(otherCall), strings.TrimSpace(recvCall)
+}
+
+// fromHereStations collects the distinct far-end callsigns of a cell, up to
+// fromHereSurgeMinStations (all the surge gate needs), without allocating.
+type fromHereStations struct {
+	calls [fromHereSurgeMinStations]string
+	n     int
+}
+
+func (t *fromHereStations) add(call string) {
+	if call == "" || t.n == len(t.calls) {
+		return
+	}
+	for i := 0; i < t.n; i++ {
+		if strings.EqualFold(t.calls[i], call) {
+			return
+		}
+	}
+	t.calls[t.n] = call
+	t.n++
+}
+
 // fromHereRemoteEnds is fromHereMatcher.ends for a one-off spot.
 func fromHereRemoteEnds(m *MQTTMessage, qthSet []string, area *liveArea, receiverSide string) (a, b string) {
 	f := newFromHereMatcher(qthSet, area)
@@ -538,9 +574,11 @@ func fromHereRemoteEnds(m *MQTTMessage, qthSet []string, area *liveArea, receive
 // applyFromHereNormal sets a from-here cell's expected / expected_spots from
 // the area normal and, when the live count clears the surge threshold against
 // it, the atypical (also on the pskr source, the only one the normal covers).
-// A cell the reference days never saw gets expected 0. No-op without a normal
-// of at least propIntelMinSampleDays.
-func applyFromHereNormal(cell *propIntelV2Cell, normals *fromHereNormals, live int, threshold float64) {
+// A surge also needs fromHereSurgeMinSpots reports from at least
+// fromHereSurgeMinStations distinct far-end stations (stations, capped at that
+// minimum). A cell the reference days never saw gets expected 0. No-op without
+// a normal of at least propIntelMinSampleDays.
+func applyFromHereNormal(cell *propIntelV2Cell, normals *fromHereNormals, live, stations int, threshold float64) {
 	if normals == nil || normals.SampleDays < propIntelMinSampleDays {
 		return
 	}
@@ -554,7 +592,7 @@ func applyFromHereNormal(cell *propIntelV2Cell, normals *fromHereNormals, live i
 			cell.PerSource[i].SampleDays = normals.SampleDays
 		}
 	}
-	if nrm.StdDev <= 0 || live < fromHereSurgeMinSpots {
+	if nrm.StdDev <= 0 || live < fromHereSurgeMinSpots || stations < fromHereSurgeMinStations {
 		return
 	}
 	z := (float64(live) - nrm.Expected) / nrm.StdDev

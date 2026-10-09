@@ -349,7 +349,7 @@ func propIntelRemoteCall(m *MQTTMessage, receiverSide string, remoteIsRecv bool)
 // scanPropIntelV2Window walks the history window once and accumulates the
 // per-(band, region, source) cells, the from-here flags and the bands seen.
 func scanPropIntelV2Window(history []MQTTMessage, profiles []propIntelSourceProfile, qthSet []string, matchArea *liveArea, now, cutoff, midpoint int64) (map[propIntelV2CellKey]*propIntelV2Acc, map[propIntelCellKey]bool, map[string]struct{}) {
-	accs, fromHere, bands, _ := scanPropIntelV2WindowMode(history, profiles, qthSet, matchArea, now, cutoff, midpoint, false)
+	accs, fromHere, bands, _, _ := scanPropIntelV2WindowMode(history, profiles, qthSet, matchArea, now, cutoff, midpoint, false)
 	return accs, fromHere, bands
 }
 
@@ -358,8 +358,9 @@ func scanPropIntelV2Window(history []MQTTMessage, profiles []propIntelSourceProf
 // in the cell of the OTHER end's region (fromHereRemoteEnds), and spots that
 // do not touch the area are skipped. normalSpots then counts, per (band,
 // region), the spots the area normal is built from (PSKReporter FT8/FT4 and
-// DX cluster); nil otherwise.
-func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSourceProfile, qthSet []string, matchArea *liveArea, now, cutoff, midpoint int64, fromHereOnly bool) (map[propIntelV2CellKey]*propIntelV2Acc, map[propIntelCellKey]bool, map[string]struct{}, map[propIntelCellKey]int) {
+// DX cluster), and normalStations the distinct far-end stations behind them
+// (capped at fromHereSurgeMinStations); both nil otherwise.
+func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSourceProfile, qthSet []string, matchArea *liveArea, now, cutoff, midpoint int64, fromHereOnly bool) (map[propIntelV2CellKey]*propIntelV2Acc, map[propIntelCellKey]bool, map[string]struct{}, map[propIntelCellKey]int, map[propIntelCellKey]int) {
 	// Per-message accumulation is indexed by (band, region, source) position
 	// in flat arrays instead of string-keyed maps (three string hashes per
 	// message); the maps the rest of the function reads are rebuilt below.
@@ -370,9 +371,11 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 	var bandSeen [len(inScopeBandNames)]bool
 	fromHere := make([]bool, nBands*nRegions)
 	var normal []int
+	var stations []fromHereStations
 	var fhm fromHereMatcher
 	if fromHereOnly {
 		normal = make([]int, nBands*nRegions)
+		stations = make([]fromHereStations, nBands*nRegions)
 		fhm = newFromHereMatcher(qthSet, matchArea)
 	}
 	regions := newRawRegionMemo()
@@ -403,17 +406,18 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 			continue
 		}
 
-		var ends [2]string
+		var ends, endCalls [2]string
 		nEnds := 0
 		matchedEnd := true
 		if fromHereOnly {
 			a, b := fhm.ends(m, prof.ReceiverSide)
+			callA, callB := fromHereRemoteCalls(m, prof.ReceiverSide)
 			if a != "" {
-				ends[nEnds] = a
+				ends[nEnds], endCalls[nEnds] = a, callA
 				nEnds++
 			}
 			if b != "" {
-				ends[nEnds] = b
+				ends[nEnds], endCalls[nEnds] = b, callB
 				nEnds++
 			}
 		} else {
@@ -454,6 +458,7 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 			}
 			if fromHereOnly && (src == "mqtt" || src == "dxcluster") {
 				normal[bi*nRegions+ri]++
+				stations[bi*nRegions+ri].add(endCalls[k])
 			}
 
 			if m.T < midpoint {
@@ -468,9 +473,10 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 	cellAccs := make(map[propIntelV2CellKey]*propIntelV2Acc)
 	cellFromHere := make(map[propIntelCellKey]bool)
 	bandsSeen := make(map[string]struct{})
-	var normalSpots map[propIntelCellKey]int
+	var normalSpots, normalStations map[propIntelCellKey]int
 	if fromHereOnly {
 		normalSpots = make(map[propIntelCellKey]int)
+		normalStations = make(map[propIntelCellKey]int)
 	}
 	allRegions := region.AllRegions()
 	for bi := 0; bi < nBands; bi++ {
@@ -482,7 +488,9 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 				cellFromHere[propIntelCellKey{band: inScopeBandNames[bi], region: string(allRegions[ri])}] = true
 			}
 			if fromHereOnly && normal[bi*nRegions+ri] > 0 {
-				normalSpots[propIntelCellKey{band: inScopeBandNames[bi], region: string(allRegions[ri])}] = normal[bi*nRegions+ri]
+				key := propIntelCellKey{band: inScopeBandNames[bi], region: string(allRegions[ri])}
+				normalSpots[key] = normal[bi*nRegions+ri]
+				normalStations[key] = stations[bi*nRegions+ri].n
 			}
 			for si := 0; si < nSources; si++ {
 				if acc := accs[(bi*nRegions+ri)*nSources+si]; acc != nil {
@@ -491,7 +499,7 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 			}
 		}
 	}
-	return cellAccs, cellFromHere, bandsSeen, normalSpots
+	return cellAccs, cellFromHere, bandsSeen, normalSpots, normalStations
 }
 
 // propIntelV2Engine is stateless like v1's; the propBaseline singleton holds
@@ -578,7 +586,7 @@ func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes in
 	cutoff := now - int64(minutes)*60
 	midpoint := cutoff + (now-cutoff)/2
 
-	cellAccs, cellFromHere, bandsSeen, normalSpots := scanPropIntelV2WindowMode(history, profiles, qthSet, matchArea, now, cutoff, midpoint, fh != nil)
+	cellAccs, cellFromHere, bandsSeen, normalSpots, normalStations := scanPropIntelV2WindowMode(history, profiles, qthSet, matchArea, now, cutoff, midpoint, fh != nil)
 
 	resp.Bands = inScopeBandsOrdered(bandsSeen)
 	slot := utcSlotOfDay(now)
@@ -738,7 +746,7 @@ func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes in
 			}
 		}
 		if fh != nil && pskrSelected {
-			applyFromHereNormal(&cell, fh.normals, normalSpots[cellKey], atypicalThreshold)
+			applyFromHereNormal(&cell, fh.normals, normalSpots[cellKey], normalStations[cellKey], atypicalThreshold)
 			applyFromHereDetail(&cell, fh, trend)
 		}
 		cells = append(cells, cell)
