@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"math"
 	"os"
 	"strings"
@@ -238,6 +239,10 @@ func (e *WsprClimatologyEngine) Save() error {
 			continue
 		}
 		cp := *v
+		// Deep-copy DayCounts: Observe keeps writing the live map after the
+		// lock is released, and marshalling a shared map is a fatal
+		// concurrent map iteration and map write.
+		cp.DayCounts = maps.Clone(v.DayCounts)
 		snap.Buckets[k] = &cp
 	}
 	e.mu.RUnlock()
