@@ -146,12 +146,12 @@ describe('almanac panel (U7)', () => {
         expect(runtime.timer).toBeNull();
     });
 
-    it('JO32: renders 11 region rows with EU last and one labelled lane per band', async () => {
+    it('JO32: renders 10 region rows with EU last (KH6 hidden) and one labelled lane per band', async () => {
         mockFetchOnce(makePayload());
         await openPanel();
         const rows = Array.from(body().querySelectorAll('.almanac-region'));
         expect(rows.map((r) => r.getAttribute('data-region'))).toEqual(
-            ['NA', 'SA', 'AF', 'AS', 'JA', 'OC', 'VK', 'KH6', 'CAR', 'AN', 'EU']);
+            ['NA', 'SA', 'AF', 'AS', 'JA', 'OC', 'VK', 'CAR', 'AN', 'EU']);
         for (const row of rows) {
             const lanes = Array.from(row.querySelectorAll('.almanac-lane'));
             expect(lanes.map((l) => l.getAttribute('data-band'))).toEqual(IN_SCOPE);
@@ -163,9 +163,17 @@ describe('almanac panel (U7)', () => {
         mockFetchOnce(makePayload({ grid4: 'FN31', bands: ['20m'] }));
         await openPanel();
         const order = Array.from(body().querySelectorAll('.almanac-region')).map((r) => r.getAttribute('data-region'));
-        expect(order).toHaveLength(11);
+        expect(order).toHaveLength(10);
         expect(order[order.length - 1]).toBe('NA');
         expect(order[0]).toBe('EU');
+    });
+
+    it('KH6 is left out of the schedule even when the payload has it', () => {
+        const html = scheduleHtml(makePayload({
+            agenda: [agendaEntry({ region: 'KH6', status: 'ongoing', start_slot: 20 })],
+        }), new Date(Date.UTC(2026, 8, 27, 12, 30)));
+        expect(html).not.toContain('KH6');
+        expect(html).toContain('No usual openings in the next 3 h');
     });
 
     it('bands are ordered low to high regardless of payload order', async () => {
@@ -189,7 +197,7 @@ describe('almanac panel (U7)', () => {
         expect(open.getAttribute('title')).toBe('20m to NA - North America, 14:00 local: opened 24 of 30 days');
         expect(Number(open.style.opacity || getOpacity(open))).toBeGreaterThan(0.5);
 
-        const unknown = body().querySelector('[aria-label="10m to KH6 - Hawaii, 05:00 local: not enough data (6 days)"]');
+        const unknown = body().querySelector('[aria-label="10m to CAR - Caribbean, 05:00 local: not enough data (6 days)"]');
         expect(unknown).not.toBeNull();
         expect(unknown.classList.contains('is-unknown')).toBe(true);
         // Unknown is never drawn in the band colour (distinct from closed).

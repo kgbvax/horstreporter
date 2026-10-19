@@ -453,10 +453,18 @@ function bandRank(band) {
     return BAND_RANK.get(band) ?? BAND_ORDER.length;
 }
 
+// Regions left out of the Typical view (lanes and schedule). The backend
+// still classifies and returns them.
+const HIDDEN_REGIONS = new Set(['KH6']);
+
+function visibleAgenda(data) {
+    return (Array.isArray(data.agenda) ? data.agenda : []).filter((e) => !HIDDEN_REGIONS.has(e.region));
+}
+
 // Region rows: canonical order with the operator's own region last.
 function orderRegions(ownRegion, extra = []) {
-    const all = [...WSPR_REGIONS];
-    for (const r of extra) if (r && !all.includes(r)) all.push(r);
+    const all = WSPR_REGIONS.filter((r) => !HIDDEN_REGIONS.has(r));
+    for (const r of extra) if (r && !all.includes(r) && !HIDDEN_REGIONS.has(r)) all.push(r);
     if (!ownRegion || !all.includes(ownRegion)) return all;
     return [...all.filter((r) => r !== ownRegion), ownRegion];
 }
@@ -572,7 +580,7 @@ export function scheduleHtml(data, now = new Date()) {
     const offsetMin = tzOffsetMinutes(now);
     const nowUtcMin = now.getUTCHours() * 60 + now.getUTCMinutes();
     const items = [];
-    for (const e of sortAgenda(Array.isArray(data.agenda) ? data.agenda : [], Number(data.now_slot) || 0)) {
+    for (const e of sortAgenda(visibleAgenda(data), Number(data.now_slot) || 0)) {
         const ongoing = e.status === 'ongoing';
         const startOff = ongoing ? 0 : Number(e.starts_in_min) || 0;
         if (startOff >= SCHEDULE_MIN) continue;
@@ -585,7 +593,7 @@ export function scheduleHtml(data, now = new Date()) {
     if (items.length === 0) {
         // Say when the next one is, so an empty schedule is not a dead end
         // (e.g. a strict SNR floor leaves nothing open for hours).
-        const next = (Array.isArray(data.agenda) ? data.agenda : [])
+        const next = visibleAgenda(data)
             .filter((e) => e.status !== 'ongoing' && Number(e.starts_in_min) >= SCHEDULE_MIN)
             .sort((a, b) => a.starts_in_min - b.starts_in_min)[0];
         const hint = next ? `. Next: ${escapeHtml(next.band)} ${escapeHtml(regionLabel(next.region))}, ${startsInLabel(next.starts_in_min)}` : '';
