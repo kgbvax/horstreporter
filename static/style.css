@@ -1226,8 +1226,8 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
 #push-status[data-kind="idle"] { color: var(--status-color); }
 
 /* Conditions dock (cond-dock.js): one in-flow column right of the map that
-   hosts Now (band rows + Propagation cells), Typical (openings) and the Chase
-   queue. Closed, #cond-collapsed (hot-band pills + toggle) sits top-right. */
+   hosts Now (band rows + Propagation cells) and Typical (openings). Closed,
+   #cond-collapsed (hot-band pills + toggle) sits top-right. */
 .cond-dock {
     position: relative;
     flex: 0 0 var(--cond-w, min(620px, 45vw));
@@ -1303,9 +1303,6 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
     min-height: 0;
     display: flex;
     flex-direction: column;
-}
-#cond-chase {
-    overflow: hidden;
 }
 .cond-horizon {
     padding: 8px 10px 0;
@@ -1997,7 +1994,7 @@ body[data-theme="dark"] .band-row {
 
 /* ── Unified control system (teal accent) ──────────────────────────────────
    One button language across the sidebar, Options grid, segmented controls,
-   Band Stats and Chase Queue. Re-skins Bootstrap 5.3 via its own --bs-btn-*
+   Band Stats. Re-skins Bootstrap 5.3 via its own --bs-btn-*
    custom properties (no specificity overrides), so hover/active/focus/disabled
    states all flow from the tokens above.
 
@@ -2006,7 +2003,7 @@ body[data-theme="dark"] .band-row {
    Active / checked (toggles, selected segment) → soft accent tint + accent text.
      The same look carries every other "on" state: the map panel toggles
      (.panel-toggle.is-active), the Propagation chips (.wspr-src-chip.is-on),
-     timeline speed / range / loop (.btn.active) and the Chase Queue pills.
+     timeline speed / range / loop (.btn.active).
    Primary  → solid accent fill (the one "go" action). The operator beam
      buttons are the only other solid "on" state. */
 
@@ -2099,9 +2096,8 @@ body[data-theme="dark"] .band-row {
 
 /* Floating panel-toggle pills share one look. The map toggles (Band stats,
    Propagation) stay visible while their panel is open and show the tint "on"
-   look (.is-active, aria-pressed="true", panel-toggle.js); the Chase Queue
-   toggle sits at the edge its panel pops from and hides while it is open.
-   Translucent pills let the map show through. */
+   look (.is-active, aria-pressed="true", panel-toggle.js). Translucent pills
+   let the map show through. */
 .panel-toggle {
     font: 600 13px sans-serif;
     border: 1px solid var(--control-border);

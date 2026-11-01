@@ -47,11 +47,7 @@ var configFields = []configField{
 	{Key: "ALLOWED_MODES", Label: "Allowed modes", Help: "Comma-separated: forward,backward,bidirectional", Kind: "text"},
 	{Key: "BEAMWIDTH_3DB_DEG", Label: "Beamwidth (°)", Help: "Antenna 3 dB beamwidth shown in UI", Kind: "number"},
 	{Key: "BACKEND_URL", Label: "Backend URL", Help: "HorstReporter server, e.g. https://horstreporter.kgbvax.net", Kind: "text"},
-	{Key: "WAVELOG_API_KEY", Label: "Wavelog API key", Help: "Read key; enables enrichment + awards. Never leaves this PC.", Kind: "password", Secret: true},
-	{Key: "WAVELOG_STATION_ID", Label: "Wavelog station id", Help: "Required for DCLNext award sources", Kind: "text"},
-	{Key: "WAVELOG_URL", Label: "Wavelog URL", Help: "Default: " + defaultWavelogURL, Kind: "text"},
-	{Key: "POTA_HUNTED_CSV", Label: "POTA hunted CSV", Help: "Path to a POTA hunted-parks export (optional)", Kind: "text"},
-	{Key: "DEBUG_LOGGING", Label: "Debug logging", Help: "Log all traffic to external systems (PSTrotator UDP + Wavelog/backend/rig HTTP). Verbose; secrets redacted. Applied on restart.", Kind: "bool"},
+	{Key: "DEBUG_LOGGING", Label: "Debug logging", Help: "Log all traffic to external systems (PSTrotator UDP + backend/rig HTTP). Verbose; secrets redacted. Applied on restart.", Kind: "bool"},
 	{Key: "UB_ENABLED", Label: "UltraBeam control", Help: "Enable UltraBeam beam-direction control over MQTT. Off = no broker connection.", Kind: "bool"},
 	{Key: "UB_BROKER_URL", Label: "UltraBeam broker URL", Help: "MQTT broker the ubctrl controller uses, e.g. tcp://127.0.0.1:1883 (tls:// for an authenticated remote broker)", Kind: "text"},
 	{Key: "UB_TOPIC_PREFIX", Label: "UltraBeam topic prefix", Help: "ubctrl topic prefix. Default ubctrl", Kind: "text"},
@@ -136,14 +132,6 @@ func (s *server) runningValue(key string) string {
 		return strconv.FormatFloat(s.cfg.Beamwidth3dBDeg, 'f', -1, 64)
 	case "BACKEND_URL":
 		return s.cfg.BackendBaseURL
-	case "WAVELOG_API_KEY":
-		return s.cfg.WavelogAPIKey
-	case "WAVELOG_STATION_ID":
-		return s.cfg.Awards.WavelogStationID
-	case "WAVELOG_URL":
-		return s.cfg.WavelogURL
-	case "POTA_HUNTED_CSV":
-		return s.cfg.Awards.POTAHuntedCSV
 	case "DEBUG_LOGGING":
 		return strconv.FormatBool(s.cfg.DebugExternal)
 	case "UB_ENABLED":

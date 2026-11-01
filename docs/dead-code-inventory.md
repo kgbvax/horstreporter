@@ -213,7 +213,7 @@ in the named surface is dead.
   `<script src="…">` reference in `index.html` (lines 368-373).
 - **Pass 10 — In-tree `static/` API calls vs registered routes.**
   In-tree frontend calls (deduped, sorted):
-  `/api/capture_snapshot`, `/api/dx_conditions`, `/api/dxspots`,
+  `/api/capture_snapshot`, `/api/dx_conditions`,
   `/api/hot_bands`, `/api/prop_intel`, `/api/push/subscribe`,
   `/api/push/subscription-status`, `/api/push/unsubscribe`,
   `/api/push/vapid-public-key`, `/api/square_details`, `/api/stats`,

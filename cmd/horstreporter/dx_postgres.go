@@ -1159,8 +1159,8 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 	// DX-cluster spots are persisted separately, with full fidelity (frequency,
 	// comment, source_type 'dxcluster'), via PersistRawSpot. Don't also enqueue a
 	// frequency-less 'mqtt' raw row for them here: that duplicate restores as an
-	// unscorable "0 MHz" spot in the Chase Queue and can shadow the real
-	// dxcluster row during /api/dxspots dedup. Baseline/region aggregation above
+	// unscorable "0 MHz" spot and can shadow the real
+	// dxcluster row during dedup. Baseline/region aggregation above
 	// still counts the spot.
 	if !isDXCluster {
 		s.pendingRawSpots = append(s.pendingRawSpots, row)
@@ -2056,8 +2056,8 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 	for rows.Next() {
 		var m MQTTMessage
 		var cm string
-		// F (frequency_khz) and CM (comment) restore the fields /api/dxspots needs;
-		// without them, spots restored after a restart score as freq 0 (unscorable).
+		// F (frequency_khz) and CM (comment) restore the frequency and comment;
+		// without them, spots restored after a restart carry freq 0.
 		// Source (from source_type) restores the ingest tag so sourceTypeForMessage
 		// tags backfilled RBN rows "rbn" (not "mqtt") and the frontend toggle works
 		// across a restart.

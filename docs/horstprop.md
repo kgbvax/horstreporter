@@ -352,19 +352,9 @@ What exists in the repo today:
 | `/v1/debug` | GET | Score + per-layer + control-point diagnostics |
 | `/v1/health` | GET | liveness + store/MUF/feed status |
 
-## Chase Queue integration (frontend)
+## Browser integration
 
-The DX Cluster "Chase Queue" (`docs/dxcluster-*`) consumes horstprop's `grade` for the score meter.
-Mapping to the existing visual vocabulary: **A/B → "go" (green)**, **C → "watch" (amber)**,
-**D → "wait" (slate)**, **"?" → muted/unknown**. Show the numeric `score` alongside, and surface
-`reason` on hover. The browser calls `GET /v1/score` per visible spot; horstprop serves from cache
-(no hot-path network) and sends `Access-Control-Allow-Origin: *` so a browser page can read it.
-
-**Wired in the prototype** (`tmp/dx-cluster-proto/index.html`): each card fetches its live grade +
-score from `:9970`, recolours the meter, shows a grade badge, re-renders the hero dial, and a status
-pill reports the live/offline state (mock values are kept when horstprop is down). To run the demo:
-`go run ./cmd/horstreporter -dev -port 8080 -dx-postgres-fail-fast=false` and `go run ./cmd/horstprop -horst-url
-http://127.0.0.1:8080 -area-rings 12`, then open the prototype.
+The browser can call `GET /v1/score` directly (or same-origin via `/horstprop/v1/score`); horstprop serves from cache (no hot-path network) and sends `Access-Control-Allow-Origin: *`. Grade mapping for display: **A/B → "go" (green)**, **C → "watch" (amber)**, **D → "wait" (slate)**, **"?" → muted/unknown**. The former Chase Queue UI that consumed it was removed.
 
 ---
 

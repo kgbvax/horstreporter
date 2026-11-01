@@ -25,31 +25,19 @@ DXCLUSTER_USERNAME=<yourcall> DXCLUSTER_PASSWORD=<password> \
 
 # Run local operator agent
 go run ./cmd/horstoperator-agent -listen 127.0.0.1:9955 -station-locator JO62qm
-# Rig control + Chase Queue enrichment (operator-local): add
+# Rig control (operator-local): add
 #   -rig-transport waveloggate   (tune via WaveLogGate)
-# and set Wavelog creds via env / a repo-root .env (NOT flags — keep secrets out of argv):
-#   WAVELOG_API_KEY=… WAVELOG_URL=https://log.dclnext.darc.de/index.php
 # Secrets convention for both binaries (env vars / systemd EnvironmentFile): see docs/deployment-secrets.md
 
 # Run HF link-quality scoring service (separate binary; consumes HorstReporter read-only)
 go run ./cmd/horstprop -listen 127.0.0.1:9970
-
-# Award progress (Chase Queue "wanted": DXCC/WAS/POTA) runs IN-PROCESS in the
-# operator agent (internal/awards) so the operator's log stays local. Enable it by
-# configuring Wavelog for the agent: WAVELOG_API_KEY (.env) + WAVELOG_STATION_ID
-# (required for DCLNext), and optionally POTA_HUNTED_CSV (hunted-parks export).
-#   WAVELOG_STATION_ID=3427 POTA_HUNTED_CSV=hunted.csv ./run_operator_agent.sh
-# Spec: docs/horstawards.md
-# The award index runs in-process in that agent (no separate binary / no
-# -horstawards-url flag): the Chase Queue "wanted" badges gain WAS/POTA from it.
 
 # Backend tests
 go test ./...
 
 # Backend coverage gate (unit U8): runs `go test ./... -cover` itself and fails
 # when an in-scope package (cmd/horstreporter, cmd/horstoperator-agent) drops below
-# .coverage-baseline.json by more than 0.5pp. internal/awards*/awardcontract are
-# out of scope by design. This is the Go side of the local coverage floor.
+# .coverage-baseline.json by more than 0.5pp.  This is the Go side of the local coverage floor.
 npm run test:go:coverage   # (= node scripts/coverage-check.mjs)
 
 # Frontend tests
@@ -118,14 +106,12 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `internal/httpx/` — gzip middleware for JSON/static responses + precompressed embedded assets
 - `internal/maidenhead/` — Maidenhead locator arithmetic (validation, square XY, rings/clusters, lat/lng)
 - `internal/qrzlookup/` — QRZ.com callsign→locator/name/country client (`Resolver` interface)
-- `internal/proxy/` — same-origin reverse proxies for the local horstprop / pathscope services
+- `internal/proxy/` — same-origin reverse proxy for the local pathscope service
 - `internal/proplab/` — primitives for that feed: `buckets.go` (`CellBucketEngine`), plus `geo.go`, `band.go`, `time.go`, `spot.go`, `region.go`, `stats.go`, `dx_midpoint.go`, `lane.go`, `types.go` (engines were deleted; name kept for stability)
 - `sw_ingest.go` — optional NOAA SWPC / OVATION polling into `proplab_sw_series` (consumed by pathscope)
-- `cmd/horstoperator-agent/` — standalone local agent bridging browser opmode to PSTrotator UDP; resolves Wavelog attributes for the Chase Queue and computes award "wanted" in-process via `internal/awards` (operator log stays local)
+- `cmd/horstoperator-agent/` — standalone local agent bridging browser opmode to PSTrotator UDP
 - `cmd/horstprop/` — standalone HF link-quality scoring service (separate binary; consumes HorstReporter read-only over HTTP; see `docs/horstprop.md`)
-- `internal/awards/` — local award-progress engine embedded in the agent: slot index (DXCC/WAS/POTA) from the operator's Wavelog log + POTA hunted-parks CSV; `Manager` + `award`/`adif`/`refdata`/`source`/`store` (see `docs/horstawards.md`)
 - `internal/propcontract/` — score contract types shared between the backend and `cmd/horstprop`
-- `internal/awardcontract/` — award `WantedSpot`/`WantedResult` types shared between the agent and `internal/awards`
 
 **Frontend core files (`static/`):**
 - `app.js` — app boot, SSE stream lifecycle, projection/style gating
@@ -134,7 +120,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `map.js` — Leaflet map setup + overlays
 - `ui.js` — UI helpers and control wiring
 - `state.js` — shared frontend state
-- `cond-dock.js` — the Conditions dock: one in-flow right column (Now / Typical horizons, Chase queue tab) that owns visibility and data polling of the panels it hosts; collapses to the hot-band pills plus a Conditions toggle
+- `cond-dock.js` — the Conditions dock: one in-flow right column (Now / Typical horizons) that owns visibility and data polling of the panels it hosts; collapses to the hot-band pills plus a Conditions toggle
 - `cond-now.js` — the dock's Now rows: verdict, reports / normal and mini plot columns added to the Propagation matrix (`wspr-matrix.js` row-extras hook, numbers from `band-lab.js`)
 
 **Key architectural constraints:**
@@ -172,8 +158,7 @@ Canonical reference: `docs/api.md` (includes response shapes, caches, and explic
 
 - Don't modify anything under `static/vendor/`
 - Don't split the *core* backend into microservices; it is intentionally single-service/single-binary. (Separate operator-side binaries like `cmd/horstoperator-agent` and `cmd/horstprop` that consume the backend/log read-only over HTTP are the sanctioned pattern — they don't grow the core binary.)
-- Keep the scoring boundary: per-spot/path **link** scoring lives only in `cmd/horstprop` (consumed by the Chase Queue via `/horstprop/v1/score`). horstreporter owns the shared, multi-station band/region **conditions** analytics (`dx_conditions.go`, `hot_bands.go`, dxlens) backed by the Postgres baseline. Don't add per-spot/path scoring to horstreporter.
-- Keep the awards boundary: the operator's personal **award progress** ("wanted") lives only in the local operator agent (`internal/awards`, merged into the enrich `needed[]`). The operator's log/award data must stay local — never pulled to the shared core/server.
+- Keep the scoring boundary: per-spot/path **link** scoring lives only in `cmd/horstprop`. horstreporter owns the shared, multi-station band/region **conditions** analytics (`dx_conditions.go`, `hot_bands.go`, dxlens) backed by the Postgres baseline. Don't add per-spot/path scoring to horstreporter.
 - Don't assume Gin/Echo/React/Vite conventions
 
 <!-- rtk-instructions v2 -->

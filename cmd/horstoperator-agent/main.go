@@ -22,12 +22,8 @@ import (
 	"sync"
 	"time"
 
-	"horstreporter/internal/awards"
 	"horstreporter/internal/dotenv"
 )
-
-// defaultWavelogURL is the dclnext (DARC) instance; override via WAVELOG_URL.
-const defaultWavelogURL = "https://log.dclnext.darc.de/index.php"
 
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
@@ -110,16 +106,13 @@ type serviceConfig struct {
 	PSTHost          string
 	PSTPort          int
 	Station          stationConfig
-	RigTransport     string        // none | waveloggate | log4om
-	RigWaveLogGate   string        // WaveLogGate callback base URL
-	RigLog4OM        string        // Log4OM Remote Control inbound UDP host:port
-	WavelogURL       string        // Wavelog base URL (e.g. https://log.dclnext.darc.de/index.php)
-	WavelogAPIKey    string        // Wavelog read API key (from env; never logged)
-	Awards           awards.Config // local award-progress engine (in-process; logs stay local)
-	EnvFile          string        // absolute path to the .env the Settings page reads/writes
-	TaskName         string        // Windows scheduled task name, for clean restart-to-apply (optional)
-	LogFile          string        // absolute path of the log file, when logging to a file ("" = stderr)
-	DebugExternal    bool          // verbose logging of all external traffic (HTTP + PSTrotator UDP)
+	RigTransport     string // none | waveloggate | log4om
+	RigWaveLogGate   string // WaveLogGate callback base URL
+	RigLog4OM        string // Log4OM Remote Control inbound UDP host:port
+	EnvFile          string // absolute path to the .env the Settings page reads/writes
+	TaskName         string // Windows scheduled task name, for clean restart-to-apply (optional)
+	LogFile          string // absolute path of the log file, when logging to a file ("" = stderr)
+	DebugExternal    bool   // verbose logging of all external traffic (HTTP + PSTrotator UDP)
 
 	// UltraBeam RCU-06 antenna controller (MQTT). Beam direction only; rotation
 	// stays with PSTrotator. Disabled unless UBEnabled && UBBrokerURL is set.
@@ -507,12 +500,10 @@ func decodeJSON[T any](r *http.Request, out *T) error {
 }
 
 type server struct {
-	cfg     serviceConfig
-	client  *pstUDPClient
-	rig     rigController   // nil when -rig-transport=none
-	wavelog *wavelogClient  // nil when WAVELOG_API_KEY is unset
-	awards  *awards.Manager // nil when no award source is configured
-	ub      beamController  // nil when UltraBeam control is disabled
+	cfg    serviceConfig
+	client *pstUDPClient
+	rig    rigController  // nil when -rig-transport=none
+	ub     beamController // nil when UltraBeam control is disabled
 
 	pollMu    sync.RWMutex
 	pollState polledAntennaState
@@ -558,18 +549,6 @@ func newServer(cfg serviceConfig) *server {
 		s.rig = newLog4OMBackend(cfg.RigLog4OM)
 	default:
 		log.Printf("[WARN] unknown -rig-transport %q; rig control disabled", cfg.RigTransport)
-	}
-	if strings.TrimSpace(cfg.WavelogAPIKey) != "" {
-		s.wavelog = newWavelogClient(cfg.WavelogURL, cfg.WavelogAPIKey)
-	}
-	if cfg.Awards.Enabled() {
-		if mgr, err := awards.New(cfg.Awards); err != nil {
-			log.Printf("[WARN] awards engine disabled: %v", err)
-		} else {
-			s.awards = mgr
-			mgr.Run(context.Background())
-			log.Printf("[INFO] awards engine enabled (sources: %s)", mgr.SourceLabel())
-		}
 	}
 	if cfg.UBEnabled && cfg.UBBrokerURL != "" {
 		s.ub = newUltrabeamClient(cfg)
@@ -700,7 +679,6 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/antenna/beam", s.handleBeam)
 	mux.HandleFunc("/v1/rig/tune", s.handleRigTune)
 	mux.HandleFunc("/v1/operate", s.handleOperate)
-	mux.HandleFunc("/v1/operate/enrich", s.handleEnrich)
 	mux.HandleFunc("/v1/config", s.handleConfig)
 	mux.HandleFunc("/v1/pst/test", s.handlePSTTest)
 	mux.HandleFunc("/v1/diagnostics", s.handleDiagnostics)
@@ -761,11 +739,6 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		c := s.rig.Capabilities()
 		capabilities["rig"] = map[string]any{"tune": c.Tune, "preview": c.Preview, "split": c.Split}
 	}
-	if s.wavelog != nil {
-		// "awards" => the in-process award engine is running (covers
-		// dxcc/band/mode/was/pota). The frontend keys off this.
-		capabilities["lookup"] = map[string]any{"wavelog": true, "awards": s.awards != nil}
-	}
 	if s.ub != nil {
 		// UltraBeam beam-direction control over MQTT. online == broker connected
 		// AND last availability not offline. The frontend gates the beam buttons
@@ -784,9 +757,6 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"reachable":  true,
 			"note":       "liveness validated via /v1/antenna/state polling",
 		},
-	}
-	if s.awards != nil {
-		resp["awards"] = s.awards.Health()
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -1167,10 +1137,8 @@ func main() {
 	rigLog4OM := flag.String("rig-log4om-addr", envOr("RIG_LOG4OM_ADDR", log4omDefaultAddr), "Log4OM Remote Control inbound UDP host:port (used when -rig-transport=log4om)")
 	trayEnabled := flag.Bool("tray", false, "Run with a Windows tray icon showing live status (Windows only; ignored elsewhere)")
 	logFilePath := flag.String("log-file", envOr("LOG_FILE", ""), "Write logs to this file; the tray (GUI) build has no console, so it defaults to a file next to the exe")
-	debugLogging := flag.Bool("debug-logging", envBoolOr("DEBUG_LOGGING", false), "Verbose logging of all external traffic (PSTrotator UDP + Wavelog/backend/rig HTTP); secrets redacted")
+	debugLogging := flag.Bool("debug-logging", envBoolOr("DEBUG_LOGGING", false), "Verbose logging of all external traffic (PSTrotator UDP + backend/rig HTTP); secrets redacted")
 	taskName := flag.String("task-name", envOr("HORSTOP_TASK", ""), "Windows scheduled task name; lets the Settings page restart-to-apply cleanly via the task")
-	potaHuntedCSV := flag.String("pota-hunted-csv", strings.TrimSpace(os.Getenv("POTA_HUNTED_CSV")), "Path to a POTA hunted-parks CSV export (enables POTA 'wanted'); empty = disabled")
-	awardsDataDir := flag.String("awards-data-dir", firstNonEmpty(strings.TrimSpace(os.Getenv("HORSTAWARDS_DATA_DIR")), "./horstawards-data"), "Local directory for the award-progress snapshot store")
 
 	ubEnabled := flag.Bool("ub-enabled", envBoolOr("UB_ENABLED", false), "Enable UltraBeam beam-direction control over MQTT")
 	ubBrokerURL := flag.String("ub-broker-url", envOr("UB_BROKER_URL", ""), "UltraBeam MQTT broker URL, e.g. tcp://127.0.0.1:1883 (tls:// for an authenticated remote broker)")
@@ -1236,8 +1204,6 @@ func main() {
 		RigTransport:   strings.TrimSpace(*rigTransport),
 		RigWaveLogGate: strings.TrimSpace(*rigWaveLogGate),
 		RigLog4OM:      strings.TrimSpace(*rigLog4OM),
-		WavelogURL:     firstNonEmpty(strings.TrimSpace(os.Getenv("WAVELOG_URL")), defaultWavelogURL),
-		WavelogAPIKey:  strings.TrimSpace(os.Getenv("WAVELOG_API_KEY")),
 		EnvFile:        envFile,
 		TaskName:       strings.TrimSpace(*taskName),
 		LogFile:        resolvedLogFile,
@@ -1250,23 +1216,6 @@ func main() {
 		UBUsername:    strings.TrimSpace(*ubUsername),
 		UBPassword:    os.Getenv("UB_PASSWORD"),
 	}
-
-	// Local award-progress engine: runs in-process so the operator's Wavelog log
-	// and POTA CSV never leave this machine. Reuses the agent's Wavelog creds.
-	awCfg := awards.Defaults()
-	awCfg.DataDir = strings.TrimSpace(*awardsDataDir)
-	awCfg.WavelogURL = cfg.WavelogURL
-	awCfg.WavelogAPIKey = cfg.WavelogAPIKey
-	awCfg.WavelogStationID = strings.TrimSpace(os.Getenv("WAVELOG_STATION_ID"))
-	awCfg.POTAHuntedCSV = strings.TrimSpace(*potaHuntedCSV)
-	if v := strings.TrimSpace(os.Getenv("POTA_CALLSIGN")); v != "" {
-		awCfg.POTACall = strings.ToUpper(v)
-	}
-	awCfg.POTAToken = strings.TrimSpace(os.Getenv("POTA_TOKEN"))
-	if v := strings.TrimSpace(os.Getenv("POTA_BASE_URL")); v != "" {
-		awCfg.POTABaseURL = v
-	}
-	cfg.Awards = awCfg
 
 	if cfg.ListenAddr == "" {
 		log.Fatal("[FATAL] listen address must not be empty")
@@ -1309,11 +1258,6 @@ func main() {
 		log.Printf("[INFO] Rig control: Log4OM Remote Control (tune VFO A) via UDP %s", cfg.RigLog4OM)
 	default:
 		log.Printf("[INFO] Rig control: disabled (-rig-transport=%s)", cfg.RigTransport)
-	}
-	if cfg.WavelogAPIKey != "" {
-		log.Printf("[INFO] Wavelog enrichment: enabled (%s)", cfg.WavelogURL)
-	} else {
-		log.Printf("[INFO] Wavelog enrichment: disabled (set WAVELOG_API_KEY to enable)")
 	}
 	log.Printf("[INFO] Station: %s (lat=%.6f lng=%.6f locator=%s)", cfg.Station.Name, cfg.Station.Lat, cfg.Station.Lng, strings.ToUpper(cfg.Station.Locator))
 	if cfg.UDPLogTraffic {

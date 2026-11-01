@@ -1,8 +1,7 @@
 import { state } from './state.js';
 import { loadConfig } from './config.js';
-import { isChaseQueueEnabled } from './cq-flag.js';
-import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineLayer, syncMercatorDxccLabelLayer, setMercatorDxHighlight, clearMercatorDxHighlight } from './map.js';
-import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, getAzimuthCenter, setAzimuthEnabled, setAzimuthDragging, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled, getAzimuthLatLngFromClientPoint, getAzimuthHiddenGridSquaresCount, setAzimuthDxSpotHighlight } from './azimuth-runtime.js';
+import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineLayer, syncMercatorDxccLabelLayer } from './map.js';
+import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, getAzimuthCenter, setAzimuthEnabled, setAzimuthDragging, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled, getAzimuthLatLngFromClientPoint, getAzimuthHiddenGridSquaresCount } from './azimuth-runtime.js';
 import { initUI, attachUITooltipEvents } from './ui.js';
 import { getBandLabLookbackMinutes, getBandNormalRate, initBandLab, updateBandLab } from './band-lab.js';
 import { initWsprMatrix, updateWsprMatrix, clearDrillDown, updateDrillDownButton } from './wspr-matrix.js';
@@ -15,7 +14,7 @@ import { initPushUI } from './push.js';
 import { updateMapVisualization, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint, whenActiveAreaRendered } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming, icon } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
-import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getOpModeStation, getRigBand } from './opmode.js';
+import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getRigBand } from './opmode.js';
 import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL, invalidateBundles as invalidateTimelineBundles, refreshMoment as refreshTimelineMoment } from './timeline.js';
 import { updateAfterglow, notifyMapMoved, hideAfterglow } from './afterglow.js';
 import { GRAYLINE_BUCKET_MS, setDataNowMs, clearDataNowOverride } from './data-now.js';
@@ -843,62 +842,6 @@ function getActiveQthCenter() {
     const lat = (bounds[0][0] + bounds[1][0]) / 2;
     const lng = (bounds[0][1] + bounds[1][1]) / 2;
     return [lat, lng];
-}
-
-// setChaseQueueHighlight drives the map highlight for a Chase Queue spot. Pass a
-// spot {dx_call, dx_locator, pinned} to show it (great-circle line from the
-// operator origin + marker), or null to clear. Origin = operator station when in
-// operator mode (matches the antenna beam), else the active target center.
-export function setChaseQueueHighlight(spot) {
-    if (!spot || !spot.dx_locator) {
-        clearChaseQueueHighlight();
-        return;
-    }
-    const bounds = locatorToBounds(String(spot.dx_locator).toUpperCase());
-    if (!bounds) {
-        clearChaseQueueHighlight();
-        return;
-    }
-    const spotLat = (bounds[0][0] + bounds[1][0]) / 2;
-    const spotLng = (bounds[0][1] + bounds[1][1]) / 2;
-
-    const station = (typeof getOpModeStation === 'function' && isOpModeActive()) ? getOpModeStation() : null;
-    const origin = station || (() => {
-        const c = getActiveQthCenter();
-        return c ? { lat: c[0], lng: c[1] } : null;
-    })();
-
-    const payload = {
-        enabled: true,
-        originLat: origin ? origin.lat : null,
-        originLng: origin ? origin.lng : null,
-        spotLat,
-        spotLng,
-        label: String(spot.dx_call || ''),
-        pinned: Boolean(spot.pinned)
-    };
-
-    setAzimuthDxSpotHighlight(payload);
-    setMercatorDxHighlight(payload);
-
-    // On an explicit selection (click), with Auto-zoom on, pull the Mercator view
-    // in so the highlighted DX is visible. Centre on the DX with a ~2000km region
-    // (matching the periodic auto-zoom's minimum). Mark it as an interaction so the
-    // periodic auto-zoom doesn't immediately yank the view back to all spots.
-    if (spot.select && currentProjection() === 'mercator' &&
-        document.getElementById('auto-zoom')?.checked) {
-        const bounds = L.latLng(spotLat, spotLng).toBounds(2000000);
-        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 6 });
-        state.lastMercatorInteractionAt = Date.now();
-    }
-
-    if (isAzimuthEnabled()) scheduleRender();
-}
-
-export function clearChaseQueueHighlight() {
-    setAzimuthDxSpotHighlight({ enabled: false });
-    clearMercatorDxHighlight();
-    if (isAzimuthEnabled()) scheduleRender();
 }
 
 function syncProjectionCenterToActiveQth() {
@@ -2621,20 +2564,6 @@ if (TIME_TRAVEL_ENABLED) {
 // Fallback pass in case autostart check happened before submit wiring was ready.
 maybeAutoStartSavedQth();
 syncSoftPauseWithVisibility();
-
-// Chase Queue (dxcluster.js) is an opt-in operator surface hidden by default.
-// It is no longer a static <script> in index.html; inject the module on demand
-// so the payload is only downloaded when opted in. The predicate lives in
-// cq-flag.js, shared with dxcluster.js's CQ_ENABLED.
-// Note: a createElement script tag, not import(). The offline payload
-// analyzer's static module-graph walk does not count these bytes in
-// wire_gzip_kb; the harness reports them separately in lazy_gzip_kb.
-if (isChaseQueueEnabled()) {
-    const cqScript = document.createElement('script');
-    cqScript.type = 'module';
-    cqScript.src = 'dxcluster.js';
-    document.head.appendChild(cqScript);
-}
 
 // Sync opmode controls visibility (initOpMode may have set checkbox from localStorage)
 requestAnimationFrame(() => {

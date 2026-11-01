@@ -108,7 +108,7 @@ func (s *Server) spotFromRequest(w http.ResponseWriter, r *http.Request) (propco
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	// Local operator tool serving only public propagation scores (no secrets, no
-	// writes, no auth) — allow browser clients (the Chase Queue UI) to read it.
+	// writes, no auth) — allow browser clients to read it.
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)

@@ -17,7 +17,6 @@
     <link rel="modulepreload" href="app.js">
     <link rel="modulepreload" href="state.js">
     <link rel="modulepreload" href="config.js">
-    <link rel="modulepreload" href="cq-flag.js">
     <link rel="modulepreload" href="map.js">
     <link rel="modulepreload" href="azimuth-runtime.js">
     <link rel="modulepreload" href="ui.js">
@@ -383,7 +382,6 @@
         <div class="cond-dock-header">
             <div class="cond-tabs" role="tablist" aria-label="Dock panels">
                 <button id="cond-tab-conditions" type="button" role="tab" class="cond-tab is-active" aria-selected="true" aria-controls="cond-conditions">Conditions from <span id="cond-qth"></span></button>
-                <button id="cond-tab-chase" type="button" role="tab" class="cond-tab" aria-selected="false" aria-controls="cond-chase" hidden>Chase queue</button>
             </div>
             <button id="cond-close" type="button" class="btn btn-sm btn-outline-secondary" title="Hide conditions" aria-label="Hide conditions">×</button>
         </div>
@@ -427,7 +425,6 @@
                 </div>
             </div>
         </div>
-        <div id="cond-chase" class="cond-pane is-hidden" role="tabpanel" aria-labelledby="cond-tab-chase"></div>
     </aside>
     <!-- Horst-Kevin's speech bubble and panel: body-level and position: fixed so
          the sidebar's overflow cannot clip them; anchored to the sidebar picture by

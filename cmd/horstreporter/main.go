@@ -254,7 +254,6 @@ func main() {
 	propBaselineFile := flag.String("prop-baseline-file", "prop_baseline.json", "Path to persistent unified per-source climatology storage (JSONL fallback when Postgres is not configured); imports -wspr-climatology-file as WSPR seed on first run")
 	dxPostgresDSN := flag.String("dx-postgres-dsn", "", "Postgres DSN for DX baseline and raw spot storage (falls back to env DX_POSTGRES_DSN, then the built-in default; keep secrets out of argv via the env var)")
 	dxPostgresFailFast := flag.Bool("dx-postgres-fail-fast", true, "Exit immediately when Postgres init/migration fails")
-	horstpropURL := flag.String("horstprop-url", "http://127.0.0.1:9970", "Reverse-proxy /horstprop/* to this local horstprop scoring service (empty disables the mount)")
 	pathscopeURL := flag.String("pathscope-url", "http://127.0.0.1:9960", "Reverse-proxy /pathscope/* to this local pathscope scoring service (empty disables the mount)")
 	dxClusterEnable := flag.Bool("dxcluster-enable", false, "Enable optional DX cluster ingest")
 	dxClusterEndpoint := flag.String("dxcluster-endpoint", "db0erf.de:7300", "DX cluster endpoint in host:port format")
@@ -695,7 +694,6 @@ func main() {
 	appMux.HandleFunc("/api/almanac/season", almanacSeasonHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
 	appMux.HandleFunc("/api/history", historyHandler)
-	appMux.HandleFunc("/api/dxspots", dxSpotsHandler)
 	// Web Push (U5): VAPID public key for the browser subscription flow,
 	// subscribe/unsubscribe, and a subscription-status endpoint used by
 	// the frontend's re-subscription-after-restart check. The handlers
@@ -705,16 +703,6 @@ func main() {
 	appMux.HandleFunc("/api/push/subscribe", pushSubscribeHandler)
 	appMux.HandleFunc("/api/push/unsubscribe", pushUnsubscribeHandler)
 	appMux.HandleFunc("/api/push/subscription-status", pushSubscriptionStatusHandler)
-
-	// Reverse-proxy /horstprop/* to the local horstprop scoring service so the
-	// Chase Queue reaches it same-origin (horstprop itself stays bound to
-	// localhost). Thin passthrough; no scoring logic lives here.
-	if h, err := proxy.Horstprop(*horstpropURL); err != nil {
-		logInfo("horstprop proxy disabled: %v", err)
-	} else if h != nil {
-		appMux.Handle("/horstprop/", h)
-		logInfo("horstprop proxy mounted at /horstprop/ -> %s", *horstpropURL)
-	}
 
 	// Reverse-proxy /pathscope/* to the local pathscope scoring service.
 	// pathscope exposes its own static assets AND an SSE stream; the

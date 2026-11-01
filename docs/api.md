@@ -9,9 +9,7 @@ Related contracts documented elsewhere:
 
 - `docs/dxcluster-agent-api.md` — local operator agent at `http://127.0.0.1:9955/v1/*`
   (browser-direct; the main binary NEVER proxies it).
-- `docs/horstprop.md` — the horstprop scoring service (`/horstprop/*` here is
-  only a reverse proxy to it).
-- `docs/horstawards.md` — award progress; entirely agent-side, no server API.
+- `docs/horstprop.md` — the horstprop scoring service.
 
 ## Transport
 
@@ -814,15 +812,6 @@ Response: `{locator, count, min_snr, max_snr, avg_snr, best_band,
 band_counts{band:n}, top_reports[{sender, receiver, band, snr}]}` — top 10
 by SNR, deduped per sender|receiver|band.
 
-### `GET /api/dxspots` — DX-cluster spots
-
-Params: `minutes` (default 15, max 60). CORS `*`.
-
-Response: JSON array `{dx_call, spotter, freq_khz, band, dx_locator?,
-spotter_locator?, age_seconds, comment?, op_name?, country?,
-country_iso?}` — deduped to latest per (DX call, band), newest first; spots
-with freq ≤ 0 skipped. Requires DX cluster ingest to be enabled.
-
 ### `GET /api/stats` — server counters
 
 No params. Active connections, hub history size/minutes/KB, session totals
@@ -996,9 +985,6 @@ plumbing their sibling consumer needs:
 These paths forward to sibling binaries; the main binary only proxies
 (upstream failure → 502).
 
-- **`/horstprop/*`** → `-horstprop-url` (default `http://127.0.0.1:9970`),
-  prefix stripped before forwarding (`/horstprop/v1/score` →
-  `127.0.0.1:9970/v1/score`). Contract: `docs/horstprop.md`.
 - **`/pathscope/*`** → `-pathscope-url` (default `http://127.0.0.1:9960`),
   path NOT stripped (upstream expects it); SSE-friendly flush. Contract:
   the pathscope module.
@@ -1029,10 +1015,7 @@ the first snapshot builds.
 
 - **No opmode proxy/control** — direct by design; browser → local agent.
   (`/api/opmode/status` existed briefly but nothing consumed it; removed.)
-- **No awards API** — operator award progress is computed inside the local
-  agent (`internal/awards`); never pulled server-side ("wanted" reaches the
-  Chase Queue through the agent's enrich response).
 - **No per-spot/path link scoring** — that is horstprop's contract,
-  consumed via `/horstprop/v1/score`.
+  lives in cmd/horstprop.
 - **No `/api/proplab/*`** and **no `/api/dxpulse/*`** — both features were
   removed (see "Removed features"); only the pathscope feed tables remain.

@@ -2,16 +2,14 @@ import { setBandLabVisible } from './band-lab.js';
 import { setWsprMatrixVisible } from './wspr-matrix.js';
 import { setAlmanacVisible } from './almanac.js';
 import { setPanelToggleState } from './panel-toggle.js';
-import { isChaseQueueEnabled } from './cq-flag.js';
 
 // cond-dock.js — the Conditions dock: one in-flow column right of the map that
 // replaces the Band stats, Propagation and Typical openings panels. Tabs:
-// Conditions (horizon Now / Typical) and, when the Chase queue is enabled,
-// Chase queue. The dock never overlays the map; closed, it collapses to the
-// hot-band pills plus a Conditions toggle (#cond-collapsed).
+// Conditions (horizon Now / Typical). The dock never overlays the map; closed,
+// it collapses to the hot-band pills plus a Conditions toggle (#cond-collapsed).
 //
 // The dock owns visibility. It switches the data pipelines of the panels it
-// hosts (band-lab.js, wspr-matrix.js, almanac.js, dxcluster.js) on only while
+// hosts (band-lab.js, wspr-matrix.js, almanac.js) on only while
 // their view is showing, so a closed dock costs no polling.
 
 const OPEN_KEY = 'condDockOpen';
@@ -58,9 +56,6 @@ export function initCondDock({ onLayoutChange } = {}) {
     runtime.horizon = localStorage.getItem(HORIZON_KEY) === 'usual' ? 'usual' : 'now';
     runtime.tab = 'conditions';
 
-    const chaseTab = document.getElementById('cond-tab-chase');
-    if (chaseTab && isChaseQueueEnabled()) chaseTab.hidden = false;
-
     restoreWidth(dock);
     syncQthLabel();
     const horizonRadio = document.querySelector(`input[name="cond-horizon"][value="${runtime.horizon}"]`);
@@ -70,7 +65,6 @@ export function initCondDock({ onLayoutChange } = {}) {
         document.getElementById('cond-open')?.addEventListener('click', () => setOpen(true));
         document.getElementById('cond-close')?.addEventListener('click', () => setOpen(false));
         document.getElementById('cond-tab-conditions')?.addEventListener('click', () => setTab('conditions'));
-        chaseTab?.addEventListener('click', () => setTab('chase'));
         document.getElementById('cond-horizon')?.addEventListener('change', (e) => {
             const value = e.target?.value;
             if (value === 'now' || value === 'usual') setHorizon(value);
@@ -131,22 +125,17 @@ function apply() {
     document.getElementById('cond-collapsed')?.classList.toggle('is-hidden', open);
     setPanelToggleState(document.getElementById('cond-open'), open, TOGGLE_LABELS);
 
-    const chase = tab === 'chase';
-    for (const [id, pane] of [['cond-tab-conditions', 'conditions'], ['cond-tab-chase', 'chase']]) {
-        const el = document.getElementById(id);
-        el?.classList.toggle('is-active', tab === pane);
-        el?.setAttribute('aria-selected', tab === pane ? 'true' : 'false');
-    }
-    document.getElementById('cond-conditions')?.classList.toggle('is-hidden', chase);
-    document.getElementById('cond-chase')?.classList.toggle('is-hidden', !chase);
+    const el = document.getElementById('cond-tab-conditions');
+    el?.classList.toggle('is-active', tab === 'conditions');
+    el?.setAttribute('aria-selected', tab === 'conditions' ? 'true' : 'false');
+    document.getElementById('cond-conditions')?.classList.toggle('is-hidden', tab !== 'conditions');
     document.getElementById('cond-now')?.classList.toggle('is-hidden', horizon !== 'now');
     document.getElementById('cond-typical')?.classList.toggle('is-hidden', horizon !== 'usual');
 
-    const showConditions = open && !chase;
+    const showConditions = open && tab === 'conditions';
     setBandLabVisible(showConditions && horizon === 'now');
     setWsprMatrixVisible(showConditions && horizon === 'now');
     setAlmanacVisible(showConditions && horizon === 'usual');
-    window.__horstChaseQueue?.setVisible(open && chase);
 
     // The dock is in-flow: the map's box changed, so Leaflet and the azimuth
     // canvas must re-fit.

@@ -52,7 +52,7 @@ A configurable-size region around a home square (a ring radius in grid-square sp
 A long-distance contact or station — the distant end of a path worth chasing. The whole product orients around surfacing DX opportunity; a path counts as DX-grade once it is long enough to be intercontinental rather than local or regional.
 
 ### DX-cluster spot
-A Spot sourced from a traditional DX-cluster feed rather than PSK Reporter. Unlike PSK Reporter spots (locator-only, QTH-filtered), these carry the spotted station's callsign, frequency, comment, and enriched country/operator metadata, and feed operator tools such as the Chase Queue.
+A Spot sourced from a traditional DX-cluster feed rather than PSK Reporter. Unlike PSK Reporter spots (locator-only, QTH-filtered), these carry the spotted station's callsign, frequency, comment, and enriched country/operator metadata, and feed operator tools.
 
 ### Spotter
 The station that posted a DX-cluster spot — the DX-cluster analogue of a Receiver. The spotted station itself is the "DX call".
@@ -126,9 +126,6 @@ The virtual "now" of timeline replay — the data-time the renderers are showing
 
 ### horstoperator-agent
 A trusted local agent running on the operator's own machine that holds operator-private secrets (logbook API key, rig and rotor access) and reverse-proxies the shared backend, so secrets and personal log data never leave the local box. The browser sees a single origin while operator-local endpoints stay local.
-
-### Chase Queue
-The operator-facing list of recent DX-cluster spots, enriched per station with award progress and link-quality scoring, that drives map highlights and rig/rotor actions. The surface where "is this worth chasing?" is answered.
 
 ### Award slot
 The atomic unit of award progress — one workable or confirmable thing (a DXCC entity, a band, a mode, a US state, a park). A spot's "wanted" status is the candidate slots it could fill minus the slots already satisfied in the operator's own log; flags such as ATNO (all-time-new-one), +BAND, +MODE, WAS and POTA name common slot kinds.

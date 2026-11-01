@@ -68,7 +68,7 @@ func serveAgent(cfg serviceConfig, srv *server, handler http.Handler, tray bool)
 		mListen.Disable()
 		systray.AddSeparator()
 		mOpen := systray.AddMenuItem("Open opmode UI", "Open the HorstReporter operator UI in your browser")
-		mSettings := systray.AddMenuItem("Settings…", "Edit station / PSTrotator / Wavelog settings in your browser")
+		mSettings := systray.AddMenuItem("Settings…", "Edit station / PSTrotator settings in your browser")
 		mDiag := systray.AddMenuItem("Diagnostics…", "Check all external connections and overall readiness")
 		mLogTraffic := systray.AddMenuItemCheckbox("Log UDP traffic", "Toggle PSTrotator UDP TX/RX logging", cfg.UDPLogTraffic)
 		systray.AddSeparator()
@@ -110,7 +110,7 @@ func serveAgent(cfg serviceConfig, srv *server, handler http.Handler, tray bool)
 		}()
 
 		// Readiness loop: periodically probe the optional external links so the
-		// icon can go amber when something you've configured (Wavelog, backend, …)
+		// icon can go amber when something you've configured (backend, …)
 		// is down even though the rotator itself is fine. Slower cadence because it
 		// makes real network calls; the required PSTrotator link is covered by the
 		// fast Health() loop below.

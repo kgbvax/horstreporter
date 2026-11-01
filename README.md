@@ -72,10 +72,7 @@ DX cluster and RBN ingests.
 - `cmd/horstoperator-agent`: a local agent that bridges the browser's opmode
   runtime to PSTrotator via UDP (built-in command profile, no user templates)
   and, with `-rig-transport`, can also tune the rig via WaveLogGate or Log4OM.
-  It resolves Wavelog attributes for the Chase Queue and computes award progress
-  ("wanted": DXCC/WAS/POTA) in-process, so the operator's log stays local; it
-  is never pulled to the shared server.
-
+  
   ```bash
   go run ./cmd/horstoperator-agent -listen 127.0.0.1:9955 -station-locator JO62qm
   ```
@@ -83,8 +80,7 @@ DX cluster and RBN ingests.
   The agent's flag matrix and env vars: `go run ./cmd/horstoperator-agent -h`
   and [docs/deployment-secrets.md](docs/deployment-secrets.md). The browser
   contract it serves is specified in
-  [docs/dxcluster-agent-api.md](docs/dxcluster-agent-api.md); award progress is
-  specified in [docs/horstawards.md](docs/horstawards.md).
+  [docs/dxcluster-agent-api.md](docs/dxcluster-agent-api.md).
 
 - `cmd/horstprop`: a separate HF link-quality scoring service that consumes
   HorstReporter read-only over HTTP and scores individual paths/links. Spec:
@@ -105,8 +101,7 @@ DX cluster and RBN ingests.
   and explicit exclusions
 - [docs/scoring-method.md](docs/scoring-method.md): the DX conditions scoring
   method
-- [docs/horstprop.md](docs/horstprop.md), [docs/horstawards.md](docs/horstawards.md):
-  specs for the companion tools
+- [docs/horstprop.md](docs/horstprop.md): spec for the companion scoring tool
 - [docs/deployment-secrets.md](docs/deployment-secrets.md): secret/env
   conventions for server and agent
 - `CLAUDE.md`: architecture map, command reference and development constraints

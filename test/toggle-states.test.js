@@ -8,7 +8,6 @@ import { readFileSync } from 'node:fs';
 // and text on the solid fills must too.
 
 const css = readFileSync('static/style.css', 'utf8'); // vitest runs from the repo root
-const cqSource = readFileSync('static/dxcluster.js', 'utf8');
 
 function block(source, selectorLine) {
     const start = source.indexOf(selectorLine);
@@ -100,11 +99,6 @@ describe('one "on" look for toggles', () => {
 
     it('timeline speed buttons have no solid override (Bootstrap .active = tint)', () => {
         expect(css).not.toMatch(/\.timeline-speed \.btn\.active/);
-    });
-
-    it('Chase Queue mode pills and sorted column use the tint look', () => {
-        tinted(block(cqSource, '.cq-mode.act {'));
-        tinted(block(cqSource, '.cq-fh1 button.act, .cq-fh2 button.act {'));
     });
 
     it('solid fills remain only on Go and the beam buttons, via --accent-fill', () => {

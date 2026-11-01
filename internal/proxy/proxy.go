@@ -1,5 +1,5 @@
 // Package proxy builds the same-origin reverse proxies that mount the
-// operator-local scoring services (horstprop, pathscope) under HorstReporter's
+// operator-local pathscope scoring service under HorstReporter's
 // TLS endpoint. They are thin passthroughs and add no scoring logic.
 package proxy
 
@@ -25,33 +25,9 @@ func parseTarget(target, flagName string) (*url.URL, error) {
 	return u, nil
 }
 
-// Horstprop builds a reverse-proxy handler for the local horstprop
-// scoring service (default http://127.0.0.1:9970), mounted at /horstprop/.
-//
-// horstprop is operator-local and binds to localhost; this lets a browser reach
-// it same-origin under HorstReporter's TLS (no CORS, no mixed content) while the
-// service stays off the public internet. It is a thin read-only passthrough — it
-// adds no scoring logic to HorstReporter (which stays small per the design). The
-// returned handler is nil (with a nil error) when no target is configured, so
-// the mount is skipped; an invalid target is an error.
-func Horstprop(target string) (http.Handler, error) {
-	u, err := parseTarget(target, "horstprop-url")
-	if u == nil {
-		return nil, err
-	}
-	proxy := httputil.NewSingleHostReverseProxy(u)
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		// horstprop down/unreachable: fail soft so the Chase Queue can render
-		// spots without scores rather than erroring hard.
-		http.Error(w, "horstprop unavailable", http.StatusBadGateway)
-	}
-	// /horstprop/v1/score -> 127.0.0.1:9970/v1/score
-	return http.StripPrefix("/horstprop", proxy), nil
-}
-
 // Pathscope builds a reverse-proxy handler for the local
 // pathscope scoring service (default http://127.0.0.1:9960), mounted at
-// /pathscope/. Mirrors Horstprop.
+// /pathscope/.
 //
 // pathscope is operator-local and binds to localhost; this lets a browser
 // reach it same-origin under HorstReporter's TLS (no CORS, no mixed

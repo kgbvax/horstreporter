@@ -14,17 +14,14 @@
 # Any extra flags are passed straight through to the agent:
 #   ./run_operator_agent.sh -pst-timeout-ms 3000
 #
-# Secrets (Wavelog) come from the environment, not flags. The agent loads a
-# .env file from its working directory (this repo root) if present, e.g.:
-#   WAVELOG_API_KEY=xxxxxxxx
-#   WAVELOG_URL=https://log.dclnext.darc.de/index.php   # optional; this is the default
-# .env is git-ignored. For a systemd-managed agent use EnvironmentFile= instead
-# of a CWD .env — see docs/deployment-secrets.md.
+# Secrets come from the environment, not flags. The agent loads a .env file
+# from its working directory (this repo root) if present. For a systemd-managed
+# agent use EnvironmentFile= instead - see docs/deployment-secrets.md.
 #
 set -euo pipefail
 
 # Run from the repo root so "go run ./cmd/..." resolves regardless of CWD
-# (and so the agent finds a repo-root .env for WAVELOG_API_KEY etc.).
+# (and so the agent finds a repo-root .env).
 cd "$(dirname "$0")"
 
 # --- Configuration (override via environment) --------------------------------
@@ -38,12 +35,6 @@ PST_PORT="${PST_PORT:-12000}"
 PST_TIMEOUT_MS="${PST_TIMEOUT_MS:-1500}"
 
 BACKEND_URL="${BACKEND_URL:-}"                 # optional reverse-proxy target
-# Award "wanted" (DXCC/WAS/POTA) runs IN-PROCESS and LOCAL — the operator's log
-# never leaves this machine. It activates when Wavelog is configured:
-#   WAVELOG_API_KEY=…           (in .env; read-only key)
-#   WAVELOG_STATION_ID=3427     (required: DCLNext get_contacts_adif needs it)
-#   POTA_HUNTED_CSV=hunted.csv  (optional: enables POTA via your hunted-parks export)
-# These are read from the environment / .env; no flag needed here.
 CONTROL_PERMITTED="${CONTROL_PERMITTED:-true}" # set false for read-only/monitor
 ALLOWED_MODES="${ALLOWED_MODES:-forward,backward,bidirectional}"
 BEAMWIDTH_3DB_DEG="${BEAMWIDTH_3DB_DEG:-60}"

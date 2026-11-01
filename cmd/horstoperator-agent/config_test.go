@@ -163,7 +163,7 @@ func TestParseEnvFile(t *testing.T) {
 func TestUpsertEnvFile(t *testing.T) {
 	t.Run("preserves comments, order and unmanaged keys", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), ".env")
-		orig := "# my secrets live here\nUNMANAGED=keep\nPST_PORT=12000\nWAVELOG_API_KEY=oldkey\n"
+		orig := "# my secrets live here\nUNMANAGED=keep\nPST_PORT=12000\nUB_PASSWORD=oldkey\n"
 		if err := os.WriteFile(path, []byte(orig), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -175,7 +175,7 @@ func TestUpsertEnvFile(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := string(data)
-		for _, want := range []string{"# my secrets live here", "UNMANAGED=keep", "PST_PORT=13000", "WAVELOG_API_KEY=oldkey", "STATION_LOCATOR=JO62qm"} {
+		for _, want := range []string{"# my secrets live here", "UNMANAGED=keep", "PST_PORT=13000", "UB_PASSWORD=oldkey", "STATION_LOCATOR=JO62qm"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("missing %q in:\n%s", want, got)
 			}
@@ -310,12 +310,12 @@ func TestValidateBrokerURL(t *testing.T) {
 }
 
 func TestIsSecretKey(t *testing.T) {
-	for _, key := range []string{"WAVELOG_API_KEY", "UB_PASSWORD"} {
+	for _, key := range []string{"UB_PASSWORD", "UB_PASSWORD"} {
 		if !isSecretKey(key) {
 			t.Errorf("%s should be Secret", key)
 		}
 	}
-	for _, key := range []string{"STATION_LOCATOR", "PST_PORT", "WAVELOG_URL"} {
+	for _, key := range []string{"STATION_LOCATOR", "PST_PORT", "BACKEND_URL"} {
 		if isSecretKey(key) {
 			t.Errorf("%s should not be Secret", key)
 		}
@@ -421,8 +421,8 @@ func TestHandleConfig_MethodRouting(t *testing.T) {
 }
 
 func TestHandleConfigGet(t *testing.T) {
-	s, envPath := newConfigTestServer(t, "PST_PORT=13000\nWAVELOG_API_KEY=sekrit\n")
-	s.cfg.WavelogAPIKey = "sekrit" // secret set on the running config too
+	s, envPath := newConfigTestServer(t, "PST_PORT=13000\nUB_PASSWORD=sekrit\n")
+	s.cfg.UBPassword = "sekrit" // secret set on the running config too
 
 	rec := httptest.NewRecorder()
 	s.handleConfig(rec, httptest.NewRequest(http.MethodGet, "/v1/config", nil))
@@ -450,10 +450,10 @@ func TestHandleConfigGet(t *testing.T) {
 		t.Error("can_restart should be true")
 	}
 	// Secret from the .env must never be echoed back.
-	if resp.Values["WAVELOG_API_KEY"] != "" {
-		t.Errorf("secret echoed back: %q", resp.Values["WAVELOG_API_KEY"])
+	if resp.Values["UB_PASSWORD"] != "" {
+		t.Errorf("secret echoed back: %q", resp.Values["UB_PASSWORD"])
 	}
-	if !resp.Set["WAVELOG_API_KEY"] {
+	if !resp.Set["UB_PASSWORD"] {
 		t.Error("secret should still be reported as set")
 	}
 	if resp.Values["PST_PORT"] != "13000" {
@@ -535,15 +535,15 @@ func TestHandleConfigPost(t *testing.T) {
 	})
 
 	t.Run("blank secret leaves stored value unchanged", func(t *testing.T) {
-		s, envPath := newConfigTestServer(t, "WAVELOG_API_KEY=existing-secret\n")
+		s, envPath := newConfigTestServer(t, "UB_PASSWORD=existing-secret\n")
 		rec := httptest.NewRecorder()
 		s.handleConfigPost(rec, httptest.NewRequest(http.MethodPost, "/v1/config",
-			strings.NewReader(`{"values":{"WAVELOG_API_KEY":"","PST_PORT":"12000"}}`)))
+			strings.NewReader(`{"values":{"UB_PASSWORD":"","PST_PORT":"12000"}}`)))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 		}
 		data, _ := os.ReadFile(envPath)
-		if !strings.Contains(string(data), "WAVELOG_API_KEY=existing-secret") {
+		if !strings.Contains(string(data), "UB_PASSWORD=existing-secret") {
 			t.Errorf("secret overwritten by blank: %q", data)
 		}
 	})

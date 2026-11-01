@@ -13,8 +13,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"horstreporter/internal/awards"
 )
 
 // startUDPAzimuthResponder binds a UDP socket on 127.0.0.1:listenPort (a
@@ -140,7 +138,7 @@ func TestHandleDiagnostics_UnconfiguredUpstreams(t *testing.T) {
 	for _, c := range resp.Checks {
 		byName[c.Name] = c
 	}
-	for _, name := range []string{"pstrotator", "backend", "wavelog", "rig", "awards", "pota_csv"} {
+	for _, name := range []string{"pstrotator", "backend", "rig"} {
 		if _, ok := byName[name]; !ok {
 			t.Fatalf("missing check %q in %+v", name, resp.Checks)
 		}
@@ -151,17 +149,8 @@ func TestHandleDiagnostics_UnconfiguredUpstreams(t *testing.T) {
 	if c := byName["backend"]; c.Configured || !strings.Contains(c.Detail, "not set") {
 		t.Errorf("backend = %+v, want unconfigured \"not set\"", c)
 	}
-	if c := byName["wavelog"]; c.Configured || !strings.Contains(c.Detail, "WAVELOG_API_KEY") {
-		t.Errorf("wavelog = %+v", c)
-	}
 	if c := byName["rig"]; c.Configured || !strings.Contains(c.Detail, "disabled") {
 		t.Errorf("rig = %+v, want disabled transport detail", c)
-	}
-	if c := byName["awards"]; c.Configured || !strings.Contains(c.Detail, "not set") {
-		t.Errorf("awards = %+v", c)
-	}
-	if c := byName["pota_csv"]; c.Configured || !strings.Contains(c.Detail, "POTA_HUNTED_CSV") {
-		t.Errorf("pota_csv = %+v", c)
 	}
 }
 
@@ -200,16 +189,12 @@ func TestEffectiveConfig_OverlaysEnvAndFlagsPending(t *testing.T) {
 		"BACKEND_URL":         "https://new.example.org/", // trailing slash trimmed
 		"PST_HOST":            "10.0.0.5",
 		"PST_PORT":            "12001",
-		"WAVELOG_API_KEY":     "env-key",
-		"WAVELOG_URL":         "https://wl.example.org/index.php",
-		"POTA_HUNTED_CSV":     "/tmp/parks.csv",
 		"RIG_TRANSPORT":       "waveloggate",
 		"RIG_LOG4OM_ADDR":     "127.0.0.1:2236",
 		"RIG_WAVELOGGATE_URL": "http://127.0.0.1:54321",
 	}
 	s := newDiagServer(t, env, 12000)
 	s.cfg.BackendBaseURL = "https://old.example.org"
-	s.cfg.WavelogAPIKey = "run-key"
 
 	cfg, pending := s.effectiveConfig()
 	if cfg.BackendBaseURL != "https://new.example.org" {
@@ -218,22 +203,16 @@ func TestEffectiveConfig_OverlaysEnvAndFlagsPending(t *testing.T) {
 	if cfg.PSTHost != "10.0.0.5" || cfg.PSTPort != 12001 {
 		t.Errorf("pst = %s:%d, want 10.0.0.5:12001", cfg.PSTHost, cfg.PSTPort)
 	}
-	if cfg.WavelogAPIKey != "env-key" || cfg.WavelogURL != "https://wl.example.org/index.php" {
-		t.Errorf("wavelog creds not overlaid from .env: url=%q", cfg.WavelogURL)
-	}
 	if cfg.RigTransport != "waveloggate" || cfg.RigLog4OM != "127.0.0.1:2236" {
 		t.Errorf("rig config not overlaid: %q / %q", cfg.RigTransport, cfg.RigLog4OM)
 	}
-	if cfg.Awards.POTAHuntedCSV != "/tmp/parks.csv" {
-		t.Errorf("POTA csv = %q", cfg.Awards.POTAHuntedCSV)
-	}
-	for _, k := range []string{"backend", "pstrotator", "wavelog", "pota_csv", "rig"} {
+	for _, k := range []string{"backend", "pstrotator", "rig"} {
 		if !pending[k] {
 			t.Errorf("pending[%q] = false, want true (saved value differs from running)", k)
 		}
 	}
-	if len(pending) != 5 {
-		t.Errorf("pending = %v, want exactly the five changed groups", pending)
+	if len(pending) != 3 {
+		t.Errorf("pending = %v, want exactly the three changed groups", pending)
 	}
 }
 
@@ -312,47 +291,6 @@ func TestCheckBackend(t *testing.T) {
 	})
 }
 
-func TestCheckWavelog(t *testing.T) {
-	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(wavelogLookup{Callsign: "DL0HRP", DXCC: "GERMANY"})
-	}))
-	defer ok.Close()
-	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden) // bad key
-	}))
-	defer failing.Close()
-
-	t.Run("not configured", func(t *testing.T) {
-		c := (&server{}).checkWavelog(context.Background(), serviceConfig{}, nil)
-		if c.OK || c.Configured || !strings.Contains(c.Detail, "not set") {
-			t.Errorf("got %+v", c)
-		}
-	})
-	t.Run("key accepted", func(t *testing.T) {
-		s := &server{wavelog: newWavelogClient(ok.URL, "k")}
-		c := s.checkWavelog(context.Background(), serviceConfig{WavelogURL: ok.URL, WavelogAPIKey: "k"}, nil)
-		if !c.OK || !strings.Contains(c.Detail, "key accepted") {
-			t.Errorf("got %+v", c)
-		}
-	})
-	t.Run("rejected key fails check", func(t *testing.T) {
-		s := &server{wavelog: newWavelogClient(failing.URL, "k")}
-		c := s.checkWavelog(context.Background(), serviceConfig{WavelogURL: failing.URL, WavelogAPIKey: "k"}, nil)
-		if c.OK || c.Detail == "" {
-			t.Errorf("got %+v, want failure detail", c)
-		}
-	})
-	// pending["wavelog"] forces a throwaway client so a just-saved key is probed
-	// before the restart — the OK detail must carry the restart hint.
-	t.Run("pending probes saved key", func(t *testing.T) {
-		s := &server{wavelog: newWavelogClient(ok.URL, "k")}
-		c := s.checkWavelog(context.Background(), serviceConfig{WavelogURL: ok.URL, WavelogAPIKey: "k"}, map[string]bool{"wavelog": true})
-		if !c.OK || !strings.Contains(c.Detail, "restart to apply") {
-			t.Errorf("got %+v", c)
-		}
-	})
-}
-
 func TestCheckRig(t *testing.T) {
 	t.Run("transport none disabled", func(t *testing.T) {
 		for _, transport := range []string{"", "none"} {
@@ -405,94 +343,4 @@ func TestCheckRig(t *testing.T) {
 			t.Errorf("got %+v", c)
 		}
 	})
-}
-
-func TestCheckAwards(t *testing.T) {
-	t.Run("no source configured", func(t *testing.T) {
-		c := (&server{}).checkAwards(context.Background(), serviceConfig{}, nil)
-		if c.OK || c.Configured || !strings.Contains(c.Detail, "not set") {
-			t.Errorf("got %+v", c)
-		}
-	})
-	t.Run("sources saved but engine missing prompts restart", func(t *testing.T) {
-		cfg := serviceConfig{WavelogAPIKey: "k"}
-		c := (&server{}).checkAwards(context.Background(), cfg, nil)
-		if !strings.Contains(c.Detail, "sources saved") || !strings.Contains(c.Detail, "restart") {
-			t.Errorf("got %+v", c)
-		}
-		cfg = serviceConfig{Awards: awards.Config{POTAHuntedCSV: "hunted.csv"}}
-		c = (&server{}).checkAwards(context.Background(), cfg, nil)
-		if !strings.Contains(c.Detail, "sources saved") {
-			t.Errorf("got %+v", c)
-		}
-	})
-	// A freshly built index with no snapshots is degraded — the check must say so.
-	t.Run("degraded manager", func(t *testing.T) {
-		cfg := awards.Defaults()
-		cfg.DataDir = t.TempDir()
-		mgr, err := awards.New(cfg)
-		if err != nil {
-			t.Fatalf("awards.New: %v", err)
-		}
-		s := &server{awards: mgr}
-		c := s.checkAwards(context.Background(), serviceConfig{}, nil)
-		if c.OK {
-			t.Errorf("got %+v, want !OK (fresh index is degraded)", c)
-		}
-		if !strings.Contains(c.Detail, "degraded") {
-			t.Errorf("detail %q", c.Detail)
-		}
-	})
-}
-
-func TestCheckPOTACSV(t *testing.T) {
-	dir := t.TempDir()
-	good := filepath.Join(dir, "hunted.csv")
-	if err := os.WriteFile(good, []byte("park,call\nUS-0001,K1ABC\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	empty := filepath.Join(dir, "empty.csv")
-	if err := os.WriteFile(empty, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cases := []struct {
-		name    string
-		path    string
-		pending bool
-		wantOK  bool
-		wantIn  string
-	}{
-		{"not set", "", false, false, "not set"},
-		{"missing file", filepath.Join(dir, "nope.csv"), false, false, "cannot read"},
-		{"empty file", empty, false, false, "empty or a directory"},
-		{"readable", good, false, true, "readable"},
-		{"readable pending", good, true, true, "restart to apply"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := serviceConfig{Awards: awardsConfigFor(tc.path)}
-			pending := map[string]bool{}
-			if tc.pending {
-				pending["pota_csv"] = true
-			}
-			c := (&server{}).checkPOTACSV(context.Background(), cfg, pending)
-			if c.OK != tc.wantOK {
-				t.Errorf("OK = %v, want %v (detail %q)", c.OK, tc.wantOK, c.Detail)
-			}
-			if !strings.Contains(c.Detail, tc.wantIn) {
-				t.Errorf("detail %q, want %q", c.Detail, tc.wantIn)
-			}
-			if c.Configured != (tc.path != "") {
-				t.Errorf("Configured = %v", c.Configured)
-			}
-		})
-	}
-}
-
-// awardsConfigFor builds the nested awards config with just the CSV path.
-func awardsConfigFor(path string) awards.Config {
-	cfg := awards.Defaults()
-	cfg.POTAHuntedCSV = path
-	return cfg
 }

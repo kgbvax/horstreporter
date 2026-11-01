@@ -3,13 +3,11 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../static/band-lab.js', () => ({ setBandLabVisible: vi.fn() }));
 vi.mock('../static/wspr-matrix.js', () => ({ setWsprMatrixVisible: vi.fn() }));
 vi.mock('../static/almanac.js', () => ({ setAlmanacVisible: vi.fn() }));
-vi.mock('../static/cq-flag.js', () => ({ isChaseQueueEnabled: vi.fn(() => false) }));
 
 import { initCondDock, migrateLegacyState, __test } from '../static/cond-dock.js';
 import { setBandLabVisible } from '../static/band-lab.js';
 import { setWsprMatrixVisible } from '../static/wspr-matrix.js';
 import { setAlmanacVisible } from '../static/almanac.js';
-import { isChaseQueueEnabled } from '../static/cq-flag.js';
 
 // Node's own localStorage global shadows jsdom's; use a Map-backed one.
 function installLocalStorageMock(initial = {}) {
@@ -32,7 +30,6 @@ function mountDom() {
         <aside id="cond-dock" class="cond-dock is-hidden">
             <div id="cond-dock-resize"></div>
             <button id="cond-tab-conditions"><span id="cond-qth"></span></button>
-            <button id="cond-tab-chase" hidden></button>
             <button id="cond-close"></button>
             <div id="cond-conditions">
                 <div id="cond-horizon">
@@ -42,7 +39,6 @@ function mountDom() {
                 <div id="cond-now"></div>
                 <div id="cond-typical" class="is-hidden"></div>
             </div>
-            <div id="cond-chase" class="is-hidden"></div>
         </aside>`;
 }
 
@@ -84,10 +80,8 @@ describe('cond dock', () => {
         mountDom();
         __test.runtime.initialized = false; // fresh DOM needs fresh listeners
         vi.clearAllMocks();
-        isChaseQueueEnabled.mockReturnValue(false);
     });
     afterEach(() => {
-        delete window.__horstChaseQueue;
     });
 
     it('starts closed with the collapsed row showing and no data pipeline running', () => {
@@ -170,25 +164,4 @@ describe('cond dock', () => {
         expect(document.getElementById('cond-qth').textContent).toBe('JO62WA');
     });
 
-    it('hides the Chase queue tab unless it is enabled', () => {
-        initCondDock();
-        expect(document.getElementById('cond-tab-chase').hidden).toBe(true);
-    });
-
-    it('with the Chase queue enabled its tab swaps the pane and drives the queue', () => {
-        isChaseQueueEnabled.mockReturnValue(true);
-        const setVisible = vi.fn();
-        window.__horstChaseQueue = { setVisible };
-        initCondDock();
-        expect(document.getElementById('cond-tab-chase').hidden).toBe(false);
-        click('cond-open');
-        click('cond-tab-chase');
-        expect(hidden('cond-conditions')).toBe(true);
-        expect(hidden('cond-chase')).toBe(false);
-        expect(setVisible).toHaveBeenLastCalledWith(true);
-        expect(setBandLabVisible).toHaveBeenLastCalledWith(false);
-        click('cond-tab-conditions');
-        expect(setVisible).toHaveBeenLastCalledWith(false);
-        expect(setBandLabVisible).toHaveBeenLastCalledWith(true);
-    });
 });

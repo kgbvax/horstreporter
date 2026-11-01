@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -87,21 +86,6 @@ func (s *server) effectiveConfig() (serviceConfig, map[string]bool) {
 			cfg.PSTPort = n
 		}
 	}
-	if v, ok := get("WAVELOG_URL"); ok {
-		cfg.WavelogURL = v
-	}
-	if v, ok := get("WAVELOG_API_KEY"); ok {
-		if v != cfg.WavelogAPIKey {
-			pending["wavelog"] = true
-		}
-		cfg.WavelogAPIKey = v
-	}
-	if v, ok := get("POTA_HUNTED_CSV"); ok {
-		if v != cfg.Awards.POTAHuntedCSV {
-			pending["pota_csv"] = true
-		}
-		cfg.Awards.POTAHuntedCSV = v
-	}
 	if v, ok := get("RIG_TRANSPORT"); ok {
 		if !strings.EqualFold(v, cfg.RigTransport) {
 			pending["rig"] = true
@@ -140,10 +124,7 @@ func (s *server) runDiagnostics(ctx context.Context) []diagCheck {
 	probes := []probe{
 		s.checkPSTrotator,
 		s.checkBackend,
-		s.checkWavelog,
 		s.checkRig,
-		s.checkAwards,
-		s.checkPOTACSV,
 	}
 	results := make([]diagCheck, len(probes))
 	var wg sync.WaitGroup
@@ -215,33 +196,6 @@ func (s *server) checkBackend(ctx context.Context, cfg serviceConfig, pending ma
 	return c
 }
 
-func (s *server) checkWavelog(ctx context.Context, cfg serviceConfig, pending map[string]bool) diagCheck {
-	c := diagCheck{Name: "wavelog", Label: "Wavelog API", Configured: strings.TrimSpace(cfg.WavelogAPIKey) != ""}
-	if !c.Configured {
-		c.Detail = "not set (WAVELOG_API_KEY)"
-		return c
-	}
-	// Probe the saved key/url even before a restart so the panel reflects what you
-	// configured. Reuse the live client when nothing relevant changed.
-	client := s.wavelog
-	if client == nil || pending["wavelog"] {
-		client = newWavelogClient(cfg.WavelogURL, cfg.WavelogAPIKey)
-	}
-	start := time.Now()
-	cctx, cancel := context.WithTimeout(ctx, 6*time.Second)
-	defer cancel()
-	// A throwaway lookup verifies reachability AND that the key is accepted.
-	_, err := client.Lookup(cctx, "DL0HRP", "20m", "FT8")
-	c.LatencyMs = timedDetail(start)
-	if err != nil {
-		c.Detail = err.Error()
-		return c
-	}
-	c.OK = true
-	c.Detail = withPending("reachable \u2014 key accepted", pending["wavelog"] || s.wavelog == nil)
-	return c
-}
-
 func (s *server) checkRig(ctx context.Context, cfg serviceConfig, pending map[string]bool) diagCheck {
 	transport := strings.ToLower(strings.TrimSpace(cfg.RigTransport))
 	c := diagCheck{Name: "rig", Label: "Rig control"}
@@ -302,52 +256,4 @@ func (s *server) checkRig(ctx context.Context, cfg serviceConfig, pending map[st
 		c.Detail = "unknown transport " + transport
 		return c
 	}
-}
-
-func (s *server) checkAwards(_ context.Context, cfg serviceConfig, _ map[string]bool) diagCheck {
-	c := diagCheck{Name: "awards", Label: "Award engine (local log)", Configured: s.awards != nil}
-	if s.awards == nil {
-		// Sources may be saved but the engine is only built at startup, so prompt a
-		// restart rather than silently showing "not set" after you configured them.
-		if strings.TrimSpace(cfg.WavelogAPIKey) != "" || strings.TrimSpace(cfg.Awards.POTAHuntedCSV) != "" {
-			c.Detail = "sources saved \u2014 restart to load the index"
-			return c
-		}
-		c.Detail = "not set (needs Wavelog or POTA source)"
-		return c
-	}
-	if s.awards.Degraded() {
-		detail := "degraded \u2014 index stale or empty"
-		if reason := s.awards.Diagnostic(); reason != "" {
-			detail += " (" + reason + ")"
-		} else {
-			detail += " (check Wavelog station id / sources)"
-		}
-		c.Detail = detail
-		return c
-	}
-	c.OK = true
-	c.Detail = "index loaded (sources: " + s.awards.SourceLabel() + ")"
-	return c
-}
-
-func (s *server) checkPOTACSV(_ context.Context, cfg serviceConfig, pending map[string]bool) diagCheck {
-	path := strings.TrimSpace(cfg.Awards.POTAHuntedCSV)
-	c := diagCheck{Name: "pota_csv", Label: "POTA hunted CSV", Configured: path != ""}
-	if !c.Configured {
-		c.Detail = "not set (POTA_HUNTED_CSV)"
-		return c
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		c.Detail = "cannot read: " + err.Error()
-		return c
-	}
-	if info.IsDir() || info.Size() == 0 {
-		c.Detail = "file is empty or a directory: " + path
-		return c
-	}
-	c.OK = true
-	c.Detail = withPending(fmt.Sprintf("readable \u2014 %d bytes", info.Size()), pending["pota_csv"])
-	return c
 }

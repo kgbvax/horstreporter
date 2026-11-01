@@ -47,7 +47,7 @@ if [ ! -f "$DEFAULT_CONFIG" ]; then
     echo "Creating default configuration at $DEFAULT_CONFIG..."
     cat <<EOF > "$DEFAULT_CONFIG"
 # horstprop command-line arguments.
-#   -listen     : where the browser/Chase Queue reaches it (keep 127.0.0.1 if the
+#   -listen     : where clients reach it (keep 127.0.0.1 if the
 #                 browser runs on this same machine; use a LAN IP otherwise).
 #   -home-grid  : your station Maidenhead locator.
 #   -horst-url  : the HorstReporter base URL it consumes read-only

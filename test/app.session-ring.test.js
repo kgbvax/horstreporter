@@ -11,10 +11,6 @@ vi.mock('../static/config.js', () => ({
     loadConfig: () => ({ initialCenter: [52, 7], initialZoom: 4 })
 }));
 
-vi.mock('../static/cq-flag.js', () => ({
-    isChaseQueueEnabled: () => false
-}));
-
 const mockMap = {
     on: vi.fn(),
     invalidateSize: vi.fn(),
@@ -28,8 +24,6 @@ vi.mock('../static/map.js', () => ({
     syncMercatorCountryLayer: vi.fn(async () => {}),
     syncMercatorGraylineLayer: vi.fn(async () => {}),
     syncMercatorDxccLabelLayer: vi.fn(async () => {}),
-    setMercatorDxHighlight: vi.fn(),
-    clearMercatorDxHighlight: vi.fn(),
     map: mockMap
 }));
 
@@ -52,8 +46,7 @@ vi.mock('../static/azimuth-runtime.js', () => ({
     setAzimuthNs6tIndicatorEnabled: vi.fn(),
     setAzimuthDxccLabelDensity: vi.fn(),
     setAzimuthDxccLabelsEnabled: vi.fn(),
-    getAzimuthHiddenGridSquaresCount: vi.fn(() => 0),
-    setAzimuthDxSpotHighlight: vi.fn()
+    getAzimuthHiddenGridSquaresCount: vi.fn(() => 0)
 }));
 
 vi.mock('../static/ui.js', () => ({

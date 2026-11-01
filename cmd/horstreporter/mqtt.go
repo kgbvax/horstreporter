@@ -20,7 +20,7 @@ type MQTTMessage struct {
 	MD string `json:"md"`
 
 	// Set programmatically for DX-cluster spots only (never from the MQTT
-	// payload — hence json:"-"); carried in hub.history for /api/dxspots.
+	// payload — hence json:"-"); carried in hub.history.
 	F float64 `json:"-"` // spot frequency in kHz (DX cluster, RBN, WSPR)
 
 	// X holds the DX-cluster / RBN annotations (comment, operator name,

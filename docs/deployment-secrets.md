@@ -77,7 +77,7 @@ before walking away.
 
 On the Windows shack PC you can run the agent with a **tray icon** so you can
 see at a glance whether it's alive: green = everything healthy, **amber = rotator
-OK but a configured link (Wavelog/backend/…) is down**, red = starting or the
+OK but a configured link (backend/…) is down**, red = starting or the
 rotator poll is failing. The amber state is driven by a background readiness
 probe (every 30 s). Hover for a tooltip, right-click for *Open opmode UI*,
 *Settings…*, *Diagnostics…*, *Log UDP traffic* (toggle), and *Quit*. When
@@ -86,14 +86,13 @@ down links, or “ready” on recovery) — raised via the Win10/11 toast runtim
 extra modules needed.
 
 **Settings…** opens a small local page (`http://127.0.0.1:9955/config`, served by
-the agent) where you edit station / PSTrotator / Wavelog settings in the browser
+the agent) where you edit station / PSTrotator settings in the browser
 instead of hand-editing `.env`. *Save* writes the `.env`; *Save & Restart*
-writes it and restarts the agent to apply (the Wavelog API key is write-only —
-blank means “keep current”). When installed via the scheduled task (with
+writes it and restarts the agent to apply. When installed via the scheduled task (with
 `-task-name`), restart bounces the task cleanly so there's no duplicate process.
 The `.env` is the single source of truth: the agent's settings all fall back to
 env vars (`STATION_LOCATOR`, `PST_HOST`, `PST_PORT`, `BACKEND_URL`,
-`WAVELOG_API_KEY`, …), so the page and the file stay in sync.
+…), so the page and the file stay in sync.
 
 **Readiness panel.** The Settings page opens with a one-click diagnostics report
 (`GET /v1/diagnostics`) that probes every external dependency concurrently and
@@ -104,10 +103,7 @@ badge — so you can assess each link without reading logs. Checks:
 | --- | --- | --- |
 | PSTrotator rotator | one-shot `AZ?` UDP query | yes |
 | HorstReporter backend | `GET <BACKEND_URL>/api/stats` (<500 = up) | no |
-| Wavelog API | throwaway `private_lookup` (verifies key) | no |
 | WaveLogGate (rig) | HTTP GET callback URL (any reply = up) | no |
-| Award engine | in-process index degraded/loaded | no |
-| POTA hunted CSV | file readable + non-empty | no |
 
 `ready` is true when every **required** check passes and nothing you've
 **configured** is failing; optional systems you haven't set up don't count
@@ -142,34 +138,11 @@ macOS/Linux, so dev and systemd workflows are unchanged. For a console build
    task (which launches the agent with `-tray`); on every run it ends the task,
    scp's the fresh exe in, and starts it again.
 3. Configure **interactively**: once logged in, open the tray → **Settings** and
-   set the locator / PSTrotator host / Wavelog key. There is nothing to seed or
+   set the locator / PSTrotator host. There is nothing to seed or
    edit on disk — the agent persists what you save and the *Diagnostics* panel
    shows readiness. The agent does still read these as env vars under the hood
    (so a `.env` or systemd `EnvironmentFile` works too), but the tray is the
    intended way to configure a shack PC:
-
-Enrichment **and the local award engine** both run here (the agent is local, so
-the operator's log never leaves the machine):
-
-| Env var | Default | Notes |
-| --- | --- | --- |
-| `WAVELOG_API_KEY` | — | Wavelog **read** API key. Enables callsign enrichment + the local log pull. Never logged. |
-| `WAVELOG_URL` | `https://log.dclnext.darc.de/index.php` | Wavelog base URL. |
-| `WAVELOG_STATION_ID` | — | Station profile id. **Required for DCLNext** — `get_contacts_adif` returns HTTP 400 without it. Enables the DXCC/WAS award sources. Not a secret. |
-| `POTA_HUNTED_CSV` | — | Path to your POTA hunted-parks CSV export; enables POTA "wanted". Also `-pota-hunted-csv`. Not a secret. |
-| `HORSTAWARDS_DATA_DIR` | `./horstawards-data` | Local award snapshot store. Also `-awards-data-dir`. Not a secret. |
-| `POTA_CALLSIGN` / `POTA_TOKEN` | — | Optional POTA *API* source (only useful with an authenticated full-list endpoint). Token never logged. |
-
-`run_operator_agent.sh` runs from the repo root, so a `.env` there is picked up:
-
-```
-WAVELOG_API_KEY=xxxxxxxx
-WAVELOG_URL=https://log.dclnext.darc.de/index.php
-WAVELOG_STATION_ID=3427
-POTA_HUNTED_CSV=hunted.csv
-```
-
-`.env` is git-ignored — keep it that way.
 
 If the agent ever runs as a **systemd service** on the shack box, use the same
 `EnvironmentFile` pattern instead of relying on CWD:
@@ -183,13 +156,7 @@ ExecStart=/opt/horstoperator/horstoperator-agent -listen 127.0.0.1:9955 \
   -rig-transport waveloggate -backend-url https://horstreporter.kgbvax.net
 ```
 
-(Rig/rotor settings are not secrets — flags are fine. Only `WAVELOG_API_KEY`
-belongs in the env file.)
-
----
-
-Award progress (DXCC/WAS/POTA) runs **in-process in this agent** — see the award
-rows above and `docs/horstawards.md`. There is no separate awards service.
+(Rig/rotor settings are not secrets — flags are fine.)
 
 ---
 
@@ -198,4 +165,4 @@ rows above and `docs/horstawards.md`. There is no separate awards service.
 Moving a secret to an `EnvironmentFile` stops *future* `argv` exposure but does
 not undo past exposure (old `systemctl status` output, logs, shell history). If a
 secret was ever printed, **rotate it**: change it at the source (QRZ, Postgres
-role, DX cluster, Wavelog), update the env file, and restart the service.
+role, DX cluster), update the env file, and restart the service.

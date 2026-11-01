@@ -1,7 +1,7 @@
 # HorstSuite
 
 *A family of small, focused tools for HF amateur radio operators — real-time
-propagation awareness, antenna control, link scoring, and award tracking, built
+propagation awareness, antenna control, link scoring, built
 to run on your own hardware.*
 
 ---
@@ -123,32 +123,15 @@ travel through a remote server.
 - **Antenna control** through **PSTRotator** over UDP: read the current heading,
   set forward/backward/bidirectional mode, and point the rotator at a clicked
   spot or bearing.
-- **Chase Queue enrichment:** for DX-cluster spots, it resolves what a station is
-  (via Wavelog) and flags whether it's needed.
 - **Operator conveniences on Windows:** a system-tray indicator that shows status
   at a glance (running / attention / error), a built-in settings page so you
   configure it in the browser instead of editing files, a one-click **readiness
-  check** that probes every connected system (rotator, backend, Wavelog, rig
+  check** that probes every connected system (rotator, backend, rig
   control), and desktop notifications when something drops or recovers.
 
 *Benefit:* a single, visible local hub for control and operating assistance that
 keeps your station data on your own machine and cuts diagnostic time when
 something isn't connected.
-
-### HorstAwards — award progress, kept private
-
-An award-progress engine that runs **in-process inside the HorstOperator agent**.
-It folds your own log (via Wavelog) and your POTA hunted-parks export into an
-in-memory index and marks cluster spots as **new entity (ATNO), new band, new
-mode, new state (WAS), or new park (POTA)**.
-
-Because it runs locally, **your log and hunted-parks list never leave your
-machine**.
-
-*Benefit:* the "do I need this one?" answer, on the spot, without uploading your
-logbook anywhere.
-
----
 
 ## How the pieces fit together
 
@@ -166,8 +149,7 @@ logbook anywhere.
           ▼
    ┌──────────────────────────┐   local-only, on your shack PC
    │  HorstOperator agent      │◄──── browser talks here directly
-   │   ├─ PSTRotator (UDP)     │────► your rotator
-   │   └─ HorstAwards (in-proc)│────► Wavelog (your log) + POTA CSV  [stays local]
+   │   └─ PSTRotator (UDP)     │────► your rotator
    └──────────────────────────┘
 ```
 
@@ -184,8 +166,7 @@ components attach to it (or to your existing tools) when you want them.
 | **DXPulse** | Band × region opening matrix | with HorstReporter | — |
 | **DXLens** | Long-term baseline analytics | Pi / server | HorstReporter baseline |
 | **HorstProp** | Per-path link-quality score | Pi / server | HorstReporter feed; your cluster client |
-| **HorstOperator** | Local antenna control + operating aid | shack PC | PSTRotator (and optionally Wavelog) |
-| **HorstAwards** | "New one?" flags | inside HorstOperator | Wavelog log / POTA CSV |
+| **HorstOperator** | Local antenna control + operating aid | shack PC | PSTRotator |
 
 ---
 
@@ -206,7 +187,7 @@ components attach to it (or to your existing tools) when you want them.
 ## What it asks of you
 
 - No account, and nothing to sign up for.
-- A modern browser. For control and award features, the shack computer that
+- A modern browser. For control features, the shack computer that
   already runs your rotator and (optionally) your logger.
 - A little willingness to run a small program — the binaries are self-contained,
   and the operator agent has an in-browser settings page and readiness check to
