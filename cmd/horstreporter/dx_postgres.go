@@ -2040,7 +2040,7 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 			spot_time, sender_callsign, sender_locator,
 			receiver_callsign, receiver_locator,
 			band, mode, signal_report_db,
-			COALESCE(frequency_khz, 0), COALESCE(comment, ''),
+			COALESCE(frequency_khz, 0),
 			COALESCE(source_type, 'mqtt')
 		FROM dx_raw_spots
 		WHERE spot_time BETWEEN $1 AND $2
@@ -2055,16 +2055,14 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 	out := make([]MQTTMessage, 0, 8192)
 	for rows.Next() {
 		var m MQTTMessage
-		var cm string
-		// F (frequency_khz) and CM (comment) restore the frequency and comment;
-		// without them, spots restored after a restart carry freq 0.
+		// F (frequency_khz) restores the frequency; without it, spots restored
+		// after a restart carry freq 0.
 		// Source (from source_type) restores the ingest tag so sourceTypeForMessage
 		// tags backfilled RBN rows "rbn" (not "mqtt") and the frontend toggle works
 		// across a restart.
-		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP, &m.F, &cm, &m.Source); err != nil {
+		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP, &m.F, &m.Source); err != nil {
 			return nil, err
 		}
-		m.X = newDXExtra(cm, "", "", "")
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -2130,7 +2128,7 @@ func (s *dxPostgresStore) loadSpotsRangeForTargets(start, end int64, tokens []st
 			spot_time, sender_callsign, sender_locator,
 			receiver_callsign, receiver_locator,
 			band, mode, signal_report_db,
-			COALESCE(frequency_khz, 0), COALESCE(comment, ''),
+			COALESCE(frequency_khz, 0),
 			COALESCE(source_type, 'mqtt')
 		FROM dx_raw_spots
 		WHERE spot_time BETWEEN $1 AND $2
@@ -2146,11 +2144,9 @@ func (s *dxPostgresStore) loadSpotsRangeForTargets(start, end int64, tokens []st
 	out := make([]MQTTMessage, 0, 1024)
 	for rows.Next() {
 		var m MQTTMessage
-		var cm string
-		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP, &m.F, &cm, &m.Source); err != nil {
+		if err := rows.Scan(&m.T, &m.SC, &m.SL, &m.RC, &m.RL, &m.B, &m.MD, &m.RP, &m.F, &m.Source); err != nil {
 			return nil, err
 		}
-		m.X = newDXExtra(cm, "", "", "")
 		out = append(out, m)
 	}
 	return out, rows.Err()

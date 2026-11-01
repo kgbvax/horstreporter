@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"horstreporter/internal/cty"
 	"horstreporter/internal/maidenhead"
 	"horstreporter/internal/qrzlookup"
 )
@@ -46,7 +45,6 @@ type dxClusterConfig struct {
 	Username       string
 	Password       string
 	Resolver       qrzlookup.Resolver
-	CtyResolver    *cty.Resolver // DXCC entity + country flag (cty.dat); may be nil
 }
 
 type dxClusterSpot struct {
@@ -171,7 +169,7 @@ func runDXClusterSession(endpoint string, cfg dxClusterConfig) error {
 		}
 		spotsParsed++
 		dxClusterAccounting.parsedSpots.Add(1)
-		handleDXClusterSpot(spot, cfg.Resolver, cfg.CtyResolver)
+		handleDXClusterSpot(spot, cfg.Resolver)
 	}
 	if err := scanner.Err(); err != nil {
 		if cfg.Verbose {
@@ -288,21 +286,10 @@ func parseDXClusterSpot(line string, observedAt int64) (dxClusterSpot, bool) {
 	}, true
 }
 
-func handleDXClusterSpot(spot dxClusterSpot, resolver qrzlookup.Resolver, ctyResolver *cty.Resolver) {
+func handleDXClusterSpot(spot dxClusterSpot, resolver qrzlookup.Resolver) {
 	band := bandFromFrequencyKHz(spot.FrequencyKHz)
 	spotterLocator := ""
 	dxLocator := ""
-	dxName := ""
-	dxCountry := ""
-	dxCountryISO := ""
-
-	// Country + flag from cty.dat (authoritative, full prefix coverage).
-	if ctyResolver != nil {
-		if ent, iso, ok := ctyResolver.Resolve(spot.DXCall); ok {
-			dxCountry = ent.Name
-			dxCountryISO = iso
-		}
-	}
 
 	if resolver != nil {
 		if spotterLocator == "" {
@@ -316,14 +303,8 @@ func handleDXClusterSpot(spot dxClusterSpot, resolver qrzlookup.Resolver, ctyRes
 			}
 		}
 
-		// One lookup for the DX call yields locator + operator name (+ country as a
-		// fallback when cty.dat didn't resolve one).
 		if info, err := resolver.LookupInfo(spot.DXCall); err == nil {
 			dxLocator = strings.ToUpper(strings.TrimSpace(info.Locator))
-			dxName = strings.TrimSpace(info.Name)
-			if dxCountry == "" {
-				dxCountry = strings.TrimSpace(info.Country)
-			}
 			if dxLocator == "" && logLevel == "DEBUG" {
 				logDebug("DX cluster QRZ lookup returned no locator for DX call %q", spot.DXCall)
 			}
@@ -342,7 +323,6 @@ func handleDXClusterSpot(spot dxClusterSpot, resolver qrzlookup.Resolver, ctyRes
 		B:      band,
 		MD:     "DXCLUSTER",
 		F:      spot.FrequencyKHz,
-		X:      newDXExtra(spot.Comment, dxName, dxCountry, dxCountryISO),
 		Source: "dxcluster",
 	}
 

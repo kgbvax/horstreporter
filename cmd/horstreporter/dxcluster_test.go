@@ -188,7 +188,7 @@ func TestHandleDXClusterSpotPopulatesLiveFields(t *testing.T) {
 		FrequencyKHz: 14074.0,
 		Comment:      "cq dx",
 		ObservedAt:   1700000000,
-	}, resolver, nil)
+	}, resolver)
 	afterAttempts, _, _, _, _, afterForwarded, afterDropped := dxClusterAccounting.snapshot()
 
 	if got := afterForwarded - forwarded; got != 1 {
@@ -231,20 +231,11 @@ func TestHandleDXClusterSpotPopulatesLiveFields(t *testing.T) {
 	if m.F != 14074.0 {
 		t.Errorf("F = %v, want 14074", m.F)
 	}
-	if x := m.extra(); x.CM != "cq dx" {
-		t.Errorf("CM = %q, want 'cq dx'", x.CM)
-	}
 	if m.T != 1700000000 {
 		t.Errorf("T = %d, want 1700000000", m.T)
 	}
 	if m.RP != 0 {
 		t.Errorf("RP = %d, want 0 (dx-cluster spots are baseline-benign)", m.RP)
-	}
-	if x := m.extra(); x.OpName != "Joe" {
-		t.Errorf("OpName = %q, want Joe", x.OpName)
-	}
-	if x := m.extra(); x.Country != "United States" {
-		t.Errorf("Country = %q, want from QRZ fallback (no cty resolver)", x.Country)
 	}
 }
 
@@ -255,7 +246,7 @@ func TestHandleDXClusterSpotDropsWithoutLocator(t *testing.T) {
 	_, _, _, _, _, _, droppedBefore := dxClusterAccounting.snapshot()
 	handleDXClusterSpot(dxClusterSpot{
 		Spotter: "W3LPL", DXCall: "K1XYZ", FrequencyKHz: 14074.0, ObservedAt: 1000,
-	}, nil, nil)
+	}, nil)
 	_, _, _, _, _, _, droppedAfter := dxClusterAccounting.snapshot()
 	if got := droppedAfter - droppedBefore; got != 1 {
 		t.Fatalf("droppedNoLoc delta = %d, want 1", got)
@@ -277,7 +268,7 @@ func TestHandleDXClusterSpotDropsOffBandFrequency(t *testing.T) {
 	_, _, _, _, _, _, droppedBefore := dxClusterAccounting.snapshot()
 	handleDXClusterSpot(dxClusterSpot{
 		Spotter: "W3LPL", DXCall: "K1XYZ", FrequencyKHz: 14900.0, ObservedAt: 1000,
-	}, resolver, nil)
+	}, resolver)
 	_, _, _, _, _, _, droppedAfter := dxClusterAccounting.snapshot()
 	if got := droppedAfter - droppedBefore; got != 1 {
 		t.Fatalf("droppedNoLoc delta = %d, want 1 (out-of-band frequency → empty band)", got)

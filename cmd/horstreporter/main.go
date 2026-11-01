@@ -59,21 +59,21 @@ func dsnSource(flagVal string) string {
 	return "built-in default"
 }
 
-// loadCtyResolver returns the cty.dat resolver for DX-cluster country/flag
-// labelling. It uses the embedded cty.dat by default; a non-empty path overrides
+// loadCtyResolver returns the cty.dat resolver for DXCC entity lookup.
+// It uses the embedded cty.dat by default; a non-empty path overrides
 // it with a file (e.g. a fresher cty.dat) when readable.
 func loadCtyResolver(path string) *cty.Resolver {
 	if path != "" {
 		if f, err := os.Open(path); err == nil {
 			defer f.Close()
 			if r, err := cty.Parse(f); err == nil {
-				logInfo("DX cluster cty.dat loaded from %s", path)
+				logInfo("cty.dat loaded from %s", path)
 				return r
 			} else {
-				logInfo("DX cluster cty.dat parse failed (%s): %v — falling back to embedded", path, err)
+				logInfo("cty.dat parse failed (%s): %v — falling back to embedded", path, err)
 			}
 		} else {
-			logInfo("DX cluster cty.dat not readable (%s): %v — falling back to embedded", path, err)
+			logInfo("cty.dat not readable (%s): %v — falling back to embedded", path, err)
 		}
 	}
 	r, err := cty.Parse(bytes.NewReader(horstreporter.CtyData))
@@ -81,7 +81,7 @@ func loadCtyResolver(path string) *cty.Resolver {
 		logInfo("DX cluster embedded cty.dat parse failed: %v (labelling disabled)", err)
 		return nil
 	}
-	logInfo("DX cluster cty.dat: using embedded (%d bytes)", len(horstreporter.CtyData))
+	logInfo("cty.dat: using embedded (%d bytes)", len(horstreporter.CtyData))
 	return r
 }
 
@@ -270,7 +270,7 @@ func main() {
 	wsprEndpoint := flag.String("wspr-endpoint", "https://db1.wspr.live", "WSPR ClickHouse HTTP endpoint (base URL)")
 	wsprPollSeconds := flag.Int("wspr-poll-seconds", 60, "Seconds between WSPR polls (wspr.live rate-limits to ~20 req/min)")
 	wsprVerbose := flag.Bool("wspr-verbose", false, "Enable verbose WSPR polling logs")
-	ctyPath := flag.String("cty-path", os.Getenv("CTY_DAT_PATH"), "Path to AD1C cty.dat for DX-cluster country/flag labelling (empty disables)")
+	ctyPath := flag.String("cty-path", os.Getenv("CTY_DAT_PATH"), "Path to AD1C cty.dat for DXCC entity lookup (empty uses the embedded copy)")
 	qrzUsernameFlag := flag.String("qrz-username", "", "QRZ username for optional callsign->locator enrichment")
 	qrzPasswordFlag := flag.String("qrz-password", "", "QRZ password for optional callsign->locator enrichment")
 	liveHistoryRetentionFlag := flag.Int("live-history-minutes", defaultLiveHistoryRetentionMinutes, "Maximum age of retained live spots in minutes")
@@ -594,7 +594,6 @@ func main() {
 		} else {
 			logInfo("QRZ callsign enrichment disabled (missing credentials); DX-cluster/RBN spots are chart-only; regional baseline uses DXCC center fallback")
 		}
-		ctyResolver := loadCtyResolver(strings.TrimSpace(*ctyPath))
 
 		if *dxClusterEnable {
 			dxClusterUser := strings.TrimSpace(*dxClusterUsername)
@@ -614,7 +613,6 @@ func main() {
 				Username:       dxClusterUser,
 				Password:       dxClusterPass,
 				Resolver:       resolver,
-				CtyResolver:    ctyResolver,
 			})
 		}
 
@@ -638,7 +636,6 @@ func main() {
 				Verbose:        *rbnVerbose,
 				Callsign:       rbnCall,
 				Resolver:       resolver,
-				CtyResolver:    ctyResolver,
 			})
 		}
 
@@ -649,7 +646,6 @@ func main() {
 				PollSeconds: *wsprPollSeconds,
 				Verbose:     *wsprVerbose,
 				Resolver:    resolver,
-				CtyResolver: ctyResolver,
 			})
 		}
 	}

@@ -6,7 +6,7 @@
 // ES-module import graph reachable (static + dynamic imports) from the module
 // script entries. Images (e.g. the hk.jpg preload) are excluded by design.
 // Script tags injected at runtime via createElement (the lazy-loaded turf
-// bundle and the opt-in Chase Queue module) are NOT in this total; they are
+// bundle) are NOT in this total; they are
 // reported separately in lazy_gzip_kb so the eager and deferred halves of the
 // first load stay visible.
 //
@@ -64,7 +64,7 @@ function addFile(absPath, relPath, kind) {
 // --- JS module graph walk ------------------------------------------------
 const importRe = /\bimport\s+(?:[\w${}\s,*]+\s+from\s+)?['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)|\bexport\s+[\w${}\s,*]*\sfrom\s+['"]([^'"]+)['"]/g;
 // Runtime-injected script tags: `.src = 'something.js'` in first-party code
-// (e.g. renderers.js's ensureTurf, app.js's Chase Queue injection). These are
+// (e.g. renderers.js's ensureTurf). These are
 // deferred fetches the eager payload walk cannot see; they are tallied
 // separately as lazy_gzip_kb.
 const lazySrcRe = /\.src\s*=\s*['"]([^'"]+)['"]/g;
@@ -98,8 +98,7 @@ function walkModule(absPath, relPath) {
   const dir = path.dirname(relPath);
   for (const m of src.matchAll(lazySrcRe)) {
     const spec = m[1];
-    // Injected script srcs are root-relative ('dxcluster.js',
-    // 'vendor/js/turf.min.js'); skip absolute URLs.
+    // Injected script srcs are root-relative ('vendor/js/turf.min.js'); skip absolute URLs.
     if (spec.startsWith('http') || spec.startsWith('//') || !spec.endsWith('.js')) continue;
     const lazyRel = path.posix.normalize(path.posix.join(dir, spec));
     if (lazyRel.startsWith('..')) continue;

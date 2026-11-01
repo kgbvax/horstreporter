@@ -110,10 +110,6 @@ async function importFreshMapModule() {
         getGraylineOverlayOpacities: vi.fn(() => ({ graylineOpacity: 0, nightOpacity: 0 })),
         getMercatorDxccLabelsEnabled: vi.fn(() => true),
         getSubsolarPoint: vi.fn(() => ({ lat: 0, lng: 0 })),
-        greatCirclePoints: vi.fn((aLat, aLng, bLat, bLng, segments = 48) => (
-            Array.from({ length: Math.max(1, Math.floor(segments)) + 1 },
-                (_, i) => [aLat + ((bLat - aLat) * i) / segments, aLng + ((bLng - aLng) * i) / segments])
-        )),
         hexToRgb: vi.fn(() => [1, 2, 3]),
         blendOverlayColors: vi.fn(() => ({ r: 0, g: 0, b: 0, a: 0 })),
         icon: vi.fn(() => 'ICON')

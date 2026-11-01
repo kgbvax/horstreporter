@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"horstreporter/internal/cty"
 	"horstreporter/internal/maidenhead"
 	"horstreporter/internal/qrzlookup"
 )
@@ -145,7 +144,6 @@ type wsprConfig struct {
 	PollSeconds int
 	Verbose     bool
 	Resolver    qrzlookup.Resolver
-	CtyResolver *cty.Resolver
 }
 
 // wsprSpot is one row from the wspr.rx table (FORMAT JSON).

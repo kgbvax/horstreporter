@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"horstreporter/internal/cty"
 	"horstreporter/internal/maidenhead"
 	"horstreporter/internal/qrzlookup"
 )
@@ -61,7 +60,6 @@ type rbnConfig struct {
 	Verbose        bool
 	Callsign       string // required-in-practice: the relay prompts "enter your call" before streaming
 	Resolver       qrzlookup.Resolver
-	CtyResolver    *cty.Resolver // DXCC entity + country flag (cty.dat); may be nil
 }
 
 type rbnSpot struct {
@@ -185,7 +183,7 @@ func runRBNSession(endpoint string, cfg rbnConfig) error {
 		}
 		spotsParsed++
 		rbnAccounting.parsedSpots.Add(1)
-		handleRBNSpot(spot, cfg.Resolver, cfg.CtyResolver)
+		handleRBNSpot(spot, cfg.Resolver)
 	}
 	if err := scanner.Err(); err != nil {
 		if cfg.Verbose {
@@ -256,21 +254,10 @@ func parseRBNSpot(line string, observedAt int64) (rbnSpot, bool) {
 	}, true
 }
 
-func handleRBNSpot(spot rbnSpot, resolver qrzlookup.Resolver, ctyResolver *cty.Resolver) {
+func handleRBNSpot(spot rbnSpot, resolver qrzlookup.Resolver) {
 	band := bandFromFrequencyKHz(spot.FrequencyKHz)
 	skimmerLocator := ""
 	dxLocator := ""
-	dxName := ""
-	dxCountry := ""
-	dxCountryISO := ""
-
-	// Country + flag from cty.dat (authoritative, full prefix coverage).
-	if ctyResolver != nil {
-		if ent, iso, ok := ctyResolver.Resolve(spot.DXCall); ok {
-			dxCountry = ent.Name
-			dxCountryISO = iso
-		}
-	}
 
 	if resolver != nil {
 		// Skimmer locator is best-effort; not required for the live path.
@@ -280,15 +267,10 @@ func handleRBNSpot(spot rbnSpot, resolver qrzlookup.Resolver, ctyResolver *cty.R
 			logDebug("RBN QRZ lookup failed for skimmer %q: %v", spot.Skimmer, err)
 		}
 
-		// One lookup for the DX call yields locator + operator name (+ country as a
-		// fallback when cty.dat didn't resolve one). The DX/RX locator is what makes a
+		// The DX/RX locator is what makes a
 		// spot usable for the live map (isRBNSpotUsableForLive), mirroring DX-cluster.
 		if info, err := resolver.LookupInfo(spot.DXCall); err == nil {
 			dxLocator = strings.ToUpper(strings.TrimSpace(info.Locator))
-			dxName = strings.TrimSpace(info.Name)
-			if dxCountry == "" {
-				dxCountry = strings.TrimSpace(info.Country)
-			}
 			if dxLocator == "" && logLevel == "DEBUG" {
 				logDebug("RBN QRZ lookup returned no locator for DX call %q", spot.DXCall)
 			}
@@ -311,7 +293,6 @@ func handleRBNSpot(spot rbnSpot, resolver qrzlookup.Resolver, ctyResolver *cty.R
 		B:      band,
 		MD:     spot.Mode,
 		F:      spot.FrequencyKHz,
-		X:      newDXExtra("", dxName, dxCountry, dxCountryISO),
 		Source: "rbn",
 	}
 

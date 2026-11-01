@@ -49,14 +49,10 @@ go.work.sum
 /proplab-backtest-linux-x64
 
 # horstawards local award snapshot store (written by the operator agent)
-horstawards-data/
 
 # macOS
 .DS_Store
 
-# scratch: Chase Queue screenshots/scripts + standalone prototype
-tmp/cq-*.png
-tmp/cq*.mjs
 tmp/dx-cluster-proto/
 # Cross-compiled binaries (scripts/build-operator-agent-win64.sh)
 dist/

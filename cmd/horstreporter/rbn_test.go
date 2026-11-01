@@ -350,7 +350,7 @@ func TestHandleRBNSpotPopulatesLiveFields(t *testing.T) {
 		Mode:         "CW",
 		DB:           22,
 		ObservedAt:   1700000000,
-	}, resolver, nil)
+	}, resolver)
 	_, _, _, _, _, forwardedAfter, droppedAfter := rbnAccounting.snapshot()
 	if got := forwardedAfter - forwardedBefore; got != 1 {
 		t.Fatalf("forwardedSpots delta = %d, want 1", got)
@@ -386,9 +386,6 @@ func TestHandleRBNSpotPopulatesLiveFields(t *testing.T) {
 	if m.F != 14024.0 {
 		t.Errorf("F = %v, want 14024", m.F)
 	}
-	if x := m.extra(); x.OpName != "Bob" {
-		t.Errorf("OpName = %q, want Bob", x.OpName)
-	}
 }
 
 func TestHandleRBNSpotDropsWithoutDXLocator(t *testing.T) {
@@ -396,7 +393,7 @@ func TestHandleRBNSpotDropsWithoutDXLocator(t *testing.T) {
 
 	_, _, _, _, _, forwardedBefore, droppedBefore := rbnAccounting.snapshot()
 	// No resolver at all → no locators → unusable for live.
-	handleRBNSpot(rbnSpot{Skimmer: "W3LPL", DXCall: "N0CALL", FrequencyKHz: 14024.0, Mode: "CW", DB: 20, ObservedAt: 1000}, nil, nil)
+	handleRBNSpot(rbnSpot{Skimmer: "W3LPL", DXCall: "N0CALL", FrequencyKHz: 14024.0, Mode: "CW", DB: 20, ObservedAt: 1000}, nil)
 	_, _, _, _, _, forwardedAfter, droppedAfter := rbnAccounting.snapshot()
 	if got := droppedAfter - droppedBefore; got != 1 {
 		t.Fatalf("droppedNoLoc delta = %d, want 1", got)
