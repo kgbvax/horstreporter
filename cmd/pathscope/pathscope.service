@@ -1,6 +1,6 @@
 # Reference systemd unit for pathscope. The DSN lives in
 # /etc/horstreporter/pathscope.env (shared with the main horstreporter
-# binary which can write WAVELOG_API_KEY, DXCLUSTER_USERNAME, etc. there).
+# binary which can write DXCLUSTER_USERNAME, QRZ_PASSWORD, etc. there).
 # This file is the manual-install reference; the install script that
 # deploys the binary is the recommended path.
 #

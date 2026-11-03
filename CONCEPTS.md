@@ -61,7 +61,7 @@ The station that posted a DX-cluster spot — the DX-cluster analogue of a Recei
 A Weak Signal Propagation Reporter spot — a one-way beacon transmission (a low-power transmitter heard by a receiver) ingested from the wspr.live ClickHouse feed. WSPR is a **propagation reference**: beacons run continuously at low power, so WSPR shows whether a path is open at all even when nobody is actively operating (the gap FT8 leaves on dead bands, off-peak hours, and during contests). WSPR SNR is on the same 2500 Hz scale as FT8 but stations transmit at wildly varying power (0.1–100 W+), so raw SNR conflates station capability with propagation — WSPR is therefore kept **out** of the FT8-calibrated conditions baseline (like RBN) and feeds the live stream, activity chart, and a per-band "path open" viability floor instead.
 
 ### DXCC entity
-The country or territory a callsign belongs to under the ARRL DXCC list — resolved from a callsign-prefix table with an online lookup fallback, and attached to DX-cluster spots as country name and ISO code. The unit most awards and "wanted" decisions are counted in.
+The country or territory a callsign belongs to under the ARRL DXCC list — resolved from a callsign-prefix table with an online lookup fallback, and attached to DX-cluster spots as country name and ISO code.
 
 ## DX condition scoring
 
@@ -125,10 +125,7 @@ The virtual "now" of timeline replay — the data-time the renderers are showing
 
 
 ### horstoperator-agent
-A trusted local agent running on the operator's own machine that holds operator-private secrets (logbook API key, rig and rotor access) and reverse-proxies the shared backend, so secrets and personal log data never leave the local box. The browser sees a single origin while operator-local endpoints stay local.
-
-### Award slot
-The atomic unit of award progress — one workable or confirmable thing (a DXCC entity, a band, a mode, a US state, a park). A spot's "wanted" status is the candidate slots it could fill minus the slots already satisfied in the operator's own log; flags such as ATNO (all-time-new-one), +BAND, +MODE, WAS and POTA name common slot kinds.
+A trusted local agent running on the operator's own machine that holds operator-private secrets (rig, rotor and antenna access) and reverse-proxies the shared backend, so secrets never leave the local box. The browser sees a single origin while operator-local endpoints stay local.
 
 ### Beam direction
 The pattern direction of the operator's UltraBeam RCU-06 antenna: **forward**, **180°** (reverse), or **bi-directional**. Distinct from rotation — rotation (azimuth) stays with the PSTrotator, while beam direction is read from and set on the UltraBeam over MQTT (the `ubctrl` topics). In operation mode it surfaces as three buttons on the left panel, with the live direction sourced from the antenna's own status rather than a local guess. The 180°/reverse state carries a deliberately escalating red alarm (ramping over 90 seconds, with a non-color text cue) because a forgotten reverse is a recurring operational footgun.

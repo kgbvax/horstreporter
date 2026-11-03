@@ -1,7 +1,6 @@
 // Package dotenv loads KEY=VALUE pairs from a .env file into the process
-// environment. It is shared by the operator-side binaries (horstoperator-agent,
-// horstawards) so secrets like WAVELOG_API_KEY stay out of shell history and
-// process args. Values are set only if not already present, so an explicit
+// environment. It is used by the operator-side binaries (horstoperator-agent)
+// so secrets like UB_PASSWORD stay out of shell history and process args. Values are set only if not already present, so an explicit
 // environment (e.g. systemd EnvironmentFile) always wins.
 package dotenv
 

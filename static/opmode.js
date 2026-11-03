@@ -758,15 +758,6 @@ export function getRigBand() {
     return freqHzToBand(rig.freqHz);
 }
 
-// canControlRig reports whether the agent has a rig backend that can tune, AND
-// the operator/server/UI permission gate is satisfied. The Chase Queue uses this
-// to decide whether to expose tune affordances.
-export function canControlRig() {
-    if (opModeState.rigCapabilities?.tune !== true) return false;
-    const [allowed] = canSendControl();
-    return allowed;
-}
-
 // rigTune QSYs the rig to freqHz (Hz) with the given mode. Mode mapping
 // (CW/FT8/SSB → cw/data/usb/lsb) happens agent-side.
 export async function rigTune(freqHz, mode) {

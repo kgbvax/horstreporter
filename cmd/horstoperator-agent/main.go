@@ -72,7 +72,7 @@ func envFloatOr(key string, def float64) float64 {
 	return def
 }
 
-// .env loading is shared with horstawards via internal/dotenv.Load.
+// .env loading lives in internal/dotenv.Load.
 
 const (
 	pstQueryAzCommand   = "<PST>AZ?</PST>"
@@ -1152,7 +1152,7 @@ func main() {
 	// has no console and would otherwise discard every log line.
 	resolvedLogFile := setupLogging(*logFilePath, *trayEnabled)
 
-	// Debug logging: capture all outbound HTTP (Wavelog/backend/rig/POTA + reverse
+	// Debug logging: capture all outbound HTTP (backend/rig + reverse
 	// proxy) by wrapping the default transport, before any client issues a request.
 	// The PSTrotator UDP half is enabled via UDPLogTraffic in the config below.
 	if *debugLogging {

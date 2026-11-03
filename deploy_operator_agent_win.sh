@@ -28,7 +28,7 @@
 #   HORSTOP_LISTEN  agent listen address                  (default: 127.0.0.1:9955)
 #
 # There is nothing to configure on disk: after the first deploy, open the tray
-# (once logged in) -> Settings and set your locator / PSTrotator host / Wavelog
+# (once logged in) -> Settings and set your locator / PSTrotator host / rig
 # key interactively. The agent persists that for you.
 
 set -euo pipefail
@@ -103,4 +103,4 @@ ssh "$TARGET" "schtasks /Run /TN \"$TASK\"" || {
 }
 
 echo "Deployment complete. Look for the tray icon on ${HOST} (green = PSTrotator OK)."
-echo "First time? Open the tray -> Settings to configure locator / PSTrotator host / Wavelog — all interactive, nothing to edit on disk."
+echo "First time? Open the tray -> Settings to configure locator / PSTrotator host / rig — all interactive, nothing to edit on disk."
