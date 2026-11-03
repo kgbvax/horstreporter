@@ -48,8 +48,6 @@ go.work.sum
 # removed proplab backtest binary (may be rebuilt by old scripts)
 /proplab-backtest-linux-x64
 
-# horstawards local award snapshot store (written by the operator agent)
-
 # macOS
 .DS_Store
 

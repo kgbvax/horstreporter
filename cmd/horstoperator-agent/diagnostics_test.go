@@ -54,7 +54,7 @@ func unusedUDPPort(t *testing.T) int {
 
 // newDiagServer builds a server for diagnostics/config handler tests. env (may
 // be nil) is written to a temp .env; pstPort 0 points the PSTrotator client at
-// a closed loopback port. rig/wavelog/awards are left nil (unconfigured).
+// a closed loopback port. rig is left nil (unconfigured).
 func newDiagServer(t *testing.T, env map[string]string, pstPort int) *server {
 	t.Helper()
 	envPath := filepath.Join(t.TempDir(), ".env")

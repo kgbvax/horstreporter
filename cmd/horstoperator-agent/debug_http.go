@@ -13,11 +13,11 @@ import (
 )
 
 // debugBodyPreview caps how many bytes of each request/response body are logged.
-// Small enough to stay readable and to avoid dumping a whole ADIF log pull.
+// Small enough to stay readable.
 const debugBodyPreview = 512
 
-// secretJSONRe redacts the Wavelog read key (and similar) when it rides in a JSON
-// body, e.g. {"key":"abc..."} for private_lookup / get_contacts_adif.
+// secretJSONRe redacts API keys, passwords and tokens when they ride in a JSON
+// body, e.g. {"key":"abc..."}.
 var secretJSONRe = regexp.MustCompile(`(?i)("(?:key|api_key|apikey|password|token)"\s*:\s*")[^"]*(")`)
 
 // secretQueryKeys are URL query params whose values must never be logged.
@@ -25,9 +25,8 @@ var secretQueryKeys = map[string]bool{"key": true, "api_key": true, "apikey": tr
 
 // loggingRoundTripper logs every outbound HTTP request/response (method, URL,
 // status, duration, and a short redacted body preview). It wraps the process
-// default transport, so it captures the agent's Wavelog/backend/rig clients, the
-// in-process award sources, AND the backend reverse proxy — all of which use the
-// default transport. Secrets are redacted; this is the HTTP half of the Settings
+// default transport, so it captures the agent's backend/rig clients AND the
+// backend reverse proxy — all of which use the default transport. Secrets are redacted; this is the HTTP half of the Settings
 // "Debug logging" switch (the PSTrotator UDP half reuses the existing UDP logger).
 type loggingRoundTripper struct {
 	base http.RoundTripper

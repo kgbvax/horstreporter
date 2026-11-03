@@ -86,8 +86,7 @@ function applyBandChange() {
 // The high-volume optional sources the stream can leave out, keyed by the
 // stream's include_<name> parameter, with the checkbox that shows/hides each
 // on the map. DX cluster is deliberately not listed: its volume is tiny, and
-// its checkbox is flipped programmatically (Chase Queue) without a change
-// event, so the stream could not follow the toggle.
+// it stays on the stream and the checkbox filters it client-side.
 const STREAM_SOURCE_TOGGLES = [
     ['rbn', 'show-rbn-spots'],
     ['wspr', 'show-wspr-spots'],
