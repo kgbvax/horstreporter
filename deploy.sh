@@ -28,7 +28,7 @@ ssh "${USER}@${HOST}" << 'EOF'
     # Flags that no longer exist: Go's flag parser exits on unknown flags and
     # would crash-loop the service. Strip them from ARGS in the EnvironmentFile
     # (idempotent; keeps a .bak of the file when something changed).
-    REMOVED_FLAGS="horstprop-url"
+    REMOVED_FLAGS="horstprop-url cty-path"
     ENVFILE=/etc/default/horstreporter
     if [ -f "$ENVFILE" ]; then
         for f in $REMOVED_FLAGS; do
