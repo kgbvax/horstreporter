@@ -30,7 +30,7 @@ ssh "${USER}@${HOST}" << 'EOF'
     # (idempotent; keeps a .bak of the file when something changed).
     # Value flags take "-flag value" or "-flag=value"; boolean flags only
     # "-flag" or "-flag=bool" (so the next argument is never swallowed).
-    REMOVED_FLAGS="horstprop-url cty-path opmode-agent-url pathscope-url qrz-username qrz-password proplab-cell-retention-days"
+    REMOVED_FLAGS="horstprop-url opmode-agent-url pathscope-url qrz-username qrz-password proplab-cell-retention-days"
     REMOVED_BOOL_FLAGS="proplab-sw-enable"
     ENVFILE=/etc/default/horstreporter
     if [ -f "$ENVFILE" ]; then
