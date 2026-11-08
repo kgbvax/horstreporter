@@ -367,6 +367,24 @@ describe('wspr-matrix (Propagation) panel', () => {
         expect(runtime.detailRetryTimer).toBeNull();
     });
 
+    it('a render-driven update does not abort the in-flight request for the same key', async () => {
+        const signals = [];
+        global.fetch = vi.fn(async (_url, opts) => {
+            signals.push(opts?.signal);
+            return new Promise(() => {}); // held open
+        });
+        initWsprMatrix();
+        setWsprMatrixVisible(true);
+        await new Promise((r) => setTimeout(r, 0));
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+
+        const { updateWsprMatrix } = await import('../static/wspr-matrix.js');
+        await updateWsprMatrix();
+        await updateWsprMatrix();
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+        expect(signals[0].aborted).toBe(false);
+    });
+
     it('TTL cache: a second update within 15s does not refetch', async () => {
         const calls = [];
         global.fetch = vi.fn(async (url) => {

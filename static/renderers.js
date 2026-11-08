@@ -257,6 +257,21 @@ export function clearWsprMarkers() {
     state.wsprLayer = null;
 }
 
+// WSPR markers follow the same band filters as the grid (enabled bands, band
+// focus, matrix drill-down) but not the FT8 SNR floors: WSPR SNR is on its own
+// scale, and the stream and session ring exempt it from them too.
+export function filterWsprMarkerSpots(wsprSpots, filterCtx) {
+    if (!filterCtx || wsprSpots.length === 0) return wsprSpots;
+    const { selectedBand, enabledBands, filterBand, filterRegion } = filterCtx;
+    return wsprSpots.filter((spot) => {
+        if (enabledBands && !enabledBands.has(spot.band)) return false;
+        if (selectedBand && selectedBand !== 'all' && spot.band !== selectedBand) return false;
+        if (filterBand && spot.band !== filterBand) return false;
+        if (filterRegion && regionForLocatorCached(spot.locator) !== filterRegion) return false;
+        return true;
+    });
+}
+
 function syncWsprMarkers(wsprSpots) {
     if (wsprSpots.length === 0) {
         if (state.wsprLayer) clearWsprMarkers();
@@ -418,7 +433,7 @@ export function updateMapVisualization(spots, maxMinutes) {
     // DX cluster markers: persistent layer, rebuilt only when the cluster
     // spot set changes — hovering must not flicker on every heatLayer rebuild.
     syncDxClusterMarkers(dxClusterSpots);
-    syncWsprMarkers(wsprSpots);
+    syncWsprMarkers(filterWsprMarkerSpots(wsprSpots, filterCtx));
 
     if (document.getElementById('auto-zoom')?.checked) {
         const now = Date.now();
@@ -498,7 +513,11 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
     for (const band of enabledBands) {
         const perMin = bandNormalRate ? bandNormalRate(band) : null;
         if (Number.isFinite(perMin) && perMin > 0) {
-            const perBin = perMin * binMinutes;
+            // Rescale from the -15 dB population to the user's Min SNR filter,
+            // using this window's own share of reports that pass the filter.
+            const act = activity.get(band);
+            const filterShare = act && act.baselineFloorCount > 0 ? act.count / act.baselineFloorCount : 1;
+            const perBin = perMin * filterShare * binMinutes;
             normals.set(band, perBin);
             if (perBin > sparkPeak) sparkPeak = perBin;
         }
@@ -589,6 +608,10 @@ if (typeof document !== 'undefined') {
 // Per-band spot count + a SPARK_BINS histogram over the max-spot-age window,
 // anchored on the newest spot so it also works for a timeline moment.
 // Applies the SNR floor but not focus.
+// SNR floor dx_conditions counts baseline_local_scale at (its default cw_min_db;
+// band-lab does not send one).
+const BASELINE_LOCAL_FLOOR_DB = -15;
+
 export function bandActivity(spots, ctx) {
     const out = new Map();
     if (!Array.isArray(spots) || spots.length === 0) return out;
@@ -600,14 +623,21 @@ export function bandActivity(spots, ctx) {
     const span = 60 * (Number(document.getElementById('minutes')?.value) || 15);
     const t0 = tMax - span;
     for (const s of spots) {
+        let a = out.get(s.band);
+        if (!a) { a = { count: 0, baselineFloorCount: 0, bins: new Array(SPARK_BINS).fill(0) }; out.set(s.band, a); }
+        // The band's normal rate (dx_conditions baseline_local_scale) is counted
+        // at the backend's default -15 dB floor; tally that population too so
+        // the dashed line can be put on the same SNR filter as the live line.
+        if (s.snr >= BASELINE_LOCAL_FLOOR_DB) a.baselineFloorCount += 1;
         if (ctx.minSnrMode === 'ssb' && s.snr < ctx.ssbMinDb) continue;
         if (ctx.minSnrMode === 'cw' && s.snr < ctx.cwMinDb) continue;
-        let a = out.get(s.band);
-        if (!a) { a = { count: 0, bins: new Array(SPARK_BINS).fill(0) }; out.set(s.band, a); }
         a.count += 1;
         const i = Math.min(SPARK_BINS - 1, Math.max(0, Math.floor(((spotEpochSeconds(s) - t0) / span) * SPARK_BINS)));
         a.bins[i] += 1;
     }
+    // Bands whose reports all fail the Min SNR filter stay absent, as before;
+    // their -15 dB tally is only needed for bands that do have a live line.
+    for (const [band, a] of out) if (a.count === 0) out.delete(band);
     // Reporters upload in ~2-minute batches, so raw 1-minute bins zig-zag
     // (58 8 50 0 ...). The drawn line is a centred 3-bin moving average.
     for (const a of out.values()) {

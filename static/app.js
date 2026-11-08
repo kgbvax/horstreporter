@@ -715,7 +715,11 @@ function getRenderableMapSpots(spots) {
     // computes a continuous true age and hides spots smoothly as their real
     // age crosses the cutoff (at whatever render runs between ticks), instead
     // of a discrete batch drop. The prune keeps reaping memory on its 5s tick.
-    const maxAge = getCurrentMaxSpotAgeSeconds();
+    // The map shows Max Spot Age only. liveSpots is retained for the longer of
+    // that and the Conditions time range (getCurrentMaxSpotAgeSeconds), which
+    // band-lab reads directly; gating the map on the retention window showed
+    // up to an hour of spots under a 15 min slider.
+    const maxAge = getStreamMaxSpotAgeSeconds();
     const now = Date.now();
 
     return spots.filter((spot) => {
@@ -737,10 +741,14 @@ function getRenderableMapSpots(spots) {
     });
 }
 
+function getStreamMaxSpotAgeSeconds() {
+    return (parseInt(document.getElementById('minutes')?.value || '15', 10) || 15) * 60;
+}
+
+// Retention for state.liveSpots: the map's Max Spot Age or the Conditions
+// time range, whichever is longer (the dock reads liveSpots directly).
 function getCurrentMaxSpotAgeSeconds() {
-    const streamMaxAge = (parseInt(document.getElementById('minutes')?.value || '15', 10) || 15) * 60;
-    const bandLabMaxAge = getBandLabLookbackMinutes() * 60;
-    return Math.max(streamMaxAge, bandLabMaxAge);
+    return Math.max(getStreamMaxSpotAgeSeconds(), getBandLabLookbackMinutes() * 60);
 }
 
 function applySoftPause() {
@@ -766,8 +774,17 @@ function resumeFromSoftPause() {
 
     if (pausedForSec > 0 && state.liveSpots.length > 0) {
         const maxAge = getCurrentMaxSpotAgeSeconds();
+        // The stream keeps delivering for a while after the tab hides, so
+        // spots received during the pause are not pausedForSec old. Re-derive
+        // each age from its own receive stamp; only unstamped spots get the
+        // blanket shift.
+        const nowMs = Date.now();
         state.liveSpots.forEach((s) => {
-            s.ageSeconds += pausedForSec;
+            if (Number.isFinite(s.__recvMs)) {
+                s.ageSeconds = Math.floor((s.__recvAge ?? 0) + (nowMs - s.__recvMs) / 1000);
+            } else {
+                s.ageSeconds += pausedForSec;
+            }
         });
         state.liveSpots = state.liveSpots.filter((s) => s.ageSeconds <= maxAge);
     }
@@ -1916,6 +1933,13 @@ function startLiveStream(preserveData = false) {
             }
         }
 
+        // A preserveData restart skips the teardown above, so drop the old
+        // marker here: re-creating it without removing it left orphans (one
+        // per restart, and on the previous square after a locator change).
+        if (state.qthLayer) {
+            map.removeLayer(state.qthLayer);
+            state.qthLayer = null;
+        }
         if (currentProjection() !== 'azimuthal') {
             if (qth.length === 4 && bounds) {
                 state.qthLayer = L.rectangle(bounds, { color: '#ff0000', weight: 3, fillOpacity: 0.1, interactive: false }).addTo(map);
@@ -2447,6 +2471,11 @@ function rebuildLiveSpotsFromRing() {
     const nowSec = Math.floor(nowMs / 1000);
     const windowSec = getCurrentMaxSpotAgeSeconds();
     const raw = sessionRing.slice(Math.max(0, nowSec - windowSec), nowSec);
+    // The ring never stores WSPR (sessionRing.push rejects it), but the stream
+    // stays open through the timeline (KTD-3), so liveSpots still holds the
+    // window's WSPR spots with their own receive stamps: carry them over, or
+    // every WSPR marker and count vanished on exit until new ones arrived.
+    const wsprKept = state.liveSpots.filter((s) => String(s?.sourceType || '').toLowerCase().trim() === 'wspr');
     state.liveSpots = raw.map((s) => {
         const ageSeconds = Math.max(0, nowSec - s.t);
         return {
@@ -2463,7 +2492,7 @@ function rebuildLiveSpotsFromRing() {
             __recvMs: nowMs,
             __recvAge: ageSeconds,
         };
-    });
+    }).concat(wsprKept);
 }
 
 async function startTimelineMode(rangeSeconds) {

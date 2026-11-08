@@ -238,11 +238,11 @@ func scanPropIntelWindowRef(history []MQTTMessage, qthSet []string, now, cutoff,
 		cell.spotCount++
 		bandsSeen[band] = struct{}{}
 		if m.TXPower > 0 {
-			cell.hasPower = true
 			effectiveSNR := float64(m.RP) + propIntelReferencePowerDbm - float64(m.TXPower)
-			if effectiveSNR > cell.bestBudgetSNR {
+			if !cell.hasPower || effectiveSNR > cell.bestBudgetSNR {
 				cell.bestBudgetSNR = effectiveSNR
 			}
+			cell.hasPower = true
 		}
 		if !cell.fromHere && matchedEnd {
 			cell.fromHere = true

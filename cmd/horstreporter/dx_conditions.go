@@ -1411,7 +1411,11 @@ func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, min
 		}
 		bandScore := clamp(rawScore*confidenceFactor, 0, 100)
 		bandConfidence := clamp(confidenceFactor*100.0, 0, 99)
-		status := classifyBandStatus(bandScore, q25, q75, quantileOK, acc.total)
+		// The baseline quantiles describe unshrunk scores, so compare against a
+		// score shrunk toward the baseline middle instead of toward 0: a thin
+		// sample then reads "about typical" (yellow) rather than "worse than
+		// typical" (red), and needs real support to reach either extreme.
+		status := classifyBandStatus(bandStatusScore(rawScore, bandScore, confidenceFactor, q25, q75, quantileOK), q25, q75, quantileOK, acc.total)
 		condition := legacyConditionFromStatus(status, bandScore)
 		mode := classifyMode(acc.ssbCount, acc.cwCount, acc.total)
 		direction := dominantDirection(acc.directionBins)
@@ -1533,6 +1537,18 @@ func roundFloats2(v []float64) []float64 {
 		out[i] = round2(x)
 	}
 	return out
+}
+
+// bandStatusScore is the score classifyBandStatus compares with the baseline
+// q25/q75: the raw score shrunk by the confidence factor toward the middle of
+// the baseline range rather than toward 0, since the quantiles themselves are
+// unshrunk. Without quantiles the status is grey anyway; keep bandScore.
+func bandStatusScore(rawScore, bandScore, confidenceFactor, q25, q75 float64, quantileOK bool) float64 {
+	if !quantileOK {
+		return bandScore
+	}
+	mid := (q25 + q75) / 2
+	return mid + (rawScore-mid)*clamp01(confidenceFactor)
 }
 
 func classifyBandStatus(score, q25, q75 float64, quantileOK bool, spots int) string {
@@ -2132,6 +2148,16 @@ func eventMatchesTargets(e dxObservedEvent, targets []string) bool {
 }
 
 func computeTrend(series []float64) (string, float64) {
+	// The newest bin is still filling: reporters upload in batches a minute
+	// or more after reception, and bins are keyed by reception time. Leave it
+	// out (and the oldest too, to keep the halves equal) so a flat band does
+	// not read as falling.
+	if len(series) >= 8 {
+		series = series[:len(series)-1]
+		if len(series)%2 == 1 {
+			series = series[1:]
+		}
+	}
 	if len(series) < 6 {
 		return "stable", 0
 	}

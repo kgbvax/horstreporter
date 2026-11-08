@@ -452,10 +452,14 @@ func (s *dxPostgresStore) PropRegionCalendarStats(ctx context.Context, sources [
 	// work_mem and took ~700 ms warm (2.3 s cold); this takes ~210 ms with
 	// identical results.
 	rows, err := s.pool.Query(ctx, `
+		-- Mean/stddev are over completed days only (today's slot may be
+		-- partial) and zero-filled: a day without a row is a day with 0 spots,
+		-- not a missing sample. first_day bounds the zero-fill to the days the
+		-- source has been ingesting (window over the grouped rows: cheap).
 		SELECT band, source, region, slot_of_day,
-		       AVG(spot_count)::double precision AS mean,
-		       COALESCE(stddev_samp(spot_count), 0)::double precision AS stddev,
-		       COUNT(*)::int AS sample_days,
+		       COALESCE(SUM(spot_count) FILTER (WHERE day_index < $3), 0)::double precision AS hist_sum,
+		       COALESCE(SUM(spot_count::double precision * spot_count) FILTER (WHERE day_index < $3), 0)::double precision AS hist_sq,
+		       (MIN(MIN(day_index)) OVER (PARTITION BY source))::bigint AS first_day,
 		       COALESCE(SUM(spot_count) FILTER (WHERE day_index = $3), 0)::bigint AS today
 		FROM prop_region_baseline_daily
 		WHERE day_index BETWEEN $1 AND $2
@@ -471,9 +475,13 @@ func (s *dxPostgresStore) PropRegionCalendarStats(ctx context.Context, sources [
 	out := make([]propRegionCalendarStatRow, 0, 8192)
 	for rows.Next() {
 		var r propRegionCalendarStatRow
-		if err := rows.Scan(&r.Band, &r.Source, &r.Region, &r.SlotOfDay, &r.Mean, &r.StdDev, &r.SampleDays, &r.Today); err != nil {
+		var histSum, histSq float64
+		var firstDay int64
+		if err := rows.Scan(&r.Band, &r.Source, &r.Region, &r.SlotOfDay, &histSum, &histSq, &firstDay, &r.Today); err != nil {
 			return nil, err
 		}
+		r.SampleDays = completedReferenceDays(firstDay, dayStart, today)
+		r.Mean, r.StdDev = zeroFilledDayStats(histSum, histSq, r.SampleDays)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -545,7 +553,7 @@ func (e *propBaselineEngine) RegionCalendarStats(ctx context.Context, daysBack i
 			if e.statsCache != nil {
 				return e.statsCache
 			}
-			rows = e.statsFromMemoryLocked(now)
+			rows = e.statsFromMemoryLocked(now, daysBack)
 		}
 		e.statsCache = rows
 		e.statsCacheAt = now
@@ -558,7 +566,7 @@ func (e *propBaselineEngine) RegionCalendarStats(ctx context.Context, daysBack i
 	if ttl > 0 && (now-e.statsCacheAt) < ttl && e.statsCache != nil {
 		return e.statsCache
 	}
-	rows := e.statsFromMemoryLocked(now)
+	rows := e.statsFromMemoryLocked(now, daysBack)
 	e.statsCache = rows
 	e.statsCacheAt = now
 	e.statsCacheErrAt = 0
@@ -616,39 +624,93 @@ func (e *propBaselineEngine) WarmStats() {
 	go e.RegionCalendarStats(context.Background(), propIntelRegionBaselineDaysBack, time.Now().Unix())
 }
 
-// statsFromMemoryLocked computes climatology stats from in-memory buckets.
+// completedReferenceDays is how many completed UTC days a climatology row
+// covers: from the later of the window start and the source's first ingested
+// day, up to yesterday. Today is excluded (its slot may still be filling).
+func completedReferenceDays(firstDay, dayStart, today int64) int {
+	from := dayStart
+	if firstDay > from {
+		from = firstDay
+	}
+	n := today - from
+	if n < 0 {
+		return 0
+	}
+	return int(n)
+}
+
+// zeroFilledDayStats is the mean and sample stddev of n daily counts whose
+// sum and sum of squares are given, days without a row counting as 0.
+func zeroFilledDayStats(sum, sumSq float64, n int) (mean, stddev float64) {
+	if n <= 0 {
+		return 0, 0
+	}
+	fn := float64(n)
+	mean = sum / fn
+	if n >= 2 {
+		v := (sumSq - fn*mean*mean) / (fn - 1)
+		if v > 0 {
+			stddev = math.Sqrt(v)
+		}
+	}
+	return mean, stddev
+}
+
+// statsFromMemoryLocked computes climatology stats from in-memory buckets,
+// with the same semantics as PropRegionCalendarStats: the last daysBack days,
+// completed days only, zero-filled from each source's first observed day.
 // Caller must hold e.mu.
-func (e *propBaselineEngine) statsFromMemoryLocked(now int64) []propRegionCalendarStatRow {
+func (e *propBaselineEngine) statsFromMemoryLocked(now int64, daysBack int) []propRegionCalendarStatRow {
 	if len(e.buckets) == 0 {
 		return nil
 	}
+	if daysBack <= 0 {
+		daysBack = propBaselineDefaultDaysBack
+	}
 	today := utcDayIndex(now)
+	dayStart := today - int64(daysBack-1)
+	firstDay := map[string]int64{}
+	for _, b := range e.buckets {
+		if b == nil {
+			continue
+		}
+		for d := range b.DayCounts {
+			if d < dayStart || d > today {
+				continue
+			}
+			if f, ok := firstDay[b.Source]; !ok || d < f {
+				firstDay[b.Source] = d
+			}
+		}
+	}
 	out := make([]propRegionCalendarStatRow, 0, len(e.buckets))
 	for _, b := range e.buckets {
 		if b == nil || len(b.DayCounts) == 0 {
 			continue
 		}
-		counts := make([]float64, 0, len(b.DayCounts))
+		var sum, sumSq float64
 		var todayCount int64
+		inWindow := false
 		for dayIdx, c := range b.DayCounts {
-			counts = append(counts, float64(c))
+			if dayIdx < dayStart || dayIdx > today {
+				continue
+			}
+			inWindow = true
 			if dayIdx == today {
 				todayCount = c
+				continue
 			}
+			sum += float64(c)
+			sumSq += float64(c) * float64(c)
 		}
-		meanVal := mean(counts)
-		var stddev float64
-		if len(counts) >= 2 {
-			var sumSqDiff float64
-			for _, c := range counts {
-				d := c - meanVal
-				sumSqDiff += d * d
-			}
-			stddev = math.Sqrt(sumSqDiff / float64(len(counts)-1))
+		if !inWindow {
+			continue
 		}
+		n := completedReferenceDays(firstDay[b.Source], dayStart, today)
+		meanVal, stddev := zeroFilledDayStats(sum, sumSq, n)
 		out = append(out, propRegionCalendarStatRow{
 			Band: b.Band, Source: b.Source, Region: b.Region, SlotOfDay: b.SlotOfDay,
-			Mean: meanVal, StdDev: stddev, Today: todayCount, SampleDays: len(counts),
+			Mean: meanVal, StdDev: stddev, Today: todayCount, SampleDays: n,
 		})
 	}
 	return out

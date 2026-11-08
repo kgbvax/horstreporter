@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"context"
 	"os"
 	"path/filepath"
@@ -81,8 +82,8 @@ func TestPropBaselineInMemStatsParityWithWSPR(t *testing.T) {
 		legacy.Observe(m)
 	}
 
-	uRows := unified.statsFromMemoryLocked(now)
-	lRows := legacy.regionCalendarStatsFromMemoryLocked(now)
+	uRows := unified.statsFromMemoryLocked(now, 0)
+	lRows := legacy.regionCalendarStatsFromMemoryLocked(now, 0)
 
 	slot := utcSlotOfDay(day0)
 	find := func(rows []propRegionCalendarStatRow) *propRegionCalendarStatRow {
@@ -307,13 +308,15 @@ func TestPropBaselineRegionCalendarStatsFromMemorySyntheticSeries(t *testing.T) 
 	if row == nil {
 		t.Fatalf("no 20m/wspr/EU/slot=%d row in %+v", slot, rows)
 	}
-	if row.SampleDays != 3 {
-		t.Fatalf("sample days = %d, want 3", row.SampleDays)
+	// Completed days only: today's partial slot (2) is reported as Today
+	// but stays out of the mean/stddev of the two reference days (5, 9).
+	if row.SampleDays != 2 {
+		t.Fatalf("sample days = %d, want 2", row.SampleDays)
 	}
 	if row.Today != 2 {
 		t.Fatalf("today = %d, want 2", row.Today)
 	}
-	wantMean := 16.0 / 3.0
+	wantMean := 7.0
 	if row.Mean < wantMean-1e-6 || row.Mean > wantMean+1e-6 {
 		t.Fatalf("mean = %v, want %v", row.Mean, wantMean)
 	}
@@ -405,4 +408,33 @@ func TestPropBaselineFlushLoopGuards(t *testing.T) {
 	if err := e.Save(); err != nil {
 		t.Fatalf("Save after loop exit: %v", err)
 	}
+}
+
+// Days without a row inside the source's ingest span count as 0, so a cell
+// that is only busy on some days gets the mean of all days, not of its
+// active days.
+func TestPropBaselineStatsZeroFillMissingDays(t *testing.T) {
+	e := newPropBaselineEngine("", "")
+	now := int64(1786224360)
+	slot := utcSlotOfDay(now)
+	// Day -3: 6 spots, day -2: none, day -1: 9 spots.
+	for i := 0; i < 6; i++ {
+		e.Observe(propSpot(now-3*86400, "wspr", "20m", "RX", "JO31ab", "TX", "FN31ab"))
+	}
+	for i := 0; i < 9; i++ {
+		e.Observe(propSpot(now-86400, "wspr", "20m", "RX", "JO31ab", "TX", "FN31ab"))
+	}
+	e.mu.Lock()
+	rows := e.statsFromMemoryLocked(now, 30)
+	e.mu.Unlock()
+	for _, r := range rows {
+		if r.Band != "20m" || r.Region != "EU" || r.SlotOfDay != slot {
+			continue
+		}
+		if r.SampleDays != 3 || math.Abs(r.Mean-5) > 1e-9 || math.Abs(r.StdDev-math.Sqrt(21)) > 1e-9 {
+			t.Fatalf("got days=%d mean=%v sd=%v, want 3, 5, sqrt(21)", r.SampleDays, r.Mean, r.StdDev)
+		}
+		return
+	}
+	t.Fatalf("no 20m/EU row in %+v", rows)
 }
