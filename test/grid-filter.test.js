@@ -11,7 +11,7 @@ vi.mock('../static/perf.js', () => ({
 // Mock map.js so renderers.js loads without a real Leaflet map.
 vi.mock('../static/map.js', () => ({ map: {} }));
 
-import { aggregateGridSquares } from '../static/renderers.js';
+import { aggregateGridSquares, filterWsprMarkerSpots } from '../static/renderers.js';
 import { regionForLocatorCached, regionForLocator } from '../static/utils.js';
 import { state } from '../static/state.js';
 
@@ -152,5 +152,21 @@ describe('state drill-down fields', () => {
     it('defaults to empty strings (no drill-down)', () => {
         expect(state.drillDownBand).toBe('');
         expect(state.drillDownRegion).toBe('');
+    });
+});
+describe('filterWsprMarkerSpots', () => {
+    const wspr = (band, locator, snr = -25) => ({ band, locator, snr, sourceType: 'wspr' });
+    const spots = [wspr('20m', 'FN31'), wspr('40m', 'FN31'), wspr('20m', 'JO31')];
+
+    it('drops disabled bands and follows band focus, but not the FT8 SNR floor', () => {
+        const base = ctx({ minSnrMode: 'ssb', ssbMinDb: 0 });
+        expect(filterWsprMarkerSpots(spots, { ...base, enabledBands: new Set(['20m']) })).toHaveLength(2);
+        expect(filterWsprMarkerSpots(spots, { ...base, selectedBand: '40m' })).toEqual([spots[1]]);
+    });
+
+    it('follows the matrix drill-down band x region', () => {
+        const region = regionForLocator('FN31');
+        const out = filterWsprMarkerSpots(spots, ctx({ filterBand: '20m', filterRegion: region }));
+        expect(out).toEqual([spots[0]]);
     });
 });

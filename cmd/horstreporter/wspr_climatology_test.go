@@ -90,11 +90,12 @@ func TestWsprClimatologyInMemoryStats(t *testing.T) {
 	// The in-memory fallback computes mean from aggregated count / span.
 	e := newWsprClimatologyEngine("")
 
-	// Seed 10 spots over 2 hours, all in the same (20m, EU, slot=42) bucket.
+	// Seed 10 spots yesterday, all in the same (20m, EU, slot=42) bucket
+	// (today's partial slot stays out of the mean).
 	now := int64(1786224360)
 	for i := 0; i < 10; i++ {
 		e.Observe(MQTTMessage{
-			RP: 5, T: now + int64(i*60), SC: "DL1ABC", SL: "JO31",
+			RP: 5, T: now - 86400 + int64(i*60), SC: "DL1ABC", SL: "JO31",
 			RC: "KF5XYZ", RL: "JO62", B: "20m", MD: "WSPR",
 			Source: "wspr", TXPower: 20000,
 		})
@@ -348,13 +349,15 @@ func TestWsprRegionCalendarStatsFromMemorySyntheticSeries(t *testing.T) {
 	if row == nil {
 		t.Fatalf("no 20m/EU/slot=%d row in %+v", slot, rows)
 	}
-	if row.SampleDays != 3 {
-		t.Fatalf("sample days = %d, want 3", row.SampleDays)
+	// Completed days only: today's partial slot (2) is reported as Today
+	// but stays out of the mean/stddev of the two reference days (5, 9).
+	if row.SampleDays != 2 {
+		t.Fatalf("sample days = %d, want 2", row.SampleDays)
 	}
 	if row.Today != 2 {
 		t.Fatalf("today = %d, want 2", row.Today)
 	}
-	wantMean := 16.0 / 3.0
+	wantMean := 7.0
 	if row.Mean < wantMean-1e-6 || row.Mean > wantMean+1e-6 {
 		t.Fatalf("mean = %v, want %v", row.Mean, wantMean)
 	}

@@ -72,6 +72,20 @@ func TestWsprNowcastCWOnly(t *testing.T) {
 	}
 }
 
+// TestWsprNowcastCWClosedBelowFloor: a powered path whose effective SNR is
+// below the CW floor (SNR -30, 5W=37dBm → -30+13 = -17 dB < -15) must not
+// read CW-open — bestBudgetSNR must be seeded from the spot, not left at 0.
+func TestWsprNowcastCWClosedBelowFloor(t *testing.T) {
+	e := &propIntelEngine{}
+	now := int64(1700000000)
+	spot := makeWSPRSpot(now, "30m", "JO50", "JO31", -30, 37)
+	resp := e.Evaluate("JO31", false, 15, -15, []MQTTMessage{spot}, now, 2.0)
+	cell := findCell(t, resp, "30m", "EU")
+	if cell.CWOpen || cell.SSBOpen {
+		t.Errorf("CWOpen=%v SSBOpen=%v, want both false for effective SNR -17 dB", cell.CWOpen, cell.SSBOpen)
+	}
+}
+
 // TestWsprNowcastMissingPower verifies AE3: TXPower=0 → cell exists but
 // SSB/CW flags are false.
 func TestWsprNowcastMissingPower(t *testing.T) {

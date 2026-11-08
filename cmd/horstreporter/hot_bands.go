@@ -302,7 +302,7 @@ func classifyHotBand(b dxBandCondition, trustedBaseline bool, liveSpanMin float6
 	baselineScoped := b.ClusterBaselineUsed
 	switch {
 	case baselineScoped && trustedBaseline &&
-		b.BaselineActivity > 0 && b.BaselineActivity <= hotBandsSurpriseBaselineMx &&
+		baselineRate > 0 && baselineRate <= hotBandsSurpriseBaselineMx &&
 		ratio >= hotBandsSurpriseRatio &&
 		b.P90DistanceKm >= hotBandsSurpriseMinP90Km &&
 		(hasRegionalRatio || poissonUpperTail(b.CurrentLinks, baselineRate*liveSpanMin) < hotBandsSurprisePoissonP):
@@ -371,7 +371,13 @@ func poissonUpperTail(k int, lambda float64) float64 {
 // opening that has been live for 30 min returns 3 etc.
 func sustainedRecentBins(sparkline []float64, floor float64) int {
 	count := 0
-	for i := len(sparkline) - 1; i >= 0; i-- {
+	start := len(sparkline) - 1
+	// The newest bin is still filling (batched uploads, see computeTrend): a
+	// dip there is not the end of a run, so start from the bin before it.
+	if start > 0 && sparkline[start] < floor {
+		start--
+	}
+	for i := start; i >= 0; i-- {
 		if sparkline[i] >= floor {
 			count++
 			continue

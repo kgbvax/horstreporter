@@ -394,6 +394,13 @@ func TestClassifyHotBandSurpriseGates(t *testing.T) {
 		{"rounded baseline rate alone is not significant", func(b *dxBandCondition) {
 			b.BaselineActivity = 0.04
 		}, true, ""},
+		// A usual rate under 0.005/min serialises as 0.00 but is still a
+		// baseline — the quietest bands are the ones a rare opening is for.
+		{"sub-0.005 baseline that rounds to 0 still qualifies", func(b *dxBandCondition) {
+			significant(b)
+			b.BaselineActivity = 0
+			b.baselineRate = 0.003
+		}, true, "surprise"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

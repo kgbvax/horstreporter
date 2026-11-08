@@ -99,6 +99,7 @@ const runtime = {
     enabled: false,
     pollTimer: null,
     abortController: null,
+    inFlightKey: '',
     cache: null,         // last /api/prop_intel/v2 payload
     cacheKey: '',
     lastFetchedAt: 0,
@@ -204,6 +205,7 @@ function stopPolling() {
     if (runtime.abortController) {
         runtime.abortController.abort();
         runtime.abortController = null;
+        runtime.inFlightKey = '';
     }
     clearTimeout(runtime.detailRetryTimer);
     runtime.detailRetryTimer = null;
@@ -257,9 +259,18 @@ async function pollMatrix(force) {
         return;
     }
 
+    // pollMatrix(false) runs after every map render: on a busy feed that is
+    // more often than the request takes, so aborting an in-flight request for
+    // the same key starved the matrix (no response ever landed). Let it
+    // finish; abort only for a different key or a forced refresh.
+    if (runtime.abortController && !force && runtime.inFlightKey === key) {
+        if (runtime.cache) renderMatrix();
+        return;
+    }
     if (runtime.abortController) runtime.abortController.abort();
     const controller = new AbortController();
     runtime.abortController = controller;
+    runtime.inFlightKey = key;
 
     // From-here-only by design, anchored at the QTH with its surroundings
     // block — same request shape v1 used, now multi-source with the chip
@@ -302,6 +313,7 @@ async function pollMatrix(force) {
     } finally {
         if (runtime.abortController === controller) {
             runtime.abortController = null;
+            runtime.inFlightKey = '';
         }
     }
 }

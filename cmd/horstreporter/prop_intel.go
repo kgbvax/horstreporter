@@ -490,11 +490,13 @@ func scanPropIntelWindow(history []MQTTMessage, qthSet []string, now, cutoff, mi
 		// A 20W beacon (43 dBm) at SNR +5 dB has effective SNR = 5 + (50-43) = +12 dB
 		// (the path would carry a 100W signal 7 dB stronger than the beacon).
 		if m.TXPower > 0 {
-			cell.hasPower = true
 			effectiveSNR := float64(m.RP) + propIntelReferencePowerDbm - float64(m.TXPower)
-			if effectiveSNR > cell.bestBudgetSNR {
+			// bestBudgetSNR starts at 0: seed it from the first powered spot so a
+			// cell whose paths are all below 0 dB effective is not read as open.
+			if !cell.hasPower || effectiveSNR > cell.bestBudgetSNR {
 				cell.bestBudgetSNR = effectiveSNR
 			}
+			cell.hasPower = true
 		}
 
 		// From-here: check if the operator's QTH is one end of this path.

@@ -1200,6 +1200,11 @@ func (s *dxPostgresStore) flushRawSpots(ctx context.Context) error {
 	s.mu.Unlock()
 
 	var minSpotTime int64
+	// Only plausible live timestamps move baseline_first_observed_at: one
+	// spot from a reporter with a wrong clock (say 2016) would otherwise
+	// stretch baseline_history_minutes to years and deflate every baseline
+	// rate for good (the value only ever goes down, via LEAST).
+	flushNow := time.Now().Unix()
 	for start := 0; start < len(rows); start += rawSpotInsertChunkSize {
 		end := start + rawSpotInsertChunkSize
 		if end > len(rows) {
@@ -1207,7 +1212,8 @@ func (s *dxPostgresStore) flushRawSpots(ctx context.Context) error {
 		}
 		chunk := rows[start:end]
 		for _, row := range chunk {
-			if row.m.T > 0 && (minSpotTime == 0 || row.m.T < minSpotTime) {
+			if row.m.T > 0 && almanacRegionTimestampAccepted(row.m.T, flushNow) &&
+				(minSpotTime == 0 || row.m.T < minSpotTime) {
 				minSpotTime = row.m.T
 			}
 		}

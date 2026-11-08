@@ -48,6 +48,18 @@ describe('bandActivity (band rail counts + sparkline bins)', () => {
         const spots = [{ band: '20m', snr: -20, t: 1000 }, { band: '20m', snr: 5, t: 1000 }];
         expect(bandActivity(spots, { ...ctx, minSnrMode: 'ssb' }).get('20m').count).toBe(1);
     });
+
+    it('tallies the -15 dB population the normal rate is counted at', () => {
+        const spots = [-20, -10, -5, 2, 5].map((snr) => ({ band: '20m', snr, t: 1000 }));
+        const a = bandActivity(spots, { ...ctx, minSnrMode: 'ssb' }).get('20m');
+        expect(a.count).toBe(2);
+        expect(a.baselineFloorCount).toBe(4);
+    });
+
+    it('leaves out bands whose reports all fail the filter', () => {
+        const spots = [{ band: '20m', snr: -10, t: 1000 }];
+        expect(bandActivity(spots, { ...ctx, minSnrMode: 'ssb' }).has('20m')).toBe(false);
+    });
 });
 
 function row(band, checked) {
@@ -135,6 +147,16 @@ describe('band rail sparkline normal line', () => {
         expect(Number(line.getAttribute('y1'))).toBeCloseTo(1, 1);
         expect(line.getAttribute('y2')).toBe(line.getAttribute('y1'));
         expect(normalOf('17m').hasAttribute('data-off')).toBe(true);
+    });
+
+    it('puts the normal on the Min SNR filter the live line uses', () => {
+        // 8 reports at >= -15 dB, 4 pass SSB 0 dB (share 0.5). Busiest smoothed
+        // bin = 2, so a 1/min normal at the -15 dB floor is drawn at 0.5/bin:
+        // y = 15 - sqrt(0.5 / 2) * 14 = 8 (unscaled it would sit at ~5.1).
+        const mixed = [-10, -10, -10, -10, 5, 5, 5, 5].map((snr) => ({ band: '20m', snr, t: 1000 }));
+        setBandNormalRateProvider((band) => (band === '20m' ? 1 : null));
+        updateBandLabels(mixed, { minSnrMode: 'ssb', ssbMinDb: 0, cwMinDb: -15, enabledBands: new Set(['20m', '17m']) });
+        expect(Number(normalOf('20m').getAttribute('y1'))).toBeCloseTo(8, 1);
     });
 
     it('refreshBandLabels redraws from the last inputs when only the normal changed', () => {

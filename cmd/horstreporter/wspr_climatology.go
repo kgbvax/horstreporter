@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
-	"math"
 	"os"
 	"strings"
 	"sync"
@@ -381,10 +380,12 @@ func (s *dxPostgresStore) WsprRegionCalendarStats(ctx context.Context, daysBack 
 	// SUM would be a no-op: aggregate the table directly (~150 ms instead of
 	// ~580 ms, identical results).
 	rows, err := s.pool.Query(ctx, `
+		-- Completed days only, zero-filled from the first ingested day (see
+		-- PropRegionCalendarStats).
 		SELECT band, region, slot_of_day,
-		       AVG(spot_count)::double precision AS mean,
-		       COALESCE(stddev_samp(spot_count), 0)::double precision AS stddev,
-		       COUNT(*)::int AS sample_days,
+		       COALESCE(SUM(spot_count) FILTER (WHERE day_index < $3), 0)::double precision AS hist_sum,
+		       COALESCE(SUM(spot_count::double precision * spot_count) FILTER (WHERE day_index < $3), 0)::double precision AS hist_sq,
+		       (MIN(MIN(day_index)) OVER ())::bigint AS first_day,
 		       COALESCE(SUM(spot_count) FILTER (WHERE day_index = $3), 0)::bigint AS today
 		FROM wspr_region_baseline_daily
 		WHERE day_index BETWEEN $1 AND $2
@@ -399,9 +400,13 @@ func (s *dxPostgresStore) WsprRegionCalendarStats(ctx context.Context, daysBack 
 	out := make([]wsprRegionCalendarStatRow, 0, 4096)
 	for rows.Next() {
 		var r wsprRegionCalendarStatRow
-		if err := rows.Scan(&r.Band, &r.Region, &r.SlotOfDay, &r.Mean, &r.StdDev, &r.SampleDays, &r.Today); err != nil {
+		var histSum, histSq float64
+		var firstDay int64
+		if err := rows.Scan(&r.Band, &r.Region, &r.SlotOfDay, &histSum, &histSq, &firstDay, &r.Today); err != nil {
 			return nil, err
 		}
+		r.SampleDays = completedReferenceDays(firstDay, dayStart, today)
+		r.Mean, r.StdDev = zeroFilledDayStats(histSum, histSq, r.SampleDays)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -473,7 +478,7 @@ func (e *WsprClimatologyEngine) RegionCalendarStats(ctx context.Context, daysBac
 			if e.statsCache != nil {
 				return e.statsCache
 			}
-			rows = e.regionCalendarStatsFromMemoryLocked(now)
+			rows = e.regionCalendarStatsFromMemoryLocked(now, daysBack)
 		}
 		e.statsCache = rows
 		e.statsCacheAt = now
@@ -486,7 +491,7 @@ func (e *WsprClimatologyEngine) RegionCalendarStats(ctx context.Context, daysBac
 	if ttl > 0 && (now-e.statsCacheAt) < ttl && e.statsCache != nil {
 		return e.statsCache
 	}
-	rows := e.regionCalendarStatsFromMemoryLocked(now)
+	rows := e.regionCalendarStatsFromMemoryLocked(now, daysBack)
 	e.statsCache = rows
 	e.statsCacheAt = now
 	e.statsCacheErrAt = 0
@@ -545,45 +550,65 @@ func (e *WsprClimatologyEngine) WarmStats() {
 }
 
 // regionCalendarStatsFromMemory computes climatology stats from the in-memory
-// buckets. Uses per-day-index counts (DayCounts) to compute Mean and StdDev.
-// Caller must hold e.mu (RLock or Lock).
+// buckets over the default window.
 func (e *WsprClimatologyEngine) regionCalendarStatsFromMemory(now int64) []wsprRegionCalendarStatRow {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.regionCalendarStatsFromMemoryLocked(now)
+	return e.regionCalendarStatsFromMemoryLocked(now, wsprClimatologyDefaultDaysBack)
 }
 
-// regionCalendarStatsFromMemoryLocked is the lock-free variant. Caller must
-// hold e.mu (RLock or Lock).
-func (e *WsprClimatologyEngine) regionCalendarStatsFromMemoryLocked(now int64) []wsprRegionCalendarStatRow {
+// regionCalendarStatsFromMemoryLocked is the lock-free variant, with the same
+// semantics as WsprRegionCalendarStats: the last daysBack days, completed days
+// only, zero-filled from the first observed day. Caller must hold e.mu.
+func (e *WsprClimatologyEngine) regionCalendarStatsFromMemoryLocked(now int64, daysBack int) []wsprRegionCalendarStatRow {
 	if len(e.buckets) == 0 {
 		return nil
 	}
+	if daysBack <= 0 {
+		daysBack = wsprClimatologyDefaultDaysBack
+	}
 	today := utcDayIndex(now)
+	dayStart := today - int64(daysBack-1)
+	firstDay := int64(0)
+	haveFirst := false
+	for _, b := range e.buckets {
+		if b == nil {
+			continue
+		}
+		for d := range b.DayCounts {
+			if d >= dayStart && d <= today && (!haveFirst || d < firstDay) {
+				firstDay, haveFirst = d, true
+			}
+		}
+	}
+	n := 0
+	if haveFirst {
+		n = completedReferenceDays(firstDay, dayStart, today)
+	}
 	out := make([]wsprRegionCalendarStatRow, 0, len(e.buckets))
 	for _, b := range e.buckets {
 		if b == nil || len(b.DayCounts) == 0 {
 			continue
 		}
-		// Compute mean and sample stddev from per-day counts.
-		counts := make([]float64, 0, len(b.DayCounts))
+		var sum, sumSq float64
 		var todayCount int64
+		inWindow := false
 		for dayIdx, c := range b.DayCounts {
-			counts = append(counts, float64(c))
+			if dayIdx < dayStart || dayIdx > today {
+				continue
+			}
+			inWindow = true
 			if dayIdx == today {
 				todayCount = c
+				continue
 			}
+			sum += float64(c)
+			sumSq += float64(c) * float64(c)
 		}
-		meanVal := mean(counts)
-		var stddev float64
-		if len(counts) >= 2 {
-			var sumSqDiff float64
-			for _, c := range counts {
-				d := c - meanVal
-				sumSqDiff += d * d
-			}
-			stddev = math.Sqrt(sumSqDiff / float64(len(counts)-1))
+		if !inWindow {
+			continue
 		}
+		meanVal, stddev := zeroFilledDayStats(sum, sumSq, n)
 		out = append(out, wsprRegionCalendarStatRow{
 			Band:       b.Band,
 			Region:     b.Region,
@@ -591,7 +616,7 @@ func (e *WsprClimatologyEngine) regionCalendarStatsFromMemoryLocked(now int64) [
 			Mean:       meanVal,
 			StdDev:     stddev,
 			Today:      todayCount,
-			SampleDays: len(counts),
+			SampleDays: n,
 		})
 	}
 	return out
