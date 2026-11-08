@@ -67,13 +67,12 @@ func AcceptsGzip(r *http.Request) bool {
 
 // Middleware compresses compressible responses of at least gzipMinSize
 // for clients that accept gzip. It never touches the SSE stream (which does
-// its own per-flush gzip), the reverse-proxied pathscope mount, HEAD or Range
+// its own per-flush gzip), HEAD or Range
 // requests, upgrades, or responses that already carry a Content-Encoding
 // (e.g. the pre-gzipped /api/history bundles).
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodHead || r.URL.Path == "/api/stream" ||
-			strings.HasPrefix(r.URL.Path, "/pathscope/") ||
 			r.Header.Get("Range") != "" || r.Header.Get("Upgrade") != "" ||
 			!AcceptsGzip(r) {
 			next.ServeHTTP(w, r)

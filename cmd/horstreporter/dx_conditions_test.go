@@ -244,38 +244,3 @@ func TestBaselineClusterKeyFromBase(t *testing.T) {
 		t.Errorf("distinct anchors collapsed to the same key %q", a)
 	}
 }
-
-// TestNumBuckets pins the baseline bucket accounting: one global bucket per
-// (band, slot, distance, snr) observation plus one cluster bucket per locator
-// end (JN68 for the German end, EM86 for the US end here).
-func TestNumBuckets(t *testing.T) {
-	e := newDxBaselineEngine("")
-	if got := e.NumBuckets(); got != 0 {
-		t.Fatalf("fresh engine NumBuckets = %d, want 0", got)
-	}
-
-	now := int64(1700000000)
-	base := MQTTMessage{SC: "DL1ABC", RC: "W1XYZ", SL: "JO62QM", RL: "FN31AB", T: now, MD: "FT8"}
-
-	m20 := base
-	m20.B, m20.RP = "20m", -10
-	e.Observe(m20)
-	if got := e.NumBuckets(); got != 3 { // 1 global + 2 cluster anchors (JN68, EM86)
-		t.Fatalf("after first spot NumBuckets = %d, want 3", got)
-	}
-
-	m40 := base
-	m40.B, m40.RP = "40m", -30
-	e.Observe(m40)
-	if got := e.NumBuckets(); got != 6 {
-		t.Fatalf("after second band NumBuckets = %d, want 6", got)
-	}
-
-	// A same-band message with a different SNR tier opens new buckets.
-	m20b := base
-	m20b.B, m20b.RP = "20m", 5
-	e.Observe(m20b)
-	if got := e.NumBuckets(); got != 9 {
-		t.Fatalf("after higher SNR tier NumBuckets = %d, want 9", got)
-	}
-}

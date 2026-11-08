@@ -3,7 +3,6 @@ module horstreporter
 go 1.25.0
 
 require (
-	dxlens v0.0.0-00010101000000-000000000000
 	fyne.io/systray v1.11.0
 	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
@@ -24,5 +23,3 @@ require (
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 )
-
-replace dxlens => ../dxlens

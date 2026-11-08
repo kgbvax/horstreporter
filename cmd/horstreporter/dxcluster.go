@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"horstreporter/internal/maidenhead"
-	"horstreporter/internal/qrzlookup"
 )
 
 type dxClusterAccountingState struct {
@@ -44,7 +43,6 @@ type dxClusterConfig struct {
 	Verbose        bool
 	Username       string
 	Password       string
-	Resolver       qrzlookup.Resolver
 }
 
 type dxClusterSpot struct {
@@ -169,7 +167,7 @@ func runDXClusterSession(endpoint string, cfg dxClusterConfig) error {
 		}
 		spotsParsed++
 		dxClusterAccounting.parsedSpots.Add(1)
-		handleDXClusterSpot(spot, cfg.Resolver)
+		handleDXClusterSpot(spot)
 	}
 	if err := scanner.Err(); err != nil {
 		if cfg.Verbose {
@@ -286,32 +284,10 @@ func parseDXClusterSpot(line string, observedAt int64) (dxClusterSpot, bool) {
 	}, true
 }
 
-func handleDXClusterSpot(spot dxClusterSpot, resolver qrzlookup.Resolver) {
+func handleDXClusterSpot(spot dxClusterSpot) {
 	band := bandFromFrequencyKHz(spot.FrequencyKHz)
 	spotterLocator := ""
 	dxLocator := ""
-
-	if resolver != nil {
-		if spotterLocator == "" {
-			if loc, err := resolver.LookupLocator(spot.Spotter); err == nil {
-				spotterLocator = strings.ToUpper(strings.TrimSpace(loc))
-				if spotterLocator == "" && logLevel == "DEBUG" {
-					logDebug("DX cluster QRZ lookup returned no locator for spotter %q", spot.Spotter)
-				}
-			} else if logLevel == "DEBUG" {
-				logDebug("DX cluster QRZ lookup failed for spotter %q: %v", spot.Spotter, err)
-			}
-		}
-
-		if info, err := resolver.LookupInfo(spot.DXCall); err == nil {
-			dxLocator = strings.ToUpper(strings.TrimSpace(info.Locator))
-			if dxLocator == "" && logLevel == "DEBUG" {
-				logDebug("DX cluster QRZ lookup returned no locator for DX call %q", spot.DXCall)
-			}
-		} else if logLevel == "DEBUG" {
-			logDebug("DX cluster QRZ lookup failed for DX call %q: %v", spot.DXCall, err)
-		}
-	}
 
 	m := MQTTMessage{
 		RP:     0,

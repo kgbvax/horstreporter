@@ -7,20 +7,7 @@ import (
 	"time"
 
 	"horstreporter/internal/maidenhead"
-	"horstreporter/internal/qrzlookup"
 )
-
-// countingResolver wraps stubResolver and counts LookupInfo calls so the
-// cache can be shown to keep repeat requests off QRZ.
-type countingResolver struct {
-	stubResolver
-	calls int
-}
-
-func (c *countingResolver) LookupInfo(callsign string) (qrzlookup.Info, error) {
-	c.calls++
-	return c.stubResolver.LookupInfo(callsign)
-}
 
 // --- resolveAlmanacArea ---
 
@@ -34,7 +21,7 @@ func TestResolveAlmanacAreaLocator(t *testing.T) {
 		{"RR99xx", "RR99"},
 	}
 	for _, c := range cases {
-		area, err := resolveAlmanacAreaWith(c.in, nil, nil)
+		area, err := resolveAlmanacAreaWith(c.in, nil)
 		if err != nil {
 			t.Fatalf("resolveAlmanacAreaWith(%q) err = %v", c.in, err)
 		}
@@ -50,7 +37,7 @@ func TestResolveAlmanacAreaLocator(t *testing.T) {
 func TestResolveAlmanacAreaValidation(t *testing.T) {
 	ctyRes := testCtyResolver(t)
 	for _, in := range []string{"", "   ", "XX99", "JS32", "SA00", "JO32ZZ", "JO32AY", "JO32A", "JO32AB1", "JO32ABCD", "DL1/*", "!!", "12", "ABC", "12345"} {
-		_, err := resolveAlmanacAreaWith(in, nil, ctyRes)
+		_, err := resolveAlmanacAreaWith(in, ctyRes)
 		if err == nil {
 			t.Errorf("resolveAlmanacAreaWith(%q) expected validation error", in)
 			continue
@@ -65,7 +52,7 @@ func TestResolveAlmanacAreaNearLocatorIsCallsign(t *testing.T) {
 	// Callsign-shaped tokens without a locator prefix go through the callsign
 	// path; unknown ones are unresolved, never mis-parsed as locators.
 	for _, in := range []string{"JO3A", "DL1ABC"} {
-		if _, err := resolveAlmanacAreaWith(in, nil, nil); !errors.Is(err, errAlmanacUnresolved) {
+		if _, err := resolveAlmanacAreaWith(in, nil); !errors.Is(err, errAlmanacUnresolved) {
 			t.Errorf("resolveAlmanacAreaWith(%q) err = %v, want errAlmanacUnresolved", in, err)
 		}
 	}
@@ -73,18 +60,9 @@ func TestResolveAlmanacAreaNearLocatorIsCallsign(t *testing.T) {
 
 func TestResolveAlmanacAreaCallsign(t *testing.T) {
 	ctyRes := testCtyResolver(t)
-	qrz := &stubResolver{infos: map[string]qrzlookup.Info{"DL1ABC": {Locator: "JO32"}}}
 
-	area, err := resolveAlmanacAreaWith("dl1abc", qrz, ctyRes)
-	if err != nil {
-		t.Fatalf("qrz path err = %v", err)
-	}
-	if area.Grid4 != "JO32" || area.Source != qthSourceQRZ || area.Approximate() {
-		t.Errorf("qrz path = %+v, want JO32/qrz/not approximate", area)
-	}
-
-	// QRZ disabled → DXCC centroid, flagged approximate (AE4).
-	area, err = resolveAlmanacAreaWith("DL1ABC", nil, ctyRes)
+	// Callsign → DXCC centroid, flagged approximate (AE4).
+	area, err := resolveAlmanacAreaWith("DL1ABC", ctyRes)
 	if err != nil {
 		t.Fatalf("dxcc path err = %v", err)
 	}
@@ -93,65 +71,58 @@ func TestResolveAlmanacAreaCallsign(t *testing.T) {
 		t.Errorf("dxcc path = %+v, want %s/dxcc/approximate", area, want)
 	}
 
-	// QRZ miss → DXCC.
-	area, err = resolveAlmanacAreaWith("DK9ZZ", qrz, ctyRes)
-	if err != nil || area.Source != qthSourceDXCC {
-		t.Errorf("qrz miss => %+v, %v; want dxcc", area, err)
-	}
-
 	// Unresolvable callsign → error, not a validation error.
-	_, err = resolveAlmanacAreaWith("K1ABC", qrz, ctyRes)
+	_, err = resolveAlmanacAreaWith("K1ABC", ctyRes)
 	if err == nil || !errors.Is(err, errAlmanacUnresolved) {
 		t.Errorf("unknown callsign err = %v, want errAlmanacUnresolved", err)
 	}
 	// Zero-centroid entity is not a location.
-	if _, err = resolveAlmanacAreaWith("ZZ1ZZ", nil, ctyRes); !errors.Is(err, errAlmanacUnresolved) {
+	if _, err = resolveAlmanacAreaWith("ZZ1ZZ", ctyRes); !errors.Is(err, errAlmanacUnresolved) {
 		t.Errorf("zero centroid err = %v, want errAlmanacUnresolved", err)
 	}
 }
 
 func TestAlmanacAreaCacheTTL(t *testing.T) {
 	ctyRes := testCtyResolver(t)
-	qrz := &countingResolver{stubResolver: stubResolver{infos: map[string]qrzlookup.Info{"DL1ABC": {Locator: "JO32"}}}}
 	now := time.Unix(1_800_000_000, 0)
 	c := newAlmanacAreaCache()
 	c.now = func() time.Time { return now }
 
 	for i := 0; i < 3; i++ {
-		area, err := c.resolve("DL1ABC", qrz, ctyRes)
-		if err != nil || area.Grid4 != "JO32" {
+		area, err := c.resolve("DL1ABC", ctyRes)
+		if err != nil || area.Source != qthSourceDXCC {
 			t.Fatalf("resolve #%d = %+v, %v", i, area, err)
 		}
 	}
-	if qrz.calls != 1 {
-		t.Errorf("QRZ calls = %d after 3 cached resolves, want 1", qrz.calls)
-	}
 	// Normalized key: lowercase hits the same entry.
-	if _, err := c.resolve(" dl1abc", qrz, ctyRes); err != nil || qrz.calls != 1 {
-		t.Errorf("normalized key missed cache: calls=%d err=%v", qrz.calls, err)
-	}
-	now = now.Add(almanacAreaCacheTTL + time.Second)
-	if _, err := c.resolve("DL1ABC", qrz, ctyRes); err != nil {
+	c.mu.Lock()
+	cached := len(c.entries)
+	c.mu.Unlock()
+	if _, err := c.resolve(" dl1abc", ctyRes); err != nil {
 		t.Fatal(err)
 	}
-	if qrz.calls != 2 {
-		t.Errorf("QRZ calls = %d after TTL expiry, want 2", qrz.calls)
+	c.mu.Lock()
+	if len(c.entries) != cached {
+		t.Errorf("normalized key missed cache: entries %d -> %d", cached, len(c.entries))
+	}
+	c.mu.Unlock()
+
+	// Entries expire after the TTL.
+	now = now.Add(almanacAreaCacheTTL + time.Second)
+	if _, err := c.resolve("DL1ABC", ctyRes); err != nil {
+		t.Fatal(err)
 	}
 
-	// Unresolvable callsigns are negatively cached (no QRZ hammering).
-	before := qrz.calls
+	// Unresolvable callsigns are negatively cached.
 	for i := 0; i < 3; i++ {
-		if _, err := c.resolve("K1ABC", qrz, ctyRes); !errors.Is(err, errAlmanacUnresolved) {
+		if _, err := c.resolve("K1ABC", ctyRes); !errors.Is(err, errAlmanacUnresolved) {
 			t.Fatalf("K1ABC err = %v", err)
 		}
-	}
-	if qrz.calls != before+1 {
-		t.Errorf("negative cache: QRZ calls grew by %d, want 1", qrz.calls-before)
 	}
 
 	// Engine wrapper uses the engine's resolvers.
 	e := newDxBaselineEngine("")
-	e.SetResolvers(nil, ctyRes)
+	e.SetCtyResolver(ctyRes)
 	area, err := e.resolveAlmanacArea("DL5XX")
 	if err != nil || area.Source != qthSourceDXCC {
 		t.Errorf("engine resolveAlmanacArea = %+v, %v; want dxcc", area, err)

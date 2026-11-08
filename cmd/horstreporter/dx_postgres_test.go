@@ -641,7 +641,7 @@ func TestInitSchemaStmtsArms(t *testing.T) {
 			t.Fatalf("dx_raw_spots durability regression: schema statement is UNLOGGED: %q", q)
 		}
 	}
-	var hasRawTable, hasGeomDrop, hasSpotTimeIndex, hasCellTable, hasSWTable bool
+	var hasRawTable, hasGeomDrop, hasSpotTimeIndex bool
 	for _, q := range stmts {
 		if strings.Contains(q, "CREATE TABLE IF NOT EXISTS dx_raw_spots") {
 			hasRawTable = true
@@ -655,12 +655,6 @@ func TestInitSchemaStmtsArms(t *testing.T) {
 		if strings.Contains(q, "idx_dx_raw_spots_spot_time") && strings.Contains(q, "CREATE INDEX") {
 			hasSpotTimeIndex = true
 		}
-		if strings.Contains(q, "CREATE TABLE IF NOT EXISTS proplab_cell_buckets") {
-			hasCellTable = true
-		}
-		if strings.Contains(q, "CREATE TABLE IF NOT EXISTS proplab_sw_series") {
-			hasSWTable = true
-		}
 	}
 	if !hasRawTable {
 		t.Fatalf("dx_raw_spots CREATE TABLE missing from schema statements")
@@ -670,9 +664,6 @@ func TestInitSchemaStmtsArms(t *testing.T) {
 	}
 	if !hasSpotTimeIndex {
 		t.Fatalf("spot_time index missing (the reader's only sargable path)")
-	}
-	if !hasCellTable || !hasSWTable {
-		t.Fatalf("cellfeed schema statements not appended (proplab_cell_buckets=%v proplab_sw_series=%v)", hasCellTable, hasSWTable)
 	}
 }
 

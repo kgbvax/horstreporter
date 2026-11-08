@@ -13,8 +13,6 @@ go run ./cmd/horstreporter -dev -port 8080
 # the shell history / process args (flags -dxcluster-username/-password also work).
 DXCLUSTER_USERNAME=<yourcall> DXCLUSTER_PASSWORD=<password> \
   go run ./cmd/horstreporter -dev -port 8080 -dxcluster-enable -dxcluster-endpoint db0erf.de:7300
-# Optional: QRZ_USERNAME/QRZ_PASSWORD enable callsign→locator enrichment (dx_locator),
-# shared by DX-cluster and RBN ingests.
 # Optional RBN (Reverse Beacon Network) CW/RTTY telnet ingest — public relay, no password,
 # but it prompts for a callsign before streaming (set -rbn-callsign / RBN_CALLSIGN). Fills the
 # activity chart/live stream during CW/SSB contests when FT8 thins out. Minimal scope:
@@ -28,9 +26,6 @@ go run ./cmd/horstoperator-agent -listen 127.0.0.1:9955 -station-locator JO62qm
 # Rig control (operator-local): add
 #   -rig-transport waveloggate   (tune via WaveLogGate)
 # Secrets convention for both binaries (env vars / systemd EnvironmentFile): see docs/deployment-secrets.md
-
-# Run HF link-quality scoring service (separate binary; consumes HorstReporter read-only)
-go run ./cmd/horstprop -listen 127.0.0.1:9970
 
 # Backend tests
 go test ./...
@@ -74,10 +69,6 @@ node scripts/measure-concurrency.mjs
 # contest-scale feed run scripts/stress-proxy.mjs and point URL at it.
 node scripts/profile-ui.mjs [label]
 
-# Cell bucket feed (path-scope data plumbing; Propagation Lab was removed 2026-08-04)
-#   -proplab-cell-retention-days  # retention for proplab_cell_buckets / proplab_sw_series (default 60; 0 disables)
-#   -proplab-sw-enable            # NOAA SWPC index series ingest (kp/F10.7/xray/OVATION; consumed by pathscope)
-
 # Mercator perf gate (catch draw/zoom regressions)
 npm run perf:gate:mercator
 ```
@@ -101,17 +92,9 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `rbn.go` — optional RBN (Reverse Beacon Network) CW/RTTY raw telnet ingest; `source_type='rbn'`, activity + live only (kept out of the FT8-SNR baseline)
 - `wspr.go` — optional WSPR ingest (wspr.live ClickHouse HTTP poller); `source_type='wspr'`, reference-only (kept out of the FT8-SNR baseline, like RBN)
 - `opmode.go` — operator mode endpoint wiring (browser calls local agent directly; backend never proxies)
-- `dxlens_mount.go` — mounts the `dxlens` sibling module at `/dxlens/`
-- `dx_cellfeed.go` — `CellBucketFeed`: midpoint-cell bucket accumulator + 60s persistence tick + retention pruning (writes `proplab_cell_buckets` for pathscope; all that remains of the removed Propagation Lab)
 - `internal/httpx/` — gzip middleware for JSON/static responses + precompressed embedded assets
 - `internal/maidenhead/` — Maidenhead locator arithmetic (validation, square XY, rings/clusters, lat/lng)
-- `internal/qrzlookup/` — QRZ.com callsign→locator/name/country client (`Resolver` interface)
-- `internal/proxy/` — same-origin reverse proxy for the local pathscope service
-- `internal/proplab/` — primitives for that feed: `buckets.go` (`CellBucketEngine`), plus `geo.go`, `band.go`, `time.go`, `spot.go`, `region.go`, `stats.go`, `dx_midpoint.go`, `lane.go`, `types.go` (engines were deleted; name kept for stability)
-- `sw_ingest.go` — optional NOAA SWPC / OVATION polling into `proplab_sw_series` (consumed by pathscope)
 - `cmd/horstoperator-agent/` — standalone local agent bridging browser opmode to PSTrotator UDP
-- `cmd/horstprop/` — standalone HF link-quality scoring service (separate binary; consumes HorstReporter read-only over HTTP; see `docs/horstprop.md`)
-- `internal/propcontract/` — score contract types shared between the backend and `cmd/horstprop`
 
 **Frontend core files (`static/`):**
 - `app.js` — app boot, SSE stream lifecycle, projection/style gating
@@ -130,26 +113,23 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - Hot per-message paths (`matchBandEvent`, `extractMatchedBandEventArea`, `matchAndCreateSpot`, `liveArea.contains`) must stay allocation-free (the window scan builds its dedup key in a stack buffer and counts uniques through `keySet`, a set of 128-bit hashes; `hot_bands` evaluates in lite mode and must not read the per-band diagnostics the full evaluation adds): the feed's locators are mixed case, so use `locatorSquareXYFold` / `hasPrefixFold` instead of `strings.ToUpper` on every message, and build keys without `fmt`. Equivalence tests against the old implementations live in `extract_matched_equiv_test.go` / `match_equiv_test.go`.
 - Production embeds `static/` via `//go:embed static` in the root `embed.go`; `-dev` serves from disk with no-cache
 - The map fetches `static/world-slim.geojson` (generated from `static/vendor/world.geojson` by `scripts/slim-world-geojson.mjs`; re-run it after adding a reader of another Natural Earth property). The live stream must not wait on that download: Mercator boot starts the stream without awaiting the overlay sync (`overlaysReady` in `app.js`)
-- The `dxlens` module is a sibling directory (`../dxlens`), referenced via `go.mod replace`
 - Browser opmode calls `http://127.0.0.1:9955/v1/*` directly; the backend never proxies to the local agent
 
 ## API endpoints
 
 Canonical reference: `docs/api.md` (includes response shapes, caches, and explicit exclusions).
 
-- `GET /api/stream` — SSE; params: `qth`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `qth`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed; `rings=auto` widens a sparse home square server-side, see `live_area.go`, and is what the web app sends to all four live endpoints). A locator `qth` is matched at its 4-char square. Also accepts `v=2` (compact batched frames + `id:` resume via `Last-Event-ID`/`since`, see `stream_wire.go`), `enabled_bands`, `min_snr_mode`/`ssb_min_db`/`cw_min_db` and `include_dxcluster|rbn|wspr`. All sources (WSPR included) are scoped to the client's area; live frames are batched (≤1 s) and heartbeat with `: hb`.
+- `GET /api/stream` — SSE; params: `qth`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `qth`, matches any sender/receiver within `rings` grid-squares; capped at 30; `rings=auto` widens a sparse home square server-side, see `live_area.go`, and is what the web app sends to all four live endpoints). A locator `qth` is matched at its 4-char square. Also accepts `v=2` (compact batched frames + `id:` resume via `Last-Event-ID`/`since`, see `stream_wire.go`), `enabled_bands`, `min_snr_mode`/`ssb_min_db`/`cw_min_db` and `include_dxcluster|rbn|wspr`. All sources (WSPR included) are scoped to the client's area; live frames are batched (≤1 s) and heartbeat with `: hb`.
 - `GET /api/dx_conditions` — DX score/conditions per band; params: `qth`, `minutes`, `surroundings`, `cw_min_db`
 - `GET /api/prop_intel` — WSPR propagation-intelligence nowcast per (band × region); params: `qth`, `minutes`, `surroundings`, `cw_min_db`, `surge_threshold`, `from_here`. Sibling summary endpoint `GET /api/prop_intel/summary` (60s cached) feeds the mobile app's home-screen widgets
 - `GET /api/stats` — active connections, history size/minutes
-- `GET /api/capture_snapshot` — deterministic filtered spot snapshot for server-driven frame capture
-- `GET /dxlens/` — DXLens module UI (reads HorstReporter's in-memory baseline via adapter)
 
 ## Related repositories
 
 - `../horstapp` — sibling Flutter mobile app (iOS primary + Android) consuming this
   backend read-only over HTTPS: propagation-intelligence overview (band × region
   matrix, band detail from `/api/dx_conditions`) plus native iOS/Android home-screen
-  widgets fed by `/api/prop_intel/summary`. Same sibling pattern as `../dxlens`.
+  widgets fed by `/api/prop_intel/summary`. 
   Visual language is ported from `static/wspr-matrix.js` — when changing the chip
   ramps, ink flip, or badge glyphs there, mirror the change in the app's
   `lib/core/theme/matrix_style.dart` and the widget's Swift/Kotlin constants.
@@ -157,8 +137,8 @@ Canonical reference: `docs/api.md` (includes response shapes, caches, and explic
 ## What to avoid
 
 - Don't modify anything under `static/vendor/`
-- Don't split the *core* backend into microservices; it is intentionally single-service/single-binary. (Separate operator-side binaries like `cmd/horstoperator-agent` and `cmd/horstprop` that consume the backend/log read-only over HTTP are the sanctioned pattern — they don't grow the core binary.)
-- Keep the scoring boundary: per-spot/path **link** scoring lives only in `cmd/horstprop`. horstreporter owns the shared, multi-station band/region **conditions** analytics (`dx_conditions.go`, `hot_bands.go`, dxlens) backed by the Postgres baseline. Don't add per-spot/path scoring to horstreporter.
+- Don't split the *core* backend into microservices; it is intentionally single-service/single-binary. (A separate operator-side binary like `cmd/horstoperator-agent` that talks to the browser locally is the sanctioned pattern — it doesn't grow the core binary.)
+- horstreporter owns the shared, multi-station band/region **conditions** analytics (`dx_conditions.go`, `hot_bands.go`) backed by the Postgres baseline. Don't add per-spot/path link scoring to it (the former `cmd/horstprop` service was removed).
 - Don't assume Gin/Echo/React/Vite conventions
 
 <!-- rtk-instructions v2 -->

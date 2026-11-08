@@ -4,6 +4,17 @@ Survey date: 2026-11-08, tree at `ad7b051` (main). This is a list only: nothing
 has been deleted. Re-run the greps on the then-current tree before acting on any
 entry.
 
+## Status (2026-11-08)
+
+Removed in the follow-up change: S1, S2, S3, C2 (capture mode and
+`/api/capture_snapshot`), C6 (pathscope stack, including the cell feed, the SW
+ingest and `internal/proplab`), C7 (dxlens), C8 (horstprop and
+`internal/propcontract`) and C9 (QRZ enrichment). Side effect of C9: DX cluster
+and RBN spots no longer get locators, so they are persisted for the activity
+chart but never reach the live map. The `proplab_cell_buckets` and
+`proplab_sw_series` tables are left in Postgres (drop them manually). Still open:
+C1, C3, C4, C5, C10.
+
 ## Method
 
 - Backend inventory: every flag in `cmd/horstreporter/main.go`, every route

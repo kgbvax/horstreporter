@@ -822,13 +822,8 @@ function renderGridSquares(squareData, filterCtx) {
     incrementPerfCounter('mercator.grid.rectangles_added', gridFeatures.length);
 }
 
-// Promise for the most recent async active-area draw; runCaptureBootstrap
-// awaits it so the capture-ready handshake covers the hull render (which now
-// completes only after the turf fetch).
+// Promise for the most recent async active-area draw.
 let activeAreaRebuildPromise = Promise.resolve();
-export function whenActiveAreaRendered() {
-    return activeAreaRebuildPromise;
-}
 
 // Async wrapper around renderActiveArea: load turf on demand (the vendor
 // script is no longer part of the initial index.html payload), then draw the

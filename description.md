@@ -87,33 +87,6 @@ spectrum in a glance.
 *Benefit:* a fast triage view for spotting the openings that are actually out of
 the ordinary, before you dig into the map.
 
-### DXLens — baseline analytics
-
-A visualization companion that reads HorstReporter's accumulated propagation
-**baseline** and presents the longer view: band-by-hour heatmaps, region
-calendars, and openings recommendations through its own web interface.
-
-*Benefit:* helps you learn the diurnal and seasonal rhythm of each band from your
-own observed data, so you know when a path *usually* opens.
-
-### HorstProp — HF link-quality scoring
-
-A standalone service that scores the quality of a specific path — from your home
-station to a spotted DX station — as a single **0–100 value with a grade,
-confidence, and a plain-language reason**. Spots to score come from your own DX
-cluster client.
-
-It scores in layers, in order of trust:
-
-1. **Empirical** — real reception reports, via HorstReporter.
-2. **MUF gate** — near-real-time ionospheric state (KC2G).
-3. **Model** — a self-hosted propagation model (ITU-R P.533 / VOACAP) for paths
-   with no live data.
-
-*Benefit:* turns a wall of cluster spots into a ranked, explainable "is this
-workable from *here*?" judgement, grounded in what's being heard rather than a
-model alone.
-
 ### HorstOperator agent — local antenna control & operating aid
 
 A small program that runs **on your shack computer**, alongside your existing
@@ -136,16 +109,15 @@ something isn't connected.
 ## How the pieces fit together
 
 ```
-   PSK Reporter (MQTT)          DX cluster client            KC2G / model
-          │                            │                          │
-          ▼                            ▼                          ▼
-   ┌──────────────┐             ┌──────────────┐          (HorstProp layers 2–3)
-   │ HorstReporter│──baseline──►│   DXLens     │
-   │  + DXPulse   │             └──────────────┘
+   PSK Reporter (MQTT)
+          │
+          ▼
+   ┌──────────────┐
+   │ HorstReporter│
+   │  + DXPulse   │
    │  (map + API) │
-   └──────┬───────┘──empirical feed──►┌──────────────┐
-          │                           │  HorstProp   │──score──► your cluster view
-          │ browser UI                └──────────────┘
+   └──────┬───────┘
+          │ browser UI
           ▼
    ┌──────────────────────────┐   local-only, on your shack PC
    │  HorstOperator agent      │◄──── browser talks here directly
@@ -164,8 +136,6 @@ components attach to it (or to your existing tools) when you want them.
 | --- | --- | --- | --- |
 | **HorstReporter** | Live propagation map + band stats | Pi / server / PC | Nothing (a callsign or grid) |
 | **DXPulse** | Band × region opening matrix | with HorstReporter | — |
-| **DXLens** | Long-term baseline analytics | Pi / server | HorstReporter baseline |
-| **HorstProp** | Per-path link-quality score | Pi / server | HorstReporter feed; your cluster client |
 | **HorstOperator** | Local antenna control + operating aid | shack PC | PSTRotator |
 
 ---

@@ -5,7 +5,7 @@ import "horstreporter/internal/maidenhead"
 // dx_regions.go holds the DXPulse region classification primitives that
 // outlived the DXPulse feature itself: the coarse band-of-Earth regions used
 // by the DX baseline's region counts (dx_conditions), the persisted
-// dx_region_baseline_daily keying (dx_postgres), and the dxlens region
+// dx_region_baseline_daily keying (dx_postgres), and the region
 // calendar. The matrix/summary UI and /api/dxpulse endpoints were removed.
 
 type dxPulseRegion string

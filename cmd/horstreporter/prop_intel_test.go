@@ -700,7 +700,7 @@ func TestPropIntelSummaryAlmanacCachedCallsign(t *testing.T) {
 	dxBaseline = newDxBaselineEngine("")
 	cache := newAlmanacAreaCache()
 	cache.entries["DL1ABC"] = almanacAreaCacheEntry{
-		area:    almanacArea{Grid4: "JO32", Source: qthSourceQRZ},
+		area:    almanacArea{Grid4: "JO32", Source: qthSourceDXCC},
 		expires: time.Now().Add(time.Hour),
 	}
 	dxBaseline.almanacAreas = cache

@@ -172,6 +172,8 @@ Used for markers like:
 
 ### `proplab_cell_buckets`
 
+> Legacy: no longer created, written or pruned (the pathscope consumer was removed). Existing tables can be dropped.
+
 Propagation Lab midpoint-cell buckets. Each row summarises one 15-minute bucket for a midpoint 4-character Maidenhead square, band, and source lane.
 
 | Column | Type | Null | Notes |
@@ -200,6 +202,8 @@ Indexes:
 ---
 
 ### `proplab_sw_series`
+
+> Legacy: no longer created, written or pruned. Existing tables can be dropped.
 
 Space-weather index time series polled by the Propagation Lab.
 
@@ -270,7 +274,7 @@ It also adds newer columns if missing:
 
 ## Autovacuum / maintenance tuning
 
-Hot tables get per-table autovacuum overrides applied by `dxPostgresStore.initSchema` (and `cellfeedSchemaStmts` for `proplab_cell_buckets`).
+Hot tables get per-table autovacuum overrides applied by `dxPostgresStore.initSchema`.
 
 | Table | vacuum scale | vacuum threshold | analyze scale | analyze threshold | Notes |
 |---|---|---|---|---|---|

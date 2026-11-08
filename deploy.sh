@@ -28,7 +28,10 @@ ssh "${USER}@${HOST}" << 'EOF'
     # Flags that no longer exist: Go's flag parser exits on unknown flags and
     # would crash-loop the service. Strip them from ARGS in the EnvironmentFile
     # (idempotent; keeps a .bak of the file when something changed).
-    REMOVED_FLAGS="horstprop-url cty-path"
+    # Value flags take "-flag value" or "-flag=value"; boolean flags only
+    # "-flag" or "-flag=bool" (so the next argument is never swallowed).
+    REMOVED_FLAGS="horstprop-url cty-path opmode-agent-url pathscope-url qrz-username qrz-password proplab-cell-retention-days"
+    REMOVED_BOOL_FLAGS="proplab-sw-enable"
     ENVFILE=/etc/default/horstreporter
     if [ -f "$ENVFILE" ]; then
         for f in $REMOVED_FLAGS; do
@@ -36,6 +39,13 @@ ssh "${USER}@${HOST}" << 'EOF'
                 echo "Removing obsolete flag -${f} from ${ENVFILE}"
                 sudo cp -p "$ENVFILE" "${ENVFILE}.bak"
                 sudo sed -E -i "s/ ?-{1,2}${f}([= ][^ \"']*)?//g" "$ENVFILE"
+            fi
+        done
+        for f in $REMOVED_BOOL_FLAGS; do
+            if sudo grep -Eq -- "-{1,2}${f}(=[^ \"']*)?" "$ENVFILE"; then
+                echo "Removing obsolete flag -${f} from ${ENVFILE}"
+                sudo cp -p "$ENVFILE" "${ENVFILE}.bak"
+                sudo sed -E -i "s/ ?-{1,2}${f}(=[^ \"']*)?//g" "$ENVFILE"
             fi
         done
     fi

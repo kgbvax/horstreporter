@@ -124,7 +124,7 @@ func TestGzipMiddlewarePassesThroughPreEncodedStreamsAndBinary(t *testing.T) {
 		t.Errorf("304 altered: %d %v", resp.StatusCode, resp.Header)
 	}
 
-	for _, p := range []string{"/api/stream", "/pathscope/x"} {
+	for _, p := range []string{"/api/stream"} {
 		if resp := gzipDo(t, jsonHandler(strings.Repeat("a", 4000)), "GET", p, ae); resp.Header.Get("Content-Encoding") != "" {
 			t.Errorf("%s must be skipped", p)
 		}

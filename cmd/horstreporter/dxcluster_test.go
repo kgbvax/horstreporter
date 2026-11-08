@@ -2,13 +2,10 @@ package main
 
 import (
 	"bufio"
-	"io"
 	"net"
 	"strings"
 	"testing"
 	"time"
-
-	"horstreporter/internal/qrzlookup"
 )
 
 func TestParseDXClusterSpot(t *testing.T) {
@@ -96,27 +93,6 @@ func TestBandFromFrequencyKHz(t *testing.T) {
 	}
 }
 
-// stubResolver is a fake qrzlookup.Resolver so handleDXClusterSpot /
-// handleRBNSpot locator enrichment can be driven without QRZ.
-type stubResolver struct {
-	locators map[string]string
-	infos    map[string]qrzlookup.Info
-}
-
-func (s *stubResolver) LookupLocator(callsign string) (string, error) {
-	if loc, ok := s.locators[callsign]; ok {
-		return loc, nil
-	}
-	return "", io.EOF
-}
-
-func (s *stubResolver) LookupInfo(callsign string) (qrzlookup.Info, error) {
-	if info, ok := s.infos[callsign]; ok {
-		return info, nil
-	}
-	return qrzlookup.Info{}, io.EOF
-}
-
 // isolateHubForIngest replaces hub.clients/history with fresh empties for the
 // duration of fn (and restores them), mirroring the withHubSnapshot pattern.
 // It also nils dxBaseline unless the caller wants one, since handle*Spot
@@ -170,83 +146,14 @@ func TestIsDXClusterSpotUsableForLive(t *testing.T) {
 	}
 }
 
-func TestHandleDXClusterSpotPopulatesLiveFields(t *testing.T) {
-	isolateHubForIngest(t, false)
-
-	resolver := &stubResolver{
-		locators: map[string]string{"W3LPL-#": "FM18"},
-		infos: map[string]qrzlookup.Info{
-			"K1XYZ": {Locator: "fn31pr", Name: "Joe", Country: "United States"},
-		},
-	}
-
-	before, _, _, _, _, forwarded, droppedNoLoc := dxClusterAccounting.snapshot()
-	// Calls arrive here already uppercased by parseDXClusterSpot.
-	handleDXClusterSpot(dxClusterSpot{
-		Spotter:      "W3LPL-#",
-		DXCall:       "K1XYZ",
-		FrequencyKHz: 14074.0,
-		Comment:      "cq dx",
-		ObservedAt:   1700000000,
-	}, resolver)
-	afterAttempts, _, _, _, _, afterForwarded, afterDropped := dxClusterAccounting.snapshot()
-
-	if got := afterForwarded - forwarded; got != 1 {
-		t.Fatalf("forwardedSpots delta = %d, want 1", got)
-	}
-	if got := afterDropped - droppedNoLoc; got != 0 {
-		t.Fatalf("droppedNoLoc delta = %d, want 0", got)
-	}
-	if got := afterAttempts - before; got != 0 {
-		t.Errorf("connectAttempts changed by %d", got)
-	}
-
-	hub.RLock()
-	defer hub.RUnlock()
-	if len(hub.history) != 1 {
-		t.Fatalf("expected 1 forwarded spot in hub.history, got %d", len(hub.history))
-	}
-	m := hub.history[0]
-	if m.SC != "W3LPL-#" {
-		t.Errorf("SC = %q, want W3LPL-# (spotter, uppercased)", m.SC)
-	}
-	if m.RC != "K1XYZ" {
-		t.Errorf("RC = %q, want K1XYZ (dx call)", m.RC)
-	}
-	if m.SL != "FM18" {
-		t.Errorf("SL = %q, want FM18 (uppercased spotter locator)", m.SL)
-	}
-	if m.RL != "FN31PR" {
-		t.Errorf("RL = %q, want FN31PR (uppercased dx locator)", m.RL)
-	}
-	if m.B != "20m" {
-		t.Errorf("B = %q, want 20m", m.B)
-	}
-	if m.MD != "DXCLUSTER" {
-		t.Errorf("MD = %q, want DXCLUSTER", m.MD)
-	}
-	if m.Source != "dxcluster" {
-		t.Errorf("Source = %q, want dxcluster", m.Source)
-	}
-	if m.F != 14074.0 {
-		t.Errorf("F = %v, want 14074", m.F)
-	}
-	if m.T != 1700000000 {
-		t.Errorf("T = %d, want 1700000000", m.T)
-	}
-	if m.RP != 0 {
-		t.Errorf("RP = %d, want 0 (dx-cluster spots are baseline-benign)", m.RP)
-	}
-}
-
 func TestHandleDXClusterSpotDropsWithoutLocator(t *testing.T) {
 	isolateHubForIngest(t, false)
 
-	// No resolver → no locators at all → unusable for live.
+	// No QRZ enrichment → no locators at all → unusable for live.
 	_, _, _, _, _, _, droppedBefore := dxClusterAccounting.snapshot()
 	handleDXClusterSpot(dxClusterSpot{
 		Spotter: "W3LPL", DXCall: "K1XYZ", FrequencyKHz: 14074.0, ObservedAt: 1000,
-	}, nil)
+	})
 	_, _, _, _, _, _, droppedAfter := dxClusterAccounting.snapshot()
 	if got := droppedAfter - droppedBefore; got != 1 {
 		t.Fatalf("droppedNoLoc delta = %d, want 1", got)
@@ -255,28 +162,6 @@ func TestHandleDXClusterSpotDropsWithoutLocator(t *testing.T) {
 	defer hub.RUnlock()
 	if len(hub.history) != 0 {
 		t.Fatalf("expected dropped spot not to reach hub.history, got %d entries", len(hub.history))
-	}
-}
-
-func TestHandleDXClusterSpotDropsOffBandFrequency(t *testing.T) {
-	isolateHubForIngest(t, false)
-
-	// 14.074 MHz is in-band, 14.9 MHz sits in the 20m→12m gap → band "" → unusable.
-	resolver := &stubResolver{
-		infos: map[string]qrzlookup.Info{"K1XYZ": {Locator: "FN31"}},
-	}
-	_, _, _, _, _, _, droppedBefore := dxClusterAccounting.snapshot()
-	handleDXClusterSpot(dxClusterSpot{
-		Spotter: "W3LPL", DXCall: "K1XYZ", FrequencyKHz: 14900.0, ObservedAt: 1000,
-	}, resolver)
-	_, _, _, _, _, _, droppedAfter := dxClusterAccounting.snapshot()
-	if got := droppedAfter - droppedBefore; got != 1 {
-		t.Fatalf("droppedNoLoc delta = %d, want 1 (out-of-band frequency → empty band)", got)
-	}
-	hub.RLock()
-	defer hub.RUnlock()
-	if len(hub.history) != 0 {
-		t.Fatalf("expected empty hub.history, got %d", len(hub.history))
 	}
 }
 
