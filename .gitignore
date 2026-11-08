@@ -35,15 +35,10 @@ go.work.sum
 # .idea/
 .vscode/
 
-# horstprop build artifact (root-anchored so it can't match cmd/horstprop/)
-/horstprop-linux-x64
 
 # operator-agent build artifact (root-anchored; `go build ./cmd/horstoperator-agent`)
 /horstoperator-agent
 
-# pathscope build artifacts (root-anchored; source lives in cmd/pathscope/)
-/pathscope
-/pathscope-linux-x64
 
 # removed proplab backtest binary (may be rebuilt by old scripts)
 /proplab-backtest-linux-x64

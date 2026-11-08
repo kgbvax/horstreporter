@@ -185,7 +185,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Optional configurable "area of interest": rings=N (>0) with a locator
 	// qth matches any sender/receiver within N grid-squares of the qth, for
-	// region feeds (e.g. horstprop); rings=auto lets the server widen the
+	// region feeds; rings=auto lets the server widen the
 	// block until enough bands carry a full sample (live_area.go). Read-only;
 	// default behaviour unchanged. The area is announced as an `area` event.
 	area := liveAreaForRequest(r, req.qth, req.surroundings, time.Now().Unix())

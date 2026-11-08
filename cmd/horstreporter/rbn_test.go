@@ -2,13 +2,10 @@ package main
 
 import (
 	"bufio"
-	"io"
 	"net"
 	"strings"
 	"testing"
 	"time"
-
-	"horstreporter/internal/qrzlookup"
 )
 
 func TestParseRBNSpot(t *testing.T) {
@@ -333,66 +330,12 @@ func TestRunRBNSessionRequiresCallsign(t *testing.T) {
 	}
 }
 
-func TestHandleRBNSpotPopulatesLiveFields(t *testing.T) {
-	isolateHubForIngest(t, false)
-
-	resolver := &stubResolver{
-		locators: map[string]string{"W3LPL-#": "FM18"},
-		infos:    map[string]qrzlookup.Info{"N0CALL": {Locator: "fn31pr", Name: "Bob", Country: "United States"}},
-	}
-
-	_, _, _, _, _, forwardedBefore, droppedBefore := rbnAccounting.snapshot()
-	handleRBNSpot(rbnSpot{
-		Skimmer:      "W3LPL-#",
-		DXCall:       "N0CALL",
-		FrequencyKHz: 14024.0,
-		Mode:         "CW",
-		DB:           22,
-		ObservedAt:   1700000000,
-	}, resolver)
-	_, _, _, _, _, forwardedAfter, droppedAfter := rbnAccounting.snapshot()
-	if got := forwardedAfter - forwardedBefore; got != 1 {
-		t.Fatalf("forwardedSpots delta = %d, want 1", got)
-	}
-	if got := droppedAfter - droppedBefore; got != 0 {
-		t.Fatalf("droppedNoLoc delta = %d, want 0", got)
-	}
-
-	hub.RLock()
-	defer hub.RUnlock()
-	if len(hub.history) != 1 {
-		t.Fatalf("expected 1 forwarded RBN spot, got %d", len(hub.history))
-	}
-	m := hub.history[0]
-	if m.SC != "W3LPL-#" || m.RC != "N0CALL" {
-		t.Errorf("SC/RC = %q/%q, want W3LPL-#/N0CALL (skimmer→DX)", m.SC, m.RC)
-	}
-	if m.RL != "FN31PR" || m.SL != "FM18" {
-		t.Errorf("RL/SL = %q/%q, want FN31PR/FM18", m.RL, m.SL)
-	}
-	if m.MD != "CW" {
-		t.Errorf("MD = %q, want CW (real over-the-air mode)", m.MD)
-	}
-	if m.RP != 22 {
-		t.Errorf("RP = %d, want 22 (skimmer dB)", m.RP)
-	}
-	if m.Source != "rbn" {
-		t.Errorf("Source = %q, want rbn", m.Source)
-	}
-	if m.B != "20m" {
-		t.Errorf("B = %q, want 20m", m.B)
-	}
-	if m.F != 14024.0 {
-		t.Errorf("F = %v, want 14024", m.F)
-	}
-}
-
 func TestHandleRBNSpotDropsWithoutDXLocator(t *testing.T) {
 	isolateHubForIngest(t, false)
 
 	_, _, _, _, _, forwardedBefore, droppedBefore := rbnAccounting.snapshot()
 	// No resolver at all → no locators → unusable for live.
-	handleRBNSpot(rbnSpot{Skimmer: "W3LPL", DXCall: "N0CALL", FrequencyKHz: 14024.0, Mode: "CW", DB: 20, ObservedAt: 1000}, nil)
+	handleRBNSpot(rbnSpot{Skimmer: "W3LPL", DXCall: "N0CALL", FrequencyKHz: 14024.0, Mode: "CW", DB: 20, ObservedAt: 1000})
 	_, _, _, _, _, forwardedAfter, droppedAfter := rbnAccounting.snapshot()
 	if got := droppedAfter - droppedBefore; got != 1 {
 		t.Fatalf("droppedNoLoc delta = %d, want 1", got)
@@ -448,26 +391,6 @@ func TestBandFromFrequencyKHz(t *testing.T) {
 			t.Errorf("bandFromFrequencyKHz(%v) = %q, want %q", tc.freq, tc.band, got)
 		}
 	}
-}
-
-// stubResolver is a fake qrzlookup.Resolver so handleRBNSpot locator enrichment can be driven without QRZ.
-type stubResolver struct {
-	locators map[string]string
-	infos    map[string]qrzlookup.Info
-}
-
-func (s *stubResolver) LookupLocator(callsign string) (string, error) {
-	if loc, ok := s.locators[callsign]; ok {
-		return loc, nil
-	}
-	return "", io.EOF
-}
-
-func (s *stubResolver) LookupInfo(callsign string) (qrzlookup.Info, error) {
-	if info, ok := s.infos[callsign]; ok {
-		return info, nil
-	}
-	return qrzlookup.Info{}, io.EOF
 }
 
 // isolateHubForIngest replaces hub.clients/history with fresh empties for the

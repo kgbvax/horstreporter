@@ -52,7 +52,7 @@ type propIntelSummaryAlmanacEntry struct {
 func almanacSummaryArea(qth string) (almanacArea, bool) {
 	q := normalizeQTHToken(qth)
 	if isAlmanacLocatorShape(q) || maidenhead.IsLocator(q) {
-		area, err := resolveAlmanacAreaWith(q, nil, nil)
+		area, err := resolveAlmanacAreaWith(q, nil)
 		return area, err == nil
 	}
 	if !isAlmanacCallsignShape(q) {

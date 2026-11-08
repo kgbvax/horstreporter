@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"horstreporter/internal/maidenhead"
-	"horstreporter/internal/qrzlookup"
 )
 
 // Reverse Beacon Network (RBN) ingest. RBN is the CW/RTTY analog of PSKReporter: a fleet
@@ -20,9 +19,10 @@ import (
 // empties out, so the activity chart and live stream flatline even though the bands are
 // packed; RBN keeps producing CW/RTTY spots through those windows.
 //
-// Minimal scope (see docs/horstprop.md): RBN spots land in dx_raw_spots with
+// Minimal scope: RBN spots land in dx_raw_spots with
 // source_type='rbn' and a real mode (CW/RTTY), feeding the count-based activity chart and
-// (when QRZ resolves a DX locator) the live stream. RBN's dB is on a different SNR scale
+// the live stream (only for spots that carry locators; without QRZ enrichment RBN spots
+// carry none, so they are persisted for the activity chart only). RBN's dB is on a different SNR scale
 // than PSKReporter FT8 SNR (0–40 dB in a ~500 Hz CW filter vs −24..+5 in 2500 Hz), so RBN is
 // deliberately NOT fed to DxBaselineEngine.Observe and is excluded from the FT8
 // conditions accumulator (isNonConditionsMode in dx_conditions.go) until calibration
@@ -57,7 +57,6 @@ type rbnConfig struct {
 	ReconnectDelay time.Duration
 	Verbose        bool
 	Callsign       string // required-in-practice: the relay prompts "enter your call" before streaming
-	Resolver       qrzlookup.Resolver
 }
 
 type rbnSpot struct {
@@ -180,7 +179,7 @@ func runRBNSession(endpoint string, cfg rbnConfig) error {
 		}
 		spotsParsed++
 		rbnAccounting.parsedSpots.Add(1)
-		handleRBNSpot(spot, cfg.Resolver)
+		handleRBNSpot(spot)
 	}
 	if err := scanner.Err(); err != nil {
 		if cfg.Verbose {
@@ -250,30 +249,8 @@ func parseRBNSpot(line string, observedAt int64) (rbnSpot, bool) {
 	}, true
 }
 
-func handleRBNSpot(spot rbnSpot, resolver qrzlookup.Resolver) {
+func handleRBNSpot(spot rbnSpot) {
 	band := bandFromFrequencyKHz(spot.FrequencyKHz)
-	skimmerLocator := ""
-	dxLocator := ""
-
-	if resolver != nil {
-		// Skimmer locator is best-effort; not required for the live path.
-		if loc, err := resolver.LookupLocator(spot.Skimmer); err == nil {
-			skimmerLocator = strings.ToUpper(strings.TrimSpace(loc))
-		} else if logLevel == "DEBUG" {
-			logDebug("RBN QRZ lookup failed for skimmer %q: %v", spot.Skimmer, err)
-		}
-
-		// The DX/RX locator is what makes a
-		// spot usable for the live map (isRBNSpotUsableForLive).
-		if info, err := resolver.LookupInfo(spot.DXCall); err == nil {
-			dxLocator = strings.ToUpper(strings.TrimSpace(info.Locator))
-			if dxLocator == "" && logLevel == "DEBUG" {
-				logDebug("RBN QRZ lookup returned no locator for DX call %q", spot.DXCall)
-			}
-		} else if logLevel == "DEBUG" {
-			logDebug("RBN QRZ lookup failed for DX call %q: %v", spot.DXCall, err)
-		}
-	}
 
 	// Sender/receiver convention (shared with WSPR): SC = the
 	// reporting station (skimmer/spotter), RC = the station being heard (DX). The live map
@@ -283,9 +260,7 @@ func handleRBNSpot(spot rbnSpot, resolver qrzlookup.Resolver) {
 		RP:     spot.DB,
 		T:      spot.ObservedAt,
 		SC:     spot.Skimmer,
-		SL:     skimmerLocator,
 		RC:     spot.DXCall,
-		RL:     dxLocator,
 		B:      band,
 		MD:     spot.Mode,
 		F:      spot.FrequencyKHz,
@@ -294,7 +269,7 @@ func handleRBNSpot(spot rbnSpot, resolver qrzlookup.Resolver) {
 
 	// Persist unconditionally with full fidelity (real frequency, mode, dB, skimmer) so the
 	// count-based activity chart (activity_by_bin, which reads dx_raw_spots regardless of
-	// source_type) benefits even when QRZ is off. RBN does NOT call DxBaselineEngine.Observe:
+	// source_type) benefits even without locators. RBN does NOT call DxBaselineEngine.Observe:
 	// its 0–40 dB CW scale would skew the FT8-calibrated snr_tier baseline (SNR-scale
 	// mismatch, see docs/horstprop.md).
 	if dxBaseline != nil {

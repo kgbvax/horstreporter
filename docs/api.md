@@ -9,7 +9,6 @@ Related contracts documented elsewhere:
 
 - `docs/dxcluster-agent-api.md` — local operator agent at `http://127.0.0.1:9955/v1/*`
   (browser-direct; the main binary NEVER proxies it).
-- `docs/horstprop.md` — the horstprop scoring service.
 
 ## Transport
 
@@ -23,14 +22,13 @@ Related contracts documented elsewhere:
 - **pprof**: `-pprof` flag starts a separate listener on `localhost:6060` —
   not part of this API.
 - JSON responses are compact bodies with `Content-Type: application/json`
-  (proplab endpoints add `Cache-Control: no-store`).
+  .
 - With `-compress` (default on) responses are gzip-encoded for clients that
   send `Accept-Encoding: gzip`: `/api/stream` compresses itself (sync flush per
   batch), `/api/history` bodies are always pre-gzipped, and every other
   compressible response of at least 1 KiB (JSON, JS, CSS, HTML) goes through a
   middleware that adds `Vary: Accept-Encoding`. Embedded static files are
-  precompressed once at startup and served with a `…-gz"` ETag. HEAD, Range and
-  `/pathscope/` requests are never compressed.
+  precompressed once at startup and served with a `…-gz"` ETag. HEAD and Range requests are never compressed.
 - There is **no auth** on any endpoint; production is a public read-only
   service. There is **no health/readiness endpoint** — `GET /api/stats` is
   the closest.
@@ -74,8 +72,8 @@ Server-sent events: initial history dump, then live spots.
 
 Params: `qth` (required), `minutes` (default 15, max 60), `surroundings`,
 `rings` (int 0..30, or `auto`; see Conventions — area-of-interest: any
-sender/receiver within N grid squares of a locator qth; 0 disables; used by
-horstprop's region feed, and `auto` by the web app).
+sender/receiver within N grid squares of a locator qth; 0 disables; `auto`
+is what the web app sends).
 
 Server-side filters (spots the client would discard are not sent):
 `enabled_bands` (CSV; empty = all), `min_snr_mode` (`"ssb"`|`"cw"`, applies to
@@ -149,20 +147,6 @@ reopens it with `since` when the tab returns.
 Overflow beyond `-max-clients` (default 150) → an `event: server_error`
 frame, not an HTTP error. With `-compress` and `Accept-Encoding: gzip` the
 stream is gzip-encoded, sync-flushed per batch.
-
-### `GET /api/capture_snapshot` — deterministic spot snapshot
-
-Same window semantics as `/api/stream` but a single JSON response, sorted
-deterministically (age, locator, band, snr desc, reporter locator). Used for
-server-driven frame capture.
-
-Params: `qth` (required), `snapshot_at` (unix seconds, default now; bad
-value → 400), `minutes` (default 15, max 720), `surroundings`,
-`min_snr_mode` (`"ssb"`|`"cw"`), `ssb_min_db` (default 0), `cw_min_db`
-(default -15), `selected_band`, `enabled_bands` (CSV), `include_rbn` (default true), `include_wspr` (default true).
-
-Response: `{qth, surroundings, snapshot_at, window_minutes, generated_at,
-count, spots: [<stream spot shape>]}`.
 
 ### `GET /api/dx_conditions` — DX baseline scoring per band
 
@@ -402,7 +386,7 @@ Response:
 optional fields. `almanac` (object, optional) is a "usually open now / next"
 glance from the QTH Almanac for the requesting QTH.
 - **Source:** it is served only from the warm Almanac cache. The request path
-  never queries Postgres or QRZ.
+  never queries Postgres.
 - **When it is omitted:**
   - Postgres or the Almanac is unavailable.
   - The area's cache is cold. Areas in `-almanac-wspr-backfill-areas` are
@@ -557,8 +541,7 @@ from `dx_region_baseline_daily`, in one read-only REPEATABLE READ
 transaction (each day counted once).
 
 Params: `qth` (or `callsign` / `locator`, see Conventions). A 6/8-char
-locator is truncated to its grid4; a callsign resolves via QRZ, falling back
-to the DXCC centroid (`area.approximate: true`). Optional `min_snr` (integer
+locator is truncated to its grid4; a callsign resolves to the DXCC centroid (`area.approximate: true`). Optional `min_snr` (integer
 dB, −40…+30): an SNR floor, snapped to the nearest of the 5 dB tiers
 −20/−15/−10/−5/0 dB (a tie goes to the higher tier); absent = any SNR
 (exactly the behaviour without the parameter). The web UI sends the Min SNR
@@ -799,7 +782,7 @@ Errors: 405 (non-GET), 400 (missing endpoint), 503 (push not configured).
 ### `GET /api/square_details` — one grid square's reports
 
 Params: `locator` (required, valid Maidenhead or 400), plus the same context
-filters as capture (`qth`, `surroundings`, `minutes` default 15 max 60,
+filters as `/api/stream` (`qth`, `surroundings`, `minutes` default 15 max 60,
 SNR modes/floors, `selected_band`, `enabled_bands`).
 
 Response: `{locator, count, min_snr, max_snr, avg_snr, best_band,
@@ -960,57 +943,25 @@ A sibling `almanac_snr_backfill` sub-object reports the one-off SNR backfill
 
 ## Removed features
 
-**Propagation Lab** (`/api/proplab/v1/params|ladder|fusion|reachability`,
-`/proplab/` UI) and **DXPulse** (`/api/dxpulse/v1/matrix|summary`,
-`/dxpulse/` UI) were removed 2026-08-04. What remains is the data
-plumbing their sibling consumer needs:
+**Propagation Lab**, **DXPulse**, **Pathscope** (`/pathscope/*` proxy,
+`cmd/pathscope`), **DXLens** (`/dxlens/*`), **horstprop** (`cmd/horstprop`),
+`/api/capture_snapshot` and QRZ callsign enrichment were removed.
 
-- `proplab_cell_buckets` is still written by the in-process cell bucket
-  feed (midpoint cell × band × lane, 15-min buckets) — read by
-  **pathscope**. The `-proplab-cell-retention-days` flag now governs this
-  feed's tables.
-- `proplab_sw_series` is still written by `-proplab-sw-enable` — also
-  read by pathscope (kp / F10.7 / x-ray / OVATION series).
+- The cell bucket feed and the NOAA space-weather ingest that only fed
+  pathscope are gone too. Existing `proplab_cell_buckets` and
+  `proplab_sw_series` tables are no longer written or pruned; drop them
+  manually to reclaim disk (`DROP TABLE proplab_cell_buckets,
+  proplab_sw_series;`).
 - The dormant tables (`proplab_dest_buckets`, `proplab_drap_snapshots`,
-  `proplab_events`) are dropped by the startup migration; deployments that
-  predate the drop can remove them manually.
-
-## Reverse proxies
-
-These paths forward to sibling binaries; the main binary only proxies
-(upstream failure → 502).
-
-- **`/pathscope/*`** → `-pathscope-url` (default `http://127.0.0.1:9960`),
-  path NOT stripped (upstream expects it); SSE-friendly flush. Contract:
-  the pathscope module.
-## DXLens module (`/dxlens/*`)
-
-Mounted only when the Postgres DX baseline is available. The embedded
-`dxlens` sibling module serves its own mux under the prefix; JSON responses
-`Cache-Control: no-store`, 503 `{"error":"no snapshot available yet"}` until
-the first snapshot builds.
-
-- `GET /dxlens/api/v1/meta` — snapshot metadata (`version`, event/bucket
-  counts, coverage flags).
-- `GET /dxlens/api/v1/heatmap` — band × slot-of-day activity heatmap.
-  Params: `qth` (locator; omit = global), `surroundings`, `mode`
-  (`"typical"` default | `"recent_24h"` | `"compare"`). Per-qth results
-  cached 5 min; global 60 s; prewarmed at startup.
-- `GET /dxlens/api/v1/region_calendar` — region × slot matrix. Params:
-  `band`, `qth`?, `surroundings`. `source` is `"stats"` (30-day
-  statistics: p25/p50/p75/…) or `"events"`.
-- `GET /dxlens/api/v1/now` — what's hot in a 30-min slot. Params: `slot`
-  (0-47, default current) or legacy `hour` (0-23).
-- `POST /dxlens/api/v1/refresh` — embedded provider cannot refresh →
-  `{reloaded: false, reason: "provider does not support refresh"}`
-  (meaningful only in the standalone dxlens binary).
-- `GET /dxlens/*` — the DXLens web UI (static).
+  `proplab_events`) are dropped by the startup migration.
+- Flags `-pathscope-url`, `-qrz-username/-password`,
+  `-proplab-cell-retention-days`, `-proplab-sw-enable` and
+  `-opmode-agent-url` no longer exist; `deploy.sh` strips them from prod `ARGS`.
 
 ## Explicitly NOT here
 
 - **No opmode proxy/control** — direct by design; browser → local agent.
   (`/api/opmode/status` existed briefly but nothing consumed it; removed.)
-- **No per-spot/path link scoring** — that is horstprop's contract,
-  lives in cmd/horstprop.
+- **No per-spot/path link scoring** (the horstprop service was removed).
 - **No `/api/proplab/*`** and **no `/api/dxpulse/*`** — both features were
-  removed (see "Removed features"); only the pathscope feed tables remain.
+  removed (see "Removed features").

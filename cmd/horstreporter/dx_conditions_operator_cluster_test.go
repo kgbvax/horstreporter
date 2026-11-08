@@ -6,7 +6,6 @@ import (
 
 	"horstreporter/internal/cty"
 	"horstreporter/internal/maidenhead"
-	"horstreporter/internal/qrzlookup"
 )
 
 // testCtyDat is a two-entity cty.dat fixture: Germany (centroid 51N 10E,
@@ -31,13 +30,8 @@ func testCtyResolver(t *testing.T) *cty.Resolver {
 
 func TestDeriveOperatorClusterCharacterization(t *testing.T) {
 	ctyRes := testCtyResolver(t)
-	qrz := &stubResolver{infos: map[string]qrzlookup.Info{
-		"DL1ABC": {Locator: "JO62"},
-		"DL2BAD": {Locator: "notaloc"}, // invalid QRZ locator → cty fallback
-		"ZZ1ZZ":  {Locator: ""},        // empty → cty (zero centroid) → ""
-	}}
 	e := newDxBaselineEngine("")
-	e.SetResolvers(qrz, ctyRes)
+	e.SetCtyResolver(ctyRes)
 
 	ctyAnchor, _ := maidenhead.ClusterAnchor(maidenhead.FromLatLng(51, 10, 4))
 	jo62Anchor, _ := maidenhead.ClusterAnchor("JO62")
@@ -47,12 +41,10 @@ func TestDeriveOperatorClusterCharacterization(t *testing.T) {
 		{"", ""},
 		{"JO62", jo62Anchor},
 		{"JO62QM", jo62Anchor},
-		{"DL1ABC", jo62Anchor},
-		{"DL2BAD", ctyAnchor},
-		{"DL9XYZ", ctyAnchor}, // QRZ miss → cty
-		{"ZZ1ZZ", ""},         // zero centroid skipped
-		{"K1ABC", ""},         // unknown everywhere
-		{"XX99", ""},          // not a locator, unknown callsign
+		{"DL1ABC", ctyAnchor},
+		{"ZZ1ZZ", ""}, // zero centroid skipped
+		{"K1ABC", ""}, // unknown everywhere
+		{"XX99", ""},  // not a locator, unknown callsign
 	}
 	for _, c := range cases {
 		if got := e.deriveOperatorCluster(c.qth); got != c.want {

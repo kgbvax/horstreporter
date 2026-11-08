@@ -19,13 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"dxlens"
-
 	"horstreporter"
 	"horstreporter/internal/cty"
 	"horstreporter/internal/httpx"
-	"horstreporter/internal/proxy"
-	"horstreporter/internal/qrzlookup"
 
 	"golang.org/x/crypto/acme/autocert"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -249,7 +245,6 @@ func main() {
 	propBaselineFile := flag.String("prop-baseline-file", "prop_baseline.json", "Path to persistent unified per-source climatology storage (JSONL fallback when Postgres is not configured); imports -wspr-climatology-file as WSPR seed on first run")
 	dxPostgresDSN := flag.String("dx-postgres-dsn", "", "Postgres DSN for DX baseline and raw spot storage (falls back to env DX_POSTGRES_DSN, then the built-in default; keep secrets out of argv via the env var)")
 	dxPostgresFailFast := flag.Bool("dx-postgres-fail-fast", true, "Exit immediately when Postgres init/migration fails")
-	pathscopeURL := flag.String("pathscope-url", "http://127.0.0.1:9960", "Reverse-proxy /pathscope/* to this local pathscope scoring service (empty disables the mount)")
 	rbnEnable := flag.Bool("rbn-enable", false, "Enable optional RBN (Reverse Beacon Network) CW/RTTY telnet ingest")
 	rbnEndpoint := flag.String("rbn-endpoint", "telnet.reversebeacon.net:7000", "RBN raw telnet endpoint (host:port). :7000 = CW/RTTY no-auth; :7001 = FT8 (redundant with PSKReporter)")
 	rbnCallsign := flag.String("rbn-callsign", "", "Callsign sent at the RBN relay's \"enter your call\" prompt (required-in-practice to get a spot stream; no password/auth). Falls back to env RBN_CALLSIGN")
@@ -260,14 +255,11 @@ func main() {
 	wsprPollSeconds := flag.Int("wspr-poll-seconds", 60, "Seconds between WSPR polls (wspr.live rate-limits to ~20 req/min)")
 	wsprVerbose := flag.Bool("wspr-verbose", false, "Enable verbose WSPR polling logs")
 	ctyPath := flag.String("cty-path", os.Getenv("CTY_DAT_PATH"), "Path to AD1C cty.dat for DXCC entity lookup (empty uses the embedded copy)")
-	qrzUsernameFlag := flag.String("qrz-username", "", "QRZ username for optional callsign->locator enrichment")
-	qrzPasswordFlag := flag.String("qrz-password", "", "QRZ password for optional callsign->locator enrichment")
 	liveHistoryRetentionFlag := flag.Int("live-history-minutes", defaultLiveHistoryRetentionMinutes, "Maximum age of retained live spots in minutes")
 	dxBaselineMaxEventsFlag := flag.Int("dx-baseline-max-events", defaultDxBaselineMaxEvents, "Maximum number of retained DX baseline events")
 	dxRawSpotRetentionDaysFlag := flag.Int("dx-raw-spot-retention-days", 4, "Delete dx_raw_spots rows older than this many days (0 disables retention).")
-	proplabCellRetentionDaysFlag := flag.Int("proplab-cell-retention-days", 60, "Delete proplab cell bucket / SW series rows older than this many days (0 disables retention).")
 	// 35d covers the 30-day regionCalendarStats / WsprRegionCalendarStats lookback
-	// (propIntelRegionBaselineDaysBack = dxlensRegionStatsLookbackDays = 30) with headroom.
+	// (propIntelRegionBaselineDaysBack = 30) with headroom.
 	dxRegionBaselineRetentionDaysFlag := flag.Int("dx-region-baseline-retention-days", 35, "Delete dx_region_baseline_daily / wspr_region_baseline_daily rows older than this many day_index days (0 disables retention).")
 	// Almanac seasonal record (U3): folds final days of dx_region_baseline_daily
 	// into the permanent packed record and gates that table's prune by the fold
@@ -289,8 +281,6 @@ func main() {
 		"One-off: backfill the Almanac SNR counters of dx_region_baseline_daily from dx_raw_spots for the days before the SNR collection start, re-fold them and lower almanac_snr_since_day (false: skip).")
 	almanacSNRBackfillCutoffFlag := flag.Int64("almanac-snr-backfill-cutoff-unix", 0,
 		"Unix time the SNR columns were added (live SNR counting start) for the SNR backfill's partial deploy day; 0 = dx_meta almanac_snr_columns_added_unix. Prod: 1790609737.")
-	proplabSWEnableFlag := flag.Bool("proplab-sw-enable", false, "Enable space-weather index series ingest (NOAA SWPC kp/F10.7/xray/OVATION; consumed by pathscope)")
-	opModeAgentURLFlag := flag.String("opmode-agent-url", "", "Deprecated and ignored: backend never proxies to local operator agent")
 	pushEnableFlag := flag.Bool("push-enable", false, "Enable Web Push notification channel for surge alerts (requires VAPID keys via -push-vapid-private-key/-push-vapid-public-key or PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
 	pushVAPIDPrivateKeyFlag := flag.String("push-vapid-private-key", "", "VAPID private key (base64url) for signing Web Push messages. Falls back to env PUSH_VAPID_PRIVATE_KEY. Generate with scripts/generate-vapid-keys.sh.")
 	pushVAPIDPublicKeyFlag := flag.String("push-vapid-public-key", "", "VAPID public key (base64url) served at /api/push/vapid-public-key for the browser subscription flow. Falls back to env PUSH_VAPID_PUBLIC_KEY.")
@@ -322,12 +312,6 @@ func main() {
 	}
 	if *dxBaselineMaxEventsFlag > 0 {
 		dxBaselineMaxEvents = *dxBaselineMaxEventsFlag
-	}
-
-	// Prod's systemd unit still passes -opmode-agent-url; keep the flag
-	// registered (warn-only) until the unit is cleaned up.
-	if strings.TrimSpace(*opModeAgentURLFlag) != "" {
-		logInfo("-opmode-agent-url is deprecated and ignored; browser must call local operator agent directly")
 	}
 
 	// Web Push (U5): resolve VAPID keys from flag then env (mirrors the
@@ -393,11 +377,10 @@ func main() {
 		logInfo("prop baseline JSONL load failed (continuing with empty buckets): %v", err)
 	}
 	// Wire the DXCC cty.dat resolver into the baseline engine so the regional
-	// baseline can derive the operator's region for callsign targets (QRZ
-	// locator → region; fallback to DXCC entity centroid → region). The cty
-	// resolver is always available (embedded cty.dat); QRZ is wired later when
-	// credentials are present (shared with the RBN/WSPR ingests).
-	dxBaseline.SetResolvers(nil, loadCtyResolver(strings.TrimSpace(*ctyPath)))
+	// baseline can derive the operator's region for callsign targets (DXCC
+	// entity centroid → region). The cty resolver is always available
+	// (embedded cty.dat).
+	dxBaseline.SetCtyResolver(loadCtyResolver(strings.TrimSpace(*ctyPath)))
 	// Set by the startup spot-cache backfill below; recorded as the live
 	// history's gap/completeness when ingest starts.
 	var backfilledThrough int64
@@ -410,8 +393,7 @@ func main() {
 	} else {
 		logInfo("DX postgres initialized (dsn=%s)", maskDSN(dxPostgresDSNResolved))
 		// /api/almanac reader (U2), started before the fold so the fold's
-		// post-run pre-warm sees almanacSvc (happens-before). Resolvers are read per request, so the
-		// QRZ resolver wired later is picked up.
+		// post-run pre-warm sees almanacSvc (happens-before).
 		if st := dxBaseline.Store(); st != nil {
 			almanacAreas, err := parseAlmanacWSPRBackfillAreas(*almanacWSPRBackfillAreasFlag)
 			if err != nil {
@@ -515,24 +497,6 @@ func main() {
 		}
 	}
 
-	cellBucketFeed = newCellBucketFeed(dxBaseline, *proplabCellRetentionDaysFlag)
-	{
-		// Seed the cell bucket engine with the most recent 15 minutes of live
-		// history so pathscope has fresh rows immediately after restart.
-		cellBackfillMinutes := 15
-		if cached, err := dxBaseline.LoadRecentSpotCache(cellBackfillMinutes, time.Now().Unix()); err != nil {
-			logInfo("Cell bucket startup spot-cache backfill failed (last %d minutes): %v", cellBackfillMinutes, err)
-		} else if len(cached) > 0 {
-			cellBucketFeed.Backfill(cached)
-			logInfo("Cell bucket startup spot-cache backfill fed %d spots (last %d minutes)", len(cached), cellBackfillMinutes)
-		}
-		cellBucketFeed.Start()
-		logInfo("Cell bucket feed enabled (retention=%dd, sw=%v)", *proplabCellRetentionDaysFlag, *proplabSWEnableFlag)
-		if *proplabSWEnableFlag {
-			go startProplabSWIngest()
-		}
-	}
-
 	if *enablePprof {
 		go func() {
 			logInfo("Starting internal pprof server on localhost:6060")
@@ -556,29 +520,8 @@ func main() {
 	}
 	go startMQTT()
 
-	// QRZ callsign->locator enrichment + cty.dat DXCC resolver are shared by the optional
-	// RBN and WSPR ingests; construct once when either is enabled.
+	// Optional RBN and WSPR ingests.
 	if *rbnEnable || *wsprEnable {
-		qrzUsername := strings.TrimSpace(*qrzUsernameFlag)
-		qrzPassword := strings.TrimSpace(*qrzPasswordFlag)
-		if qrzUsername == "" {
-			qrzUsername = strings.TrimSpace(os.Getenv("QRZ_USERNAME"))
-		}
-		if qrzPassword == "" {
-			qrzPassword = strings.TrimSpace(os.Getenv("QRZ_PASSWORD"))
-		}
-		resolver := qrzlookup.Resolver(nil)
-		if qrzUsername != "" && qrzPassword != "" {
-			resolver = qrzlookup.NewClient(qrzUsername, qrzPassword)
-			logInfo("QRZ callsign enrichment enabled (shared by RBN + WSPR + regional baseline)")
-			// Wire QRZ into the baseline engine so the regional baseline can
-			// resolve callsign targets to a locator (→ region). The cty
-			// resolver was already set at startup; this upgrades the QRZ slot.
-			dxBaseline.SetResolvers(resolver, nil)
-		} else {
-			logInfo("QRZ callsign enrichment disabled (missing credentials); RBN spots are chart-only; regional baseline uses DXCC center fallback")
-		}
-
 		if *rbnEnable {
 			rbnCall := strings.TrimSpace(*rbnCallsign)
 			if rbnCall == "" {
@@ -598,7 +541,6 @@ func main() {
 				ReconnectDelay: reconnectDelay,
 				Verbose:        *rbnVerbose,
 				Callsign:       rbnCall,
-				Resolver:       resolver,
 			})
 		}
 
@@ -608,7 +550,6 @@ func main() {
 				Endpoint:    strings.TrimSpace(*wsprEndpoint),
 				PollSeconds: *wsprPollSeconds,
 				Verbose:     *wsprVerbose,
-				Resolver:    resolver,
 			})
 		}
 	}
@@ -637,7 +578,6 @@ func main() {
 		appMux.Handle("/", cachedStaticHandler(staticFS))
 	}
 	appMux.HandleFunc("/api/stream", streamHandler)
-	appMux.HandleFunc("/api/capture_snapshot", captureSnapshotHandler)
 	appMux.HandleFunc("/api/stats", statsHandler)
 	appMux.HandleFunc("/api/dx_conditions", dxConditionsHandler)
 	appMux.HandleFunc("/api/hot_bands", hotBandsHandler)
@@ -662,47 +602,6 @@ func main() {
 	appMux.HandleFunc("/api/push/subscribe", pushSubscribeHandler)
 	appMux.HandleFunc("/api/push/unsubscribe", pushUnsubscribeHandler)
 	appMux.HandleFunc("/api/push/subscription-status", pushSubscriptionStatusHandler)
-
-	// Reverse-proxy /pathscope/* to the local pathscope scoring service.
-	// pathscope exposes its own static assets AND an SSE stream; the
-	// proxy uses FlushInterval: -1 (set in proxy.Pathscope) so the
-	// SSE bytes flush per event rather than buffering. Thin passthrough;
-	// no scoring logic lives here.
-	if h, err := proxy.Pathscope(*pathscopeURL); err != nil {
-		logInfo("pathscope proxy disabled: %v", err)
-	} else if h != nil {
-		appMux.Handle("/pathscope/", h)
-		logInfo("pathscope proxy mounted at /pathscope/ -> %s", *pathscopeURL)
-	}
-
-	// Mount DXLens (separate module) at /dxlens/. Reads HorstReporter's
-	// in-memory DX baseline via a small adapter; no extra network hops.
-	// Cache TTL is 60s: the historic-data queries (recent-24h, region stats)
-	// scan tens of millions of rows and cost several seconds each; the rose
-	// and region calendar are propagation views, not real-time tickers.
-	if dxBaseline != nil {
-		provider := newDxlensProvider(dxBaseline, 60*time.Second)
-		appMux.Handle("/dxlens/", dxlens.NewHandler(provider, dxlens.MountOptions{
-			PathPrefix: "/dxlens/",
-			NoCache:    *dev,
-		}))
-		logInfo("DXLens mounted at /dxlens/")
-		// Pre-warm the snapshot so the heavy PG queries run during startup
-		// rather than on the first user request. Async so it doesn't delay
-		// the HTTP listener.
-		go func() {
-			started := time.Now()
-			snap := provider.Snapshot()
-			if snap == nil {
-				logInfo("DXLens snapshot pre-warm: no snapshot built")
-				return
-			}
-			logInfo("DXLens snapshot pre-warm complete in %s (recent_24h=%v, region_stats=%v)",
-				time.Since(started).Round(time.Millisecond),
-				len(snap.Recent24hBuckets) > 0,
-				len(snap.RegionCalendarStats) > 0)
-		}()
-	}
 
 	// dx_raw_spots retention loop: prune rows older than the configured
 	// window once an hour. Disabled when retention is set to 0 days.
