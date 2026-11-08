@@ -1105,7 +1105,7 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
     background: none;
 }
 
-/* Chip row: source multi-select (WSPR / PSKR / RBN / DXC) and the look
+/* Chip row: source multi-select (WSPR / PSKR / RBN) and the look
    (vs Normal / Day / Trend), each its own labelled group. */
 .wspr-src-chips {
     display: flex;

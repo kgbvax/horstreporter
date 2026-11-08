@@ -8,13 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Run backend
 go run ./cmd/horstreporter -dev -port 8080
 
-# Run with DX cluster ingest. Most clusters (e.g. DB0ERF) require a registered
-# callsign + individually-assigned password — pass via env so secrets stay out of
-# the shell history / process args (flags -dxcluster-username/-password also work).
-DXCLUSTER_USERNAME=<yourcall> DXCLUSTER_PASSWORD=<password> \
-  go run ./cmd/horstreporter -dev -port 8080 -dxcluster-enable -dxcluster-endpoint db0erf.de:7300
 # Optional: QRZ_USERNAME/QRZ_PASSWORD enable callsign→locator enrichment (dx_locator),
-# shared by DX-cluster and RBN ingests.
+# used by the RBN ingest and the regional baseline.
 # Optional RBN (Reverse Beacon Network) CW/RTTY telnet ingest — public relay, no password,
 # but it prompts for a callsign before streaming (set -rbn-callsign / RBN_CALLSIGN). Fills the
 # activity chart/live stream during CW/SSB contests when FT8 thins out. Minimal scope:
@@ -97,7 +92,6 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `dx_conditions.go` — DX baseline scoring engine
 - `live_area.go` — adaptive live area (`rings=auto`): widens a sparse home square ring by ring, cached per grid4, shared by stream / dx_conditions / hot_bands / prop_intel v2
 - `dx_postgres.go` — Postgres persistence for raw spots and baseline
-- `dxcluster.go` — optional DX cluster TCP ingest
 - `rbn.go` — optional RBN (Reverse Beacon Network) CW/RTTY raw telnet ingest; `source_type='rbn'`, activity + live only (kept out of the FT8-SNR baseline)
 - `wspr.go` — optional WSPR ingest (wspr.live ClickHouse HTTP poller); `source_type='wspr'`, reference-only (kept out of the FT8-SNR baseline, like RBN)
 - `opmode.go` — operator mode endpoint wiring (browser calls local agent directly; backend never proxies)
@@ -125,7 +119,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 
 **Key architectural constraints:**
 - `hub.history` is the in-memory rolling window; changes affect all SSE client fan-out and history dumps. It is **append-only**: elements are never written in place, expired spots are dropped by reslicing the front (`dropFrontLocked`), and readers take zero-copy views with `Hub.windowFromLocked` (never `make`+`copy` the window per request — tens of MB per call, up to ~200 MB for the full hour, which drove peak RSS past 4 GB under concurrency). Do not sort, compact or mutate it in place; `hub_view_test.go` (run with `-race`) guards this.
-- `MQTTMessage` is on the order of a million resident values: keep it at or under 152 bytes (`TestMQTTMessageStaysCompact`). DX-cluster/RBN-only annotations live behind `X *DXExtra` (read via `m.extra()`, build with `newDXExtra`); like everything in a history message they are immutable after the append.
+- `MQTTMessage` is on the order of a million resident values: keep it at or under 152 bytes (`TestMQTTMessageStaysCompact`). Like everything in a history message, its fields are immutable after the append.
 - `area_index.go` pre-filters the history window for `dx_conditions` / `hot_bands` (`EvaluateAreaWindow`). Its position predicate (an end in the area block) must stay a superset of every per-message test the evaluation applies except the regional count; if you add a message filter to `EvaluateArea` that can accept a message the index would reject, extend `areaIndexKey.wants` (the equivalence test will catch most omissions). The regional count (ends in the operator's cluster block) is not read from the positions: `cluster_counts.go` keeps it per second and band beside the index, and `areaIndexKey.classify` must keep applying the same rule as the walk's own count (conditions mode, feeding source, both locators, in-scope band).
 - Hot per-message paths (`matchBandEvent`, `extractMatchedBandEventArea`, `matchAndCreateSpot`, `liveArea.contains`) must stay allocation-free (the window scan builds its dedup key in a stack buffer and counts uniques through `keySet`, a set of 128-bit hashes; `hot_bands` evaluates in lite mode and must not read the per-band diagnostics the full evaluation adds): the feed's locators are mixed case, so use `locatorSquareXYFold` / `hasPrefixFold` instead of `strings.ToUpper` on every message, and build keys without `fmt`. Equivalence tests against the old implementations live in `extract_matched_equiv_test.go` / `match_equiv_test.go`.
 - Production embeds `static/` via `//go:embed static` in the root `embed.go`; `-dev` serves from disk with no-cache
@@ -137,7 +131,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 
 Canonical reference: `docs/api.md` (includes response shapes, caches, and explicit exclusions).
 
-- `GET /api/stream` — SSE; params: `qth`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `qth`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed; `rings=auto` widens a sparse home square server-side, see `live_area.go`, and is what the web app sends to all four live endpoints). A locator `qth` is matched at its 4-char square. Also accepts `v=2` (compact batched frames + `id:` resume via `Last-Event-ID`/`since`, see `stream_wire.go`), `enabled_bands`, `min_snr_mode`/`ssb_min_db`/`cw_min_db` and `include_dxcluster|rbn|wspr`. All sources (WSPR included) are scoped to the client's area; live frames are batched (≤1 s) and heartbeat with `: hb`.
+- `GET /api/stream` — SSE; params: `qth`, `minutes` (default 15, max 60), `surroundings`, `rings` (configurable "area of interest": with a locator `qth`, matches any sender/receiver within `rings` grid-squares; capped at 30; used by horstprop's region feed; `rings=auto` widens a sparse home square server-side, see `live_area.go`, and is what the web app sends to all four live endpoints). A locator `qth` is matched at its 4-char square. Also accepts `v=2` (compact batched frames + `id:` resume via `Last-Event-ID`/`since`, see `stream_wire.go`), `enabled_bands`, `min_snr_mode`/`ssb_min_db`/`cw_min_db` and `include_rbn|wspr`. All sources (WSPR included) are scoped to the client's area; live frames are batched (≤1 s) and heartbeat with `: hb`.
 - `GET /api/dx_conditions` — DX score/conditions per band; params: `qth`, `minutes`, `surroundings`, `cw_min_db`
 - `GET /api/prop_intel` — WSPR propagation-intelligence nowcast per (band × region); params: `qth`, `minutes`, `surroundings`, `cw_min_db`, `surge_threshold`, `from_here`. Sibling summary endpoint `GET /api/prop_intel/summary` (60s cached) feeds the mobile app's home-screen widgets
 - `GET /api/stats` — active connections, history size/minutes

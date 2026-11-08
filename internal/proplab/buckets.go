@@ -89,9 +89,7 @@ func (e *CellBucketEngine) Observe(m Spot) {
 	if dist > b.maxDistKm {
 		b.maxDistKm = dist
 	}
-	if lane != "dcx" {
-		b.snrs = append(b.snrs, m.RP)
-	}
+	b.snrs = append(b.snrs, m.RP)
 }
 
 // CloseBuckets finalises buckets whose start is before or at cutoff, returns

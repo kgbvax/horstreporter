@@ -370,11 +370,9 @@ func encodeHistoryBody(resp *historyResponse) ([]byte, error) {
 
 // loadHistoryMessages prefers the Postgres archive (token pushdown); a nil
 // store returns (nil, nil) and the handler falls back to hub.history.
-// includeDXCluster follows the -dx-cluster-enable ingest flag: the cluster
-// archive only exists when the ingest runs.
 func loadHistoryMessages(t0, t1 int64, tokens []string) ([]MQTTMessage, error) {
 	if dxBaseline != nil && dxBaseline.HasSpotStore() {
-		return dxBaseline.LoadSpotsRangeForTargets(t0, t1, tokens, dxClusterEnabled)
+		return dxBaseline.LoadSpotsRangeForTargets(t0, t1, tokens)
 	}
 	return nil, nil
 }

@@ -309,7 +309,7 @@ func (s *CellBucketFeed) tick() {
 }
 
 // Observe ingests one spot, deduplicated against the two ingest paths that
-// both deliver spots (DX-cluster observe + raw persistence).
+// both deliver spots (Observe for PSKReporter + PersistRawSpot for RBN/WSPR).
 func (s *CellBucketFeed) Observe(m MQTTMessage) {
 	if s == nil {
 		return

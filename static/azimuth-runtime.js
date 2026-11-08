@@ -455,9 +455,9 @@ function collectGridSquares(visibleSpots, resolution) {
     const squareData = {};
     visibleSpots.forEach(spot => {
         // Grid squares are FT8/RBN reports only, as in Mercator (renderers.js
-        // splitSpotSources): DX cluster and WSPR spots are drawn as markers.
+        // splitSpotSources): WSPR spots are drawn as markers.
         const src = String(spot?.sourceType || '').toLowerCase();
-        if (src === 'dxcluster' || src === 'wspr') return;
+        if (src === 'wspr') return;
         let loc = (spot.locator || '').substring(0, resolution);
         if (loc.length < resolution) loc = (spot.locator || '').substring(0, 4);
         if (loc.length < 4) return;
@@ -469,28 +469,6 @@ function collectGridSquares(visibleSpots, resolution) {
         squareData[loc].snrs.push(Number(spot.snr));
     });
     return squareData;
-}
-
-function drawDxClusterSpots(ctx, width, height, dxClusterSpots) {
-    for (const spot of dxClusterSpots) {
-        const p = projectToCanvas(spot.lat, spot.lng, width, height);
-        if (!p) continue;
-        const color = bandColors[spot.band] || bandColors.all;
-
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 4.3, 0, Math.PI * 2);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.globalAlpha = 0.95;
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.globalAlpha = 0.95;
-        ctx.fill();
-    }
-    ctx.globalAlpha = 1;
 }
 
 function drawWsprSpots(ctx, width, height, wsprSpots) {
@@ -579,10 +557,10 @@ export function selectProminentDxccLabels(featureCollection, center, options = {
 function getFilteredSpots(spots, renderCtx) {
     const { filterBand, filterRegion } = renderCtx;
     return spots.filter(spot => {
-        // The SSB/CW floors are FT8-calibrated: WSPR and DX cluster spots are
-        // exempt, as in Mercator and the session ring.
+        // The SSB/CW floors are FT8-calibrated: WSPR spots are exempt, as in
+        // Mercator and the session ring.
         const src = String(spot?.sourceType || '').toLowerCase();
-        const snrExempt = src === 'wspr' || src === 'dxcluster';
+        const snrExempt = src === 'wspr';
         if (!snrExempt && renderCtx.minSnrMode === 'ssb' && spot.snr < renderCtx.ssbMinDb) return false;
         if (!snrExempt && renderCtx.minSnrMode === 'cw' && spot.snr < renderCtx.cwMinDb) return false;
         if (!renderCtx.enabledBands.has(spot.band)) return false;
@@ -1112,7 +1090,6 @@ export function drawTrendHalo(ctx, width, height, filteredSpots) {
     const split = maxAge / 2;
 
     for (const s of filteredSpots) {
-        if (String(s?.sourceType || '').toLowerCase() === 'dxcluster') continue;
         if (!Number.isFinite(s?.lat) || !Number.isFinite(s?.lng)) continue;
         const sector = Math.floor((bearingFromCenter(s.lat, s.lng) / 360) * SECTORS) % SECTORS;
         const band = s?.band || 'all';
@@ -1549,7 +1526,6 @@ function buildAzimuthDensityField(filteredSpots, width, height, step, radius) {
     const agg = new Map();
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const spot of filteredSpots) {
-        if (String(spot?.sourceType || '').toLowerCase() === 'dxcluster') continue;
         const lat = Number(spot.lat), lng = Number(spot.lng), snr = Number(spot.snr);
         if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(snr)) continue;
         const p = projectToCanvas(lat, lng, width, height);
@@ -1715,15 +1691,13 @@ function fillAzimuthContours(ctx, field) {
 }
 
 function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, renderCtx) {
-    // Split once so drawDxClusterSpots/drawWsprSpots don't each re-filter the
-    // full array (two extra O(n) passes per frame).
-    const dxClusterSpots = [];
+    // Split once so drawWsprSpots doesn't re-filter the full array (an extra
+    // O(n) pass per frame).
     const wsprSpots = [];
     const regularSpots = [];
     for (const spot of filteredSpots) {
         const src = String(spot?.sourceType || '').toLowerCase();
-        if (src === 'dxcluster') dxClusterSpots.push(spot);
-        else if (src === 'wspr') wsprSpots.push(spot);
+        if (src === 'wspr') wsprSpots.push(spot);
         else regularSpots.push(spot);
     }
 
@@ -1760,8 +1734,7 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, render
             ctx.fill();
         }
         state.hiddenGridSquaresCount = hiddenSquares;
-        drawDxClusterSpots(ctx, width, height, dxClusterSpots);
-    drawWsprSpots(ctx, width, height, wsprSpots);
+        drawWsprSpots(ctx, width, height, wsprSpots);
         ctx.globalAlpha = 1;
         return;
     }
@@ -1809,8 +1782,7 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, render
             }
         }
         state.hiddenGridSquaresCount = 0;
-        drawDxClusterSpots(ctx, width, height, dxClusterSpots);
-    drawWsprSpots(ctx, width, height, wsprSpots);
+        drawWsprSpots(ctx, width, height, wsprSpots);
         ctx.globalAlpha = 1;
         return;
     }
@@ -1827,7 +1799,6 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, render
         ctx.globalAlpha = 0.8;
         ctx.fill();
     }
-    drawDxClusterSpots(ctx, width, height, dxClusterSpots);
     drawWsprSpots(ctx, width, height, wsprSpots);
     ctx.globalAlpha = 1;
 }

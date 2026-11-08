@@ -6,8 +6,8 @@ import (
 )
 
 func TestSourceProfilesSanity(t *testing.T) {
-	if len(propIntelSourceProfiles) != 4 {
-		t.Fatalf("expected 4 profiles, got %d", len(propIntelSourceProfiles))
+	if len(propIntelSourceProfiles) != 3 {
+		t.Fatalf("expected 3 profiles, got %d", len(propIntelSourceProfiles))
 	}
 	seenTag := map[string]string{}
 	seenName := map[string]string{}
@@ -44,19 +44,15 @@ func TestSourceProfilesSanity(t *testing.T) {
 		t.Fatalf("rbn cw floor expected +8: %+v", rbn)
 	}
 
-	dxc := propIntelProfilesByName["dxcluster"]
-	if dxc.SSBFloorDb != nil || dxc.CWFloorDb != nil || dxc.DigitalFloorDb != nil {
-		t.Fatalf("dxcluster carries no amplitude — all floors must be nil: %+v", dxc)
-	}
-	if dxc.PresenceMinSpots < 2 {
-		t.Fatalf("dxcluster presence floor must guard against busted calls: %+v", dxc)
+	if _, ok := propIntelProfilesByName["dxcluster"]; ok {
+		t.Fatal("the removed dxcluster source must not have a profile")
 	}
 
 	pskr := propIntelProfilesByName["pskr"]
 	if pskr.ReceiverSide != "rc" {
 		t.Fatalf("pskr receiver is the reporter (RC/RL): %+v", pskr)
 	}
-	for _, other := range []string{"wspr", "rbn", "dxcluster"} {
+	for _, other := range []string{"wspr", "rbn"} {
 		if propIntelProfilesByName[other].ReceiverSide != "sc" {
 			t.Fatalf("%s receiver side must be sc", other)
 		}
@@ -82,11 +78,11 @@ func TestParseSourcesParam(t *testing.T) {
 		return s
 	}
 
-	// Empty → all four, canonical order.
+	// Empty → all three, canonical order.
 	r := httptest.NewRequest("GET", "/api/prop_intel/v2", nil)
 	got := join(names(parseSourcesParam(r)))
-	if got != "wspr,pskr,rbn,dxcluster" {
-		t.Fatalf("empty sources param = all four, got %q", got)
+	if got != "wspr,pskr,rbn" {
+		t.Fatalf("empty sources param = all three, got %q", got)
 	}
 
 	// CSV.
@@ -97,22 +93,30 @@ func TestParseSourcesParam(t *testing.T) {
 	}
 
 	// Repeated keys.
-	r = httptest.NewRequest("GET", "/api/prop_intel/v2?sources=rbn&sources=dxcluster", nil)
+	r = httptest.NewRequest("GET", "/api/prop_intel/v2?sources=rbn&sources=pskr", nil)
 	got = join(names(parseSourcesParam(r)))
-	if got != "rbn,dxcluster" {
+	if got != "pskr,rbn" {
 		t.Fatalf("repeated keys, got %q", got)
 	}
 
-	// Unknown values dropped; all-unknown falls back to all four.
+	// The removed dxcluster source is dropped like any unknown name (old
+	// clients may still send it).
+	r = httptest.NewRequest("GET", "/api/prop_intel/v2?sources=rbn&sources=dxcluster", nil)
+	got = join(names(parseSourcesParam(r)))
+	if got != "rbn" {
+		t.Fatalf("removed dxcluster must be dropped, got %q", got)
+	}
+
+	// Unknown values dropped; all-unknown falls back to all three.
 	r = httptest.NewRequest("GET", "/api/prop_intel/v2?sources=wspr,bogus", nil)
 	got = join(names(parseSourcesParam(r)))
 	if got != "wspr" {
 		t.Fatalf("unknown dropped, got %q", got)
 	}
-	r = httptest.NewRequest("GET", "/api/prop_intel/v2?sources=bogus,fake", nil)
+	r = httptest.NewRequest("GET", "/api/prop_intel/v2?sources=bogus,dxcluster", nil)
 	got = join(names(parseSourcesParam(r)))
-	if got != "wspr,pskr,rbn,dxcluster" {
-		t.Fatalf("all-unknown = all four, got %q", got)
+	if got != "wspr,pskr,rbn" {
+		t.Fatalf("all-unknown = all three, got %q", got)
 	}
 }
 

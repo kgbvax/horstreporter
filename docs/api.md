@@ -80,14 +80,14 @@ horstprop's region feed, and `auto` by the web app).
 Server-side filters (spots the client would discard are not sent):
 `enabled_bands` (CSV; empty = all), `min_snr_mode` (`"ssb"`|`"cw"`, applies to
 FT8/PSKReporter and RBN spots only), `ssb_min_db` (default 0), `cw_min_db`
-(default -15), `include_dxcluster` / `include_rbn` / `include_wspr` (default
+(default -15), `include_rbn` / `include_wspr` (default
 true; `false` drops that source — the web app sends `include_rbn` and
 `include_wspr` for sources the user has hidden).
 
-Every source is scoped to the client's area: WSPR, RBN, DX cluster and
+Every source is scoped to the client's area: WSPR, RBN and
 PSKReporter spots are only sent when the sender or receiver square is inside the
 qth (and `rings`) area. `reporterLocator` is always the receiving station's
-square (PSKReporter `RL`; DX cluster, RBN and WSPR `SL`).
+square (PSKReporter `RL`; RBN and WSPR `SL`).
 
 With `rings`, the first frame is `event: area` carrying the `area` object above
 (before the history dump, and again after every reconnect). Without `rings`
@@ -110,8 +110,7 @@ data: {}
 
 Spot fields: `lat`, `lng` float; `snr` int; `ageSeconds`; `locator` (the far
 end); `reporterLocator` (omitempty); `sourceType`
-(`"mqtt"`|`"dxcluster"`|`"rbn"`|`"wspr"`); `band`; `sender`, `receiver` (only
-for DX-cluster spots). v1 has no ids and no resume.
+(`"mqtt"`|`"rbn"`|`"wspr"`); `band`. v1 has no ids and no resume.
 
 **v2 (`v=2`, opt-in; used by the web app)** — compact tuples in batched frames,
 about a quarter of the v1 bytes:
@@ -126,9 +125,8 @@ event: spots   id: <epoch>-<seq>   data: {…}                 (live batches)
 ```
 
 Tuple: `age = n − spot time` (may be negative under clock skew; clamp to 0, the
-exact time is `n − age`); `src` omitted or `""` = `mqtt`, `"d"` dxcluster,
-`"r"` rbn, `"w"` wspr, anything else verbatim; `snd`/`rcv` only for
-DX-cluster spots; trailing empty elements are trimmed (so `rep` can be `""`
+exact time is `n − age`); `src` omitted or `""` = `mqtt`,
+`"r"` rbn, `"w"` wspr, anything else verbatim; trailing empty elements are trimmed (so `rep` can be `""`
 when only `src` follows). `lat`/`lng` are not sent: the client derives them
 from `loc` (Maidenhead square centre, same maths as `locatorToLatLng`).
 
@@ -142,7 +140,7 @@ is unusable (`epoch` = server restarted, `area` = `prev_radius` differs from
 the current area radius, `bad_id`). When the client widens its filter it also
 sends `prev=1` with the previous filter as `prev_enabled_bands`,
 `prev_min_snr_mode`, `prev_ssb_min_db`, `prev_cw_min_db`,
-`prev_include_dxcluster|rbn|wspr` and `prev_radius`; the server then also
+`prev_include_rbn|wspr` and `prev_radius`; the server then also
 resends spots the previous filter excluded. A native auto-reconnect re-sends
 the original URL, so it repeats those `prev_*` params (harmless: more overlap).
 The web app closes the stream after the tab has been hidden for 3 minutes and
@@ -161,8 +159,7 @@ server-driven frame capture.
 Params: `qth` (required), `snapshot_at` (unix seconds, default now; bad
 value → 400), `minutes` (default 15, max 720), `surroundings`,
 `min_snr_mode` (`"ssb"`|`"cw"`), `ssb_min_db` (default 0), `cw_min_db`
-(default -15), `selected_band`, `enabled_bands` (CSV), `include_dxcluster`
-(default true), `include_rbn` (default true), `include_wspr` (default true).
+(default -15), `selected_band`, `enabled_bands` (CSV), `include_rbn` (default true), `include_wspr` (default true).
 
 Response: `{qth, surroundings, snapshot_at, window_minutes, generated_at,
 count, spots: [<stream spot shape>]}`.
@@ -198,7 +195,7 @@ live history (at most its retention) instead of Postgres.
 
 `activity_ratio` compares like with like: spots with an end in the operator's
 6×6-square cluster, counted the way the cluster baseline is written (per end,
-all SNR, FT8/FT4/DX-cluster only, no dedup), over the live-history span (≤ 60
+all SNR, FT8/FT4 only, no dedup), over the live-history span (≤ 60
 min), against the per-slot cluster baseline integrated over that same span.
 `above` ≥ 1.5×, `below` ≤ 0.67× (on the 2-decimal ratio); `low_sample` when both observed and expected
 are under 20; `no_baseline` when a compared slot has no cluster baseline or
@@ -453,7 +450,7 @@ Params: v1's (`qth` required, `surroundings`, `minutes`, `surge_threshold`,
   control, sent by the web panel). When present they REPLACE the per-source
   profile floors for the SNR-floored sources (`pskr`, `rbn` CW) with the
   given values, clamped ssb −10..30 / cw −40..20. Absent (and for `wspr`'s
-  budget model and `dxcluster`'s presence rule) the profile floors apply.
+  budget model) the profile floors apply.
 
 - `rings`: see Conventions. The area is then the block of squares around the
   QTH and the response carries `area`. Without `from_here`, `atypical` is
@@ -497,9 +494,8 @@ Params: v1's (`qth` required, `surroundings`, `minutes`, `surge_threshold`,
 
 - `sources`: source selection, CSV or repeated (`?sources=wspr,pskr` or
   `?sources=wspr&sources=rbn`). Public names: `wspr` (WSPR beacons),
-  `pskr` (PSKReporter FT8/FT4), `rbn` (RBN CW/RTTY skimmers),
-  `dxcluster` (DX cluster spots). Unknown names are dropped; absent/empty
-  selects all four.
+  `pskr` (PSKReporter FT8/FT4), `rbn` (RBN CW/RTTY skimmers). Unknown names (including the removed
+  `dxcluster`) are dropped; absent/empty selects all three.
 
 Response: v1's envelope plus `sources_requested`; `cells[]` per (band ×
 region):
@@ -530,15 +526,13 @@ region):
     not false — a CW skimmer can never prove SSB.
   - `ssb_min_db`/`cw_min_db` override these floors when the global Min SNR
     control is set (see params).
-  - `dxcluster` — no amplitude: `open` = ≥ 2 spots in the window (a single
-    spot may be a busted callsign); no mode flags (`presence`).
 - `atypical` per source z-scores the live rate against THAT source's
   climatology (≥ 3 sample days, nonzero stddev, same cold-start confidence
   discount as v1). The rollup cell carries the highest-confidence atypical;
   `atypical_agreement` is the fraction of active sources that surged
   (replaces v1's FT8 flavor cross-reference).
 - `expected` / `expected_spots` (from-here view only, optional): the mean
-  PSKReporter FT8/FT4 (plus DX-cluster) count for this band and far-end region
+  PSKReporter FT8/FT4 count for this band and far-end region
   over the same clock window on the last 28 complete UTC days with
   PSKReporter ingest (≥ 3 such days), from `dx_region_baseline_daily` summed
   over the area's squares; and the live count of those same spots. Their
@@ -556,7 +550,7 @@ region):
 For the operator's area: per band, far-end region and 30-min UTC slot, on how
 many of the last 30 complete UTC days the slot was open (`n`) out of the days
 it could be observed (`m`), plus an agenda of openings that are usual now or
-in the next 12 h. Source: PSKReporter FT8/FT4 + DX-cluster spots with
+in the next 12 h. Source: PSKReporter FT8/FT4 spots with
 locators (the region baseline); the WSPR backfill layer never enters this
 view. Days ≤ the fold watermark come from the seasonal record, later days
 from `dx_region_baseline_daily`, in one read-only REPEATABLE READ
@@ -638,8 +632,8 @@ Response:
 - SNR floor (`min_snr` given; KTD13 of the Almanac plan): `min_snr` echoes
   the request, `snr_tier` is the applied tier floor (both `null` without a
   floor). A day is open in a slot when ≥ `k` of its spots reached the floor
-  (spots with a real SNR only: PSKReporter; DX-cluster spots have none, so a
-  cluster-only cell is not open). Days before `snr_since` have no SNR data
+  (spots with a real SNR only: PSKReporter; rows from the removed DX-cluster
+  ingest have none, so a cluster-only cell is not open). Days before `snr_since` have no SNR data
   and are left out of both `n` and `m` (unknown, never closed); `m` still
   uses the all-spot alive/active rules otherwise. `share[s]` is the pooled
   share of spots ≥ the floor among the SNR-carrying spots over the slot's
@@ -819,7 +813,7 @@ and byte accounting, running stream wire counters (`stream_bytes_wire_total`
 post-gzip bytes including open sessions, `stream_history_bytes_total`,
 `stream_spots_sent_total`, `stream_frames_total` flushes,
 `stream_resume_delta_total`, `stream_resume_full_total`; `wspr_duplicate_rows`
-counts overlapping-poll rows dropped at ingest), DX baseline event counts, DX-cluster / RBN / WSPR ingest
+counts overlapping-poll rows dropped at ingest), DX baseline event counts, RBN / WSPR ingest
 counters, plus a `prop_intel` block (`requests`, `errors`, `surges_detected`)
 and a `push` block (`surges_detected`, `push_sent`, `push_errors`). The
 de-facto health endpoint.
@@ -902,7 +896,8 @@ A sibling `almanac_snr_backfill` sub-object reports the one-off SNR backfill
 
 - `dx_region_baseline_daily` carries six SNR counters next to `spot_count`
   (INTEGER NOT NULL DEFAULT 0): `snr_spots` (spots with a real SNR —
-  PSKReporter; DX-cluster spots are counted in `spot_count` only) and the
+  PSKReporter; rows from the removed DX-cluster ingest are counted in
+  `spot_count` only) and the
   cumulative `snr_ge_m20`, `snr_ge_m15`, `snr_ge_m10`, `snr_ge_m5`,
   `snr_ge_0` (spots with SNR ≥ −20 … ≥ 0 dB). Written by the live ingest
   and, once, for the days before the SNR start, by the SNR backfill (below);
@@ -931,7 +926,7 @@ A sibling `almanac_snr_backfill` sub-object reports the one-off SNR backfill
   `false` skips it.
   - **Rows:** only `source_type = 'mqtt'` (PSKReporter). They pass the live
     gates (FT8/FT4, known band, both locators) and key emitter unchanged;
-    DX-cluster / RBN / WSPR rows are never read. The live 24 h late-spot
+    RBN / WSPR (and legacy DX-cluster) rows are never read. The live 24 h late-spot
     clamp is not applied, and every counter is capped at the row's
     `spot_count`. `spot_count` itself is never touched.
   - **Range:** every UTC day before the deploy day that `dx_raw_spots` covers

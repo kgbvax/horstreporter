@@ -1,6 +1,6 @@
 // Package feed implements PropFeedSource: it consumes HorstReporter's SSE stream
-// read-only and maps each locator-level streamSpot into a propcontract.PropReport,
-// dropping dxcluster-sourced spots. It never writes to HorstReporter.
+// read-only and maps each locator-level streamSpot into a propcontract.PropReport.
+// It never writes to HorstReporter.
 package feed
 
 import (
@@ -28,11 +28,8 @@ type streamSpot struct {
 }
 
 // mapSpot converts a streamSpot to a PropReport relative to the ingest time.
-// ok=false for dxcluster spots or spots missing the data Layer 1 needs.
+// ok=false for spots missing the data Layer 1 needs.
 func mapSpot(s streamSpot, now time.Time) (propcontract.PropReport, bool) {
-	if strings.EqualFold(s.SourceType, "dxcluster") {
-		return propcontract.PropReport{}, false // never use cluster spots
-	}
 	if s.Band == "" || s.Locator == "" {
 		return propcontract.PropReport{}, false
 	}

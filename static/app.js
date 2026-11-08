@@ -11,7 +11,7 @@ import { initCondNow } from './cond-now.js';
 import { initCondDock } from './cond-dock.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { initPushUI } from './push.js';
-import { updateMapVisualization, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint, whenActiveAreaRendered, visibleMapSpots, setRailSpanOverride } from './renderers.js';
+import { updateMapVisualization, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, clearWsprMarkers, resetRenderFingerprint, whenActiveAreaRendered, visibleMapSpots, setRailSpanOverride } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming, icon } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getRigBand } from './opmode.js';
@@ -85,8 +85,7 @@ function applyBandChange() {
 
 // The high-volume optional sources the stream can leave out, keyed by the
 // stream's include_<name> parameter, with the checkbox that shows/hides each
-// on the map. DX cluster is deliberately not listed: its volume is tiny, and
-// it stays on the stream and the checkbox filters it client-side.
+// on the map.
 const STREAM_SOURCE_TOGGLES = [
     ['rbn', 'show-rbn-spots'],
     ['wspr', 'show-wspr-spots'],
@@ -224,7 +223,6 @@ function parseCaptureConfig() {
     const minSnrMode = (params.get('min_snr_mode') || 'ssb').trim().toLowerCase();
     const selectedBand = (params.get('selected_band') || 'all').trim().toLowerCase();
     const enabledBandsCsv = (params.get('enabled_bands') || '').trim();
-    const includeDxcluster = parseBoolParam(params.get('include_dxcluster'), false);
 
     return {
         enabled: true,
@@ -239,7 +237,6 @@ function parseCaptureConfig() {
         cwMinDb: Number.parseInt(params.get('cw_min_db') || '-15', 10),
         selectedBand,
         enabledBandsCsv,
-        includeDxcluster,
         countryColoring: parseBoolParam(params.get('country_coloring'), true),
         dk3jfMode: parseBoolParam(params.get('dk3jf_mode'), true)
     };
@@ -700,10 +697,9 @@ function currentProjection() {
 }
 
 function getRenderableMapSpots(spots) {
-    const showDXClusterSpots = document.getElementById('show-dxcluster-spots')?.checked !== false;
     const showRbnSpots = document.getElementById('show-rbn-spots')?.checked !== false;
     const showWsprSpots = document.getElementById('show-wspr-spots')?.checked !== false;
-    const srcFilter = !(showDXClusterSpots && showRbnSpots && showWsprSpots);
+    const srcFilter = !(showRbnSpots && showWsprSpots);
 
     // Render-time age gate using TRUE wall-clock age, not the prune's 5s-stepped
     // ageSeconds. The prune (state.renderInterval) already reaps over-age spots
@@ -734,7 +730,6 @@ function getRenderableMapSpots(spots) {
         }
         if (!srcFilter) return true;
         const src = String(spot?.sourceType || '').toLowerCase();
-        if (!showDXClusterSpots && src === 'dxcluster') return false;
         if (!showRbnSpots && src === 'rbn') return false;
         if (!showWsprSpots && src === 'wspr') return false;
         return true;
@@ -1065,9 +1060,6 @@ function applyCaptureConfigToControls(config) {
         }
     });
 
-    const showDxclusterEl = document.getElementById('show-dxcluster-spots');
-    if (showDxclusterEl) showDxclusterEl.checked = config.includeDxcluster;
-
     const countryColoringEl = document.getElementById('show-country-coloring');
     if (countryColoringEl) countryColoringEl.checked = Boolean(config.countryColoring);
 
@@ -1095,7 +1087,6 @@ async function runCaptureBootstrap(config) {
     params.set('cw_min_db', String(config.cwMinDb));
     params.set('selected_band', config.selectedBand);
     if (config.enabledBandsCsv) params.set('enabled_bands', config.enabledBandsCsv);
-    params.set('include_dxcluster', config.includeDxcluster ? 'true' : 'false');
     if (Number.isFinite(config.snapshotAt)) {
         params.set('snapshot_at', String(config.snapshotAt));
     }
@@ -1917,7 +1908,6 @@ function startLiveStream(preserveData = false) {
             map.removeLayer(state.heatLayer);
             state.heatLayer = null;
         }
-        clearDxClusterMarkers();
         resetRenderFingerprint();
 
         if (state.qthLayer) {
@@ -2375,7 +2365,6 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
             map.removeLayer(state.heatLayer);
             state.heatLayer = null;
         }
-        clearDxClusterMarkers();
         clearWsprMarkers();
         resetRenderFingerprint();
         if (state.qthLayer) {
@@ -2512,7 +2501,6 @@ async function startTimelineMode(rangeSeconds) {
     // timeline-incompatible overlays are cleared.
     streamRestartedDuringTimeline = false;
     if (state.heatLayer) { map.removeLayer(state.heatLayer); state.heatLayer = null; }
-    clearDxClusterMarkers();
     clearWsprMarkers();
     resetRenderFingerprint();
     // The submit button keeps reflecting the (still running) stream: a stop

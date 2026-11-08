@@ -5,7 +5,7 @@
 
 import { locatorToLatLngJS } from './utils.js';
 
-const SOURCE_NAMES = { d: 'dxcluster', r: 'rbn', w: 'wspr' };
+const SOURCE_NAMES = { r: 'rbn', w: 'wspr' };
 
 // Locators repeat heavily (a few hundred squares per session), so lat/lng are
 // memoized; the cap only guards against a pathological feed.

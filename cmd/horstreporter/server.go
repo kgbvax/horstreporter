@@ -243,8 +243,6 @@ type streamSpot struct {
 	ReporterLocator string  `json:"reporterLocator,omitempty"`
 	SourceType      string  `json:"sourceType,omitempty"`
 	Band            string  `json:"band"`
-	Sender          string  `json:"sender,omitempty"`
-	Receiver        string  `json:"receiver,omitempty"`
 }
 
 type squareDetailReport struct {
@@ -324,7 +322,7 @@ func resolveQTHQuery(r *http.Request) (string, bool) {
 }
 
 func toStreamSpot(spot Spot) streamSpot {
-	s := streamSpot{
+	return streamSpot{
 		Lat:             spot.Lat,
 		Lng:             spot.Lng,
 		SNR:             spot.SNR,
@@ -334,13 +332,6 @@ func toStreamSpot(spot Spot) streamSpot {
 		SourceType:      spot.SourceType,
 		Band:            spot.Band,
 	}
-	// Only DX cluster spots need callsigns on the wire (hover tooltip on the
-	// cluster markers); regular spots stay trimmed.
-	if spot.SourceType == "dxcluster" {
-		s.Sender = spot.Sender
-		s.Receiver = spot.Receiver
-	}
-	return s
 }
 
 // streamClientFilter carries the band/SNR filters the browser requests so the
@@ -351,9 +342,8 @@ type streamClientFilter struct {
 	minSnrMode   string
 	ssbMinDb     int
 	cwMinDb      int
-	// excludeDx/excludeRBN/excludeWSPR drop whole sources (include_*=false on
-	// the stream). Zero value keeps every source.
-	excludeDx   bool
+	// excludeRBN/excludeWSPR drop whole sources (include_*=false on the
+	// stream). Zero value keeps every source.
 	excludeRBN  bool
 	excludeWSPR bool
 }
@@ -365,7 +355,7 @@ func newStreamClientFilter(r *http.Request) streamClientFilter {
 
 // streamFilterFromQuery parses the filter from q, reading each parameter as
 // prefix+name (the resume protocol sends the previous filter as prev_*).
-// withSources also honours include_dxcluster/include_rbn/include_wspr.
+// withSources also honours include_rbn/include_wspr.
 func streamFilterFromQuery(q url.Values, prefix string, withSources bool) streamClientFilter {
 	f := streamClientFilter{
 		enabledBands: parseEnabledBands(q.Get(prefix + "enabled_bands")),
@@ -374,7 +364,6 @@ func streamFilterFromQuery(q url.Values, prefix string, withSources bool) stream
 		cwMinDb:      parseIntDefault(q.Get(prefix+"cw_min_db"), -15),
 	}
 	if withSources {
-		f.excludeDx = !parseIncludeFlag(q, prefix+"include_dxcluster")
 		f.excludeRBN = !parseIncludeFlag(q, prefix+"include_rbn")
 		f.excludeWSPR = !parseIncludeFlag(q, prefix+"include_wspr")
 	}
@@ -392,10 +381,6 @@ func parseIncludeFlag(q url.Values, name string) bool {
 
 func (f streamClientFilter) spotAllowed(s Spot) bool {
 	switch s.SourceType {
-	case "dxcluster":
-		if f.excludeDx {
-			return false
-		}
 	case "rbn":
 		if f.excludeRBN {
 			return false
@@ -410,8 +395,9 @@ func (f streamClientFilter) spotAllowed(s Spot) bool {
 			return false
 		}
 	}
-	// SNR thresholds are calibrated for FT8/MQTT spots; leave DX cluster,
-	// WSPR and RBN unfiltered by SNR because they use different scales.
+	// SNR thresholds are calibrated for FT8/MQTT spots; RBN shares them, while
+	// WSPR (and any other non-PSKR source) stays unfiltered by SNR because it
+	// uses a different scale.
 	if s.SourceType != "" && s.SourceType != "mqtt" && s.SourceType != "rbn" {
 		return true
 	}
@@ -573,7 +559,6 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	started, completed, active, bytesTotal, avgBytes := streamAccounting.snapshot()
-	dxConnAttempts, dxConnected, dxLinesSeen, dxParsed, dxPersisted, dxForwarded, dxDroppedNoLoc := dxClusterAccounting.snapshot()
 	rbnAttempts, rbnConnected, rbnLinesSeen, rbnParsed, rbnPersisted, rbnForwarded, rbnDroppedNoLoc := rbnAccounting.snapshot()
 	wsprAttempts, wsprFailures, wsprRowsSeen, wsprParsed, wsprPersisted, wsprForwarded, wsprDroppedNoLoc := wsprAccounting.snapshot()
 	dxBaselineEventCount := 0
@@ -613,13 +598,6 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		DxBaselineEventCount int                  `json:"dx_baseline_event_count"`
 		DxBaselineHistoryM   int                  `json:"dx_baseline_history_minutes"`
 		DxBaselineMaxEvents  int                  `json:"dx_baseline_max_events"`
-		DxClusterConnAttempt int64                `json:"dxcluster_connect_attempts"`
-		DxClusterConnected   int64                `json:"dxcluster_connected_sessions"`
-		DxClusterLinesSeen   int64                `json:"dxcluster_lines_seen"`
-		DxClusterParsed      int64                `json:"dxcluster_parsed_spots"`
-		DxClusterPersisted   int64                `json:"dxcluster_persisted_spots"`
-		DxClusterForwarded   int64                `json:"dxcluster_live_forwarded"`
-		DxClusterDroppedLoc  int64                `json:"dxcluster_dropped_no_locator"`
 		RbnConnAttempt       int64                `json:"rbn_connect_attempts"`
 		RbnConnected         int64                `json:"rbn_connected_sessions"`
 		RbnLinesSeen         int64                `json:"rbn_lines_seen"`
@@ -658,13 +636,6 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		DxBaselineEventCount: dxBaselineEventCount,
 		DxBaselineHistoryM:   dxBaselineHistoryMinutes,
 		DxBaselineMaxEvents:  dxBaselineMaxEvents,
-		DxClusterConnAttempt: dxConnAttempts,
-		DxClusterConnected:   dxConnected,
-		DxClusterLinesSeen:   dxLinesSeen,
-		DxClusterParsed:      dxParsed,
-		DxClusterPersisted:   dxPersisted,
-		DxClusterForwarded:   dxForwarded,
-		DxClusterDroppedLoc:  dxDroppedNoLoc,
 		RbnConnAttempt:       rbnAttempts,
 		RbnConnected:         rbnConnected,
 		RbnLinesSeen:         rbnLinesSeen,

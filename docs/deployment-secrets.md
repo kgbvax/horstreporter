@@ -28,7 +28,7 @@ Reads these from the environment (flags still win when passed):
 | --- | --- | --- |
 | `DX_POSTGRES_DSN` | `-dx-postgres-dsn` | Postgres DSN incl. password. Logged **masked** (`maskDSN`), with a `DSN source:` provenance line. |
 | `QRZ_USERNAME` / `QRZ_PASSWORD` | `-qrz-username` / `-qrz-password` | QRZ callsign→locator enrichment. |
-| `DXCLUSTER_USERNAME` / `DXCLUSTER_PASSWORD` | `-dxcluster-username` / `-dxcluster-password` | DX cluster login. |
+| `RBN_CALLSIGN` | `-rbn-callsign` | Callsign sent to the RBN relay. Legacy fallback: `DXCLUSTER_USERNAME` (the removed DX cluster ingest's login) is still read when this is unset. |
 | `PUSH_VAPID_PRIVATE_KEY` / `PUSH_VAPID_PUBLIC_KEY` | `-push-vapid-private-key` / `-push-vapid-public-key` | Web Push signing pair; only used with `-push-enable`. Create with `scripts/generate-vapid-keys.sh` (see below). Rotating the pair invalidates every browser subscription. |
 
 `/etc/default/horstreporter` (`root:root`, `0600`) holds both: the secrets as
@@ -39,8 +39,7 @@ env vars and the non-secret flags in `ARGS`:
 DX_POSTGRES_DSN=postgres://dxuser:CHANGEME@localhost:5432/dxdata?sslmode=disable
 QRZ_USERNAME=YOURCALL
 QRZ_PASSWORD=CHANGEME
-DXCLUSTER_USERNAME=YOURCALL
-DXCLUSTER_PASSWORD=CHANGEME
+RBN_CALLSIGN=YOURCALL
 PUSH_VAPID_PRIVATE_KEY=…
 PUSH_VAPID_PUBLIC_KEY=…
 ARGS="-port 443 -domain horstreporter.kgbvax.net -pprof -compress -max-clients 150 \
@@ -165,4 +164,4 @@ ExecStart=/opt/horstoperator/horstoperator-agent -listen 127.0.0.1:9955 \
 Moving a secret to an `EnvironmentFile` stops *future* `argv` exposure but does
 not undo past exposure (old `systemctl status` output, logs, shell history). If a
 secret was ever printed, **rotate it**: change it at the source (QRZ, Postgres
-role, DX cluster), update the env file, and restart the service.
+role), update the env file, and restart the service.

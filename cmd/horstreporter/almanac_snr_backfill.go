@@ -31,12 +31,10 @@ import (
 //     a re-run is idempotent — plus the partial deploy day since−1 for the
 //     spots before the column-add time (counters ADDed to the live ones,
 //     exactly once: guarded by its own dx_meta key in the same transaction).
-//   - Only source_type='mqtt' (PSKReporter) rows carry a real SNR; DX-cluster
-//     rows ('dxcluster') count toward spot_count only, which the backfill
-//     never touches, and RBN/WSPR rows never reach the region baseline. The
-//     rows pass the live gates (pskrModeFeedsBaseline, dxBaselineObserveGate,
-//     spotCarriesRealSNR) and key emitter (dxPulseRegionBaselineKeysForSpot)
-//     unchanged. The live 24 h late-spot clamp is not applied (no ingest time
+//   - Only source_type='mqtt' (PSKReporter) rows are replayed; RBN/WSPR rows
+//     never reach the region baseline. The rows pass the live gates
+//     (pskrModeFeedsBaseline, dxBaselineObserveGate) and key emitter
+//     (dxPulseRegionBaselineKeysForSpot) unchanged. The live 24 h late-spot clamp is not applied (no ingest time
 //     in the raw table); every counter is capped at the row's spot_count.
 //   - Writes are batched (almanacSNRBackfillSetBatch / AddBatch keys per
 //     transaction, deterministic key order, keys without SNR skipped): each
@@ -128,10 +126,9 @@ func almanacSNRBackfillObserve(agg map[dxPulseRegionBaselineDailyKey]regionDelta
 	if len(keys) == 0 {
 		return false
 	}
-	hasSNR := spotCarriesRealSNR(m)
 	for _, k := range keys {
 		d := agg[k]
-		d.observeSpot(m.RP, hasSNR)
+		d.observeSpot(m.RP)
 		agg[k] = d
 	}
 	return true

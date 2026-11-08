@@ -95,8 +95,8 @@ type dxPostgresStore struct {
 }
 
 // regionDelta is one pending dx_region_baseline_daily delta (Almanac KTD13):
-// all spots (spot_count), the spots carrying a real SNR (snr_spots:
-// PSKReporter; DX-cluster spots have none) and, cumulatively, those with
+// all spots (spot_count), the spots carrying a real SNR (snr_spots) and,
+// cumulatively, those with
 // SNR ≥ each almanacSNRTierFloors tier (snr_ge_m20 … snr_ge_0).
 type regionDelta struct {
 	Count int64
@@ -113,20 +113,13 @@ func (d *regionDelta) add(o regionDelta) {
 	}
 }
 
-// spotCarriesRealSNR: DX-cluster spots carry RP 0, not a measured SNR, so
-// they count toward spot_count only (KTD13). Shared by live observe() and the
-// Almanac SNR backfill.
-func spotCarriesRealSNR(m MQTTMessage) bool {
-	return !strings.EqualFold(strings.TrimSpace(m.MD), "DXCLUSTER")
-}
-
-// observeSpot counts one spot; hasSNR is false for spots without a real SNR
-// (DX cluster), which count toward spot_count only.
-func (d *regionDelta) observeSpot(snr int, hasSNR bool) {
+// observeSpot counts one spot with its SNR. Every spot reaching the region
+// baseline is a PSKReporter FT8/FT4 spot (pskrModeFeedsBaseline) and carries a
+// real SNR, so snr_spots tracks spot_count for new data; rows written while the
+// (since removed) DX-cluster ingest fed the baseline may still have
+// snr_spots < spot_count, which the Almanac readers already handle.
+func (d *regionDelta) observeSpot(snr int) {
 	d.Count++
-	if !hasSNR {
-		return
-	}
 	d.SNR++
 	for i, floor := range almanacSNRTierFloors {
 		if snr >= floor {
@@ -932,13 +925,13 @@ func (s *dxPostgresStore) ensureDxBaselineCluster(ctx context.Context) error {
 
 	logInfo("DX grid-cluster baseline backfill starting from existing raw spots")
 
-	// Only the sources Observe feeds the baseline (PSKReporter FT8/FT4 and
-	// DX-cluster); RBN and WSPR rows share dx_raw_spots but never reach the
-	// live cluster baseline, so replaying them here would inflate it.
+	// Only the source Observe feeds the baseline (PSKReporter FT8/FT4); RBN
+	// and WSPR rows share dx_raw_spots but never reach the live cluster
+	// baseline, so replaying them here would inflate it.
 	rows, err := s.pool.Query(ctx, `
 		SELECT spot_time, band, sender_locator, receiver_locator, signal_report_db
 		FROM dx_raw_spots
-		WHERE source_type IN ('mqtt', 'dxcluster')
+		WHERE source_type = 'mqtt'
 		ORDER BY spot_time ASC
 	`)
 	if err != nil {
@@ -1086,20 +1079,15 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 	// (these only depend on m) so flushRawSpots can emit a multi-VALUES INSERT
 	// without recomputing per row and so the ingest lock critical section isn't
 	// extended by the normalization/geo work.
-	isDXCluster := !spotCarriesRealSNR(m)
-	var row rawSpotRow
-	if !isDXCluster {
-		source4 := normalizeSource4(m.SL)
-		row = rawSpotRow{
-			m:       m,
-			band:    band,
-			source4: source4,
-			sc:      strings.ToUpper(strings.TrimSpace(m.SC)),
-			rc:      strings.ToUpper(strings.TrimSpace(m.RC)),
-			sl:      strings.ToUpper(strings.TrimSpace(m.SL)),
-			rl:      strings.ToUpper(strings.TrimSpace(m.RL)),
-			md:      strings.ToUpper(strings.TrimSpace(m.MD)),
-		}
+	row := rawSpotRow{
+		m:       m,
+		band:    band,
+		source4: normalizeSource4(m.SL),
+		sc:      strings.ToUpper(strings.TrimSpace(m.SC)),
+		rc:      strings.ToUpper(strings.TrimSpace(m.RC)),
+		sl:      strings.ToUpper(strings.TrimSpace(m.SL)),
+		rl:      strings.ToUpper(strings.TrimSpace(m.RL)),
+		md:      strings.ToUpper(strings.TrimSpace(m.MD)),
 	}
 
 	// Live-only late-spot clamp (Almanac KTD6): region keys from spots outside
@@ -1124,10 +1112,9 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 
 	if regionAccepted {
 		for _, key := range regionKeys {
-			// Almanac SNR counters (KTD13): DX-cluster spots carry RP 0,
-			// not a real SNR, so they count toward spot_count only.
+			// Almanac SNR counters (KTD13).
 			d := s.pendingRegion[key]
-			d.observeSpot(m.RP, !isDXCluster)
+			d.observeSpot(m.RP)
 			s.pendingRegion[key] = d
 			s.pendingCount++
 		}
@@ -1156,16 +1143,8 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 		s.pendingCount++
 	}
 
-	// DX-cluster spots are persisted separately, with full fidelity (frequency,
-	// comment, source_type 'dxcluster'), via PersistRawSpot. Don't also enqueue a
-	// frequency-less 'mqtt' raw row for them here: that duplicate restores as an
-	// unscorable "0 MHz" spot and can shadow the real
-	// dxcluster row during dedup. Baseline/region aggregation above
-	// still counts the spot.
-	if !isDXCluster {
-		s.pendingRawSpots = append(s.pendingRawSpots, row)
-		s.trimPendingRawSpotsLocked()
-	}
+	s.pendingRawSpots = append(s.pendingRawSpots, row)
+	s.trimPendingRawSpotsLocked()
 	shouldFlush := s.pendingCount >= dxBaselineFlushMaxPending
 	s.mu.Unlock()
 
@@ -1875,7 +1854,7 @@ func (s *dxPostgresStore) refreshClusterCoverage(now int64) {
 	defer s.clusterCoverageMu.Unlock()
 	s.clusterCoverageRefreshing = false
 	if err != nil {
-		logDebug("dx cluster coverage refresh failed (keeping previous value): %v", err)
+		logDebug("grid-cluster baseline coverage refresh failed (keeping previous value): %v", err)
 		return
 	}
 	s.clusterCoverageAt = now
@@ -2027,11 +2006,13 @@ func (s *dxPostgresStore) touchBaselineFirstObserved(ctx context.Context, spotTi
 		fmt.Sprintf("%d", spotTime))
 }
 
-func (s *dxPostgresStore) loadSpotsBetween(start, end int64) ([]MQTTMessage, error) {
-	return s.loadSpotsBetweenWithSourceFilter(start, end, true)
-}
+// rawSpotsExcludeRemovedSources is the dx_raw_spots predicate every spot
+// loader applies: rows from the removed DX-cluster ingest
+// (source_type='dxcluster') may linger in the table until retention prunes
+// them, and must not be restored into hub.history or served by /api/history.
+const rawSpotsExcludeRemovedSources = `LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster'`
 
-func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, includeDXCluster bool) ([]MQTTMessage, error) {
+func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64) ([]MQTTMessage, error) {
 	if end <= 0 {
 		end = time.Now().Unix()
 	}
@@ -2050,9 +2031,9 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 			COALESCE(source_type, 'mqtt')
 		FROM dx_raw_spots
 		WHERE spot_time BETWEEN $1 AND $2
-		  AND ($3::bool OR LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster')
+		  AND `+rawSpotsExcludeRemovedSources+`
 		ORDER BY spot_time ASC
-	`, start, end, includeDXCluster)
+	`, start, end)
 	if err != nil {
 		return nil, err
 	}
@@ -2085,17 +2066,15 @@ const historyQueryTimeout = 45 * time.Second
 // Postgres through the sargable ~>=~/~<~ locator prefix-range arms (and the
 // = ANY callsign arm) so a 24h window uses the (locator, spot_time) indexes
 // instead of materializing the whole window in Go. Row mapping and source
-// semantics mirror loadSpotsBetweenWithSourceFilter; includeDXCluster=false
-// also excludes rbn rows (the /api/history source filter is
-// mqtt|dxcluster|wspr only — rbn spots never carried a locator in the first
-// place, so this is a cheap correctness guard rather than a semantic change).
+// semantics mirror loadSpotsBetweenWithSourceFilter (historic dxcluster rows
+// excluded via rawSpotsExcludeRemovedSources).
 //
 // The token filter is intentionally a *superset* of matchAndCreateSpot's
 // decision (e.g. a spot matching only via area-rings would be missed here):
 // /api/history re-runs full matchAndCreateSpot in Go on the returned rows, so
 // area-of-interest matching still works correctly against the slightly larger
 // pre-filtered set.
-func (s *dxPostgresStore) loadSpotsRangeForTargets(start, end int64, tokens []string, includeDXCluster bool) ([]MQTTMessage, error) {
+func (s *dxPostgresStore) loadSpotsRangeForTargets(start, end int64, tokens []string) ([]MQTTMessage, error) {
 	if s == nil || len(tokens) == 0 {
 		return nil, nil
 	}
@@ -2121,12 +2100,6 @@ func (s *dxPostgresStore) loadSpotsRangeForTargets(start, end int64, tokens []st
 	arms := make([]string, 0, len(locators)+1)
 	arms, args, _ = appendTargetArms(arms, args, len(args)+1, locators, calls)
 
-	src := "LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster'"
-	if includeDXCluster {
-		src = "($3::bool OR LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster')"
-		args = append(args, true)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), historyQueryTimeout)
 	defer cancel()
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
@@ -2141,7 +2114,7 @@ func (s *dxPostgresStore) loadSpotsRangeForTargets(start, end int64, tokens []st
 		  AND (%s)
 		  AND (%s)
 		ORDER BY spot_time ASC
-	`, strings.Join(arms, "\n\t\t  OR "), src), args...)
+	`, strings.Join(arms, "\n\t\t  OR "), rawSpotsExcludeRemovedSources), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2313,7 +2286,7 @@ func pruneRegionBaselinesGated(
 	return n1 + n2 + n3, nil
 }
 
-func (s *dxPostgresStore) loadRecentSpotCache(minutes int, now int64, includeDXCluster bool) ([]MQTTMessage, error) {
+func (s *dxPostgresStore) loadRecentSpotCache(minutes int, now int64) ([]MQTTMessage, error) {
 	if minutes <= 0 {
 		minutes = 60
 	}
@@ -2321,7 +2294,7 @@ func (s *dxPostgresStore) loadRecentSpotCache(minutes int, now int64, includeDXC
 		now = time.Now().Unix()
 	}
 	windowStart := now - int64(minutes*60)
-	return s.loadSpotsBetweenWithSourceFilter(windowStart, now, includeDXCluster)
+	return s.loadSpotsBetweenWithSourceFilter(windowStart, now)
 }
 
 // recent24hBandSlotRow is one (band, slot) cell of the last-24h activity

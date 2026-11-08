@@ -51,7 +51,6 @@ func captureSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 	cwMinDb := parseIntDefault(r.URL.Query().Get("cw_min_db"), -15)
 	selectedBand := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("selected_band")))
 	enabledBands := parseEnabledBands(r.URL.Query().Get("enabled_bands"))
-	includeDxcluster := parseIncludeFlag(r.URL.Query(), "include_dxcluster")
 	includeRbn := parseIncludeFlag(r.URL.Query(), "include_rbn")
 	includeWspr := parseIncludeFlag(r.URL.Query(), "include_wspr")
 
@@ -74,9 +73,6 @@ func captureSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if !includeDxcluster && strings.EqualFold(spot.SourceType, "dxcluster") {
-			continue
-		}
 		if !includeRbn && strings.EqualFold(spot.SourceType, "rbn") {
 			continue
 		}

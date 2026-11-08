@@ -66,7 +66,7 @@ Primary key:
 
 ### `dx_raw_spots`
 
-Raw event store for MQTT and DX cluster spots.
+Raw event store for MQTT, RBN and WSPR spots (older rows may carry `source_type='dxcluster'` from the removed DX cluster ingest).
 
 | Column | Type | Null | Notes |
 |---|---|---|---|
@@ -77,14 +77,14 @@ Raw event store for MQTT and DX cluster spots.
 | `receiver_callsign` | `TEXT` | NOT NULL | Receiver/destination callsign |
 | `sender_locator` | `TEXT` | NOT NULL | Sender locator |
 | `receiver_locator` | `TEXT` | NOT NULL | Receiver locator |
-| `mode` | `TEXT` | NOT NULL | Mode (`FT8`, `DXCLUSTER`, etc.) |
+| `mode` | `TEXT` | NOT NULL | Mode (`FT8`, `FT4`, `CW`, ...; legacy `DXCLUSTER`) |
 | `signal_report_db` | `INTEGER` | NOT NULL | Signal report (dB) |
 | `source_grid4` | `TEXT` | NOT NULL | Normalized 4-char source grid |
 | `spot_geom` | `geometry(Point, 4326)` | NULL | Point geometry derived from source grid |
-| `source_type` | `TEXT` | NOT NULL | Event source (`mqtt`, `dxcluster`), default `mqtt` |
+| `source_type` | `TEXT` | NOT NULL | Event source (`mqtt`, `rbn`, `wspr`; legacy `dxcluster`), default `mqtt` |
 | `spotter_callsign` | `TEXT` | NOT NULL | Spotter callsign, default empty string |
-| `frequency_khz` | `DOUBLE PRECISION` | NULL | Optional DX cluster frequency |
-| `comment` | `TEXT` | NOT NULL | Optional DX cluster comment, default empty string |
+| `frequency_khz` | `DOUBLE PRECISION` | NULL | Optional spot frequency |
+| `comment` | `TEXT` | NOT NULL | Optional spot comment, default empty string |
 
 Primary key:
 

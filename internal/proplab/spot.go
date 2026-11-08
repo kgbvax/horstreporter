@@ -18,16 +18,13 @@ type Spot struct {
 	RL     string // receiver locator
 	B      string // band
 	MD     string // mode
-	Source string // "mqtt", "dxcluster", "rbn"
+	Source string // "mqtt", "rbn", "wspr"
 }
 
 // SourceTypeForMessage returns the ingest lane tag for a spot.
 func SourceTypeForMessage(m Spot) string {
 	if src := strings.ToLower(strings.TrimSpace(m.Source)); src != "" {
 		return src
-	}
-	if strings.ToUpper(strings.TrimSpace(m.MD)) == "DXCLUSTER" {
-		return "dxcluster"
 	}
 	return "mqtt"
 }

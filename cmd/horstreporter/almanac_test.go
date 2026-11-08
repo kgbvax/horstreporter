@@ -102,7 +102,7 @@ func (f *fakeAggStore) addSeason(grid, band, region, layer string, day int64, sl
 func (f *fakeAggStore) addSNR(grid, band, region string, day int64, slot int, n int64, snr int) {
 	var d regionDelta
 	for i := int64(0); i < n; i++ {
-		d.observeSpot(snr, true)
+		d.observeSpot(snr)
 	}
 	if f.hasWM && day <= f.wm {
 		f.addSeason(grid, band, region, almanacSeasonLayerPSKR, day, slot, n)

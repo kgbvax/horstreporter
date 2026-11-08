@@ -23,7 +23,7 @@ import (
 // rebuilt once the daily rows are gone (see the Sep 7 dx_raw_spots loss).
 
 const (
-	// almanacSeasonLayerPSKR is the PSKReporter/DX-cluster layer (live ingest).
+	// almanacSeasonLayerPSKR is the PSKReporter layer (live ingest).
 	almanacSeasonLayerPSKR = "pskr"
 
 	almanacSeasonSlotsPerDay  = 48

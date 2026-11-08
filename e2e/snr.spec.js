@@ -160,11 +160,3 @@ test('legacy target key migrates to qth on load', async ({ page }) => {
     await page.reload();
     await expect(page.locator('#qth')).toHaveValue('JO42');
 });
-
-test('dx-cluster defaults on; external setter syncs it', async ({ page }) => {
-    await expect(page.locator('#show-dxcluster-spots')).toBeChecked();
-    await page.evaluate(() => window.__horstSetDxcluster(false));
-    await expect(page.locator('#show-dxcluster-spots')).not.toBeChecked();
-    await page.reload();
-    await expect(page.locator('#show-dxcluster-spots')).not.toBeChecked();
-});

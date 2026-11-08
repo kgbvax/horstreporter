@@ -18,7 +18,6 @@ const defaults = {
     mapStyle: 'grid-snr',
     projection: 'mercator',
     countryColoring: true,
-    showDxcluster: true,
     surroundings: false,
 };
 
@@ -27,6 +26,8 @@ function loadInitial() {
         const raw = localStorage.getItem(PERSIST_KEY);
         if (raw) {
             const saved = { ...defaults, ...JSON.parse(raw) };
+            // The DX cluster toggle was removed; drop its stale persisted field.
+            delete saved.showDxcluster;
             // One-time migration: the legacy 'target' field name is now 'qth'.
             if (saved.target !== undefined && saved.qth === undefined) {
                 saved.qth = saved.target;

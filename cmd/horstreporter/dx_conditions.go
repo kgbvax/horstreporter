@@ -404,51 +404,44 @@ func (e *DxBaselineEngine) Store() *dxPostgresStore {
 	return e.store
 }
 
-func (e *DxBaselineEngine) LoadRecentSpotCache(minutes int, now int64, includeDXCluster bool) ([]MQTTMessage, error) {
+// LoadRecentSpotCache returns the raw spots of the last `minutes` before now
+// (historic source_type='dxcluster' rows excluded, see
+// loadSpotsBetweenWithSourceFilter).
+func (e *DxBaselineEngine) LoadRecentSpotCache(minutes int, now int64) ([]MQTTMessage, error) {
 	e.mu.RLock()
 	st := e.store
 	e.mu.RUnlock()
 	if st == nil {
 		return nil, nil
 	}
-	return st.loadRecentSpotCache(minutes, now, includeDXCluster)
+	return st.loadRecentSpotCache(minutes, now)
 }
 
-func (e *DxBaselineEngine) LoadSpotsBetween(start, end int64) ([]MQTTMessage, error) {
+// LoadSpotsBetweenFiltered returns the raw spots in [start,end] under the
+// same source filter as LoadRecentSpotCache. The startup backfill walks the
+// window in chunks through this so peak memory stays at one chunk instead of
+// the whole window.
+func (e *DxBaselineEngine) LoadSpotsBetweenFiltered(start, end int64) ([]MQTTMessage, error) {
 	e.mu.RLock()
 	st := e.store
 	e.mu.RUnlock()
 	if st == nil {
 		return nil, nil
 	}
-	return st.loadSpotsBetween(start, end)
-}
-
-// LoadSpotsBetweenFiltered is LoadSpotsBetween with the source filter exposed
-// (same includeDXCluster semantics as LoadRecentSpotCache). The startup
-// backfill walks the window in chunks through this so peak memory stays at
-// one chunk instead of the whole window.
-func (e *DxBaselineEngine) LoadSpotsBetweenFiltered(start, end int64, includeDXCluster bool) ([]MQTTMessage, error) {
-	e.mu.RLock()
-	st := e.store
-	e.mu.RUnlock()
-	if st == nil {
-		return nil, nil
-	}
-	return st.loadSpotsBetweenWithSourceFilter(start, end, includeDXCluster)
+	return st.loadSpotsBetweenWithSourceFilter(start, end)
 }
 
 // LoadSpotsRangeForTargets returns the raw spots in [start,end] matching the
 // QTH tokens (locator prefix / exact callsign), with the token filter pushed
 // down into Postgres (see loadSpotsRangeForTargets). Backs /api/history.
-func (e *DxBaselineEngine) LoadSpotsRangeForTargets(start, end int64, tokens []string, includeDXCluster bool) ([]MQTTMessage, error) {
+func (e *DxBaselineEngine) LoadSpotsRangeForTargets(start, end int64, tokens []string) ([]MQTTMessage, error) {
 	e.mu.RLock()
 	st := e.store
 	e.mu.RUnlock()
 	if st == nil {
 		return nil, nil
 	}
-	return st.loadSpotsRangeForTargets(start, end, tokens, includeDXCluster)
+	return st.loadSpotsRangeForTargets(start, end, tokens)
 }
 
 // HasSpotStore reports whether the engine has a Postgres store backing it —
@@ -466,7 +459,7 @@ func (e *DxBaselineEngine) HasSpotStore() bool {
 // CountSpotsBetweenFiltered returns the number of spots in the window under
 // the same source filter as LoadSpotsBetweenFiltered, so the caller can
 // allocate the destination slice exactly once.
-func (e *DxBaselineEngine) CountSpotsBetweenFiltered(start, end int64, includeDXCluster bool) (int64, error) {
+func (e *DxBaselineEngine) CountSpotsBetweenFiltered(start, end int64) (int64, error) {
 	e.mu.RLock()
 	st := e.store
 	e.mu.RUnlock()
@@ -479,8 +472,8 @@ func (e *DxBaselineEngine) CountSpotsBetweenFiltered(start, end int64, includeDX
 	err := st.pool.QueryRow(ctx, `
 		SELECT count(*) FROM dx_raw_spots
 		WHERE spot_time BETWEEN $1 AND $2
-		  AND ($3::bool OR LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster')
-	`, start, end, includeDXCluster).Scan(&n)
+		  AND `+rawSpotsExcludeRemovedSources+`
+	`, start, end).Scan(&n)
 	return n, err
 }
 
@@ -1195,9 +1188,8 @@ func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, min
 		}
 		// Keep the FT8-calibrated conditions accumulator (spots_per_min, classifyMode,
 		// avgSnr, distances) pure from RBN CW/RTTY, whose dB is on a different SNR scale
-		// than PSKReporter FT8 SNR (docs/horstprop.md). FT8/FT4 (PSKReporter), "" (legacy)
-		// and "DXCLUSTER" (a source marker, not a mode — RP=0, already counted today) stay
-		// in; real non-FT8 modes (CW, RTTY, PSK*, SSB, … only produced by RBN) are skipped.
+		// than PSKReporter FT8 SNR (docs/horstprop.md). FT8/FT4 (PSKReporter) and "" (legacy)
+		// stay in; real non-FT8 modes (CW, RTTY, PSK*, SSB, … only produced by RBN) are skipped.
 		// RBN spots still reach the live stream (broadcastMsg) and the activity chart.
 		if !conditionsMode {
 			continue
@@ -1619,17 +1611,16 @@ func legacyConditionFromStatus(status string, score float64) string {
 // "ssb"; +20 dB would create phantom high snr_tier rows). WSPR is likewise excluded: its SNR
 // is on the same 2500 Hz scale as FT8 but WSPR stations transmit at wildly varying power
 // (0.1–100 W+), so raw SNR conflates station capability with propagation. FT8/FT4
-// (PSKReporter), "" (legacy / unset), and "DXCLUSTER" (a source marker, not a real mode —
-// RP=0, already counted in the baseline today) stay in; any other real mode (CW, RTTY, PSK*,
+// (PSKReporter) and "" (legacy / unset) stay in; any other real mode (CW, RTTY, PSK*,
 // SSB, AM, FM, DIGI, WSPR, …) is excluded. Only RBN and WSPR produce those real non-FT8
 // modes today.
 func isNonConditionsMode(md string) bool {
 	switch md { // the feed's own spelling, without the normalising copy
-	case "", "FT8", "FT4", "DXCLUSTER":
+	case "", "FT8", "FT4":
 		return false
 	}
 	switch strings.ToUpper(strings.TrimSpace(md)) {
-	case "", "FT8", "FT4", "DXCLUSTER":
+	case "", "FT8", "FT4":
 		return false
 	}
 	return true
@@ -2334,7 +2325,7 @@ func liveSegments(start, end int64) [][2]int64 {
 }
 
 // feedsClusterBaseline reports whether m is one of the spots Observe writes
-// into the cluster baseline (PSKReporter FT8/FT4 and DX-cluster). RBN and
+// into the cluster baseline (PSKReporter FT8/FT4). RBN and
 // WSPR share hub.history but never reach Observe — excluded by source, not
 // just by mode, since an RBN digital feed can carry FT8.
 func feedsClusterBaseline(m MQTTMessage) bool {
@@ -2718,7 +2709,7 @@ func normalizeBand(raw string) string {
 }
 
 // bandsInScope is the set of amateur bands HorstReporter analyses (160m–2m).
-// PSKReporter / DX-cluster feeds occasionally carry microwave spots (13cm, 23cm,
+// The PSKReporter feed occasionally carry microwave spots (13cm, 23cm,
 // 70cm, …) whose band strings also end in "m", so normalizeBand passes them
 // through. Trend/hot-band analysis must gate on this set explicitly, otherwise
 // it surfaces out-of-scope bands like "13cm rising".

@@ -3,7 +3,7 @@
 HorstReporter is a single Go binary with a plain-ES-modules frontend. It ingests
 PSK Reporter MQTT data (`pskr/filter/v2/#`), computes live HF propagation
 conditions from an FT8-SNR baseline, and serves a browser UI plus SSE streams.
-Optional ingests add DX cluster, RBN, and WSPR data.
+Optional ingests add RBN and WSPR data.
 
 ![HorstReporter live map: FT8 spots per band around JO32](docs/screenshot.png)
 
@@ -46,17 +46,11 @@ Tests: `go test ./...` (backend), `npm run check` (frontend typecheck + tests).
 
 All optional ingests are disabled by default and enabled via flags; secrets go
 through env vars, never argv (see
-[docs/deployment-secrets.md](docs/deployment-secrets.md)). Cluster, RBN and WSPR
+[docs/deployment-secrets.md](docs/deployment-secrets.md)). RBN and WSPR
 spots are tagged with a `source_type` and stay out of the FT8-SNR conditions
 baseline; only RBN/WSPR contribute to the activity chart and live stream.
 
 ```bash
-# DX cluster (TCP). Most clusters require a registered callsign and an
-# individually-assigned password; login is prompt-aware. Parsed spots persist
-# to Postgres dx_raw_spots; only spots with usable locators enter the live map.
-DXCLUSTER_USERNAME=<yourcall> DXCLUSTER_PASSWORD=<password> \
-  go run ./cmd/horstreporter -dev -port 8080 -dxcluster-enable -dxcluster-endpoint db0erf.de:7300
-
 # RBN (Reverse Beacon Network): public CW/RTTY telnet relay, prompts for a callsign
 go run ./cmd/horstreporter -dev -port 8080 -rbn-enable -rbn-callsign <yourcall>
 
@@ -64,8 +58,8 @@ go run ./cmd/horstreporter -dev -port 8080 -rbn-enable -rbn-callsign <yourcall>
 go run ./cmd/horstreporter -dev -port 8080 -wspr-enable
 ```
 
-`QRZ_USERNAME` / `QRZ_PASSWORD` enable callsign→locator enrichment, shared by the
-DX cluster and RBN ingests.
+`QRZ_USERNAME` / `QRZ_PASSWORD` enable callsign→locator enrichment for the RBN
+ingest.
 
 ## Companion tools
 

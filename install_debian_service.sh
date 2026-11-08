@@ -44,8 +44,8 @@ mv -f "$INSTALL_DIR/$BINARY_NAME.new" "$INSTALL_DIR/$BINARY_NAME"
 chown -R "$APP_USER:$APP_USER" "$INSTALL_DIR"
 chown -R "$APP_USER:$APP_USER" "/var/log/$APP_NAME"
 
-# Note: cty.dat (DX-cluster country/flag labelling) is embedded in the binary —
-# no file to deploy. Override with -cty-path only if you want a fresher cty.dat.
+# Note: cty.dat (DXCC entity lookup) is embedded in the binary — no file to
+# deploy. Override with -cty-path only if you want a fresher cty.dat.
 
 # 4. Create an environment configuration file for easy arg modifications
 DEFAULT_CONFIG="/etc/default/$APP_NAME"

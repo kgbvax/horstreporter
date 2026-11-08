@@ -32,8 +32,7 @@ func TestToProplabSpot(t *testing.T) {
 			t.Fatalf("band mapping drifted: %+v", got)
 		}
 		// Characterization: MD is intentionally NOT mapped — the ingest tag
-		// already resolved into Source (SourceTypeForMessage only falls back
-		// to MD when Source is empty), so Spot.MD stays zero.
+		// already resolved into Source, so Spot.MD stays zero.
 		if got.MD != "" {
 			t.Fatalf("MD must not be mapped: %+v", got)
 		}
@@ -43,19 +42,15 @@ func TestToProplabSpot(t *testing.T) {
 	})
 
 	t.Run("explicit source tags are lower-trimmed", func(t *testing.T) {
-		if got := toProplabSpot(MQTTMessage{Source: " DXCLUSTER "}).Source; got != "dxcluster" {
-			t.Fatalf("source = %q, want dxcluster", got)
+		if got := toProplabSpot(MQTTMessage{Source: " WSPR "}).Source; got != "wspr" {
+			t.Fatalf("source = %q, want wspr", got)
 		}
 		if got := toProplabSpot(MQTTMessage{Source: "RBN"}).Source; got != "rbn" {
 			t.Fatalf("source = %q, want rbn", got)
 		}
 	})
 
-	t.Run("legacy MD fallback tags dxcluster when Source is empty", func(t *testing.T) {
-		// Older cached rows carry the ingest tag in MD, not Source.
-		if got := toProplabSpot(MQTTMessage{MD: "DXCLUSTER"}).Source; got != "dxcluster" {
-			t.Fatalf("source = %q, want dxcluster via MD fallback", got)
-		}
+	t.Run("empty Source defaults to mqtt", func(t *testing.T) {
 		if got := toProplabSpot(MQTTMessage{MD: "FT8"}).Source; got != "mqtt" {
 			t.Fatalf("source = %q, want mqtt", got)
 		}
@@ -193,7 +188,7 @@ func TestCellDedupKey(t *testing.T) {
 	}
 	variants := []string{
 		cellDedupKey("40m", "ft8", "DL1ABC", "K1ABC", 1730000000),
-		cellDedupKey("20m", "dcx", "DL1ABC", "K1ABC", 1730000000),
+		cellDedupKey("20m", "rbn", "DL1ABC", "K1ABC", 1730000000),
 		cellDedupKey("20m", "ft8", "DL2ABC", "K1ABC", 1730000000),
 		cellDedupKey("20m", "ft8", "DL1ABC", "K2ABC", 1730000000),
 		cellDedupKey("20m", "ft8", "DL1ABC", "K1ABC", 1730000900),

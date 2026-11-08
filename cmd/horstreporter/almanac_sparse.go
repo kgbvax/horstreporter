@@ -11,10 +11,10 @@ import (
 // almanac_season_counts.counts (plan KTD5, KTD13). A month row is logically a
 // dense 31 days × 48 slots grid (pos = (dom−1)*48 + slot, 0..1487) of cells:
 // the spot count (uint8, saturating) plus, since KTD13, an SNR histogram of
-// the cell's spots that carry a real SNR (PSKReporter / WSPR; DX-cluster
-// spots have none). It is stored sparse because most cells are zero (prod:
-// avg 94.8 non-zero cells of 1488, p50 8, p90 315) and Postgres only
-// TOAST-compresses tuples above ~2 KB.
+// the cell's spots that carry a real SNR (PSKReporter / WSPR; spots from the
+// since-removed DX-cluster ingest had none). It is stored sparse because most
+// cells are zero (prod: avg 94.8 non-zero cells of 1488, p50 8, p90 315) and
+// Postgres only TOAST-compresses tuples above ~2 KB.
 //
 // Encoding version 2 (written since KTD13):
 //
@@ -28,7 +28,8 @@ import (
 // The six disjoint SNR bins (almanacSNRBinFloors) are
 // [<−20], [−20,−15), [−15,−10), [−10,−5), [−5,0), [≥0] dB; they sum to the
 // cell's SNR-carrying spots (n_snr, each bin saturating). mask 0 = no SNR
-// data (before the SNR collection start, or DX-cluster-only cells).
+// data (before the SNR collection start, or cells holding only
+// spots from the since-removed DX-cluster ingest).
 //
 // Encoding version 1 (rows folded before KTD13; still read, never written):
 // the same without mask and bins — every cell reads as "no SNR data".

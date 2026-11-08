@@ -61,7 +61,6 @@ vi.mock('../static/renderers.js', () => ({
     updateBandLabels: vi.fn(),
     refreshBandLabels: vi.fn(),
     setBandNormalRateProvider: vi.fn(),
-    clearDxClusterMarkers: vi.fn(),
     clearWsprMarkers: vi.fn(),
     resetRenderFingerprint: vi.fn(),
     whenActiveAreaRendered: vi.fn()

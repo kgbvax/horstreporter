@@ -96,7 +96,7 @@ func TestMatchAndCreateSpotMatchesReference(t *testing.T) {
 	qthSets := [][]string{nil, {"JO32"}, {"DK3JF"}, {"JO32", "JO33", "JO31"}, {"FN20", "W1AW"}, maidenhead.QTHSquares("JO32", true)}
 	pick := func(xs []string) string { return xs[rng.Intn(len(xs))] }
 	for i := 0; i < 300000; i++ {
-		m := MQTTMessage{T: rng.Int63n(2_000_000_000), RP: rng.Intn(60) - 30, B: "20m", MD: "FT8", SC: pick(calls), RC: pick(calls), SL: pick(locs), RL: pick(locs), Source: pick([]string{"", "mqtt", "wspr", "rbn", "dxcluster"})}
+		m := MQTTMessage{T: rng.Int63n(2_000_000_000), RP: rng.Intn(60) - 30, B: "20m", MD: "FT8", SC: pick(calls), RC: pick(calls), SL: pick(locs), RL: pick(locs), Source: pick([]string{"", "mqtt", "wspr", "rbn", "bogus"})}
 		c := &Client{qthSet: qthSets[rng.Intn(len(qthSets))]}
 		if rng.Intn(2) == 0 {
 			c.areaActive = true

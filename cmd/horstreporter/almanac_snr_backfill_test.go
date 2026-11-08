@@ -27,7 +27,7 @@ func liveRegionDeltas(m MQTTMessage) map[dxPulseRegionBaselineDailyKey]regionDel
 	s := newObserveTestStore()
 	e := newDxBaselineEngine("")
 	e.store = s
-	if pskrModeFeedsBaseline(strings.ToUpper(strings.TrimSpace(m.MD))) || m.MD == "DXCLUSTER" {
+	if pskrModeFeedsBaseline(strings.ToUpper(strings.TrimSpace(m.MD))) {
 		e.Observe(m)
 	}
 	return s.pendingRegion
@@ -97,17 +97,14 @@ func TestAlmanacSNRBackfillObserveParity(t *testing.T) {
 		}
 	})
 
-	t.Run("DX cluster excluded", func(t *testing.T) {
+	t.Run("legacy DXCLUSTER mode excluded", func(t *testing.T) {
 		agg := map[dxPulseRegionBaselineDailyKey]regionDelta{}
 		r := row("20m", "FN31", "JO32", "DXCLUSTER", 0)
 		if almanacSNRBackfillObserve(agg, r) || len(agg) != 0 {
-			t.Fatalf("a DX-cluster row must add no SNR counters: %+v", agg)
+			t.Fatalf("a historic DX-cluster row must add no SNR counters: %+v", agg)
 		}
-		live := liveRegionDeltas(MQTTMessage{T: ts, B: "20m", SL: "FN31", RL: "JO32", MD: "DXCLUSTER"})
-		for k, d := range live {
-			if d.SNR != 0 || d.GE != ([almanacSNRTiers]int64{}) || d.Count != 1 {
-				t.Fatalf("live DX-cluster spot must count toward spot_count only: %+v %+v", k, d)
-			}
+		if live := liveRegionDeltas(MQTTMessage{T: ts, B: "20m", SL: "FN31", RL: "JO32", MD: "DXCLUSTER"}); len(live) != 0 {
+			t.Fatalf("a non-FT8/FT4 mode must not reach the region baseline: %+v", live)
 		}
 	})
 }
@@ -566,7 +563,7 @@ func newSNRBackfillFixture() *fakeSNRBackfillStore {
 		t0 := day*86400 + 12*3600
 		add("mqtt", t0, -3)
 		add("mqtt", t0+60, -18)
-		add("dxcluster", t0+120, 0) // excluded (source)
+		add("dxcluster", t0+120, 0) // excluded (source; historic rows may linger)
 		add("rbn", t0+180, 20)      // excluded (source)
 		for _, k := range dxPulseRegionBaselineKeysForSpot(t0, "20m", "FN31", "JO32") {
 			f.daily[k] = regionDelta{Count: 10}

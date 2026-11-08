@@ -62,7 +62,7 @@ export function deriveT(recvMs, recvAge) {
 
 // spotIdentity builds the full-identity dedup key: sourceType, band, sender,
 // receiver, locator, reporterLocator, lat, lng, snr and the derived t. The
-// live wire strips sender/receiver for non-dxcluster spots, so a coarser
+// live wire carries no sender/receiver, so a coarser
 // band/sender/receiver key would collapse distinct same-second spots during
 // FT8/WSPR bursts — hence every distinguishing field participates (the
 // spotKey precedent in app.js buckets coarser; this key is finer on purpose).
@@ -84,7 +84,7 @@ export function spotIdentity(s) {
 // filterAllowed is a client-side replica of streamClientFilter.spotAllowed
 // (server.go:506-528): enabled-band set, then SNR thresholds applied only to
 // the mqtt-calibrated source types — empty sourceType counts as
-// mqtt-calibrated, as does rbn; dxcluster and wspr are SNR-exempt.
+// mqtt-calibrated, as does rbn; every other source (wspr) is SNR-exempt.
 // selectedBand is deliberately NOT applied (KTD-13): /api/history ignores it,
 // band focus is client-side.
 export function filterAllowed(spot, filter) {
@@ -95,7 +95,7 @@ export function filterAllowed(spot, filter) {
         if (!enabled.has(band)) return false;
     }
     const src = String(spot.sourceType || '').toLowerCase().trim();
-    if (src && src !== 'mqtt' && src !== 'rbn') return true; // dxcluster/wspr exempt
+    if (src && src !== 'mqtt' && src !== 'rbn') return true; // wspr (any non-FT8-scale source) exempt
     const mode = String(filter.minSnrMode || '').toLowerCase().trim();
     const snr = Number.isFinite(spot.snr) ? spot.snr : 0;
     if (mode === 'ssb') {

@@ -316,7 +316,7 @@ func wsprMessageFromRow(s wsprSpot, now int64) (MQTTMessage, bool) {
 		ts = now
 	}
 
-	// Sender/receiver convention matches RBN/DX-cluster: SC = the reporting
+	// Sender/receiver convention matches RBN: SC = the reporting
 	// station (receiver), RC = the station being heard (transmitter). The
 	// live map draws receiver→transmitter paths; activity_by_bin matches
 	// callsign-targets on receiver_callsign (the transmitter being heard).

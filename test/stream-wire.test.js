@@ -28,8 +28,8 @@ describe('decodeSpotsFrame', () => {
 
     it('maps source codes and optional fields', () => {
         const { spots } = decodeSpotsFrame(
-            '{"n":50,"s":[["K","20m",0,0,"","d","DL1ABC","K1XYZ"],["EM12","20m",20,1,"JO31","r"],["AB","15m",1,2,"FN31","other"]]}');
-        expect(spots[0]).toMatchObject({ sourceType: 'dxcluster', sender: 'DL1ABC', receiver: 'K1XYZ', lat: 0, lng: 0 });
+            '{"n":50,"s":[["K","20m",0,0,"","w","DL1ABC","K1XYZ"],["EM12","20m",20,1,"JO31","r"],["AB","15m",1,2,"FN31","other"]]}');
+        expect(spots[0]).toMatchObject({ sourceType: 'wspr', sender: 'DL1ABC', receiver: 'K1XYZ', lat: 0, lng: 0 });
         expect(spots[1]).toMatchObject({ sourceType: 'rbn', reporterLocator: 'JO31' });
         expect(spots[1].sender).toBeUndefined();
         expect(spots[2].sourceType).toBe('other');

@@ -8,8 +8,6 @@ func LaneForSourceType(t string) string {
 	switch t {
 	case "rbn":
 		return "rbn"
-	case "dxcluster":
-		return "dcx"
 	default:
 		return "ft8"
 	}

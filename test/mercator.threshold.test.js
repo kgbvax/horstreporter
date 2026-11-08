@@ -21,7 +21,7 @@ const { mockMap } = vi.hoisted(() => ({
 vi.mock('../static/map.js', () => ({ map: mockMap }));
 
 import { state } from '../static/state.js';
-import { updateMapVisualization, clearDxClusterMarkers } from '../static/renderers.js';
+import { updateMapVisualization } from '../static/renderers.js';
 
 let geoJsonCalls;
 function setupDom({ minSnr = 'ssb', ssbMinDb = 0, cwMinDb = -15, focusBand = '', enabled = ['20m', '15m'] } = {}) {
@@ -85,7 +85,6 @@ beforeEach(() => {
     installLeafletMock();
     mockMap.removeLayer.mockReset();
     state.heatLayer = null;
-    clearDxClusterMarkers();
 });
 
 describe('renderGridSnr threshold gate', () => {
@@ -236,39 +235,5 @@ describe('renderGridSnr grading', () => {
         const feats = drawFeatures();
         expect(feats).toHaveLength(1);
         expect(feats[0].fillOpacity).toBeCloseTo(0.30, 2);
-    });
-});
-
-// DX cluster markers: separate persistent layer (rebuilt only when the
-// cluster set changes, so hover tooltips don't flicker on every grid
-// rebuild) and tooltips carry the DX/spotter callsigns.
-describe('renderGridSnr DX cluster markers', () => {
-    function dxSpot() {
-        return {
-            locator: 'IM59', snr: 0, band: '20m', sourceType: 'dxcluster',
-            lat: 38.5, lng: -8.5,
-            sender: 'EA1AAA', receiver: 'JA1BBB', reporterLocator: 'JO43'
-        };
-    }
-
-    it('renders cluster spots as circle markers with callsigns in the tooltip', () => {
-        setupDom({ minSnr: 'none' });
-        updateMapVisualization([dxSpot()], 15);
-        expect(circleMarkerCalls).toHaveLength(1);
-        const marker = globalThis.L.circleMarker(circleMarkerCalls[0].latlng, circleMarkerCalls[0].opts);
-        expect(marker.tooltipCalls[0]).toContain('DX: JA1BBB');
-        expect(marker.tooltipCalls[0]).toContain('Spotter: EA1AAA');
-        expect(marker.tooltipCalls[0]).toContain('Spotter Loc: JO43');
-        expect(marker.tooltipCalls[0]).toContain('DX Loc: IM59');
-    });
-
-    it('does not rebuild the marker layer when only regular spots change', () => {
-        setupDom({ minSnr: 'none' });
-        updateMapVisualization([dxSpot()], 15);
-        const firstLayer = state.dxClusterLayer;
-        expect(firstLayer).toBeTruthy();
-        updateMapVisualization([dxSpot(), spot('JO32', 5, '20m')], 15);
-        expect(state.dxClusterLayer).toBe(firstLayer);
-        expect(circleMarkerCalls).toHaveLength(1);
     });
 });

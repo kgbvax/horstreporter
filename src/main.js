@@ -32,7 +32,6 @@ if (captureConfig?.enabled) {
         if (cfg.style === 'grid-snr' || cfg.style === 'active-area') next.mapStyle = cfg.style;
         if (typeof cfg.surroundings === 'boolean') next.surroundings = cfg.surroundings;
         if (typeof cfg.countryColoring === 'boolean') next.countryColoring = cfg.countryColoring;
-        if (typeof cfg.includeDxcluster === 'boolean') next.showDxcluster = cfg.includeDxcluster;
         return next;
     });
 }
@@ -55,10 +54,6 @@ if (surroundingsHost) new Toggle({ target: surroundingsHost, props: { id: 'surro
 
 const countryHost = document.getElementById('country-coloring-root');
 if (countryHost) new Toggle({ target: countryHost, props: { id: 'show-country-coloring', label: 'Country colors', key: 'countryColoring', render: false, hook: '__horstCountryColoringChanged' } });
-
-const dxclusterHost = document.getElementById('dxcluster-root');
-if (dxclusterHost) new Toggle({ target: dxclusterHost, props: { id: 'show-dxcluster-spots', label: 'DX cluster', key: 'showDxcluster' } });
-window.__horstSetDxcluster = (on) => uiStore.update((s) => ({ ...s, showDxcluster: !!on }));
 
 const minSnrHost = document.getElementById('min-snr-group');
 if (minSnrHost) new MinSnr({ target: minSnrHost });
@@ -91,8 +86,6 @@ if (!captureConfig?.enabled) {
     }
     const savedQth = localStorage.getItem('qth');
     if (savedQth) uiStore.update((s) => ({ ...s, qth: savedQth }));
-    const savedDx = localStorage.getItem('showDXClusterSpots');
-    if (savedDx !== null) uiStore.update((s) => ({ ...s, showDxcluster: savedDx === 'true' }));
 }
 
 // External vanilla writers set the qth via the store so the input stays in

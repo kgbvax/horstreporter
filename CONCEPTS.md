@@ -7,7 +7,7 @@ Shared domain vocabulary for this project — entities, named processes, and sta
 ### Spot
 A single reception report: evidence that one station heard another on a band at a moment in time, carrying the reported signal strength and the two stations' grid locators. Spots are the atomic unit everything else is built from — the live map, the rolling history, and the DX scoring baseline all consume them.
 
-The PSK Reporter feed omits fields that are already encoded in its message topic; a spot is only complete once those topic-derived fields are reconstructed. The PSK Reporter path keeps only FT8/FT4 spots — DX-cluster spots arrive on a separate path and carry more detail.
+The PSK Reporter feed omits fields that are already encoded in its message topic; a spot is only complete once those topic-derived fields are reconstructed. The PSK Reporter path keeps only FT8/FT4 spots — RBN and WSPR spots arrive on separate paths.
 
 ### Sender
 The transmitting station in a Spot — the one whose signal was received.
@@ -24,7 +24,7 @@ The reported signal-to-noise ratio of a Spot, in dB. Used both as a strength fil
 An amateur radio band a Spot was reported on (e.g. 20m, 40m). The app analyses a fixed in-scope set spanning the HF and low-VHF bands; out-of-scope microwave bands that occasionally arrive on the feeds are passed through for display but excluded from trend and hot-band analysis.
 
 ### Mode
-The transmission mode of a Spot. The PSK Reporter ingest keeps only the FT8 and FT4 digital modes; a "DX-cluster" mode marks spots that arrived via the DX-cluster path rather than PSK Reporter.
+The transmission mode of a Spot. The PSK Reporter ingest keeps only the FT8 and FT4 digital modes.
 
 ## Location & targeting
 
@@ -46,22 +46,16 @@ An option that expands a Locator QTH to also include its eight neighbouring grid
 ### Area of interest
 A configurable-size region around a home square (a ring radius in grid-square space) that matches any Spot whose Sender or Receiver falls inside it. Additive to QTH matching, it backs region-wide feeds rather than single-station tracking.
 
-## DX cluster
+## DX
 
 ### DX
 A long-distance contact or station — the distant end of a path worth chasing. The whole product orients around surfacing DX opportunity; a path counts as DX-grade once it is long enough to be intercontinental rather than local or regional.
-
-### DX-cluster spot
-A Spot sourced from a traditional DX-cluster feed rather than PSK Reporter. Unlike PSK Reporter spots (locator-only, QTH-filtered), these carry the spotted station's callsign, frequency, comment, and enriched country/operator metadata, and feed operator tools.
-
-### Spotter
-The station that posted a DX-cluster spot — the DX-cluster analogue of a Receiver. The spotted station itself is the "DX call".
 
 ### WSPR
 A Weak Signal Propagation Reporter spot — a one-way beacon transmission (a low-power transmitter heard by a receiver) ingested from the wspr.live ClickHouse feed. WSPR is a **propagation reference**: beacons run continuously at low power, so WSPR shows whether a path is open at all even when nobody is actively operating (the gap FT8 leaves on dead bands, off-peak hours, and during contests). WSPR SNR is on the same 2500 Hz scale as FT8 but stations transmit at wildly varying power (0.1–100 W+), so raw SNR conflates station capability with propagation — WSPR is therefore kept **out** of the FT8-calibrated conditions baseline (like RBN) and feeds the live stream, activity chart, and a per-band "path open" viability floor instead.
 
 ### DXCC entity
-The country or territory a callsign belongs to under the ARRL DXCC list — resolved from a callsign-prefix table with an online lookup fallback, and attached to DX-cluster spots as country name and ISO code.
+The country or territory a callsign belongs to under the ARRL DXCC list — resolved from a callsign-prefix table with an online lookup fallback, and attached to RBN spots as country name and ISO code.
 
 ## DX condition scoring
 
@@ -108,7 +102,7 @@ The planned from-your-QTH view of *typical* propagation. For each region and ban
 The Almanac statistic. A slot is *open* on a day when it reaches a fixed spot floor between the QTH's area and the region. M counts the days on which the QTH's area was active on that band. A cell with too few active days reads as "not enough data", never as "closed". With an SNR floor (the Min SNR slider, snapped to a 5 dB tier from −20 to 0 dB) only spots at or above the floor count toward the spot floor, and days before SNR data was collected drop out of both N and M, so they read as unknown rather than closed.
 
 ### SNR share
-For an Almanac slot with an SNR floor: of all spots with a real SNR report over the slot's observed days, the share that reached the floor, pooled across days rather than averaged per day. DX-cluster spots carry no SNR and are left out. It says how reliably the path carried a signal strong enough for the chosen mode, beyond whether it opened at all.
+For an Almanac slot with an SNR floor: of all spots with a real SNR report over the slot's observed days, the share that reached the floor, pooled across days rather than averaged per day. Spots without an SNR report are left out. It says how reliably the path carried a signal strong enough for the chosen mode, beyond whether it opened at all.
 
 ### Seasonal record
 The permanent per-area, month × slot × band × region counts that the Almanac's seasonal view reads. Each day is folded in before the daily region baseline prunes it. A WSPR-archive layer, kept separate and labelled, can backfill it.

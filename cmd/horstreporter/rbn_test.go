@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -132,7 +133,7 @@ func TestParseRBNSpot(t *testing.T) {
 }
 
 func TestIsNonConditionsMode(t *testing.T) {
-	keep := []string{"", "FT8", "FT4", "DXCLUSTER", "ft8", "ft4", "dxcluster"}
+	keep := []string{"", "FT8", "FT4", "ft8", "ft4"}
 	exclude := []string{"CW", "RTTY", "PSK31", "PSK", "SSB", "AM", "FM", "DIGI", "cw", "rtty"}
 	for _, md := range keep {
 		if isNonConditionsMode(md) {
@@ -153,10 +154,9 @@ func TestSourceTypeForMessage(t *testing.T) {
 		want string
 	}{
 		{name: "explicit rbn source wins regardless of mode", m: MQTTMessage{Source: "rbn", MD: "CW"}, want: "rbn"},
-		{name: "explicit dxcluster source", m: MQTTMessage{Source: "dxcluster", MD: "DXCLUSTER"}, want: "dxcluster"},
+		{name: "explicit wspr source", m: MQTTMessage{Source: "wspr", MD: "WSPR"}, want: "wspr"},
 		{name: "explicit mqtt source", m: MQTTMessage{Source: "mqtt", MD: "FT8"}, want: "mqtt"},
 		{name: "source is case-insensitive", m: MQTTMessage{Source: "RBN"}, want: "rbn"},
-		{name: "no source: DXCLUSTER mode fallback", m: MQTTMessage{MD: "DXCLUSTER"}, want: "dxcluster"},
 		{name: "no source: anything else defaults to mqtt", m: MQTTMessage{MD: "CW"}, want: "mqtt"},
 		{name: "empty message defaults to mqtt", m: MQTTMessage{}, want: "mqtt"},
 	}
@@ -225,8 +225,7 @@ func TestAwaitRBNPromptCaseInsensitiveAndMidStream(t *testing.T) {
 func TestAwaitRBNPromptEndsOnClosedConnection(t *testing.T) {
 	// "No hang when the prompt never arrives": a closed connection must end
 	// the wait with an error. (The real path is additionally bounded by the
-	// caller's SetReadDeadline; see the DX-cluster deadline test for the
-	// timeout-vs-EOF characterization.)
+	// caller's SetReadDeadline.)
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
 	_ = serverConn.Close()
@@ -413,7 +412,7 @@ func TestIsRBNSpotUsableForLive(t *testing.T) {
 	if !isRBNSpotUsableForLive(MQTTMessage{B: "20m", RL: "JO62"}) {
 		t.Error("band + DX locator should be usable")
 	}
-	// Skimmer locator alone is not enough (mirrors the DX-cluster rule).
+	// Skimmer locator alone is not enough.
 	if isRBNSpotUsableForLive(MQTTMessage{B: "20m", RL: "", SL: "JO62"}) {
 		t.Error("skimmer locator alone should not be usable")
 	}
@@ -423,4 +422,113 @@ func TestIsRBNSpotUsableForLive(t *testing.T) {
 	if isRBNSpotUsableForLive(MQTTMessage{B: "20m", RL: "W1AW"}) {
 		t.Error("callsign as locator should not be usable")
 	}
+}
+
+func TestBandFromFrequencyKHz(t *testing.T) {
+	cases := []struct {
+		freq float64
+		band string
+	}{
+		{14074.0, "20m"},
+		{7074.0, "40m"},
+		{50100.0, "6m"},
+		{999.0, ""},
+		// Band edges from the implementation's switch.
+		{1800, "160m"}, {1999.9, "160m"}, {2000, ""},
+		{3500, "80m"}, {7000, "40m"}, {7299.9, "40m"}, {7300, ""},
+		{10100, "30m"}, {14000, "20m"}, {14350, ""},
+		{18068, "17m"}, {21000, "15m"}, {24890, "12m"},
+		{28000, "10m"}, {29699, "10m"}, {29700, ""},
+		{50000, "6m"}, {70000, "4m"}, {144000, "2m"}, {147999.9, "2m"}, {148000, ""},
+		{430000, "70cm"}, {435000, "70cm"}, {439999.9, "70cm"}, {440000, ""},
+		{5250, "60m"}, {5449.9, "60m"},
+	}
+	for _, tc := range cases {
+		if got := bandFromFrequencyKHz(tc.freq); got != tc.band {
+			t.Errorf("bandFromFrequencyKHz(%v) = %q, want %q", tc.freq, tc.band, got)
+		}
+	}
+}
+
+// stubResolver is a fake qrzlookup.Resolver so handleRBNSpot locator enrichment can be driven without QRZ.
+type stubResolver struct {
+	locators map[string]string
+	infos    map[string]qrzlookup.Info
+}
+
+func (s *stubResolver) LookupLocator(callsign string) (string, error) {
+	if loc, ok := s.locators[callsign]; ok {
+		return loc, nil
+	}
+	return "", io.EOF
+}
+
+func (s *stubResolver) LookupInfo(callsign string) (qrzlookup.Info, error) {
+	if info, ok := s.infos[callsign]; ok {
+		return info, nil
+	}
+	return qrzlookup.Info{}, io.EOF
+}
+
+// isolateHubForIngest replaces hub.clients/history with fresh empties for the
+// duration of fn (and restores them), mirroring the withHubSnapshot pattern.
+// It also nils dxBaseline unless the caller wants one, since handle*Spot
+// persist through it.
+func isolateHubForIngest(t *testing.T, withBaseline bool) (engine *DxBaselineEngine) {
+	t.Helper()
+	hub.Lock()
+	savedClients := hub.clients
+	savedHistory := hub.history
+	hub.clients = make(map[*Client]bool)
+	hub.history = nil
+	hub.Unlock()
+	savedBaseline := dxBaseline
+	if withBaseline {
+		dxBaseline = newDxBaselineEngine("")
+		engine = dxBaseline
+	} else {
+		dxBaseline = nil
+	}
+	t.Cleanup(func() {
+		hub.Lock()
+		hub.clients = savedClients
+		hub.history = savedHistory
+		hub.Unlock()
+		dxBaseline = savedBaseline
+	})
+	return engine
+}
+
+// startTestTCPServer runs a raw TCP server on 127.0.0.1 and hands the
+// connection to script, which performs the scripted handshake. This dials
+// localhost only — no external hosts.
+func startTestTCPServer(t *testing.T, script func(conn net.Conn, reader *bufio.Reader) error) (addr string, done <-chan error) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	doneCh := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			doneCh <- err
+			return
+		}
+		defer conn.Close()
+		doneCh <- script(conn, bufio.NewReader(conn))
+	}()
+	return ln.Addr().String(), doneCh
+}
+
+type testScriptError struct {
+	step string
+	got  string
+	want string
+}
+
+func (e *testScriptError) Error() string {
+	return e.step + ": got " + e.got + ", want " + e.want
 }

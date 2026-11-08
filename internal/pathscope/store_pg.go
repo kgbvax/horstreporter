@@ -100,7 +100,7 @@ SELECT band, receiver_locator, mode,
 FROM dx_raw_spots
 WHERE spot_time >= $1 AND spot_time < $2
   AND receiver_locator <> ''
-  AND source_type IN ('mqtt', 'dxcluster')
+  AND source_type = 'mqtt'
 GROUP BY band, receiver_locator, mode
 HAVING COUNT(*) >= 5
 `
@@ -289,9 +289,9 @@ func modeFromLane(lane string) Mode {
 		return ModeFT8
 	case "rbn":
 		return ModeCW // RBN is overwhelmingly CW; treat as CW for pathscope
-	case "dcx":
-		return ModeAny // DX cluster is mixed-mode
 	}
+	// Anything else, incl. historic "dcx" rows from the removed DX-cluster
+	// lane, is mixed-mode.
 	return ModeAny
 }
 

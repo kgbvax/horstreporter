@@ -17,8 +17,8 @@ import (
 //
 // The unified climatology (prop_baseline.go) is a global mesh keyed by the
 // receiver's region, so it cannot say what is normal FROM a given QTH. The
-// region baseline dx_region_baseline_daily can: every PSKReporter FT8/FT4 (and
-// DX-cluster) spot adds one row per end, keyed by that end's 4-char square and
+// region baseline dx_region_baseline_daily can: every PSKReporter FT8/FT4 spot
+// adds one row per end, keyed by that end's 4-char square and
 // the OTHER end's region (dxPulseRegionBaselineKeysForSpot). Summing it over
 // the squares of the operator's area gives, per (band, far-end region, slot,
 // day), the same count the from-here live counter produces for those spots.

@@ -47,8 +47,9 @@ model is a fallback for paths with no live data.
 - HorstReporter already exists and provides the **aggregated reception-report feed**.
   **Do not add this scoring into HorstReporter.** Separate, independently deployable binary;
   HorstReporter stays small and is consumed **read-only**.
-- HorstReporter also exposes a **DX-cluster feed**. **Do not use those DX-cluster spots** for
-  anything. Spots to score come only from the operator's cluster client (§3 A3).
+- HorstReporter used to expose a **DX-cluster feed**; that ingest was removed in Nov 2026, so
+  `/api/stream` no longer carries `sourceType=="dxcluster"` (the adapter's drop is now a no-op
+  guard). Spots to score come only from the operator's cluster client (§3 A3).
 - Do **not** connect directly to RBN (telnet) or PSKReporter (MQTT) for Layer 1 — consume
   HorstReporter's already-aggregated feed.
 - The three scoring layers, in order of trust:

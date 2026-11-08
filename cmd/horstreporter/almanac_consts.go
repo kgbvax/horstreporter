@@ -61,7 +61,7 @@ const (
 	// ending yesterday. Today only feeds the "open today" overlay (KTD11).
 	almanacWindowDays = 30
 
-	// almanacOpenMinSpotsPSKR is k for the PSKR/DX-cluster layer: a
+	// almanacOpenMinSpotsPSKR is k for the PSKReporter layer: a
 	// (band, region, slot) is open on a day when the ring's summed spot count
 	// in that slot reaches k.
 	almanacOpenMinSpotsPSKR = 2

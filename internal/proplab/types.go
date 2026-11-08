@@ -9,7 +9,7 @@ type CellRow struct {
 	Band          string
 	Cell4         string
 	Region        string
-	Lane          string // "ft8", "rbn", "dcx"
+	Lane          string // "ft8", "rbn" (historic rows may still carry "dcx")
 	SpotCount     int
 	LinkCount     int
 	ReporterCount int

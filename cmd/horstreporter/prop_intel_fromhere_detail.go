@@ -186,23 +186,20 @@ func fromHereDayCurvesFor(grids []string, now int64, wait time.Duration) *fromHe
 }
 
 // fromHereTrend counts, per (band, far-end region), the spots the area normal
-// is built from (selected PSKReporter FT8/FT4 and DX-cluster spots, once per
-// end inside the area, as scanPropIntelV2WindowMode counts ExpectedSpots) in
-// fromHereTrendBins five-minute bins ending at now, oldest first. The last
-// three bins are the 15-minute window.
+// is built from (selected PSKReporter FT8/FT4 spots, once per end inside the
+// area, as scanPropIntelV2WindowMode counts ExpectedSpots) in fromHereTrendBins
+// five-minute bins ending at now, oldest first. The last three bins are the
+// 15-minute window.
 func fromHereTrend(history []MQTTMessage, profiles []propIntelSourceProfile, qthSet []string, area *liveArea, now int64) map[propIntelCellKey][]int {
-	var mqttSide, dxcSide string
-	var wantMQTT, wantDXC bool
+	var mqttSide string
+	var wantMQTT bool
 	for _, p := range profiles {
-		switch p.InternalTag {
-		case "mqtt":
+		if p.InternalTag == "mqtt" {
 			wantMQTT, mqttSide = true, p.ReceiverSide
-		case "dxcluster":
-			wantDXC, dxcSide = true, p.ReceiverSide
 		}
 	}
 	out := map[propIntelCellKey][]int{}
-	if !wantMQTT && !wantDXC {
+	if !wantMQTT {
 		return out
 	}
 	start := now - fromHereTrendBins*fromHereTrendBinSec
@@ -215,21 +212,10 @@ func fromHereTrend(history []MQTTMessage, profiles []propIntelSourceProfile, qth
 		if m.T > now || m.T < start {
 			continue
 		}
-		var side string
-		switch m.Source {
-		case "", "mqtt":
-			if !wantMQTT {
-				continue
-			}
-			side = mqttSide
-		case "dxcluster":
-			if !wantDXC {
-				continue
-			}
-			side = dxcSide
-		default:
+		if m.Source != "" && m.Source != "mqtt" {
 			continue
 		}
+		side := mqttSide
 		bi := feedBandIndex(m.B)
 		if bi < 0 {
 			continue

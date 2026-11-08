@@ -282,8 +282,8 @@ func TestRawSpotInsertArgs(t *testing.T) {
 		if got := rawSpotInsertArgs(MQTTMessage{}, "20m", "", "", nil, "")[9]; got != "mqtt" {
 			t.Fatalf("blank sourceType = %v, want mqtt", got)
 		}
-		if got := rawSpotInsertArgs(MQTTMessage{}, "20m", "DXCLUSTER", "", nil, "")[9]; got != "dxcluster" {
-			t.Fatalf("dxcluster sourceType = %v, want lowercased dxcluster", got)
+		if got := rawSpotInsertArgs(MQTTMessage{}, "20m", "RBN", "", nil, "")[9]; got != "rbn" {
+			t.Fatalf("RBN sourceType = %v, want lowercased rbn", got)
 		}
 	})
 

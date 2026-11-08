@@ -151,10 +151,10 @@ func TestAppendV2Spot(t *testing.T) {
 		{"plain pskreporter, no reporter", Spot{Locator: "JO62", Band: "20m", SNR: -12, T: 563, SourceType: "mqtt"}, `["JO62","20m",-12,437]`},
 		{"reporter only", Spot{Locator: "JO62QM", Band: "20m", SNR: 3, T: 990, ReporterLocator: "FN31", SourceType: "mqtt"}, `["JO62QM","20m",3,10,"FN31"]`},
 		{"wspr keeps empty reporter slot", Spot{Locator: "EM12", Band: "40m", SNR: -20, T: 900, SourceType: "wspr"}, `["EM12","40m",-20,100,"","w"]`},
-		{"rbn", Spot{Locator: "EM12", Band: "20m", SNR: 20, T: 999, ReporterLocator: "JO31", SourceType: "rbn", Sender: "X", Receiver: "Y"}, `["EM12","20m",20,1,"JO31","r"]`},
-		{"dxcluster carries calls", Spot{Locator: "K", Band: "20m", SNR: 0, T: 1000, SourceType: "dxcluster", Sender: "DL1ABC", Receiver: "K1XYZ"}, `["K","20m",0,0,"","d","DL1ABC","K1XYZ"]`},
+		{"rbn never carries calls", Spot{Locator: "EM12", Band: "20m", SNR: 20, T: 999, ReporterLocator: "JO31", SourceType: "rbn", Sender: "X", Receiver: "Y"}, `["EM12","20m",20,1,"JO31","r"]`},
+		{"unknown source verbatim, no calls", Spot{Locator: "K", Band: "20m", SNR: 0, T: 1000, SourceType: "dxcluster", Sender: "DL1ABC", Receiver: "K1XYZ"}, `["K","20m",0,0,"","dxcluster"]`},
 		{"future spot gives negative age", Spot{Locator: "JO62", Band: "20m", SNR: 1, T: 1005, SourceType: "mqtt"}, `["JO62","20m",1,-5]`},
-		{"escaping", Spot{Locator: "JO62", Band: "20m", SNR: 1, T: 1000, SourceType: "dxcluster", Sender: `A"B`, Receiver: "é"}, `["JO62","20m",1,0,"","d","A\"B","é"]`},
+		{"escaping", Spot{Locator: "JO62", Band: "20m", SNR: 1, T: 1000, ReporterLocator: `A"é`, SourceType: "mqtt"}, `["JO62","20m",1,0,"A\"é"]`},
 	}
 	for _, c := range cases {
 		if got := string(appendV2Spot(nil, c.s, n)); got != c.want {
@@ -298,8 +298,12 @@ func TestStreamSourceFilter(t *testing.T) {
 	if f.spotAllowed(Spot{SourceType: "wspr", Band: "20m"}) || f.spotAllowed(Spot{SourceType: "rbn", Band: "20m"}) {
 		t.Fatal("wspr and rbn must be excluded")
 	}
-	if !f.spotAllowed(Spot{SourceType: "mqtt", Band: "20m"}) || !f.spotAllowed(Spot{SourceType: "dxcluster", Band: "20m"}) {
-		t.Fatal("mqtt and dxcluster must stay")
+	if !f.spotAllowed(Spot{SourceType: "mqtt", Band: "20m"}) {
+		t.Fatal("mqtt must stay")
+	}
+	// The removed include_dxcluster flag is ignored, not an error.
+	if g := streamFilterFromQuery(map[string][]string{"include_dxcluster": {"false"}}, "", true); !g.spotAllowed(Spot{SourceType: "mqtt", Band: "20m"}) {
+		t.Fatal("include_dxcluster must not filter anything")
 	}
 	if g := streamFilterFromQuery(map[string][]string{"include_wspr": {"false"}}, "", false); !g.spotAllowed(Spot{SourceType: "wspr"}) {
 		t.Fatal("withSources=false must ignore include_*")

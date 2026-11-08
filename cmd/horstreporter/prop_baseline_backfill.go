@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// prop_baseline_backfill.go seeds prop_region_baseline_daily for the three
-// non-WSPR sources (pskr, rbn, dxcluster) — and fills any missing WSPR days —
+// prop_baseline_backfill.go seeds prop_region_baseline_daily for the
+// non-WSPR sources (pskr, rbn) — and fills any missing WSPR days —
 // from dx_raw_spots. The 11-region taxonomy lives in Go (region.FromLocator)
 // and cannot be expressed in SQL, so this is a Go background job, not a
 // one-shot SQL statement.

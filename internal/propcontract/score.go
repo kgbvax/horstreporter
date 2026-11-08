@@ -34,7 +34,7 @@ type Spot struct {
 // IMPORTANT: the public feed is LOCATOR-LEVEL. It does not expose callsigns,
 // frequency, or mode — only the two grids, SNR, band and source. Layer 1 is
 // therefore locator/path based, not callsign based. See docs/horstprop.md §5.2
-// and §3 A2. ("dxcluster" source is dropped by the adapter.)
+// and §3 A2.
 type PropReport struct {
 	TxLocator  string    `json:"tx_locator"` // heard (DX-side) grid — streamSpot.locator
 	RxLocator  string    `json:"rx_locator"` // receiver/monitor grid — streamSpot.reporterLocator

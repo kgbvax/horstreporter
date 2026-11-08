@@ -26,22 +26,17 @@ type Spot struct {
 
 func sourceTypeForMessage(m MQTTMessage) string {
 	if src := strings.ToLower(strings.TrimSpace(m.Source)); src != "" {
-		return src // explicit ingest tag ("mqtt"|"dxcluster"|"rbn"), incl. backfilled rows
-	}
-	// Legacy fallback for messages without an explicit Source (e.g. older cached
-	// rows): DX-cluster is the only ingest that historically marked itself via MD.
-	if strings.ToUpper(strings.TrimSpace(m.MD)) == "DXCLUSTER" {
-		return "dxcluster"
+		return src // explicit ingest tag ("mqtt"|"rbn"|"wspr"), incl. backfilled rows
 	}
 	return "mqtt"
 }
 
 func reporterLocatorForMessage(m MQTTMessage) string {
 	// reporterLocator is the receiving (reporting) station's square. For
-	// PSKReporter that is RL; DX cluster, RBN and WSPR use SC/SL for the
-	// reporting station (RC/RL is the station heard).
+	// PSKReporter that is RL; RBN and WSPR use SC/SL for the reporting
+	// station (RC/RL is the station heard).
 	switch sourceTypeForMessage(m) {
-	case "dxcluster", "rbn", "wspr":
+	case "rbn", "wspr":
 		return strings.ToUpper(strings.TrimSpace(m.SL))
 	}
 	return strings.ToUpper(strings.TrimSpace(m.RL))

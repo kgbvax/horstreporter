@@ -12,8 +12,8 @@ import "embed"
 //go:embed static
 var StaticFiles embed.FS
 
-// CtyData is cty.dat, embedded so DX-cluster country/flag labelling works out
-// of the box (no file to deploy). Refreshed whenever the binary is rebuilt;
+// CtyData is cty.dat, embedded so DXCC entity lookup works out of the box
+// (no file to deploy). Refreshed whenever the binary is rebuilt;
 // -cty-path can override it with a newer file at runtime.
 //
 //go:embed cty.dat

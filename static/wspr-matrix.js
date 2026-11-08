@@ -8,7 +8,7 @@ import {
 
 // wspr-matrix.js — the unified Propagation panel: band × region propagation-
 // intelligence matrix over ALL ingest sources (WSPR, PSKReporter FT8/FT4,
-// RBN, DX cluster). Polls /api/prop_intel/v2 (the multi-source contract;
+// RBN). Polls /api/prop_intel/v2 (the multi-source contract;
 // v1 stays frozen for the horstapp widgets). Every look shows a path against
 // its normal for this hour, not its raw count (wspr-matrix-looks.js, chip
 // row): dot strip (default), day strip, sparkline. They replaced the viridis /
@@ -56,19 +56,17 @@ const SOURCES = [
     { key: 'wspr', label: 'WSPR', title: 'WSPR beacon reports' },
     { key: 'pskr', label: 'PSKR', title: 'PSKReporter FT8 and FT4 reports' },
     { key: 'rbn', label: 'RBN', title: 'Reverse Beacon Network CW and RTTY spots' },
-    { key: 'dxcluster', label: 'DXC', title: 'DX cluster spots' },
 ];
 const SOURCE_LABELS = Object.fromEntries(SOURCES.map((s) => [s.key, s.label]));
 // Per-source "open" basis (backend v2 open_basis) in the cell tooltip.
 const OPEN_BASIS_LABELS = { budget: 'link budget', snr_floor: 'SNR floor' };
 const ALL_SOURCES = SOURCES.map((s) => s.key);
-// Default selection excludes dxcluster: prod has no DX-cluster ingest wired
-// (-dxcluster-enable absent), so DXC would sit there contributing nothing.
-// The chip stays available for local/dev instances that run the ingest.
-const DEFAULT_SOURCES = ['wspr', 'pskr', 'rbn'];
+// Every source is selected by default. A stored selection is filtered to
+// ALL_SOURCES on load, so a stale entry (the removed 'dxcluster') is dropped.
+const DEFAULT_SOURCES = [...ALL_SOURCES];
 // PSKReporter is always selected: every look compares its reports with the
 // area normal, and the other sources have no normal (a WSPR-only selection
-// left all three looks empty). WSPR / RBN / DXC are optional extras.
+// left all three looks empty). WSPR / RBN are optional extras.
 const BASE_SOURCE = 'pskr';
 
 // A source list with the base source, in canonical order.
