@@ -15,7 +15,7 @@ import (
 // prop_intel_v2.go implements /api/prop_intel/v2: the unified multi-source
 // propagation-intelligence nowcast. Where v1 (prop_intel.go) is WSPR-only with
 // an FT8 flavor cross-reference, v2 evaluates every requested ingest source
-// (wspr, pskr, rbn, dxcluster) against its own climatology
+// (wspr, pskr, rbn) against its own climatology
 // (prop_region_baseline_daily via propBaseline) and rolls them up per
 // (band × region) cell with multi-source agreement.
 //
@@ -34,8 +34,7 @@ type propIntelV2SourceCell struct {
 	SSBOpen *bool `json:"ssb_open,omitempty"`
 	CWOpen  *bool `json:"cw_open,omitempty"`
 	// OpenBasis documents which model produced the open flags:
-	// "budget" (WSPR SNR+power), "snr_floor" (pskr/rbn report floors),
-	// "presence" (dxcluster spot count).
+	// "budget" (WSPR SNR+power) or "snr_floor" (pskr/rbn report floors).
 	OpenBasis string `json:"open_basis"`
 	// UnknownPower: the path budget could not account for TX power (pskr) —
 	// the ssb/cw flags are estimates, not measurements.
@@ -85,7 +84,7 @@ type propIntelV2Cell struct {
 	PerSource         []propIntelV2SourceCell `json:"sources"`
 	// Expected and ExpectedSpots are set in the from-here view only, when
 	// PSKReporter is selected and the area has a normal (prop_intel_fromhere.go).
-	// Expected is the mean PSKReporter (+ DX-cluster) count for this band and
+	// Expected is the mean PSKReporter count for this band and
 	// far-end region over the same clock window on recent days, from the
 	// operator's area; ExpectedSpots is the live count of those same spots, so
 	// ExpectedSpots / Expected is the cell against its normal.
@@ -357,8 +356,8 @@ func scanPropIntelV2Window(history []MQTTMessage, profiles []propIntelSourceProf
 // with fromHereOnly a spot counts once for each of its ends inside the area,
 // in the cell of the OTHER end's region (fromHereRemoteEnds), and spots that
 // do not touch the area are skipped. normalSpots then counts, per (band,
-// region), the spots the area normal is built from (PSKReporter FT8/FT4 and
-// DX cluster), and normalStations the distinct far-end stations behind them
+// region), the spots the area normal is built from (PSKReporter FT8/FT4),
+// and normalStations the distinct far-end stations behind them
 // (capped at fromHereSurgeMinStations); both nil otherwise.
 func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSourceProfile, qthSet []string, matchArea *liveArea, now, cutoff, midpoint int64, fromHereOnly bool) (map[propIntelV2CellKey]*propIntelV2Acc, map[propIntelCellKey]bool, map[string]struct{}, map[propIntelCellKey]int, map[propIntelCellKey]int) {
 	// Per-message accumulation is indexed by (band, region, source) position
@@ -388,7 +387,7 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 		}
 		src := m.Source
 		if src == "" {
-			src = "mqtt" // MQTT ingest leaves Source empty (only wspr/rbn/dxc tag theirs)
+			src = "mqtt" // MQTT ingest leaves Source empty (only wspr/rbn tag theirs)
 		}
 		si := -1
 		for j := range profiles {
@@ -456,7 +455,7 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 			if matchedEnd {
 				fromHere[bi*nRegions+ri] = true
 			}
-			if fromHereOnly && (src == "mqtt" || src == "dxcluster") {
+			if fromHereOnly && src == "mqtt" {
 				normal[bi*nRegions+ri]++
 				stations[bi*nRegions+ri].add(endCalls[k])
 			}
@@ -630,8 +629,7 @@ func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes in
 
 		// Global Min SNR overrides (ssb_min_db/cw_min_db query params) swap the
 		// per-source profile floor for the operator's own threshold — one
-		// control gates every SNR-floored source. Presence-only sources
-		// (dxcluster) have no SNR to filter.
+		// control gates every SNR-floored source.
 		ssbFloor, cwFloor := prof.SSBFloorDb, prof.CWFloorDb
 		if ssbOverride != nil && ssbFloor != nil {
 			v := float64(*ssbOverride)
@@ -651,9 +649,6 @@ func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes in
 			sc.SSBOpen = &ssb
 			sc.CWOpen = &cw
 			sc.Open = ssb || cw
-		case prof.PresenceMinSpots > 0:
-			// dxcluster: presence-only.
-			sc.Open = acc.spotCount >= prof.PresenceMinSpots
 		default:
 			// pskr/rbn: SNR floors. Unknown power → honesty flag.
 			if ssbFloor != nil {
@@ -784,8 +779,6 @@ func openBasisForProfile(p propIntelSourceProfile) string {
 	switch {
 	case p.HasTXPower:
 		return "budget"
-	case p.PresenceMinSpots > 0:
-		return "presence"
 	default:
 		return "snr_floor"
 	}
@@ -799,12 +792,23 @@ func (resp propIntelV2Response) applyFromHere(fromHere bool) propIntelV2Response
 		return resp
 	}
 	filtered := make([]propIntelV2Cell, 0, len(resp.Cells))
+	kept := make(map[string]struct{}, len(resp.Bands))
 	for _, c := range resp.Cells {
 		if c.FromHere {
 			filtered = append(filtered, c)
+			kept[c.Band] = struct{}{}
 		}
 	}
 	resp.Cells = filtered
+	// Bands lists what the cells cover; the summary headline counts it, so
+	// drop the bands whose only cells were filtered out.
+	bands := make([]string, 0, len(kept))
+	for _, b := range resp.Bands {
+		if _, ok := kept[b]; ok {
+			bands = append(bands, b)
+		}
+	}
+	resp.Bands = bands
 	return resp
 }
 

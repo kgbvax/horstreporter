@@ -294,11 +294,6 @@ export function attachUITooltipEvents() {
     }
 
     map.on('mousemove', function(e) {
-        if (state.dxClusterHoverActive) {
-            hideTooltip();
-            return;
-        }
-
         const res = getGridResolution();
         const loc = latLngToLocator(e.latlng.lat, e.latlng.lng, res);
         updateHoverSquareHighlight(loc);

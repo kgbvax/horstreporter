@@ -13,7 +13,7 @@ vi.mock('../static/utils.js', () => ({
 }));
 
 import { initWsprMatrix, setWsprMatrixVisible, setRowExtras, refreshMatrix, __test } from '../static/wspr-matrix.js';
-import { state } from '../static/state.js';
+import { state, STREAM_QTH_EVENT } from '../static/state.js';
 
 const {
     renderLookCell,
@@ -207,10 +207,9 @@ describe('wspr-matrix (Propagation) panel', () => {
         const groups = Array.from(document.querySelectorAll('.wspr-src-chips [role="group"]'));
         expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['Sources', 'Look', 'Overlay']);
         expect(groups[2].querySelector('[data-toggle="heat"]').getAttribute('aria-pressed')).toBe('false');
-        expect(groups[0].querySelectorAll('[data-source]').length).toBe(4);
+        expect(groups[0].querySelectorAll('[data-source]').length).toBe(3);
         expect(Array.from(groups[1].querySelectorAll('[data-style]')).map((c) => c.textContent)).toEqual(['vs Normal', 'Day', 'Trend']);
         expect(groups[0].querySelector('[data-source="rbn"]').getAttribute('aria-pressed')).toBe('true');
-        expect(groups[0].querySelector('[data-source="dxcluster"]').getAttribute('aria-pressed')).toBe('false');
     });
 
     it('opening starts polling; closing aborts in-flight requests', async () => {
@@ -252,7 +251,7 @@ describe('wspr-matrix (Propagation) panel', () => {
         expect(calls[0]).toContain('/api/prop_intel/v2?');
         expect(calls[0]).toContain('from_here=true');
         expect(calls[0]).toContain('surroundings=true');
-        expect(calls[0]).toContain('sources=wspr%2Cpskr%2Crbn'); // dxcluster off by default
+        expect(calls[0]).toContain('sources=wspr%2Cpskr%2Crbn');
         // What the looks draw: silent cells, the usual day, the last hour.
         expect(calls[0]).toContain('silent=1');
         expect(calls[0]).toContain('normal_day=1');
@@ -402,7 +401,7 @@ describe('wspr-matrix (Propagation) panel', () => {
         expect(calls.length).toBe(1);
     });
 
-    it('changing QTH triggers a re-poll with the new QTH', async () => {
+    it('the stream starting for a new QTH triggers a re-poll with it', async () => {
         const calls = [];
         global.fetch = vi.fn(async (url) => {
             calls.push(url);
@@ -415,10 +414,16 @@ describe('wspr-matrix (Propagation) panel', () => {
         expect(calls.length).toBe(1);
         expect(calls[0]).toContain('qth=JO32');
 
+        // Typing alone does not re-poll; the stream starting for FN31 does.
         const qthInput = document.getElementById('qth');
         qthInput.value = 'FN31';
         qthInput.dispatchEvent(new Event('change'));
         await new Promise((r) => setTimeout(r, 0));
+        expect(calls.length).toBe(1);
+        state.streamQth = 'FN31';
+        window.dispatchEvent(new CustomEvent(STREAM_QTH_EVENT, { detail: { qth: 'FN31' } }));
+        await new Promise((r) => setTimeout(r, 0));
+        state.streamQth = '';
         expect(calls.length).toBe(2);
         expect(calls[1]).toContain('qth=FN31');
     });
@@ -442,7 +447,7 @@ describe('wspr-matrix (Propagation) panel', () => {
         expect(calls[1]).not.toContain('rbn');
     });
 
-    it('default source selection excludes dxcluster (prod has no DXC ingest)', async () => {
+    it('default source selection is every source', async () => {
         expect(runtime.sources).toEqual(['wspr', 'pskr', 'rbn']);
         const calls = [];
         global.fetch = vi.fn(async (url) => {
@@ -453,18 +458,17 @@ describe('wspr-matrix (Propagation) panel', () => {
         setWsprMatrixVisible(true);
         await new Promise((r) => setTimeout(r, 0));
         expect(calls[0]).toContain('sources=wspr%2Cpskr%2Crbn');
-        expect(calls[0]).not.toContain('dxcluster');
     });
 
     it('PSKR is always selected: its chip does not toggle, the others do', () => {
         runtime.sources = ['pskr'];
         toggleSource('pskr');
         expect(runtime.sources).toEqual(['pskr']);
-        toggleSource('dxcluster');
+        toggleSource('rbn');
         toggleSource('wspr');
-        expect(runtime.sources).toEqual(['wspr', 'pskr', 'dxcluster']); // canonical order
+        expect(runtime.sources).toEqual(['wspr', 'pskr', 'rbn']); // canonical order
         toggleSource('wspr');
-        expect(runtime.sources).toEqual(['pskr', 'dxcluster']);
+        expect(runtime.sources).toEqual(['pskr', 'rbn']);
     });
 
     it('the PSKR chip renders as fixed on', () => {
@@ -475,9 +479,15 @@ describe('wspr-matrix (Propagation) panel', () => {
     });
 
     it('a stored chip selection survives a re-init, and gains PSKR', () => {
+        store.setItem(SOURCES_KEY, 'rbn,pskr,wspr');
+        initWsprMatrix();
+        expect(runtime.sources).toEqual(['wspr', 'pskr', 'rbn']); // canonical order
+        // A stored 'dxcluster' (the removed DX cluster source) is dropped
+        // silently and the cleaned selection is written back.
         store.setItem(SOURCES_KEY, 'dxcluster,pskr,wspr');
         initWsprMatrix();
-        expect(runtime.sources).toEqual(['wspr', 'pskr', 'dxcluster']); // canonical order
+        expect(runtime.sources).toEqual(['wspr', 'pskr']);
+        expect(store.getItem(SOURCES_KEY)).toBe('wspr,pskr');
         // A WSPR-only selection (it left every look empty) gains PSKR, stored.
         store.setItem(SOURCES_KEY, 'wspr');
         initWsprMatrix();

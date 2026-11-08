@@ -16,7 +16,6 @@ export const STREAM_STATUS_TEXT = Object.freeze({
     disconnected: 'Disconnected. Press Go to reconnect.',
     ended: 'Live data stopped. The timeline shows this session only.',
     timeTravel: 'Time travel: showing past spots',
-    snapshotLoading: 'Loading snapshot',
     paused: 'Paused while this tab is hidden',
 });
 

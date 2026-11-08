@@ -139,10 +139,10 @@ func TestLocatorHelpersAgreeWithUpperCasingReference(t *testing.T) {
 			t.Fatalf("maidenhead.InCluster(%q, %d, %d) = %v want %v", loc, ax, ay, got, want)
 		}
 	}
-	for _, md := range []string{"", "FT8", "ft8", " Ft4 ", "dxcluster", "WSPR", "CW", "rtty", "FT8 "} {
+	for _, md := range []string{"", "FT8", "ft8", " Ft4 ", "WSPR", "CW", "rtty", "FT8 "} {
 		want := true
 		switch strings.ToUpper(strings.TrimSpace(md)) {
-		case "", "FT8", "FT4", "DXCLUSTER":
+		case "", "FT8", "FT4":
 			want = false
 		}
 		if got := isNonConditionsMode(md); got != want {

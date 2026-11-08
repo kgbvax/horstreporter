@@ -19,12 +19,12 @@ type MQTTMessage struct {
 	B  string `json:"b"`
 	MD string `json:"md"`
 
-	// Set programmatically for DX-cluster spots only (never from the MQTT
-	// payload — hence json:"-"); carried in hub.history.
-	F float64 `json:"-"` // spot frequency in kHz (DX cluster, RBN, WSPR)
+	// Set programmatically by the RBN/WSPR ingests and the startup backfill
+	// (never from the MQTT payload — hence json:"-"); carried in hub.history.
+	F float64 `json:"-"` // spot frequency in kHz (RBN, WSPR)
 
 	// Source identifies which ingest produced this spot: "mqtt" (PSKReporter),
-	// "dxcluster", or "rbn". Set by each ingest and by the startup backfill (from
+	// "rbn" or "wspr". Set by each ingest and by the startup backfill (from
 	// dx_raw_spots.source_type) so sourceTypeForMessage can tag the stream without
 	// abusing MD (RBN's real modes CW/RTTY are not source markers). json:"-" —
 	// surfaces via toStreamSpot.sourceType, never the raw MQTT payload.

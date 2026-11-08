@@ -1,14 +1,17 @@
 export const state = {
     liveSpots: [],
     heatLayer: null,
-    dxClusterLayer: null,
     wsprLayer: null,
     qthLayer: null,
     qth: '',
+    // The qth the live stream was last started for (normalised, e.g. JO32).
+    // state.qth follows the input on every keystroke; panels that sit next to
+    // the stream's spots read this instead (panelQth), so they don't fetch
+    // for a half-typed or not-yet-submitted locator.
+    streamQth: '',
     eventSource: null,
     renderInterval: null,
     renderPending: false,
-    dxClusterHoverActive: false,
     lastMercatorInteractionAt: 0,
     lastMercatorAutoZoomAt: 0,
     mercatorInteractionActive: false,
@@ -35,3 +38,13 @@ export const state = {
     // Server answer to the last resume request ("delta" | "full" | null).
     lastResumeMode: null,
 };
+// The qth the Conditions panels describe: the one the live stream runs for,
+// or the input's value before any stream has started.
+export function panelQth() {
+    if (state.streamQth) return state.streamQth;
+    const el = typeof document !== 'undefined' ? document.getElementById('qth') : null;
+    return String(el?.value || state.qth || '').trim().toUpperCase();
+}
+
+// Fired on window when the stream starts for a different qth than before.
+export const STREAM_QTH_EVENT = 'horst:stream-qth';

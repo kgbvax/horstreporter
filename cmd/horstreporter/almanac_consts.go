@@ -31,13 +31,13 @@ const (
 	almanacMaxWidenRadius = 2
 
 	// almanacAreaCacheTTL is how long a resolved callsign → area stays cached
-	// (QRZ-backed and locator results).
+	// (DXCC-centroid and locator results).
 	almanacAreaCacheTTL = 6 * time.Hour
 	// almanacAreaApproxCacheTTL is the shorter TTL for DXCC-centroid fallbacks,
-	// so a transient QRZ failure is upgraded to the real locator soon.
+	// so a refined cty.dat entry is picked up soon.
 	almanacAreaApproxCacheTTL = 30 * time.Minute
 	// almanacAreaNegativeCacheTTL caches unresolvable callsigns so repeat
-	// requests don't hit QRZ.
+	// requests don't repeat the lookup.
 	almanacAreaNegativeCacheTTL = 10 * time.Minute
 	// almanacAreaCacheMaxEntries bounds the resolver cache.
 	almanacAreaCacheMaxEntries = 4096
@@ -61,7 +61,7 @@ const (
 	// ending yesterday. Today only feeds the "open today" overlay (KTD11).
 	almanacWindowDays = 30
 
-	// almanacOpenMinSpotsPSKR is k for the PSKR/DX-cluster layer: a
+	// almanacOpenMinSpotsPSKR is k for the PSKReporter layer: a
 	// (band, region, slot) is open on a day when the ring's summed spot count
 	// in that slot reaches k.
 	almanacOpenMinSpotsPSKR = 2

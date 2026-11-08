@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// propSpot builds an MQTTMessage for baseline tests. For wspr/rbn/dxcluster
+// propSpot builds an MQTTMessage for baseline tests. For wspr/rbn
 // SC/SL is the receiver side; for pskr ("mqtt") RC/RL is the receiver side.
 func propSpot(ts int64, source, band, sc, sl, rc, rl string) MQTTMessage {
 	return MQTTMessage{Source: source, B: band, T: ts, SC: sc, SL: sl, RC: rc, RL: rl}
@@ -19,14 +19,15 @@ func TestPropBaselineObserveKeysBySource(t *testing.T) {
 	e := newPropBaselineEngine("", "")
 	now := time.Now().Unix()
 
-	// Same band/region/time, four sources → four distinct buckets.
+	// Same band/region/time, three sources → three distinct buckets; the
+	// removed dxcluster source has no profile and is ignored.
 	e.Observe(propSpot(now, "wspr", "20m", "RX", "JO62qm", "TX", "FN31ab"))   // recv=SL JO62 (EU)
 	e.Observe(propSpot(now, "mqtt", "20m", "TX", "JO62qm", "RX", "FN31ab"))   // recv=RL FN31 (NA)
 	e.Observe(propSpot(now, "rbn", "20m", "SKIM", "JO62qm", "DX", "FN31ab"))  // recv=SL JO62 (EU)
 	e.Observe(propSpot(now, "dxcluster", "20m", "SPOT", "JO62qm", "DX", "FN31ab"))
 
-	if len(e.buckets) != 4 {
-		t.Fatalf("expected 4 source-distinct buckets, got %d", len(e.buckets))
+	if len(e.buckets) != 3 {
+		t.Fatalf("expected 3 source-distinct buckets, got %d", len(e.buckets))
 	}
 	// pskr keys by the RC/RL (reporter) region: FN31 = NA.
 	if b := e.buckets[propBaselineBucketKey("20m", "pskr", utcSlotOfDay(now), "NA")]; b == nil {

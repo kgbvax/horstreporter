@@ -14,29 +14,6 @@ const host = document.getElementById('svelte-root');
 let app = null;
 if (host) app = new App({ target: host });
 
-// If app.js was loaded with ?capture=1, it parsed the URL into a capture config
-// and exposed it here. Seed the Svelte store from those values BEFORE mounting
-// the control components so URL-driven projection/style/qth/etc. are not
-// clobbered by store defaults or persisted localStorage state.
-const captureConfig = typeof window !== 'undefined' ? window.__horstCaptureConfig : null;
-if (captureConfig?.enabled) {
-    const cfg = captureConfig;
-    uiStore.update((s) => {
-        const next = { ...s };
-        if (cfg.target != null) next.qth = String(cfg.target);
-        if (Number.isFinite(cfg.minutes) && cfg.minutes >= 1) next.minutes = Math.min(60, cfg.minutes);
-        if (cfg.minSnrMode === 'ssb' || cfg.minSnrMode === 'cw' || cfg.minSnrMode === 'none') next.minSnr = cfg.minSnrMode;
-        if (Number.isFinite(cfg.ssbMinDb)) next.ssbMinDb = cfg.ssbMinDb;
-        if (Number.isFinite(cfg.cwMinDb)) next.cwMinDb = cfg.cwMinDb;
-        if (cfg.projection === 'mercator' || cfg.projection === 'azimuthal') next.projection = cfg.projection;
-        if (cfg.style === 'grid-snr' || cfg.style === 'active-area') next.mapStyle = cfg.style;
-        if (typeof cfg.surroundings === 'boolean') next.surroundings = cfg.surroundings;
-        if (typeof cfg.countryColoring === 'boolean') next.countryColoring = cfg.countryColoring;
-        if (typeof cfg.includeDxcluster === 'boolean') next.showDxcluster = cfg.includeDxcluster;
-        return next;
-    });
-}
-
 // U2 slice: SNR threshold sliders mount into the controls form placeholder.
 const snrHost = document.getElementById('snr-sliders-root');
 if (snrHost) new SnrThresholds({ target: snrHost });
@@ -56,20 +33,15 @@ if (surroundingsHost) new Toggle({ target: surroundingsHost, props: { id: 'surro
 const countryHost = document.getElementById('country-coloring-root');
 if (countryHost) new Toggle({ target: countryHost, props: { id: 'show-country-coloring', label: 'Country colors', key: 'countryColoring', render: false, hook: '__horstCountryColoringChanged' } });
 
-const dxclusterHost = document.getElementById('dxcluster-root');
-if (dxclusterHost) new Toggle({ target: dxclusterHost, props: { id: 'show-dxcluster-spots', label: 'DX cluster', key: 'showDxcluster' } });
-window.__horstSetDxcluster = (on) => uiStore.update((s) => ({ ...s, showDxcluster: !!on }));
-
 const minSnrHost = document.getElementById('min-snr-group');
 if (minSnrHost) new MinSnr({ target: minSnrHost });
 
 const styleHost = document.getElementById('style-group');
 if (styleHost) new MapStyle({ target: styleHost });
 
-// Legacy localStorage seeding: only applied when there is no capture config so
-// normal reloads keep the user's last UI state, while capture URLs win.
+// Legacy localStorage seeding.
 // One-time migration: the legacy 'target' key is now 'qth'.
-if (!captureConfig?.enabled) {
+{
     const savedProjection = localStorage.getItem('mapProjection');
     if (savedProjection === 'mercator' || savedProjection === 'azimuthal') {
         uiStore.update((s) => ({ ...s, projection: savedProjection }));
@@ -91,8 +63,6 @@ if (!captureConfig?.enabled) {
     }
     const savedQth = localStorage.getItem('qth');
     if (savedQth) uiStore.update((s) => ({ ...s, qth: savedQth }));
-    const savedDx = localStorage.getItem('showDXClusterSpots');
-    if (savedDx !== null) uiStore.update((s) => ({ ...s, showDxcluster: savedDx === 'true' }));
 }
 
 // External vanilla writers set the qth via the store so the input stays in

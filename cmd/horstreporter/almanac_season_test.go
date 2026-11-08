@@ -246,7 +246,7 @@ func TestAlmanacSeasonHandlerStatusCodes(t *testing.T) {
 		}
 	}
 
-	noStore := newAlmanacService(nil, func(q string) (almanacArea, error) { return resolveAlmanacAreaWith(q, nil, nil) }, nil)
+	noStore := newAlmanacService(nil, func(q string) (almanacArea, error) { return resolveAlmanacAreaWith(q, nil) }, nil)
 	if rec := almanacSeasonGet(noStore, "?qth=JO32&band=20m&region=NA"); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("no store: %d", rec.Code)
 	}

@@ -62,14 +62,14 @@ vi.mock('../static/ui.js', () => ({
 }));
 
 vi.mock('../static/renderers.js', () => ({
+    visibleMapSpots: (spots) => spots || [],
+    setRailSpanOverride: vi.fn(),
     updateMapVisualization: vi.fn(),
     updateBandLabels: vi.fn(),
     refreshBandLabels: vi.fn(),
     setBandNormalRateProvider: vi.fn(),
-    clearDxClusterMarkers: vi.fn(),
     clearWsprMarkers: vi.fn(),
-    resetRenderFingerprint: vi.fn(),
-    whenActiveAreaRendered: vi.fn()
+    resetRenderFingerprint: vi.fn()
 }));
 
 vi.mock('../static/cond-now.js', () => ({ initCondNow: vi.fn() }));
@@ -98,6 +98,7 @@ const timelineMock = {
     refreshCalls: 0
 };
 vi.mock('../static/timeline.js', () => ({
+    MOMENT_WINDOW_SECONDS: 900,
     isTimelineActive: () => timelineMock.timelineActive,
     enterTimeline: vi.fn(async () => { timelineMock.timelineActive = true; }),
     exitTimeline: vi.fn(() => { timelineMock.timelineActive = false; }),

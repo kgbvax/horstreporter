@@ -1,4 +1,4 @@
-import { state } from './state.js';
+import { state, STREAM_QTH_EVENT, panelQth } from './state.js';
 import { loadConfig } from './config.js';
 import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineLayer, syncMercatorDxccLabelLayer } from './map.js';
 import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, getAzimuthCenter, setAzimuthEnabled, setAzimuthDragging, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled, getAzimuthLatLngFromClientPoint, getAzimuthHiddenGridSquaresCount } from './azimuth-runtime.js';
@@ -11,11 +11,11 @@ import { initCondNow } from './cond-now.js';
 import { initCondDock } from './cond-dock.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { initPushUI } from './push.js';
-import { updateMapVisualization, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint, whenActiveAreaRendered } from './renderers.js';
+import { updateMapVisualization, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, clearWsprMarkers, resetRenderFingerprint, visibleMapSpots, setRailSpanOverride } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming, icon } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getRigBand } from './opmode.js';
-import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL, invalidateBundles as invalidateTimelineBundles, refreshMoment as refreshTimelineMoment } from './timeline.js';
+import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL, invalidateBundles as invalidateTimelineBundles, refreshMoment as refreshTimelineMoment, MOMENT_WINDOW_SECONDS } from './timeline.js';
 import { updateAfterglow, notifyMapMoved, hideAfterglow } from './afterglow.js';
 import { GRAYLINE_BUCKET_MS, setDataNowMs, clearDataNowOverride } from './data-now.js';
 import { sessionRing, deriveT, filterAllowed } from './session-ring.js';
@@ -85,8 +85,7 @@ function applyBandChange() {
 
 // The high-volume optional sources the stream can leave out, keyed by the
 // stream's include_<name> parameter, with the checkbox that shows/hides each
-// on the map. DX cluster is deliberately not listed: its volume is tiny, and
-// it stays on the stream and the checkbox filters it client-side.
+// on the map.
 const STREAM_SOURCE_TOGGLES = [
     ['rbn', 'show-rbn-spots'],
     ['wspr', 'show-wspr-spots'],
@@ -203,56 +202,6 @@ function switchToBand(band) {
     applyBandChange();
     return true;
 }
-
-function parseBoolParam(raw, fallback = false) {
-    if (raw == null || raw === '') return fallback;
-    const normalized = String(raw).trim().toLowerCase();
-    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
-}
-
-function parseCaptureConfig() {
-    const params = new URLSearchParams(window.location.search || '');
-    const enabled = parseBoolParam(params.get('capture'), false) || params.get('mode') === 'capture';
-    if (!enabled) return null;
-
-    const qth = (params.get('qth') || 'JO32').trim().toUpperCase();
-    const minutes = Math.max(1, Math.min(720, Number.parseInt(params.get('minutes') || '15', 10) || 15));
-    const snapshotAt = Number.parseInt(params.get('snapshot_at') || '', 10);
-
-    const projection = (params.get('projection') || 'mercator').trim().toLowerCase() === 'azimuthal' ? 'azimuthal' : 'mercator';
-    const style = (params.get('style') || 'active-area').trim().toLowerCase() === 'grid-snr' ? 'grid-snr' : 'active-area';
-    const minSnrMode = (params.get('min_snr_mode') || 'ssb').trim().toLowerCase();
-    const selectedBand = (params.get('selected_band') || 'all').trim().toLowerCase();
-    const enabledBandsCsv = (params.get('enabled_bands') || '').trim();
-    const includeDxcluster = parseBoolParam(params.get('include_dxcluster'), false);
-
-    return {
-        enabled: true,
-        qth,
-        minutes,
-        snapshotAt: Number.isFinite(snapshotAt) ? snapshotAt : null,
-        surroundings: parseBoolParam(params.get('surroundings'), false),
-        projection,
-        style,
-        minSnrMode: minSnrMode === 'cw' || minSnrMode === 'ssb' ? minSnrMode : 'none',
-        ssbMinDb: Number.parseInt(params.get('ssb_min_db') || '0', 10),
-        cwMinDb: Number.parseInt(params.get('cw_min_db') || '-15', 10),
-        selectedBand,
-        enabledBandsCsv,
-        includeDxcluster,
-        countryColoring: parseBoolParam(params.get('country_coloring'), true),
-        dk3jfMode: parseBoolParam(params.get('dk3jf_mode'), true)
-    };
-}
-
-const captureConfig = parseCaptureConfig();
-if (captureConfig?.enabled) {
-    window.__horstCaptureReady = false;
-}
-// Expose the parsed capture config so the Svelte UI bundle can seed its store
-// before mounting controls, preventing a race where Svelte defaults overwrite
-// URL-driven projection/style/target/etc.
-window.__horstCaptureConfig = captureConfig;
 
 const storedAzimuthZoomRaw = localStorage.getItem('azimuthZoom');
 const storedAzimuthHorizonKmRaw = localStorage.getItem('azimuthHorizonKm');
@@ -700,10 +649,9 @@ function currentProjection() {
 }
 
 function getRenderableMapSpots(spots) {
-    const showDXClusterSpots = document.getElementById('show-dxcluster-spots')?.checked !== false;
     const showRbnSpots = document.getElementById('show-rbn-spots')?.checked !== false;
     const showWsprSpots = document.getElementById('show-wspr-spots')?.checked !== false;
-    const srcFilter = !(showDXClusterSpots && showRbnSpots && showWsprSpots);
+    const srcFilter = !(showRbnSpots && showWsprSpots);
 
     // Render-time age gate using TRUE wall-clock age, not the prune's 5s-stepped
     // ageSeconds. The prune (state.renderInterval) already reaps over-age spots
@@ -728,13 +676,12 @@ function getRenderableMapSpots(spots) {
             const trueAge = (spot.__recvAge ?? spot.ageSeconds) + (now - recvMs) / 1000;
             if (trueAge > maxAge) return false;
         } else if (spot.ageSeconds > maxAge) {
-            // Fallback for spots lacking a receive stamp (e.g. capture-mode
-            // snapshots loaded directly into liveSpots): use the stepped age.
+            // Fallback for spots lacking a receive stamp (e.g. spots loaded
+            // directly into liveSpots): use the stepped age.
             return false;
         }
         if (!srcFilter) return true;
         const src = String(spot?.sourceType || '').toLowerCase();
-        if (!showDXClusterSpots && src === 'dxcluster') return false;
         if (!showRbnSpots && src === 'rbn') return false;
         if (!showWsprSpots && src === 'wspr') return false;
         return true;
@@ -875,9 +822,6 @@ function syncProjectionCenterToActiveQth() {
 }
 
 function maybeAutoStartSavedQth() {
-    if (captureConfig?.enabled) {
-        return;
-    }
     if (autoStartTriggered || !appReadyForAutoStart || !map) {
         return;
     }
@@ -1005,127 +949,6 @@ async function applyProjectionMode(projection) {
     await syncMercatorOverlays(true);
     if (seq !== projectionApplySeq) return; // superseded by a newer toggle
     scheduleRender();
-}
-
-function applyCaptureConfigToControls(config) {
-    if (!config?.enabled) return;
-
-    const qthEl = document.getElementById('qth');
-    if (qthEl) window.__horstSetQTH?.(config.qth);
-
-    const minutesEl = document.getElementById('minutes');
-    if (minutesEl) {
-        minutesEl.value = String(config.minutes);
-        const minutesVal = document.getElementById('minutes-val');
-        if (minutesVal) minutesVal.textContent = config.minutes;
-    }
-
-    const surroundingsEl = document.getElementById('surroundings');
-    if (surroundingsEl) surroundingsEl.checked = Boolean(config.surroundings);
-
-    const ssbEl = document.getElementById('ssb-min-db');
-    if (ssbEl && Number.isFinite(config.ssbMinDb)) {
-        ssbEl.value = String(config.ssbMinDb);
-        const ssbVal = document.getElementById('ssb-min-db-val');
-        if (ssbVal) ssbVal.textContent = config.ssbMinDb;
-    }
-
-    const cwEl = document.getElementById('cw-min-db');
-    if (cwEl && Number.isFinite(config.cwMinDb)) {
-        cwEl.value = String(config.cwMinDb);
-        const cwVal = document.getElementById('cw-min-db-val');
-        if (cwVal) cwVal.textContent = config.cwMinDb;
-    }
-
-    const minSnrRadio = document.querySelector(`input[name="min-snr"][value="${config.minSnrMode}"]`);
-    if (minSnrRadio) minSnrRadio.checked = true;
-
-    const styleRadio = document.querySelector(`input[name="style-select"][value="${config.style}"]`);
-    if (styleRadio) styleRadio.checked = true;
-
-    const projectionRadio = document.querySelector(`input[name="projection-select"][value="${config.projection}"]`);
-    if (projectionRadio) projectionRadio.checked = true;
-
-    setBandFocus(config.selectedBand && config.selectedBand !== 'all' ? config.selectedBand : 'all');
-
-    const enabledBandsSet = new Set(
-        config.enabledBandsCsv
-            .split(',')
-            .map((part) => part.trim().toLowerCase())
-            .filter(Boolean)
-    );
-
-    document.querySelectorAll('.band-enable').forEach((cb) => {
-        const band = String(cb?.value || '').toLowerCase();
-        if (!band) return;
-        if (enabledBandsSet.size === 0) {
-            cb.checked = true;
-        } else {
-            cb.checked = enabledBandsSet.has(band);
-        }
-    });
-
-    const showDxclusterEl = document.getElementById('show-dxcluster-spots');
-    if (showDxclusterEl) showDxclusterEl.checked = config.includeDxcluster;
-
-    const countryColoringEl = document.getElementById('show-country-coloring');
-    if (countryColoringEl) countryColoringEl.checked = Boolean(config.countryColoring);
-
-    updateCurrentBandDisplay();
-}
-
-async function runCaptureBootstrap(config) {
-    if (!config?.enabled) return;
-
-    if (state.eventSource) {
-        state.eventSource.close();
-        state.eventSource = null;
-    }
-    if (state.renderInterval) {
-        clearInterval(state.renderInterval);
-        state.renderInterval = null;
-    }
-
-    const params = new URLSearchParams();
-    params.set('qth', config.qth);
-    params.set('minutes', String(config.minutes));
-    params.set('surroundings', config.surroundings ? 'true' : 'false');
-    params.set('min_snr_mode', config.minSnrMode);
-    params.set('ssb_min_db', String(config.ssbMinDb));
-    params.set('cw_min_db', String(config.cwMinDb));
-    params.set('selected_band', config.selectedBand);
-    if (config.enabledBandsCsv) params.set('enabled_bands', config.enabledBandsCsv);
-    params.set('include_dxcluster', config.includeDxcluster ? 'true' : 'false');
-    if (Number.isFinite(config.snapshotAt)) {
-        params.set('snapshot_at', String(config.snapshotAt));
-    }
-
-    setStreamStatus({ message: STREAM_STATUS_TEXT.snapshotLoading, tone: 'warn', spinner: true });
-
-    const response = await fetch(`/api/capture_snapshot?${params.toString()}`);
-    if (!response.ok) {
-        const msg = await response.text();
-        throw new Error(`capture snapshot request failed (${response.status}): ${msg}`);
-    }
-
-    const payload = await response.json();
-    state.liveSpots = Array.isArray(payload?.spots) ? payload.spots : [];
-
-    scheduleRender();
-
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    // The active-area hull draw completes asynchronously (turf is lazy-loaded);
-    // hold the capture-ready handshake until it settles so frames captured off
-    // __horstCaptureReady always contain the hulls. Resolves immediately when
-    // no active-area rebuild is pending (grid-snr or cached turf).
-    await whenActiveAreaRendered();
-    setStreamStatus({ title: config.qth ? `Snapshot for ${config.qth}` : 'Snapshot', message: spotCountText(state.liveSpots.length), tone: 'ok' });
-    window.__horstCaptureReady = {
-        ready: true,
-        count: state.liveSpots.length,
-        snapshotAt: payload?.snapshot_at ?? null,
-        generatedAt: payload?.generated_at ?? null
-    };
 }
 
 export function attachMapEvents() {
@@ -1314,10 +1137,6 @@ export function attachMapEvents() {
 // --- Init UI ---
 initUI();
 
-if (captureConfig?.enabled) {
-    applyCaptureConfigToControls(captureConfig);
-}
-
 (async () => {
     installPerfDebugApi();
     // Render hook for migrated Svelte controls (SNR sliders) to trigger renders.
@@ -1338,8 +1157,7 @@ if (captureConfig?.enabled) {
     initRbnSpotsToggle();
     initWsprSpotsToggle();
 
-    const initialProjection = captureConfig?.enabled ? captureConfig.projection : savedProjection;
-    const projRadio = document.querySelector(`input[name="projection-select"][value="${initialProjection}"]`);
+    const projRadio = document.querySelector(`input[name="projection-select"][value="${savedProjection}"]`);
     if (projRadio) projRadio.checked = true;
 
     // The country outlines (world-slim.geojson, ~0.6 MB) gate the Mercator
@@ -1347,11 +1165,10 @@ if (captureConfig?.enabled) {
     // when this init finishes, so on a slow link it used to sit behind that
     // download (first spots ~2 s later at 3 Mbps). In Mercator mode the
     // overlays now settle in the background: the grid draws without them and
-    // each overlay appears when its data is ready. Azimuthal mode (and capture
-    // mode, which screenshots the finished page) keeps waiting, because
+    // each overlay appears when its data is ready. Azimuthal mode keeps waiting, because
     // nothing can be drawn without the outlines.
     const overlaysReady = (async () => {
-        await applyProjectionMode(initialProjection);
+        await applyProjectionMode(savedProjection);
         syncProjectionCenterToActiveQth();
 
         const dxccToggle = document.getElementById('show-dxcc-labels');
@@ -1359,7 +1176,7 @@ if (captureConfig?.enabled) {
 
         await syncMercatorOverlays(true);
     })();
-    if (initialProjection === 'azimuthal' || captureConfig?.enabled) {
+    if (savedProjection === 'azimuthal') {
         await overlaysReady;
     } else {
         overlaysReady.catch((err) => { console.warn('Initial map overlays failed:', err); });
@@ -1391,7 +1208,9 @@ if (captureConfig?.enabled) {
     }
     updateDrillDownButton();
     hotBandIndicator = initHotBandIndicator({
-        getQth: () => document.getElementById('qth')?.value?.trim()?.toUpperCase() || '',
+        // The pills sit in the Conditions dock: the stream's qth, not the input
+        // mid-edit (panelQth).
+        getQth: () => panelQth(),
         getSurroundings: () => Boolean(document.getElementById('surroundings')?.checked),
         getCurrentBand: () => getSelectedBand(),
         onBandSwitch: switchToBand,
@@ -1414,18 +1233,6 @@ if (captureConfig?.enabled) {
     // Force an initial render to sync visual band states (colors/opacity) loaded from localStorage
     scheduleRender();
     updateCurrentBandDisplay();
-
-    if (captureConfig?.enabled) {
-        await updateDk3jfMode(captureConfig.dk3jfMode);
-        try {
-            await runCaptureBootstrap(captureConfig);
-        } catch (err) {
-            console.error('Snapshot mode bootstrap failed:', err);
-            const errorText = String(err?.message || err);
-            window.__horstCaptureReady = { ready: false, error: errorText };
-            setStreamStatus({ message: `Could not load snapshot: ${errorText}`, tone: 'danger' });
-        }
-    }
 
     appReadyForAutoStart = true;
     maybeAutoStartSavedQth();
@@ -1614,9 +1421,9 @@ document.getElementById('dk3jf-mode')?.addEventListener('change', async (e) => {
 // --- RBN (Reverse Beacon Network) live-map toggle ----------------------------
 // Filters sourceType==='rbn' spots out of the live map (both projections, via
 // getRenderableMapSpots) when unchecked. Default: show. Persisted to localStorage
-// and the include_rbn URL param so the choice survives reload. RBN only reaches
-// the live map when QRZ resolves a locator, so this is a no-op until RBN is
-// enabled upstream (-rbn-enable) and produces locators.
+// and the include_rbn URL param so the choice survives reload. RBN spots reach
+// the live map only when they carry locators (RBN's feed has none and QRZ
+// enrichment was removed), so this currently filters nothing.
 function initRbnSpotsToggle() {
     const el = document.getElementById('show-rbn-spots');
     if (!el) return;
@@ -1880,6 +1687,10 @@ function startLiveStream(preserveData = false) {
     }
 
     state.qth = qth;
+    if (state.streamQth !== qth) {
+        state.streamQth = qth;
+        window.dispatchEvent(new CustomEvent(STREAM_QTH_EVENT, { detail: { qth } }));
+    }
     localStorage.setItem('qth', qth);
     localStorage.setItem('minutes', minutes);
 
@@ -1911,7 +1722,6 @@ function startLiveStream(preserveData = false) {
             map.removeLayer(state.heatLayer);
             state.heatLayer = null;
         }
-        clearDxClusterMarkers();
         resetRenderFingerprint();
 
         if (state.qthLayer) {
@@ -2045,7 +1855,10 @@ function startLiveStream(preserveData = false) {
         tone: 'warn',
         spinner: true,
     });
-    const showLiveStatus = () => setStreamStatus({ title: liveTitle, message: spotCountText(totalReceived), tone: 'ok' });
+    // The live count is the spots held (deduplicated, kept across a
+    // preserveData restart or resume), not this connection's deliveries: those
+    // counted duplicates and restarted from the resume delta.
+    const showLiveStatus = () => setStreamStatus({ title: liveTitle, message: spotCountText(state.liveSpots.length), tone: 'ok' });
 
     const btnSubmit = document.getElementById('btn-submit');
     if (btnSubmit) setSubmitMode(btnSubmit, 'stop');
@@ -2147,13 +1960,12 @@ function startLiveStream(preserveData = false) {
     // Adds one delivered spot to the live list and the session ring. Returns
     // false when it was a duplicate of a spot we already hold.
     function ingestSpot(spot) {
-        totalReceived++;
-
         if (seenKeys) {
             const key = exactSpotKey(spot, deriveT(Date.now(), spot.ageSeconds ?? 0));
             if (seenKeys.has(key)) return false;
             seenKeys.add(key);
         }
+        totalReceived++;
 
         // Cap liveSpots: drop oldest-arrived in a batch when over the limit so a
         // hot-band burst between 5s prunes can't grow memory unbounded.
@@ -2330,6 +2142,7 @@ function teardownTimelineFrame() {
     lastMomentSpots = null;
     lastMomentPlayhead = 0;
     clearDataNowOverride();
+    setRailSpanOverride(null);
 }
 
 // exitTimelineForRestart is the plain programmatic exit used when the timeline
@@ -2366,7 +2179,6 @@ document.getElementById('fetch-form')?.addEventListener('submit', (e) => {
             map.removeLayer(state.heatLayer);
             state.heatLayer = null;
         }
-        clearDxClusterMarkers();
         clearWsprMarkers();
         resetRenderFingerprint();
         if (state.qthLayer) {
@@ -2430,7 +2242,7 @@ function renderTimelineMomentFrame(moved = false) {
         // Afterglow overlay (Mercator only; azimuth renders its own scene).
         // moved marks a playhead move (decay active); a gate re-render is a
         // re-style, not a move, so no re-fade.
-        updateAfterglow(lastMomentSpots, lastMomentPlayhead, moved);
+        updateAfterglow(visibleMapSpots(lastMomentSpots), lastMomentPlayhead, moved);
         // Moment-driven grayline sync (plan 2026-09-11-002 U5, R8): the clock
         // is pinned to the playhead by the moment listener, and the layer's
         // 5-minute bucket/key check in map.js dedupes within a bucket — so
@@ -2503,7 +2315,6 @@ async function startTimelineMode(rangeSeconds) {
     // timeline-incompatible overlays are cleared.
     streamRestartedDuringTimeline = false;
     if (state.heatLayer) { map.removeLayer(state.heatLayer); state.heatLayer = null; }
-    clearDxClusterMarkers();
     clearWsprMarkers();
     resetRenderFingerprint();
     // The submit button keeps reflecting the (still running) stream: a stop
@@ -2525,6 +2336,9 @@ async function startTimelineMode(rangeSeconds) {
         return;
     }
     if (!isTimelineActive()) return; // enterTimeline bailed (no qth)
+    // Moments always span MOMENT_WINDOW_SECONDS: bin the rail over that, not
+    // the Max Spot Age slider (reset in teardownTimelineFrame).
+    setRailSpanOverride(MOMENT_WINDOW_SECONDS / 60);
     timelinePlay();
 }
 

@@ -95,8 +95,8 @@ type dxPostgresStore struct {
 }
 
 // regionDelta is one pending dx_region_baseline_daily delta (Almanac KTD13):
-// all spots (spot_count), the spots carrying a real SNR (snr_spots:
-// PSKReporter; DX-cluster spots have none) and, cumulatively, those with
+// all spots (spot_count), the spots carrying a real SNR (snr_spots) and,
+// cumulatively, those with
 // SNR ≥ each almanacSNRTierFloors tier (snr_ge_m20 … snr_ge_0).
 type regionDelta struct {
 	Count int64
@@ -113,20 +113,13 @@ func (d *regionDelta) add(o regionDelta) {
 	}
 }
 
-// spotCarriesRealSNR: DX-cluster spots carry RP 0, not a measured SNR, so
-// they count toward spot_count only (KTD13). Shared by live observe() and the
-// Almanac SNR backfill.
-func spotCarriesRealSNR(m MQTTMessage) bool {
-	return !strings.EqualFold(strings.TrimSpace(m.MD), "DXCLUSTER")
-}
-
-// observeSpot counts one spot; hasSNR is false for spots without a real SNR
-// (DX cluster), which count toward spot_count only.
-func (d *regionDelta) observeSpot(snr int, hasSNR bool) {
+// observeSpot counts one spot with its SNR. Every spot reaching the region
+// baseline is a PSKReporter FT8/FT4 spot (pskrModeFeedsBaseline) and carries a
+// real SNR, so snr_spots tracks spot_count for new data; rows written while the
+// (since removed) DX-cluster ingest fed the baseline may still have
+// snr_spots < spot_count, which the Almanac readers already handle.
+func (d *regionDelta) observeSpot(snr int) {
 	d.Count++
-	if !hasSNR {
-		return
-	}
 	d.SNR++
 	for i, floor := range almanacSNRTierFloors {
 		if snr >= floor {
@@ -694,7 +687,6 @@ func initSchemaStmts() []string {
 			v TEXT NOT NULL
 		);`,
 	}
-	stmts = append(stmts, cellfeedSchemaStmts()...)
 	stmts = append(stmts, almanacSeasonSchemaStmts()...)
 	return stmts
 }
@@ -932,13 +924,13 @@ func (s *dxPostgresStore) ensureDxBaselineCluster(ctx context.Context) error {
 
 	logInfo("DX grid-cluster baseline backfill starting from existing raw spots")
 
-	// Only the sources Observe feeds the baseline (PSKReporter FT8/FT4 and
-	// DX-cluster); RBN and WSPR rows share dx_raw_spots but never reach the
-	// live cluster baseline, so replaying them here would inflate it.
+	// Only the source Observe feeds the baseline (PSKReporter FT8/FT4); RBN
+	// and WSPR rows share dx_raw_spots but never reach the live cluster
+	// baseline, so replaying them here would inflate it.
 	rows, err := s.pool.Query(ctx, `
 		SELECT spot_time, band, sender_locator, receiver_locator, signal_report_db
 		FROM dx_raw_spots
-		WHERE source_type IN ('mqtt', 'dxcluster')
+		WHERE source_type = 'mqtt'
 		ORDER BY spot_time ASC
 	`)
 	if err != nil {
@@ -1086,20 +1078,15 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 	// (these only depend on m) so flushRawSpots can emit a multi-VALUES INSERT
 	// without recomputing per row and so the ingest lock critical section isn't
 	// extended by the normalization/geo work.
-	isDXCluster := !spotCarriesRealSNR(m)
-	var row rawSpotRow
-	if !isDXCluster {
-		source4 := normalizeSource4(m.SL)
-		row = rawSpotRow{
-			m:       m,
-			band:    band,
-			source4: source4,
-			sc:      strings.ToUpper(strings.TrimSpace(m.SC)),
-			rc:      strings.ToUpper(strings.TrimSpace(m.RC)),
-			sl:      strings.ToUpper(strings.TrimSpace(m.SL)),
-			rl:      strings.ToUpper(strings.TrimSpace(m.RL)),
-			md:      strings.ToUpper(strings.TrimSpace(m.MD)),
-		}
+	row := rawSpotRow{
+		m:       m,
+		band:    band,
+		source4: normalizeSource4(m.SL),
+		sc:      strings.ToUpper(strings.TrimSpace(m.SC)),
+		rc:      strings.ToUpper(strings.TrimSpace(m.RC)),
+		sl:      strings.ToUpper(strings.TrimSpace(m.SL)),
+		rl:      strings.ToUpper(strings.TrimSpace(m.RL)),
+		md:      strings.ToUpper(strings.TrimSpace(m.MD)),
 	}
 
 	// Live-only late-spot clamp (Almanac KTD6): region keys from spots outside
@@ -1124,10 +1111,9 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 
 	if regionAccepted {
 		for _, key := range regionKeys {
-			// Almanac SNR counters (KTD13): DX-cluster spots carry RP 0,
-			// not a real SNR, so they count toward spot_count only.
+			// Almanac SNR counters (KTD13).
 			d := s.pendingRegion[key]
-			d.observeSpot(m.RP, !isDXCluster)
+			d.observeSpot(m.RP)
 			s.pendingRegion[key] = d
 			s.pendingCount++
 		}
@@ -1156,16 +1142,8 @@ func (s *dxPostgresStore) observe(m MQTTMessage, band string, slotOfDay, distTie
 		s.pendingCount++
 	}
 
-	// DX-cluster spots are persisted separately, with full fidelity (frequency,
-	// comment, source_type 'dxcluster'), via PersistRawSpot. Don't also enqueue a
-	// frequency-less 'mqtt' raw row for them here: that duplicate restores as an
-	// unscorable "0 MHz" spot and can shadow the real
-	// dxcluster row during dedup. Baseline/region aggregation above
-	// still counts the spot.
-	if !isDXCluster {
-		s.pendingRawSpots = append(s.pendingRawSpots, row)
-		s.trimPendingRawSpotsLocked()
-	}
+	s.pendingRawSpots = append(s.pendingRawSpots, row)
+	s.trimPendingRawSpotsLocked()
 	shouldFlush := s.pendingCount >= dxBaselineFlushMaxPending
 	s.mu.Unlock()
 
@@ -1875,7 +1853,7 @@ func (s *dxPostgresStore) refreshClusterCoverage(now int64) {
 	defer s.clusterCoverageMu.Unlock()
 	s.clusterCoverageRefreshing = false
 	if err != nil {
-		logDebug("dx cluster coverage refresh failed (keeping previous value): %v", err)
+		logDebug("grid-cluster baseline coverage refresh failed (keeping previous value): %v", err)
 		return
 	}
 	s.clusterCoverageAt = now
@@ -2027,11 +2005,13 @@ func (s *dxPostgresStore) touchBaselineFirstObserved(ctx context.Context, spotTi
 		fmt.Sprintf("%d", spotTime))
 }
 
-func (s *dxPostgresStore) loadSpotsBetween(start, end int64) ([]MQTTMessage, error) {
-	return s.loadSpotsBetweenWithSourceFilter(start, end, true)
-}
+// rawSpotsExcludeRemovedSources is the dx_raw_spots predicate every spot
+// loader applies: rows from the removed DX-cluster ingest
+// (source_type='dxcluster') may linger in the table until retention prunes
+// them, and must not be restored into hub.history or served by /api/history.
+const rawSpotsExcludeRemovedSources = `LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster'`
 
-func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, includeDXCluster bool) ([]MQTTMessage, error) {
+func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64) ([]MQTTMessage, error) {
 	if end <= 0 {
 		end = time.Now().Unix()
 	}
@@ -2050,9 +2030,9 @@ func (s *dxPostgresStore) loadSpotsBetweenWithSourceFilter(start, end int64, inc
 			COALESCE(source_type, 'mqtt')
 		FROM dx_raw_spots
 		WHERE spot_time BETWEEN $1 AND $2
-		  AND ($3::bool OR LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster')
+		  AND `+rawSpotsExcludeRemovedSources+`
 		ORDER BY spot_time ASC
-	`, start, end, includeDXCluster)
+	`, start, end)
 	if err != nil {
 		return nil, err
 	}
@@ -2085,17 +2065,15 @@ const historyQueryTimeout = 45 * time.Second
 // Postgres through the sargable ~>=~/~<~ locator prefix-range arms (and the
 // = ANY callsign arm) so a 24h window uses the (locator, spot_time) indexes
 // instead of materializing the whole window in Go. Row mapping and source
-// semantics mirror loadSpotsBetweenWithSourceFilter; includeDXCluster=false
-// also excludes rbn rows (the /api/history source filter is
-// mqtt|dxcluster|wspr only — rbn spots never carried a locator in the first
-// place, so this is a cheap correctness guard rather than a semantic change).
+// semantics mirror loadSpotsBetweenWithSourceFilter (historic dxcluster rows
+// excluded via rawSpotsExcludeRemovedSources).
 //
 // The token filter is intentionally a *superset* of matchAndCreateSpot's
 // decision (e.g. a spot matching only via area-rings would be missed here):
 // /api/history re-runs full matchAndCreateSpot in Go on the returned rows, so
 // area-of-interest matching still works correctly against the slightly larger
 // pre-filtered set.
-func (s *dxPostgresStore) loadSpotsRangeForTargets(start, end int64, tokens []string, includeDXCluster bool) ([]MQTTMessage, error) {
+func (s *dxPostgresStore) loadSpotsRangeForTargets(start, end int64, tokens []string) ([]MQTTMessage, error) {
 	if s == nil || len(tokens) == 0 {
 		return nil, nil
 	}
@@ -2121,12 +2099,6 @@ func (s *dxPostgresStore) loadSpotsRangeForTargets(start, end int64, tokens []st
 	arms := make([]string, 0, len(locators)+1)
 	arms, args, _ = appendTargetArms(arms, args, len(args)+1, locators, calls)
 
-	src := "LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster'"
-	if includeDXCluster {
-		src = "($3::bool OR LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster')"
-		args = append(args, true)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), historyQueryTimeout)
 	defer cancel()
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
@@ -2141,7 +2113,7 @@ func (s *dxPostgresStore) loadSpotsRangeForTargets(start, end int64, tokens []st
 		  AND (%s)
 		  AND (%s)
 		ORDER BY spot_time ASC
-	`, strings.Join(arms, "\n\t\t  OR "), src), args...)
+	`, strings.Join(arms, "\n\t\t  OR "), rawSpotsExcludeRemovedSources), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2311,283 +2283,6 @@ func pruneRegionBaselinesGated(
 		return n1 + n2 + n3, fmt.Errorf("prop_region_baseline_daily: %w", err)
 	}
 	return n1 + n2 + n3, nil
-}
-
-func (s *dxPostgresStore) loadRecentSpotCache(minutes int, now int64, includeDXCluster bool) ([]MQTTMessage, error) {
-	if minutes <= 0 {
-		minutes = 60
-	}
-	if now <= 0 {
-		now = time.Now().Unix()
-	}
-	windowStart := now - int64(minutes*60)
-	return s.loadSpotsBetweenWithSourceFilter(windowStart, now, includeDXCluster)
-}
-
-// recent24hBandSlotRow is one (band, slot) cell of the last-24h activity
-// histogram. SlotOfDay is computed in SQL from spot_time so the result is
-// stable regardless of when it's queried.
-type recent24hBandSlotRow struct {
-	Band      string
-	SlotOfDay int
-	Count     int64
-}
-
-// recent24hBandSlotCountsForTokens returns spot counts per (band, slot_of_day)
-// for the 24h ending at `now`, restricted to spots whose sender/receiver
-// callsign or locator prefix matches one of the supplied tokens (a 6-char
-// token matches locators extending it, mirroring the live stream's HasPrefix).
-// Used to populate the target+recent_24h and target+compare paths so the
-// rose has data immediately after a restart (the in-memory event buffer
-// takes hours to accumulate 24h of spots at typical rates).
-func (s *dxPostgresStore) recent24hBandSlotCountsForTokens(tokens []string, now int64) ([]recent24hBandSlotRow, error) {
-	if s == nil || len(tokens) == 0 {
-		return nil, nil
-	}
-	if now <= 0 {
-		now = time.Now().Unix()
-	}
-	norm := make([]string, 0, len(tokens))
-	seen := make(map[string]struct{}, len(tokens))
-	for _, t := range tokens {
-		u := strings.ToUpper(strings.TrimSpace(t))
-		if u == "" {
-			continue
-		}
-		if _, dup := seen[u]; dup {
-			continue
-		}
-		seen[u] = struct{}{}
-		norm = append(norm, u)
-	}
-	if len(norm) == 0 {
-		return nil, nil
-	}
-	// Same sargable prefix-range matching as activityByBinForTargets (see
-	// appendTargetArms): strict-locator tokens match locators extending them,
-	// everything else stays on the callsign-equality arm.
-	locators, calls := splitTargetTokens(norm)
-	args := []any{now - 24*60*60, now}
-	arms := make([]string, 0, len(locators)+1)
-	arms, args, _ = appendTargetArms(arms, args, len(args)+1, locators, calls)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
-		SELECT band,
-		       ((spot_time / 1800) %% 48)::int AS slot_of_day,
-		       COUNT(*)::bigint
-		FROM dx_raw_spots
-		WHERE spot_time BETWEEN $1 AND $2
-		  AND (%s)
-		GROUP BY band, slot_of_day
-	`, strings.Join(arms, "\n\t\t    OR ")), args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]recent24hBandSlotRow, 0, 256)
-	for rows.Next() {
-		var r recent24hBandSlotRow
-		if err := rows.Scan(&r.Band, &r.SlotOfDay, &r.Count); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
-// recent24hBandSlotCounts returns spot counts per (band, slot_of_day) for the
-// 24 hours ending at `now`. Slot-of-day is in 30-minute UTC bins (0..47).
-//
-// On a large dx_raw_spots table (tens of millions of rows) this aggregates
-// over the full 24h slice and takes several seconds even with the spot_time
-// index, so the context timeout is generous. Callers should cache the
-// result rather than reissuing the query per request.
-func (s *dxPostgresStore) recent24hBandSlotCounts(now int64) ([]recent24hBandSlotRow, error) {
-	if s == nil {
-		return nil, nil
-	}
-	if now <= 0 {
-		now = time.Now().Unix()
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	start := now - 24*60*60
-	rows, err := s.pool.Query(ctx, `
-		SELECT band,
-		       ((spot_time / 1800) % 48)::int AS slot_of_day,
-		       COUNT(*)::bigint
-		FROM dx_raw_spots
-		WHERE spot_time BETWEEN $1 AND $2
-		GROUP BY band, slot_of_day
-	`, start, now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]recent24hBandSlotRow, 0, 256)
-	for rows.Next() {
-		var r recent24hBandSlotRow
-		if err := rows.Scan(&r.Band, &r.SlotOfDay, &r.Count); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
-// typicalBucketRow is one (band, slot_of_day, distance_tier, snr_tier) cell
-// of the long-term aggregate, summed across source4. Used to populate the
-// dxlens snapshot's Buckets map with the persistent all-time view rather
-// than just the in-memory accumulation since the last restart.
-type typicalBucketRow struct {
-	Band         string
-	SlotOfDay    int
-	DistanceTier int
-	SnrTier      int
-	Count        int64
-}
-
-// typicalBuckets returns the long-term bucket aggregate from dx_baseline_global.
-// Source4 is collapsed since dxlens's heatmap doesn't read it. Cardinality
-// bound: 13 bands × 48 slots × 5 dist tiers × 4 snr tiers ≈ 12k rows max.
-func (s *dxPostgresStore) typicalBuckets() ([]typicalBucketRow, error) {
-	if s == nil {
-		return nil, nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	rows, err := s.pool.Query(ctx, `
-		SELECT band, slot_of_day, distance_tier, snr_tier, SUM(count)::bigint
-		FROM dx_baseline_global
-		GROUP BY band, slot_of_day, distance_tier, snr_tier
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]typicalBucketRow, 0, 4096)
-	for rows.Next() {
-		var r typicalBucketRow
-		if err := rows.Scan(&r.Band, &r.SlotOfDay, &r.DistanceTier, &r.SnrTier, &r.Count); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
-// typicalMultiTargetRow extends typicalBucketRow with the matching target
-// token so the API layer can rekey results back into the
-// "<TOKEN>|<band>|<slot>|<distTier>|<snrTier>" snapshot format.
-type typicalMultiTargetRow struct {
-	TargetToken string
-	typicalBucketRow
-}
-
-// typicalTargetBucketsMulti returns the long-term per-target bucket aggregate
-// for a SET of target tokens in a single bitmap-index scan. Dramatically
-// cheaper than calling typicalTargetBuckets once per token (the rose is
-// usually queried with target + 8 surrounding squares).
-func (s *dxPostgresStore) typicalTargetBucketsMulti(tokens []string) ([]typicalMultiTargetRow, error) {
-	if s == nil || len(tokens) == 0 {
-		return nil, nil
-	}
-	norm := make([]string, 0, len(tokens))
-	seen := make(map[string]struct{}, len(tokens))
-	for _, t := range tokens {
-		u := strings.ToUpper(strings.TrimSpace(t))
-		if u == "" {
-			continue
-		}
-		if _, dup := seen[u]; dup {
-			continue
-		}
-		seen[u] = struct{}{}
-		norm = append(norm, u)
-	}
-	if len(norm) == 0 {
-		return nil, nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SET LOCAL work_mem = '128MB'`); err != nil {
-		return nil, err
-	}
-	rows, err := tx.Query(ctx, `
-		SELECT cluster_anchor, band, slot_of_day, distance_tier, snr_tier, SUM(count)::bigint
-		FROM dx_baseline_cluster
-		WHERE cluster_anchor = ANY($1)
-		GROUP BY cluster_anchor, band, slot_of_day, distance_tier, snr_tier
-	`, norm)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]typicalMultiTargetRow, 0, 4096)
-	for rows.Next() {
-		var r typicalMultiTargetRow
-		if err := rows.Scan(&r.TargetToken, &r.Band, &r.SlotOfDay, &r.DistanceTier, &r.SnrTier, &r.Count); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
-// typicalTargetBuckets returns the long-term cluster-anchor-scoped bucket
-// aggregate from dx_baseline_cluster for a single cluster anchor. Used to give
-// cluster-filtered rose queries the full historical picture instead of just
-// the in-memory accumulation since restart.
-//
-// The bitmap-heap-scan on a 50 GB table takes ~minute on cold cache; the
-// generous timeout matches that. Once PG's buffer cache is warm the same
-// query is sub-second, and the dxlensProvider memoizes the result for the
-// length of one snapshot TTL so the UI doesn't pay per request.
-//
-// SET LOCAL work_mem keeps the GROUP BY hash in RAM. The hash itself only
-// needs a couple of MB, but on a near-full volume the default would be one
-// stress point we don't need.
-func (s *dxPostgresStore) typicalTargetBuckets(token string) ([]typicalBucketRow, error) {
-	if s == nil || strings.TrimSpace(token) == "" {
-		return nil, nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SET LOCAL work_mem = '128MB'`); err != nil {
-		return nil, err
-	}
-	rows, err := tx.Query(ctx, `
-		SELECT band, slot_of_day, distance_tier, snr_tier, SUM(count)::bigint
-		FROM dx_baseline_cluster
-		WHERE cluster_anchor = $1
-		GROUP BY band, slot_of_day, distance_tier, snr_tier
-	`, strings.ToUpper(strings.TrimSpace(token)))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]typicalBucketRow, 0, 1024)
-	for rows.Next() {
-		var r typicalBucketRow
-		if err := rows.Scan(&r.Band, &r.SlotOfDay, &r.DistanceTier, &r.SnrTier, &r.Count); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
 }
 
 // regionCalendarStatRow is one (band, region, slot) cell with daily-distribution

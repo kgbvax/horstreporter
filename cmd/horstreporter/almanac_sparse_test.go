@@ -289,7 +289,7 @@ func TestAlmanacSparseV2RoundTrip(t *testing.T) {
 	var d [almanacSeasonCountsLen]byte
 	var h [almanacSeasonCountsLen]almanacSNRHist
 	d[0], h[0] = 3, almanacSNRHist{1, 0, 0, 0, 0, 2}
-	d[700] = 9 // no SNR data (DX-cluster only)
+	d[700] = 9 // no SNR data (e.g. historic DX-cluster-only cell)
 	d[almanacSeasonCountsLen-1], h[almanacSeasonCountsLen-1] = 255, almanacSNRHist{255, 255, 255, 255, 255, 255}
 	h[5] = almanacSNRHist{7} // zero-count cell: histogram dropped
 	enc := almanacSparseEncode(&d, &h)

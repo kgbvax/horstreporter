@@ -30,7 +30,6 @@ func withHistoryState(t *testing.T, fn func()) {
 		historyBundleCache.eviction = nil
 		historyBundleCache.mu.Unlock()
 
-		origDxClusterEnabled := dxClusterEnabled
 		defer func() {
 			historyRateLimiter.mu.Lock()
 			historyRateLimiter.counts = origCounts
@@ -39,7 +38,6 @@ func withHistoryState(t *testing.T, fn func()) {
 			historyBundleCache.entries = origEntries
 			historyBundleCache.eviction = origEviction
 			historyBundleCache.mu.Unlock()
-			dxClusterEnabled = origDxClusterEnabled
 		}()
 
 		fn()

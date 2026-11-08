@@ -11,7 +11,7 @@ type Client struct {
 	send   chan Spot
 
 	// Optional "area of interest" filter (a configurable-size region around a
-	// home square), used by region feeds such as horstprop. When areaActive is
+	// home square), used by region feeds. When areaActive is
 	// true a spot also matches if its sender or receiver locator falls within
 	// areaRings grid-squares (Chebyshev distance) of (areaX, areaY). This is
 	// additive to qthSet and is inert (no behaviour change) when areaActive

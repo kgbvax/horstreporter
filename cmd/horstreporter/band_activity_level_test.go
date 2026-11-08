@@ -242,7 +242,7 @@ func TestClusterCoverageFromSpans(t *testing.T) {
 }
 
 func TestFeedsClusterBaseline(t *testing.T) {
-	for src, want := range map[string]bool{"": true, "mqtt": true, "dxcluster": true, "rbn": false, "wspr": false} {
+	for src, want := range map[string]bool{"": true, "mqtt": true, "rbn": false, "wspr": false} {
 		if got := feedsClusterBaseline(MQTTMessage{Source: src, MD: "FT8"}); got != want {
 			t.Errorf("feedsClusterBaseline(source=%q) = %v, want %v", src, got, want)
 		}

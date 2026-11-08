@@ -15,7 +15,7 @@ It is effectively an alternate frontend for <a href="https://www.pskreporter.inf
     * *Grid:* Groups spots into Maidenhead squares. Color indicates the dominant band, opacity indicates signal strength.
     * *Active area:* Draws dynamic polygons enclosing clustered spots to show the overall propagation footprint.
 
-* **Settings:** Below the band list, **Layers** switches map overlays and spot sources (RBN, WSPR, DX cluster, DXCC labels, country colors, forecast), **Display** sets spot age, SNR thresholds, cluster distance, auto-zoom and more, and **Notifications** manages push alerts.
+* **Settings:** Below the band list, **Layers** switches map overlays and spot sources (RBN, WSPR, DXCC labels, country colors, forecast), **Display** sets spot age, SNR thresholds, cluster distance, auto-zoom and more, and **Notifications** manages push alerts.
 * If you don't see enough data for your square, try enabling **Adj. squares** (adjacent squares), which also pulls data from the 8 grid squares around you.
 * **Operator mode** (when running behind the local operator agent with an UltraBeam antenna): the map gains a **Beam direction** control — three buttons, *Forward* / *180°* / *Bi-dir* — that show and set the antenna's pattern live over MQTT. When the beam is left in **180°**, that button pulses an escalating red with a **REVERSE** warning; this is intentional, since a forgotten reverse beam is easy to miss.
 

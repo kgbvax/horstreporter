@@ -76,8 +76,7 @@ const MAX_ACTIVE_AREA_CLUSTER_POINTS = 300;
 // zoom level) that is the dominant zoom-time cost. Canvas redraws all paths
 // in one batched paint instead. Grid squares and active-area polygons are
 // already interactive:false, so canvas (which can't do per-path mouse
-// events) is safe; DX-cluster circleMarkers keep the default SVG renderer so
-// their tooltips/hover are unaffected.
+// events) is safe.
 //
 // Singleton, reused across heatLayer rebuilds: map.removeLayer(heatLayer)
 // removes the geoJSON paths from the renderer but leaves the renderer on
@@ -113,6 +112,26 @@ function buildFilterCtx() {
     };
 }
 
+// The spots the map's own layers would show under the current filters: Min
+// SNR (WSPR exempt), enabled bands, band focus and the matrix
+// drill-down. For overlays that draw spots outside the grid/marker layers
+// (the timeline afterglow), so they cannot show bands the map hides.
+export function visibleMapSpots(spots, filterCtx = buildFilterCtx()) {
+    if (!Array.isArray(spots) || spots.length === 0) return [];
+    const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands, filterBand, filterRegion } = filterCtx;
+    return spots.filter((spot) => {
+        const src = String(spot?.sourceType || '').toLowerCase();
+        const snrExempt = src === 'wspr';
+        if (!snrExempt && minSnrMode === 'ssb' && spot.snr < ssbMinDb) return false;
+        if (!snrExempt && minSnrMode === 'cw' && spot.snr < cwMinDb) return false;
+        if (enabledBands && !enabledBands.has(spot.band)) return false;
+        if (selectedBand && selectedBand !== 'all' && spot.band !== selectedBand) return false;
+        if (filterBand && spot.band !== filterBand) return false;
+        if (filterRegion && regionForLocatorCached(spot.locator) !== filterRegion) return false;
+        return true;
+    });
+}
+
 // resetRenderFingerprint forces the next render to rebuild the heat layer even
 // if the spot set looks identical. Called on stream stop and projection switch
 // so a restarted/cleared stream always redraws.
@@ -130,122 +149,24 @@ function escapeHtml(value) {
         .replaceAll("'", '&#39;');
 }
 
-function buildDxClusterHoverHtml(spot) {
-    const sender = escapeHtml(spot?.sender || '—');
-    const receiver = escapeHtml(spot?.receiver || '—');
-    const band = escapeHtml(spot?.band || '—');
-    const locator = escapeHtml(spot?.locator || '—');
-    const reporterLocator = escapeHtml(spot?.reporterLocator || '—');
-    const snr = Number.isFinite(Number(spot?.snr)) ? `${Number(spot.snr)} dB` : '—';
-
-    return [
-        '<strong>DXCluster Spot</strong>',
-        `DX: ${receiver}`,
-        `Spotter: ${sender}`,
-        `Band: ${band}`,
-        `SNR: ${snr}`,
-        `DX Loc: ${locator}`,
-        `Spotter Loc: ${reporterLocator}`
-    ].join('<br>');
-}
-
 function splitSpotSources(spots) {
     const regularSpots = [];
-    const dxClusterSpots = [];
     const wsprSpots = [];
     spots.forEach((spot) => {
         const src = String(spot?.sourceType || '').toLowerCase();
-        if (src === 'dxcluster') {
-            dxClusterSpots.push(spot);
-        } else if (src === 'wspr') {
+        if (src === 'wspr') {
             wsprSpots.push(spot);
         } else {
             regularSpots.push(spot);
         }
     });
-    return { regularSpots, dxClusterSpots, wsprSpots };
-}
-
-// DX cluster markers live in their own layer (state.dxClusterLayer), NOT in
-// the heatLayer. The heatLayer is torn down and rebuilt on every render, and
-// a rebuilt marker's bound tooltip closes and re-opens — hovering a cluster
-// marker during an active FT8 period made the tooltip flicker with no
-// pointer movement. This layer only rebuilds when the DX cluster spot set
-// itself changes.
-let dxClusterMarkerFingerprint = '';
-
-export function clearDxClusterMarkers() {
-    dxClusterMarkerFingerprint = '';
-    // The layer's markers are being torn down; their mouseout won't fire, so
-    // clear the hover-suppression flag here or the grid tooltip would stay
-    // suppressed after the markers are gone.
-    state.dxClusterHoverActive = false;
-    if (state.dxClusterLayer && map) {
-        map.removeLayer(state.dxClusterLayer);
-    }
-    state.dxClusterLayer = null;
-}
-
-function syncDxClusterMarkers(dxClusterSpots) {
-    // O(1) fingerprint: spots are appended at the end and pruned from the
-    // front (never mutated in place), so the first/last spots capture every
-    // set change without building a giant join string every frame.
-    const first = dxClusterSpots[0];
-    const last = dxClusterSpots[dxClusterSpots.length - 1];
-    const key = (s) => s ? `${s.locator}|${s.band}|${s.sender}|${s.receiver}|${s.reporterLocator}|${s.lat}|${s.lng}` : '';
-    const fingerprint = `${dxClusterSpots.length}:${key(first)}:${key(last)}`;
-    if (fingerprint === dxClusterMarkerFingerprint && state.dxClusterLayer) return;
-    clearDxClusterMarkers();
-    dxClusterMarkerFingerprint = fingerprint;
-    if (dxClusterSpots.length === 0) return;
-    state.dxClusterLayer = L.layerGroup().addTo(map);
-    incrementPerfCounter('mercator.layers.added', 1);
-    renderDxClusterMarkers(dxClusterSpots);
-}
-
-function renderDxClusterMarkers(dxClusterSpots) {
-    if (!Array.isArray(dxClusterSpots) || dxClusterSpots.length === 0 || !state.dxClusterLayer) return;
-
-    // Item 4: single circleMarker per spot instead of two
-    // Subtle visual distinction: white border around the band-colored fill
-    // so DX Cluster spots are clearly identifiable as individual points in
-    // Grid-SNR mode, rather than looking like small grid rectangles.
-    dxClusterSpots.forEach((spot) => {
-        if (!Number.isFinite(spot.lat) || !Number.isFinite(spot.lng)) return;
-        const color = bandColors[spot.band] || bandColors.all;
-        const marker = L.circleMarker([spot.lat, spot.lng], {
-            color: '#ffffff',
-            fillColor: color,
-            radius: 4.5,
-            weight: 1.5,
-            opacity: 0.9,
-            fillOpacity: 0.65,
-            interactive: true,
-            bubblingMouseEvents: false
-        }).addTo(state.dxClusterLayer);
-
-        marker.bindTooltip(buildDxClusterHoverHtml(spot), {
-            direction: 'top',
-            offset: [0, -6],
-            opacity: 0.95,
-            sticky: true
-        });
-        marker.on('mouseover', () => {
-            state.dxClusterHoverActive = true;
-            const tooltip = document.getElementById('tooltip');
-            if (tooltip) tooltip.style.display = 'none';
-        });
-        marker.on('mouseout', () => {
-            state.dxClusterHoverActive = false;
-        });
-    });
+    return { regularSpots, wsprSpots };
 }
 
 // --- WSPR beacon markers (region-scoped, distinct style) --------------------
 // WSPR spots are a global propagation reference. They're drawn as a separate
-// layer (like DX-cluster) with a distinct visual style (smaller, teal/cyan
-// band-colored fill with dashed border) so they're clearly separable from regular spots
-// and DX-cluster markers. Region-scoped: only WSPR paths where either end is
+// layer with a distinct visual style (smaller, teal/cyan
+// band-colored fill with dashed border) so they're clearly separable from regular spots. Region-scoped: only WSPR paths where either end is
 // in the operator's DXPulse region are shown, keeping the map relevant.
 let wsprMarkerFingerprint = '';
 
@@ -282,7 +203,9 @@ function syncWsprMarkers(wsprSpots) {
     // only), so no client-side region filter is needed.
     const scopedSpots = wsprSpots;
 
-    // O(1) fingerprint (first/last spot) — see syncDxClusterMarkers.
+    // O(1) fingerprint: spots are appended at the end and pruned from the
+    // front (never mutated in place), so the first/last spots capture every
+    // set change without building a giant join string every frame.
     const first = scopedSpots[0];
     const last = scopedSpots[scopedSpots.length - 1];
     const key = (s) => s ? `${s.locator}|${s.reporterLocator}|${s.band}|${s.snr}` : '';
@@ -370,20 +293,14 @@ export function updateMapVisualization(spots, maxMinutes) {
     const perfEnabled = isPerfProfilingEnabled();
     const renderTimer = startPerfTimer();
 
-    // NOTE: do NOT reset state.dxClusterHoverActive here. It is set by the
-    // DX-cluster marker's mouseover and cleared by its mouseout (and by
-    // clearDxClusterMarkers when the layer is torn down). Resetting it on every
-    // render re-enabled the grid-square hover tooltip while the pointer was
-    // still over a cluster marker, causing tooltip flicker/overlap.
-
     // Item 3: read all filter/style state once
     const checkedStyleRadio = document.querySelector('input[name="style-select"]:checked');
     const style = checkedStyleRadio ? checkedStyleRadio.value : 'grid-snr';
     const filterCtx = buildFilterCtx();
 
-    // Split spot sources once per render (was 3x: renderGridSnr,
-    // syncDxClusterMarkers, syncWsprMarkers each re-split the full array).
-    const { regularSpots, dxClusterSpots, wsprSpots } = splitSpotSources(spots);
+    // Split spot sources once per render (the grid/area pass and
+    // syncWsprMarkers both consume the split).
+    const { regularSpots, wsprSpots } = splitSpotSources(spots);
 
     if (style === 'active-area') {
         // turf.clustersDbscan is O(n²), so bound the rebuild with a debounce
@@ -430,9 +347,6 @@ export function updateMapVisualization(spots, maxMinutes) {
         endPerfTimer('mercator.band_labels.total_ms', bandLabelTimer);
     }
 
-    // DX cluster markers: persistent layer, rebuilt only when the cluster
-    // spot set changes — hovering must not flicker on every heatLayer rebuild.
-    syncDxClusterMarkers(dxClusterSpots);
     syncWsprMarkers(filterWsprMarkerSpots(wsprSpots, filterCtx));
 
     if (document.getElementById('auto-zoom')?.checked) {
@@ -508,7 +422,7 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
     for (const a of activity.values()) for (const v of a.line) if (v > sparkPeak) sparkPeak = v;
     // The dashed "normal for this hour" line, in spots per bin like the trend.
     // It joins the shared peak so it stays on the chart when activity is below it.
-    const binMinutes = (Number(document.getElementById('minutes')?.value) || 15) / SPARK_BINS;
+    const binMinutes = railSpanMinutes() / SPARK_BINS;
     const normals = new Map();
     for (const band of enabledBands) {
         const perMin = bandNormalRate ? bandNormalRate(band) : null;
@@ -580,6 +494,19 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
 
 const SPARK_BINS = 15;
 
+// Span of the rail sparklines in minutes: the Max Spot Age slider, or a fixed
+// span while a replay feeds the rail (the timeline's moments always cover
+// MOMENT_WINDOW_SECONDS, so a 60 min slider left 3/4 of every line empty).
+let railSpanOverrideMinutes = null;
+export function setRailSpanOverride(minutes) {
+    railSpanOverrideMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : null;
+    updateRailTimeAnchor();
+}
+function railSpanMinutes() {
+    if (railSpanOverrideMinutes) return railSpanOverrideMinutes;
+    return Number(typeof document !== 'undefined' ? document.getElementById('minutes')?.value : NaN) || 15;
+}
+
 // "15 min", "1 h": the span of the sparklines (max spot age).
 export function sparkSpanLabel(minutes) {
     const m = Math.max(1, Math.round(Number(minutes) || 15));
@@ -589,7 +516,7 @@ export function sparkSpanLabel(minutes) {
 // The rail's time scale: the label at the foot of the hairline that marks
 // where the sparklines start.
 function updateRailTimeAnchor() {
-    const span = sparkSpanLabel(document.getElementById('minutes')?.value);
+    const span = sparkSpanLabel(railSpanMinutes());
     const label = document.querySelector('.band-rail-time-span');
     if (label) label.textContent = span;
     const row = document.querySelector('.band-rail-time');
@@ -620,7 +547,7 @@ export function bandActivity(spots, ctx) {
         const t = spotEpochSeconds(s);
         if (t > tMax) tMax = t;
     }
-    const span = 60 * (Number(document.getElementById('minutes')?.value) || 15);
+    const span = 60 * railSpanMinutes();
     const t0 = tMax - span;
     for (const s of spots) {
         let a = out.get(s.band);
@@ -814,21 +741,13 @@ function renderGridSquares(squareData, filterCtx) {
         }).addTo(state.heatLayer);
     }
 
-    // DX cluster markers are managed separately (syncDxClusterMarkers) so
-    // heatLayer rebuilds don't churn their tooltips.
-
     endPerfTimer('mercator.grid.draw_ms', drawTimer);
     endPerfTimer('mercator.grid.total_ms', timer);
     incrementPerfCounter('mercator.grid.rectangles_added', gridFeatures.length);
 }
 
-// Promise for the most recent async active-area draw; runCaptureBootstrap
-// awaits it so the capture-ready handshake covers the hull render (which now
-// completes only after the turf fetch).
+// Promise for the most recent async active-area draw.
 let activeAreaRebuildPromise = Promise.resolve();
-export function whenActiveAreaRendered() {
-    return activeAreaRebuildPromise;
-}
 
 // Async wrapper around renderActiveArea: load turf on demand (the vendor
 // script is no longer part of the initial index.html payload), then draw the
@@ -855,7 +774,7 @@ function renderActiveArea(regularSpots, maxMinutes, filterCtx, layer) {
     const timer = startPerfTimer();
 
     // Item 3: use passed filterCtx instead of re-reading DOM
-    const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands } = filterCtx;
+    const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands, filterBand, filterRegion } = filterCtx;
     let maxClusterDist = parseInt(document.getElementById('cluster-distance')?.value, 10);
     if (isNaN(maxClusterDist) || maxClusterDist < 100) maxClusterDist = 500;
 
@@ -868,6 +787,9 @@ function renderActiveArea(regularSpots, maxMinutes, filterCtx, layer) {
         if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
         if (!enabledBands.has(spot.band)) return;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return;
+        // Matrix drill-down (band x region), as in the grid style.
+        if (filterBand && spot.band !== filterBand) return;
+        if (filterRegion && regionForLocatorCached(spot.locator) !== filterRegion) return;
 
         if (!pointsByBand[spot.band]) {
             pointsByBand[spot.band] = [];
@@ -972,9 +894,6 @@ function renderActiveArea(regularSpots, maxMinutes, filterCtx, layer) {
             markersAdded += 1;
         });
     }
-
-    // DX cluster markers are managed separately (syncDxClusterMarkers) so
-    // heatLayer rebuilds don't churn their tooltips.
 
     endPerfTimer('mercator.active_area.cluster_draw_ms', clusterTimer);
     endPerfTimer('mercator.active_area.total_ms', timer);

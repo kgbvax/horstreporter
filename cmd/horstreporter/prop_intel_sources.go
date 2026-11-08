@@ -9,18 +9,19 @@ import (
 // propagation-intelligence engine (/api/prop_intel/v2). Each profile captures
 // how honest "path open" signals can be computed from that source: WSPR has a
 // real power-budget model, PSKReporter/RBN reports carry SNR on their own
-// scales, and DX-cluster spots carry no amplitude at all.
+// scales.
 
 // propIntelSourceProfile describes the SNR semantics and field conventions of
 // one ingest source for the v2 engine.
 type propIntelSourceProfile struct {
-	// PublicName is the API/DB-facing source name: "wspr" | "pskr" | "rbn" |
-	// "dxcluster".
+	// PublicName is the API/DB-facing source name: "wspr" | "pskr" | "rbn".
+	// (The former "dxcluster" source was removed with its ingest; a request
+	// naming it is treated like any unknown name, see parseSourcesParam.)
 	PublicName string
 	// InternalTag is the MQTTMessage.Source / dx_raw_spots.source_type value.
 	InternalTag string
 	// ReceiverSide picks which end of the message is the receiver/reporter
-	// (the region a path "lands in"): "sc" = SC/SL (wspr, rbn, dxcluster),
+	// (the region a path "lands in"): "sc" = SC/SL (wspr, rbn),
 	// "rc" = RC/RL (pskr, where SC/SL is the transmitter).
 	ReceiverSide string
 	// HasTXPower: only WSPR carries beacon TX power (dBm), enabling the
@@ -34,10 +35,6 @@ type propIntelSourceProfile struct {
 	// DigitalFloorDb: floor for the mode-agnostic "digital open" signal on
 	// SNR-carrying sources (pskr only; wspr implies digital via budget).
 	DigitalFloorDb *float64
-	// PresenceMinSpots: for amplitude-free sources (dxcluster), a cell is
-	// open when the window holds at least this many spots (1 spot may be a
-	// busted callsign).
-	PresenceMinSpots int
 }
 
 // fptr returns a pointer to a float64 constant (profile table sugar).
@@ -53,8 +50,6 @@ func fptr(v float64) *float64 { return &v }
 //     unknown_power. Basis "snr_floor".
 //   - rbn:     CW/RTTY skimmer, 0..40 dB scale; CW open at >= +8 dB.
 //     ssb_open is nil (a CW skimmer can never prove SSB). Basis "snr_floor".
-//   - dxcluster: no amplitude at all; open = someone actually worked/reported
-//     the path (>= 2 spots guard against busted calls). Basis "presence".
 var propIntelSourceProfiles = []propIntelSourceProfile{
 	{
 		PublicName:   "wspr",
@@ -77,12 +72,6 @@ var propIntelSourceProfiles = []propIntelSourceProfile{
 		InternalTag:  "rbn",
 		ReceiverSide: "sc",
 		CWFloorDb:    fptr(8.0),
-	},
-	{
-		PublicName:       "dxcluster",
-		InternalTag:      "dxcluster",
-		ReceiverSide:     "sc",
-		PresenceMinSpots: 2,
 	},
 }
 

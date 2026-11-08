@@ -20,8 +20,8 @@ func randomWindowMsgs(rng *rand.Rand, n int, t0, t1 int64) []MQTTMessage {
 	far := []string{"FN20", "EM73", "PM95", "QF22", "OJ12", "IO91", "KP20", "RE78", "GG87", "DM79"}
 	subs := []string{"", "lk", "LK", "gu", "xx", "AA"}
 	band := []string{"20m", "40m", "20M", "15m", "10m", "13cm", "6m", " 17m "}
-	mode := []string{"FT8", "FT8", "FT8", "FT4", "CW", "WSPR", "DXCLUSTER", ""}
-	src := []string{"", "", "mqtt", "wspr", "rbn", "dxcluster"}
+	mode := []string{"FT8", "FT8", "FT8", "FT4", "CW", "WSPR", "RTTY", ""}
+	src := []string{"", "", "mqtt", "wspr", "rbn", "bogus"}
 	calls := []string{"DK3JF", "dl1abc", "W1AW", "F5XYZ/P", "JA1ZZZ", "VK2ABC", "OH2XX", "N0CALL", "EA8ZZ"}
 	loc := func() string {
 		var base string

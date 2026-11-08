@@ -17,10 +17,10 @@ import (
 )
 
 // prop_baseline.go is the unified per-source band × region climatology engine
-// backing /api/prop_intel/v2. It generalizes WsprClimatologyEngine to all four
-// ingest sources: buckets are keyed "band|source|slot|region", and the region
+// backing /api/prop_intel/v2. It generalizes WsprClimatologyEngine to every
+// ingest source: buckets are keyed "band|source|slot|region", and the region
 // axis is the receiver/reporter side per the source profile's ReceiverSide
-// (pskr reports land on RC/RL; wspr/rbn/dxcluster on SC/SL).
+// (pskr reports land on RC/RL; wspr/rbn on SC/SL).
 //
 // IMPORTANT: WsprClimatologyEngine (wspr_climatology.go) remains live and
 // untouched — /api/prop_intel v1 (horstapp widgets) reads it. The two engines
@@ -154,7 +154,7 @@ func (e *propBaselineEngine) Observe(m MQTTMessage) {
 	}
 	src := m.Source
 	if src == "" {
-		src = "mqtt" // MQTT ingest leaves Source empty (only wspr/rbn/dxc tag theirs)
+		src = "mqtt" // MQTT ingest leaves Source empty (only wspr/rbn tag theirs)
 	}
 	prof, ok := propIntelProfilesByTag[src]
 	if !ok {

@@ -44,8 +44,8 @@ mv -f "$INSTALL_DIR/$BINARY_NAME.new" "$INSTALL_DIR/$BINARY_NAME"
 chown -R "$APP_USER:$APP_USER" "$INSTALL_DIR"
 chown -R "$APP_USER:$APP_USER" "/var/log/$APP_NAME"
 
-# Note: cty.dat (DX-cluster country/flag labelling) is embedded in the binary —
-# no file to deploy. Override with -cty-path only if you want a fresher cty.dat.
+# Note: cty.dat (DXCC entity lookup) is embedded in the binary — no file to
+# deploy. Override with -cty-path only if you want a fresher cty.dat.
 
 # 4. Create an environment configuration file for easy arg modifications
 DEFAULT_CONFIG="/etc/default/$APP_NAME"
@@ -101,7 +101,7 @@ cat <<'EOF' > "$CRON_FILE"
 # Nightly catch-up vacuum/analyze for HorstReporter hot tables.
 # Runs as postgres; low-traffic time (03:43 UTC).  Uses plain VACUUM ANALYZE
 # (not VACUUM FULL) so it does not block concurrent ingest/queries.
-43 3 * * * postgres /usr/bin/psql -d dxdata -c "VACUUM (ANALYZE) dx_raw_spots, dx_region_baseline_daily, proplab_cell_buckets, dx_baseline_global, proplab_sw_series;"
+43 3 * * * postgres /usr/bin/psql -d dxdata -c "VACUUM (ANALYZE) dx_raw_spots, dx_region_baseline_daily, dx_baseline_global;"
 EOF
 chmod 0644 "$CRON_FILE"
 

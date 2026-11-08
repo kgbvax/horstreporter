@@ -173,32 +173,6 @@ func TestV2RbnNeverSSB(t *testing.T) {
 	}
 }
 
-// TestV2DxclusterPresence: open = ≥2 spots; no SNR flags ever.
-func TestV2DxclusterPresence(t *testing.T) {
-	now := time.Now().Unix()
-	spot := func(dt int64) MQTTMessage {
-		return MQTTMessage{Source: "dxcluster", B: "20m", T: now - dt,
-			SC: "SPOT", SL: "JO62qm", RC: "DX", RL: "FN31ab", MD: ""}
-	}
-
-	resp := propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("dxcluster"), nil, nil, []MQTTMessage{spot(100)}, now, propIntelAtypicalZThreshold)
-	c := findV2Cell(t, resp, "20m", "NA")
-	s := findV2SourceCell(t, c, "dxcluster")
-	if s.Open {
-		t.Fatalf("1 cluster spot must not open the cell")
-	}
-	if s.SSBOpen != nil || s.CWOpen != nil || s.OpenBasis != "presence" {
-		t.Fatalf("dxcluster must have nil mode flags and presence basis: %+v", s)
-	}
-
-	resp = propIntelV2.EvaluateV2("JO62", false, 15, v2Spots("dxcluster"), nil, nil, []MQTTMessage{spot(100), spot(50)}, now, propIntelAtypicalZThreshold)
-	c = findV2Cell(t, resp, "20m", "NA")
-	s = findV2SourceCell(t, c, "dxcluster")
-	if !s.Open {
-		t.Fatalf("2 cluster spots must open the cell")
-	}
-}
-
 // TestV2Agreement: rollup ORs the flags and computes the open agreement.
 func TestV2Agreement(t *testing.T) {
 	now := time.Now().Unix()

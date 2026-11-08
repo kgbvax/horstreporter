@@ -23,16 +23,15 @@ import (
 func TestRegionDeltaTierBoundaries(t *testing.T) {
 	var d regionDelta
 	for _, snr := range []int{-21, -20, -16, -15, -11, -10, -6, -5, -1, 0, 5} {
-		d.observeSpot(snr, true)
+		d.observeSpot(snr)
 	}
-	d.observeSpot(0, false) // DX cluster: RP 0 is not a real SNR
-	want := regionDelta{Count: 12, SNR: 11, GE: [almanacSNRTiers]int64{10, 8, 6, 4, 2}}
+	want := regionDelta{Count: 11, SNR: 11, GE: [almanacSNRTiers]int64{10, 8, 6, 4, 2}}
 	if d != want {
 		t.Fatalf("delta = %+v, want %+v (tiers inclusive at -20/-15/-10/-5/0)", d, want)
 	}
 }
 
-func TestObserveSNRCountersExcludeDXCluster(t *testing.T) {
+func TestObserveSNRCounters(t *testing.T) {
 	now := time.Now().Unix()
 	spot := func(rp int, md string) MQTTMessage {
 		return MQTTMessage{T: now - 60, RP: rp, SC: "K1ABC", SL: "FN31", RC: "DL1ABC", RL: "JO32", B: "20m", MD: md}
@@ -41,14 +40,13 @@ func TestObserveSNRCountersExcludeDXCluster(t *testing.T) {
 	for _, rp := range []int{-15, -16, 0, -1} {
 		_ = s.observe(spot(rp, "FT8"), "20m", 0, 0, 0)
 	}
-	_ = s.observe(spot(0, "DXCLUSTER"), "20m", 0, 0, 0)
 	if len(s.pendingRegion) != 2 {
 		t.Fatalf("region keys = %d, want 2", len(s.pendingRegion))
 	}
-	want := regionDelta{Count: 5, SNR: 4, GE: [almanacSNRTiers]int64{4, 3, 2, 2, 1}}
+	want := regionDelta{Count: 4, SNR: 4, GE: [almanacSNRTiers]int64{4, 3, 2, 2, 1}}
 	for k, d := range s.pendingRegion {
 		if d != want {
-			t.Fatalf("key %+v: delta %+v, want %+v (DX cluster counts toward spot_count only)", k, d, want)
+			t.Fatalf("key %+v: delta %+v, want %+v", k, d, want)
 		}
 	}
 }
@@ -197,7 +195,7 @@ func TestRegionSNRSchemaSQL(t *testing.T) {
 func snrDailyRow(grid, band, region string, slot int, n int64, snrs ...int) almanacDailyRow {
 	var d regionDelta
 	for _, s := range snrs {
-		d.observeSpot(s, true)
+		d.observeSpot(s)
 	}
 	return almanacDailyRow{Grid4: grid, Band: band, Region: region, Slot: slot, Count: n, SNR: d.SNR, GE: d.GE}
 }
@@ -294,7 +292,7 @@ func TestAlmanacParseMinSNR(t *testing.T) {
 // from win.Start+10; after that, on 20m to NA:
 //   - slot 26: 3 spots at −12 dB every day,
 //   - slot 28: 3 spots at −3 dB every day,
-//   - slot 30: 3 DX-cluster spots (no SNR) every day,
+//   - slot 30: 3 spots without SNR every day (as historic DX-cluster rows left),
 //   - slot 32: even days 2 @ −12 + 2 @ +1, odd days 6 @ −12 + 1 @ +1.
 //
 // Days before the start carry the same spots (fold would not store their
@@ -371,7 +369,7 @@ func TestAlmanacFloorOpenSemantics(t *testing.T) {
 	if v, ok := shareOf(t, l.Share[26]); !ok || v != 1 {
 		t.Fatalf("≥−15 slot 26 share = %v %v, want 1", v, ok)
 	}
-	// DX-cluster-only cells: not open, no share.
+	// Cells with only SNR-less spots (historic DX-cluster rows): not open, no share.
 	if l.N[30] != 0 || l.M[30] != 20 {
 		t.Fatalf("cluster-only slot 30: %d/%d, want 0/20", l.N[30], l.M[30])
 	}

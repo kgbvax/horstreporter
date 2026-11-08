@@ -44,17 +44,17 @@ func TestFromHereTrendBins(t *testing.T) {
 		pskrSpot(now-20, "20m", "JN58AA", "FN42AA", -5),   // global mesh
 		pskrSpot(now-30, "80m", "JO31AA", "JO33BB", -5),   // both ends in the area: twice
 		{Source: "wspr", T: now - 20, B: "20m", SC: "RX", SL: "JO32CD", RC: "TX", RL: "FN31AB", RP: -10, TXPower: 37},
-		{Source: "dxcluster", T: now - 40, B: "20m", SC: "DX", SL: "FN31AB", RC: "SPOTTER", RL: "JO32AA"},
+		{Source: "rbn", T: now - 40, B: "20m", SC: "SKIM", SL: "JO32AA", RC: "DX", RL: "FN31AB", RP: 20},
 	}
-	trend := fromHereTrend(history, v2Spots("wspr", "pskr", "dxcluster"), maidenhead.QTHSquares("JO32", true), nil, now)
+	trend := fromHereTrend(history, v2Spots("wspr", "pskr", "rbn"), maidenhead.QTHSquares("JO32", true), nil, now)
 	na := trend[propIntelCellKey{band: "20m", region: "NA"}]
-	want := []int{1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 2}
+	want := []int{1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1}
 	if len(na) != fromHereTrendBins {
 		t.Fatalf("20m NA trend = %v", na)
 	}
 	for i := range want {
 		if na[i] != want[i] {
-			t.Fatalf("20m NA trend = %v, want %v (pskr + dxcluster, no wspr, no mesh)", na, want)
+			t.Fatalf("20m NA trend = %v, want %v (pskr only, no wspr/rbn, no mesh)", na, want)
 		}
 	}
 	if eu := trend[propIntelCellKey{band: "80m", region: "EU"}]; eu[11] != 2 {

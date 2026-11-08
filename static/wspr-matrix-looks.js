@@ -12,7 +12,7 @@ import { escapeHtml } from './ui-helpers.js';
 //            per 30-minute slot), a cursor at now and a dot for now.
 //   - trend: sparkline. The last hour in five-minute bins against the normal.
 //
-// The comparison is PSKReporter (+ DX cluster) reports from the operator's
+// The comparison is PSKReporter reports from the operator's
 // area against their own normal (backend expected / expected_spots /
 // normal_day / trend, prop_intel_fromhere*.go); the dot size and the stroke
 // weight carry all selected reports. wspr-matrix.js owns the table, the grid

@@ -102,7 +102,7 @@ func TestScanPropIntelV2WindowMatchesReference(t *testing.T) {
 			msgs[i].T = now - 7200 // outside the window
 		}
 	}
-	profileSets := [][]propIntelSourceProfile{propIntelSourceProfiles, propIntelSourceProfiles[:1], propIntelSourceProfiles[1:3], {propIntelSourceProfiles[3], propIntelSourceProfiles[0]}}
+	profileSets := [][]propIntelSourceProfile{propIntelSourceProfiles, propIntelSourceProfiles[:1], propIntelSourceProfiles[1:3], {propIntelSourceProfiles[2], propIntelSourceProfiles[0]}}
 	qthSets := [][]string{maidenhead.QTHSquares("JO32", false), maidenhead.QTHSquares("JO32", true), maidenhead.QTHSquares("DK3JF", false), maidenhead.QTHSquares("FN20", false)}
 	areas := []*liveArea{nil, explicitLiveArea("JO32", 2), explicitLiveArea("FN20", 3)}
 

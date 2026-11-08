@@ -11,7 +11,7 @@ vi.mock('../static/perf.js', () => ({
 // Mock map.js so renderers.js loads without a real Leaflet map.
 vi.mock('../static/map.js', () => ({ map: {} }));
 
-import { aggregateGridSquares, filterWsprMarkerSpots } from '../static/renderers.js';
+import { aggregateGridSquares, filterWsprMarkerSpots, visibleMapSpots } from '../static/renderers.js';
 import { regionForLocatorCached, regionForLocator } from '../static/utils.js';
 import { state } from '../static/state.js';
 
@@ -168,5 +168,17 @@ describe('filterWsprMarkerSpots', () => {
         const region = regionForLocator('FN31');
         const out = filterWsprMarkerSpots(spots, ctx({ filterBand: '20m', filterRegion: region }));
         expect(out).toEqual([spots[0]]);
+    });
+});
+
+describe('visibleMapSpots (afterglow overlay filter)', () => {
+    it('applies band focus, drill-down and the SNR floor (WSPR exempt) like the map layers', () => {
+        const spots = [
+            spot('20m', 'FN31', 5), spot('40m', 'FN31', 5), spot('20m', 'FN31', -20),
+            { ...spot('20m', 'FN31', -25), sourceType: 'wspr' }, spot('20m', 'JO31', 5),
+        ];
+        const region = regionForLocator('FN31');
+        const out = visibleMapSpots(spots, ctx({ ssbMinDb: 0, selectedBand: '20m', filterRegion: region }));
+        expect(out).toEqual([spots[0], spots[3]]);
     });
 });

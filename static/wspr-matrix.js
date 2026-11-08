@@ -1,4 +1,4 @@
-import { state } from './state.js';
+import { state, panelQth, STREAM_QTH_EVENT } from './state.js';
 import { WSPR_REGIONS, bandColors, getEnabledBands, getMinSnrMode } from './utils.js';
 import { escapeHtml } from './ui-helpers.js';
 import {
@@ -8,7 +8,7 @@ import {
 
 // wspr-matrix.js — the unified Propagation panel: band × region propagation-
 // intelligence matrix over ALL ingest sources (WSPR, PSKReporter FT8/FT4,
-// RBN, DX cluster). Polls /api/prop_intel/v2 (the multi-source contract;
+// RBN). Polls /api/prop_intel/v2 (the multi-source contract;
 // v1 stays frozen for the horstapp widgets). Every look shows a path against
 // its normal for this hour, not its raw count (wspr-matrix-looks.js, chip
 // row): dot strip (default), day strip, sparkline. They replaced the viridis /
@@ -56,19 +56,17 @@ const SOURCES = [
     { key: 'wspr', label: 'WSPR', title: 'WSPR beacon reports' },
     { key: 'pskr', label: 'PSKR', title: 'PSKReporter FT8 and FT4 reports' },
     { key: 'rbn', label: 'RBN', title: 'Reverse Beacon Network CW and RTTY spots' },
-    { key: 'dxcluster', label: 'DXC', title: 'DX cluster spots' },
 ];
 const SOURCE_LABELS = Object.fromEntries(SOURCES.map((s) => [s.key, s.label]));
 // Per-source "open" basis (backend v2 open_basis) in the cell tooltip.
 const OPEN_BASIS_LABELS = { budget: 'link budget', snr_floor: 'SNR floor' };
 const ALL_SOURCES = SOURCES.map((s) => s.key);
-// Default selection excludes dxcluster: prod has no DX-cluster ingest wired
-// (-dxcluster-enable absent), so DXC would sit there contributing nothing.
-// The chip stays available for local/dev instances that run the ingest.
-const DEFAULT_SOURCES = ['wspr', 'pskr', 'rbn'];
+// Every source is selected by default. A stored selection is filtered to
+// ALL_SOURCES on load, so a stale entry (the removed 'dxcluster') is dropped.
+const DEFAULT_SOURCES = [...ALL_SOURCES];
 // PSKReporter is always selected: every look compares its reports with the
 // area normal, and the other sources have no normal (a WSPR-only selection
-// left all three looks empty). WSPR / RBN / DXC are optional extras.
+// left all three looks empty). WSPR / RBN are optional extras.
 const BASE_SOURCE = 'pskr';
 
 // A source list with the base source, in canonical order.
@@ -100,6 +98,7 @@ const runtime = {
     pollTimer: null,
     abortController: null,
     inFlightKey: '',
+    qthListener: null,
     cache: null,         // last /api/prop_intel/v2 payload
     cacheKey: '',
     lastFetchedAt: 0,
@@ -141,17 +140,18 @@ export function initWsprMatrix() {
     }
 
     // Re-poll when QTH changes (band-lab.js pattern).
-    const qthInput = document.getElementById('qth');
-    if (qthInput) {
-        qthInput.addEventListener('change', () => {
-            if (!runtime.enabled) return;
-            const next = currentQth();
-            if (next !== runtime.lastQth) {
-                invalidateCache();
-                pollMatrix(true);
-            }
-        });
-    }
+    // The panel follows the stream's qth (panelQth), so re-poll when the
+    // stream starts for a new one, not on every edit of the input. Replace,
+    // don't stack, on re-init.
+    if (runtime.qthListener) window.removeEventListener(STREAM_QTH_EVENT, runtime.qthListener);
+    runtime.qthListener = () => {
+        if (!runtime.enabled) return;
+        if (currentQth() !== runtime.lastQth) {
+            invalidateCache();
+            pollMatrix(true);
+        }
+    };
+    window.addEventListener(STREAM_QTH_EVENT, runtime.qthListener);
 
     // Re-poll when the global Min SNR control changes — the panel's SSB/CW
     // open floors are the same filter as everything else on the page.
@@ -218,7 +218,7 @@ function invalidateCache() {
 }
 
 function currentQth() {
-    return String(document.getElementById('qth')?.value || state.qth || '').trim().toUpperCase();
+    return panelQth();
 }
 
 // Toggle a source chip. The base source (PSKR) stays selected.
@@ -237,6 +237,15 @@ export async function updateWsprMatrix() {
     pollMatrix(false);
 }
 
+// Cache key of a matrix payload: qth, sources and the Min SNR state.
+// Both thresholds ride in it so toggling none/cw/ssb always re-fetches.
+function matrixKey(qth = currentQth()) {
+    const minSnrMode = getMinSnrMode();
+    const ssbMinDb = document.getElementById('ssb-min-db')?.value || '0';
+    const cwMinDb = document.getElementById('cw-min-db')?.value || '-15';
+    return `${qth}|15|fh|${runtime.sources.join(',')}|${minSnrMode}|${ssbMinDb}|${cwMinDb}`;
+}
+
 async function pollMatrix(force) {
     if (!runtime.enabled) return;
     const qth = currentQth();
@@ -253,7 +262,7 @@ async function pollMatrix(force) {
     const cwMinDb = document.getElementById('cw-min-db')?.value || '-15';
 
     const now = Date.now();
-    const key = `${qth}|15|fh|${runtime.sources.join(',')}|${minSnrMode}|${ssbMinDb}|${cwMinDb}`;
+    const key = matrixKey(qth);
     if (!force && runtime.cache && runtime.cacheKey === key && (now - runtime.lastFetchedAt) < CACHE_TTL_MS) {
         renderMatrix();
         return;
@@ -422,14 +431,17 @@ function restoreFocus(body, focus) {
 function renderMatrix() {
     const body = document.getElementById(BODY_ID);
     if (!body) return;
-    const data = runtime.cache;
+    // A cache for another qth/source/SNR key (the refetch is in flight or
+    // failed) must not be drawn next to the current rows: draw no cells.
+    const stale = runtime.cache && runtime.cacheKey && runtime.cacheKey !== matrixKey();
+    const data = stale ? null : runtime.cache;
     const allCells = (data && Array.isArray(data.cells)) ? data.cells : [];
     // Rows follow the band rail's enabled set (when the rail is present).
     const enabled = document.querySelector('.band-enable') ? getEnabledBands() : null;
     const cells = enabled ? allCells.filter((c) => enabled.has(c.band)) : allCells;
     if (cells.length === 0 && !(runtime.rowExtras && enabled && enabled.size > 0)) {
         runtime.lastRenderKey = '';
-        const empty = allCells.length > 0
+        const empty = stale ? 'Loading propagation for this locator…' : allCells.length > 0
             ? 'No paths open on the enabled bands.'
             : 'No paths open in the current window.';
         const focus = captureFocus(body);

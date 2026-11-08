@@ -469,11 +469,11 @@ describe('createAzimuthRenderPlan scene composition', () => {
         expect(plan.overlaySummary).toEqual({ style: 'grid-snr', itemCount: 1 });
     });
 
-    it('counts every spot unfiltered, including dxcluster-sourced and off-band ones', () => {
+    it('counts every spot unfiltered, including RBN-sourced and off-band ones', () => {
         const spots = [];
         for (let i = 0; i < 20; i++) spots.push({ locator: 'JO32', snr: 8, band: '20m', lat: 52 + i * 0.1, lng: 7 + i * 0.1 });
         spots.push({ locator: 'JO42', snr: -30, band: '70cm', lat: 53, lng: 8 });         // weak + off-band
-        spots.push({ locator: 'JO52', snr: 0, band: '40m', sourceType: 'DXCLUSTER', lat: 54, lng: 9 }); // dxcluster ingest
+        spots.push({ locator: 'JO52', snr: 0, band: '40m', sourceType: 'RBN', lat: 54, lng: 9 });   // rbn ingest
         spots.push({ locator: null, snr: 5, band: '20m', lat: 55, lng: 10 });             // no locator
 
         const plan = az.createAzimuthRenderPlan({

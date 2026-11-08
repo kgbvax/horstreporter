@@ -17,7 +17,6 @@ import (
 
 	"horstreporter/internal/cty"
 	"horstreporter/internal/maidenhead"
-	"horstreporter/internal/qrzlookup"
 	"horstreporter/internal/region"
 )
 
@@ -42,24 +41,37 @@ var dxBaselineMaxEvents = defaultDxBaselineMaxEvents
 // append path. Callers must treat the slice as read-only; engines read it but
 // never retain it.
 func snapshotHubHistoryWindow(now int64, minutes int) ([]MQTTMessage, func()) {
-	cutoff := now - int64(minutes)*60
 	hub.RLock()
-	idx := sort.Search(len(hub.history), func(i int) bool {
-		return hub.history[i].T >= cutoff
-	})
+	idx := historyWindowStartLocked(now - int64(minutes)*60)
 	hist := hub.windowFromLocked(idx)
 	hub.RUnlock()
 	return hist, func() {}
 }
 
+// historyWindowOrderSlackSeconds is how far out of order reception times
+// arrive in hub.history. History is in arrival order, but T is the reporter's
+// reception time and reporters upload in batches minutes later, so near the
+// cutoff the T >= cutoff predicate is not monotone and a plain binary search
+// lands inside the mixed stretch, dropping in-window reports that arrived
+// before an older one.
+const historyWindowOrderSlackSeconds = 300
+
+// historyWindowStartLocked is the first history index a window starting at
+// cutoff must include: the binary search runs on cutoff minus the ordering
+// slack, so the view may start with a few messages older than cutoff. Every
+// reader filters on T itself (liveStart <= T <= now). Caller holds hub's lock.
+func historyWindowStartLocked(cutoff int64) int {
+	lo := cutoff - historyWindowOrderSlackSeconds
+	return sort.Search(len(hub.history), func(i int) bool {
+		return hub.history[i].T >= lo
+	})
+}
+
 // snapshotHubHistoryWindowSeq is snapshotHubHistoryWindow plus the sequence
 // numbers the per-area index keys on.
 func snapshotHubHistoryWindowSeq(now int64, minutes int) historyWindow {
-	cutoff := now - int64(minutes)*60
 	hub.RLock()
-	idx := sort.Search(len(hub.history), func(i int) bool {
-		return hub.history[i].T >= cutoff
-	})
+	idx := historyWindowStartLocked(now - int64(minutes)*60)
 	win := historyWindow{
 		msgs:     hub.windowFromLocked(idx),
 		firstSeq: hub.baseSeq + uint64(idx) + 1,
@@ -140,12 +152,8 @@ type DxBaselineEngine struct {
 	eventsStart    int
 	events         []dxObservedEvent
 
-	// callsignResolver enables QRZ locator lookup for callsign QTH so the
-	// cluster baseline can be derived (cluster anchor from the resolved locator).
-	// Optional — when nil, callsign QTH falls back to ctyResolver, then global.
-	callsignResolver qrzlookup.Resolver
 	// ctyResolver provides DXCC entity centroids (lat/lon) as a last-resort
-	// cluster derivation when QRZ has no locator for a callsign QTH.
+	// cluster derivation for a callsign QTH.
 	ctyResolver *cty.Resolver
 	// almanacAreas caches Almanac QTH → area resolutions (lazily created by
 	// resolveAlmanacArea, guarded by mu for the pointer only).
@@ -329,23 +337,16 @@ func newDxBaselineEngine(path string) *DxBaselineEngine {
 	}
 }
 
-// SetResolvers wires the optional callsign→locator (QRZ) and DXCC-entity
-// (cty.dat) resolvers used by the regional baseline to derive the operator's
-// region for callsign targets. Locator targets derive their region directly;
-// callsign targets try QRZ first, then fall back to the DXCC entity centroid.
-// A nil argument leaves the existing resolver unchanged (so QRZ can be wired
-// later without clobbering the cty resolver set at startup).
-func (e *DxBaselineEngine) SetResolvers(callsign qrzlookup.Resolver, ctyRes *cty.Resolver) {
-	if e == nil {
+// SetCtyResolver wires the DXCC-entity (cty.dat) resolver used by the regional
+// baseline to derive the operator's region for callsign targets. Locator
+// targets derive their region directly; callsign targets fall back to the
+// DXCC entity centroid.
+func (e *DxBaselineEngine) SetCtyResolver(ctyRes *cty.Resolver) {
+	if e == nil || ctyRes == nil {
 		return
 	}
 	e.mu.Lock()
-	if callsign != nil {
-		e.callsignResolver = callsign
-	}
-	if ctyRes != nil {
-		e.ctyResolver = ctyRes
-	}
+	e.ctyResolver = ctyRes
 	e.mu.Unlock()
 }
 
@@ -391,51 +392,31 @@ func (e *DxBaselineEngine) Store() *dxPostgresStore {
 	return e.store
 }
 
-func (e *DxBaselineEngine) LoadRecentSpotCache(minutes int, now int64, includeDXCluster bool) ([]MQTTMessage, error) {
+// LoadSpotsBetweenFiltered returns the raw spots in [start,end] under the
+// source filter as every raw-spot loader (rawSpotsExcludeRemovedSources). The startup backfill walks the
+// window in chunks through this so peak memory stays at one chunk instead of
+// the whole window.
+func (e *DxBaselineEngine) LoadSpotsBetweenFiltered(start, end int64) ([]MQTTMessage, error) {
 	e.mu.RLock()
 	st := e.store
 	e.mu.RUnlock()
 	if st == nil {
 		return nil, nil
 	}
-	return st.loadRecentSpotCache(minutes, now, includeDXCluster)
-}
-
-func (e *DxBaselineEngine) LoadSpotsBetween(start, end int64) ([]MQTTMessage, error) {
-	e.mu.RLock()
-	st := e.store
-	e.mu.RUnlock()
-	if st == nil {
-		return nil, nil
-	}
-	return st.loadSpotsBetween(start, end)
-}
-
-// LoadSpotsBetweenFiltered is LoadSpotsBetween with the source filter exposed
-// (same includeDXCluster semantics as LoadRecentSpotCache). The startup
-// backfill walks the window in chunks through this so peak memory stays at
-// one chunk instead of the whole window.
-func (e *DxBaselineEngine) LoadSpotsBetweenFiltered(start, end int64, includeDXCluster bool) ([]MQTTMessage, error) {
-	e.mu.RLock()
-	st := e.store
-	e.mu.RUnlock()
-	if st == nil {
-		return nil, nil
-	}
-	return st.loadSpotsBetweenWithSourceFilter(start, end, includeDXCluster)
+	return st.loadSpotsBetweenWithSourceFilter(start, end)
 }
 
 // LoadSpotsRangeForTargets returns the raw spots in [start,end] matching the
 // QTH tokens (locator prefix / exact callsign), with the token filter pushed
 // down into Postgres (see loadSpotsRangeForTargets). Backs /api/history.
-func (e *DxBaselineEngine) LoadSpotsRangeForTargets(start, end int64, tokens []string, includeDXCluster bool) ([]MQTTMessage, error) {
+func (e *DxBaselineEngine) LoadSpotsRangeForTargets(start, end int64, tokens []string) ([]MQTTMessage, error) {
 	e.mu.RLock()
 	st := e.store
 	e.mu.RUnlock()
 	if st == nil {
 		return nil, nil
 	}
-	return st.loadSpotsRangeForTargets(start, end, tokens, includeDXCluster)
+	return st.loadSpotsRangeForTargets(start, end, tokens)
 }
 
 // HasSpotStore reports whether the engine has a Postgres store backing it —
@@ -453,7 +434,7 @@ func (e *DxBaselineEngine) HasSpotStore() bool {
 // CountSpotsBetweenFiltered returns the number of spots in the window under
 // the same source filter as LoadSpotsBetweenFiltered, so the caller can
 // allocate the destination slice exactly once.
-func (e *DxBaselineEngine) CountSpotsBetweenFiltered(start, end int64, includeDXCluster bool) (int64, error) {
+func (e *DxBaselineEngine) CountSpotsBetweenFiltered(start, end int64) (int64, error) {
 	e.mu.RLock()
 	st := e.store
 	e.mu.RUnlock()
@@ -466,8 +447,8 @@ func (e *DxBaselineEngine) CountSpotsBetweenFiltered(start, end int64, includeDX
 	err := st.pool.QueryRow(ctx, `
 		SELECT count(*) FROM dx_raw_spots
 		WHERE spot_time BETWEEN $1 AND $2
-		  AND ($3::bool OR LOWER(COALESCE(source_type, 'mqtt')) <> 'dxcluster')
-	`, start, end, includeDXCluster).Scan(&n)
+		  AND `+rawSpotsExcludeRemovedSources+`
+	`, start, end).Scan(&n)
 	return n, err
 }
 
@@ -502,12 +483,6 @@ func (e *DxBaselineEngine) PruneRegionBaselinesOlderThan(cutoffDayIndex int64) (
 		return 0, nil
 	}
 	return st.pruneRegionBaselinesOlderThan(cutoffDayIndex)
-}
-
-func (e *DxBaselineEngine) NumBuckets() int {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return len(e.buckets) + len(e.clusterBuckets)
 }
 
 func (e *DxBaselineEngine) Stats(now int64) (bucketCount, eventCount, historyMinutes int) {
@@ -637,9 +612,6 @@ func (e *DxBaselineEngine) Observe(m MQTTMessage) {
 	if st != nil {
 		_ = st.observe(m, band, hour, distTier, snrTier)
 	}
-	if cellBucketFeed != nil {
-		cellBucketFeed.Observe(m)
-	}
 }
 
 func (e *DxBaselineEngine) PersistRawSpot(m MQTTMessage, sourceType, spotter string, frequencyKHz *float64, comment string) {
@@ -655,9 +627,6 @@ func (e *DxBaselineEngine) PersistRawSpot(m MQTTMessage, sourceType, spotter str
 	defer cancel()
 	if err := st.insertRawSpot(ctx, m, band, sourceType, spotter, frequencyKHz, comment); err != nil {
 		logDebug("DX raw spot persistence failed (source=%s): %v", sourceType, err)
-	}
-	if cellBucketFeed != nil {
-		cellBucketFeed.Observe(m)
 	}
 }
 
@@ -821,19 +790,17 @@ func remapBucketsForLoad(src map[string]*baselineBucket, legacy bool) map[string
 // operator's QTH, used to key the cluster baseline (the middle tier of the
 // cluster → global fallback). Resolution order:
 //  1. Locator QTH → maidenhead.ClusterAnchor directly.
-//  2. Callsign QTH → QRZ locator → maidenhead.ClusterAnchor.
-//  3. Callsign QTH, QRZ fails → DXCC entity centroid (cty.dat) →
+//  2. Callsign QTH → DXCC entity centroid (cty.dat) →
 //     centroidLatLng → maidenhead.ClusterAnchor.
-//  4. All fail → "" (cluster tier skipped; falls back to global).
+//  3. All fail → "" (cluster tier skipped; falls back to global).
 func (e *DxBaselineEngine) deriveOperatorCluster(qth string) string {
 	if qth == "" {
 		return ""
 	}
 	e.mu.RLock()
-	qrz := e.callsignResolver
 	ctyRes := e.ctyResolver
 	e.mu.RUnlock()
-	loc, _, ok := resolveQTHLocator(qth, qrz, ctyRes)
+	loc, _, ok := resolveQTHLocator(qth, ctyRes)
 	if !ok {
 		return ""
 	}
@@ -844,12 +811,11 @@ func (e *DxBaselineEngine) deriveOperatorCluster(qth string) string {
 }
 
 // qthLocationSource records how a QTH was turned into a locator: given
-// directly, looked up in QRZ, or approximated by the DXCC entity centroid.
+// directly or approximated by the DXCC entity centroid.
 type qthLocationSource string
 
 const (
 	qthSourceLocator qthLocationSource = "locator"
-	qthSourceQRZ     qthLocationSource = "qrz"
 	qthSourceDXCC    qthLocationSource = "dxcc"
 )
 
@@ -857,22 +823,16 @@ const (
 // cluster baseline (deriveOperatorCluster) and the Almanac area resolver.
 // Resolution order:
 //  1. qth is a locator (maidenhead.IsLocator) → returned unchanged, source=locator.
-//  2. QRZ lookup yields a valid locator → that locator, source=qrz.
-//  3. cty.dat entity with a non-zero centroid → its 4-char square, source=dxcc.
-//  4. otherwise ok=false.
+//  2. cty.dat entity with a non-zero centroid → its 4-char square, source=dxcc.
+//  3. otherwise ok=false.
 //
-// No normalization is applied here; callers own that. qrz and ctyRes may be nil.
-func resolveQTHLocator(qth string, qrz qrzlookup.Resolver, ctyRes *cty.Resolver) (loc string, source qthLocationSource, ok bool) {
+// No normalization is applied here; callers own that. ctyRes may be nil.
+func resolveQTHLocator(qth string, ctyRes *cty.Resolver) (loc string, source qthLocationSource, ok bool) {
 	if qth == "" {
 		return "", "", false
 	}
 	if maidenhead.IsLocator(qth) {
 		return qth, qthSourceLocator, true
-	}
-	if qrz != nil {
-		if info, err := qrz.LookupInfo(qth); err == nil && maidenhead.IsLocator(info.Locator) {
-			return info.Locator, qthSourceQRZ, true
-		}
 	}
 	if ctyRes != nil {
 		if ent, _, ok := ctyRes.Resolve(qth); ok && ent.Lat != 0 && ent.Lon != 0 {
@@ -1055,8 +1015,14 @@ func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, min
 	// or zero rows matched; the per-band loop then lazily snapshots the
 	// in-memory event ring and falls back to in-memory binning (see the loop).
 	var activityByBinMap map[string][]float64
+	// trendFromBin is the first activity bin the trend may read. A widened
+	// area bins from hub.history only (no Postgres fallback), so bins before
+	// the hub's coverage (retention, or the restart backfill) read zero and
+	// would make every band look "rising".
+	trendFromBin := 0
 	if matchArea != nil {
 		activityByBinMap = buildActivityByBinFromHistoryAt(history, pos, usePos, matchArea, cwMinDb, minutes, now)
+		trendFromBin = hubCoveredFromBin(now, minutes)
 	} else if st != nil {
 		if m, ok := hubActivityByBin(qth, surroundings, history, pos, usePos, cwMinDb, minutes, now); ok {
 			activityByBinMap = m
@@ -1176,9 +1142,8 @@ func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, min
 		}
 		// Keep the FT8-calibrated conditions accumulator (spots_per_min, classifyMode,
 		// avgSnr, distances) pure from RBN CW/RTTY, whose dB is on a different SNR scale
-		// than PSKReporter FT8 SNR (docs/horstprop.md). FT8/FT4 (PSKReporter), "" (legacy)
-		// and "DXCLUSTER" (a source marker, not a mode — RP=0, already counted today) stay
-		// in; real non-FT8 modes (CW, RTTY, PSK*, SSB, … only produced by RBN) are skipped.
+		// than PSKReporter FT8 SNR (docs/horstprop.md). FT8/FT4 (PSKReporter) and "" (legacy)
+		// stay in; real non-FT8 modes (CW, RTTY, PSK*, SSB, … only produced by RBN) are skipped.
 		// RBN spots still reach the live stream (broadcastMsg) and the activity chart.
 		if !conditionsMode {
 			continue
@@ -1370,7 +1335,7 @@ func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, min
 		// meaningful. Backed by the full-window activity series now, not the old
 		// recentEvents path that only ever populated the newest bins.
 		historicalBandSeries := normalizeSeriesTo100(activityByBin)
-		trend, trendDelta := computeTrend(historicalBandSeries)
+		trend, trendDelta := computeTrend(historicalBandSeries[min(trendFromBin, len(historicalBandSeries)):])
 
 		uniqueCount := len(acc.uniqueLinks)
 		repeatRatio := 0.0
@@ -1595,22 +1560,21 @@ func legacyConditionFromStatus(status string, score float64) string {
 
 // isNonConditionsMode reports whether a spot's mode is a real over-the-air mode that the
 // FT8-calibrated conditions accumulator must exclude. RBN CW/RTTY dB is on a different SNR
-// scale than PSKReporter FT8 SNR (docs/horstprop.md), so feeding it to classifyMode / the
+// scale than PSKReporter FT8 SNR, so feeding it to classifyMode / the
 // per-band snr and distance stats would corrupt them (strong CW would mislabel a band
 // "ssb"; +20 dB would create phantom high snr_tier rows). WSPR is likewise excluded: its SNR
 // is on the same 2500 Hz scale as FT8 but WSPR stations transmit at wildly varying power
 // (0.1–100 W+), so raw SNR conflates station capability with propagation. FT8/FT4
-// (PSKReporter), "" (legacy / unset), and "DXCLUSTER" (a source marker, not a real mode —
-// RP=0, already counted in the baseline today) stay in; any other real mode (CW, RTTY, PSK*,
+// (PSKReporter) and "" (legacy / unset) stay in; any other real mode (CW, RTTY, PSK*,
 // SSB, AM, FM, DIGI, WSPR, …) is excluded. Only RBN and WSPR produce those real non-FT8
 // modes today.
 func isNonConditionsMode(md string) bool {
 	switch md { // the feed's own spelling, without the normalising copy
-	case "", "FT8", "FT4", "DXCLUSTER":
+	case "", "FT8", "FT4":
 		return false
 	}
 	switch strings.ToUpper(strings.TrimSpace(md)) {
-	case "", "FT8", "FT4", "DXCLUSTER":
+	case "", "FT8", "FT4":
 		return false
 	}
 	return true
@@ -2002,6 +1966,35 @@ func hubCoversWindow(now int64, minutes int) bool {
 	return true
 }
 
+// hubCoveredFromBin is the index of the first of the window's activityBins
+// that hub.history covers completely: 0 when the hub covers the whole window,
+// activityBins when it covers none of it.
+func hubCoveredFromBin(now int64, minutes int) int {
+	if minutes <= 0 {
+		return 0
+	}
+	windowSec := int64(minutes) * 60
+	binSec := windowSec / activityBins
+	if binSec <= 0 {
+		return 0
+	}
+	windowStart := now - windowSec
+	coverStart := liveHistoryCompleteSince.Load()
+	if liveHistoryRetentionMinutes > 0 {
+		if r := now - int64(liveHistoryRetentionMinutes)*60; r > coverStart {
+			coverStart = r
+		}
+	}
+	if coverStart <= windowStart {
+		return 0
+	}
+	i := int((coverStart - windowStart + binSec - 1) / binSec)
+	if i > activityBins {
+		i = activityBins
+	}
+	return i
+}
+
 // hubActivityByBin is the Postgres activity-by-bin series for a locator qth
 // (its own square, or the 3x3 block with surroundings) computed from
 // hub.history instead, when the hub covers the window. The query it replaces
@@ -2286,7 +2279,7 @@ func liveSegments(start, end int64) [][2]int64 {
 }
 
 // feedsClusterBaseline reports whether m is one of the spots Observe writes
-// into the cluster baseline (PSKReporter FT8/FT4 and DX-cluster). RBN and
+// into the cluster baseline (PSKReporter FT8/FT4). RBN and
 // WSPR share hub.history but never reach Observe — excluded by source, not
 // just by mode, since an RBN digital feed can carry FT8.
 func feedsClusterBaseline(m MQTTMessage) bool {
@@ -2670,7 +2663,7 @@ func normalizeBand(raw string) string {
 }
 
 // bandsInScope is the set of amateur bands HorstReporter analyses (160m–2m).
-// PSKReporter / DX-cluster feeds occasionally carry microwave spots (13cm, 23cm,
+// The PSKReporter feed occasionally carry microwave spots (13cm, 23cm,
 // 70cm, …) whose band strings also end in "m", so normalizeBand passes them
 // through. Trend/hot-band analysis must gate on this set explicitly, otherwise
 // it surfaces out-of-scope bands like "13cm rising".

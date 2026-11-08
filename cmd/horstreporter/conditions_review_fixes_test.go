@@ -44,3 +44,22 @@ func TestBandStatusScoreShrinksTowardBaselineMiddle(t *testing.T) {
 		t.Fatalf("poor, full support: status %q, want red", got)
 	}
 }
+
+func TestHubCoveredFromBin(t *testing.T) {
+	prevRet, prevSince := liveHistoryRetentionMinutes, liveHistoryCompleteSince.Load()
+	t.Cleanup(func() { liveHistoryRetentionMinutes = prevRet; liveHistoryCompleteSince.Store(prevSince) })
+	now := int64(1_800_000_000)
+	liveHistoryCompleteSince.Store(0)
+	liveHistoryRetentionMinutes = 60
+	if got := hubCoveredFromBin(now, 60); got != 0 {
+		t.Fatalf("60 of 60 min covered: got %d, want 0", got)
+	}
+	// 120-min window, 10-min bins: the hub's 60 min cover the newer half.
+	if got := hubCoveredFromBin(now, 120); got != 6 {
+		t.Fatalf("120-min window, 60-min hub: got %d, want 6", got)
+	}
+	liveHistoryCompleteSince.Store(now - 25*60) // restarted 25 min ago
+	if got := hubCoveredFromBin(now, 60); got != 7 {
+		t.Fatalf("hub complete for 25 of 60 min: got %d, want 7 (35 uncovered min = 7 five-min bins)", got)
+	}
+}

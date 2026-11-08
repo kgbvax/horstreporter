@@ -5,6 +5,7 @@ vi.mock('../static/wspr-matrix.js', () => ({ setWsprMatrixVisible: vi.fn() }));
 vi.mock('../static/almanac.js', () => ({ setAlmanacVisible: vi.fn() }));
 
 import { initCondDock, migrateLegacyState, __test } from '../static/cond-dock.js';
+import { state, STREAM_QTH_EVENT } from '../static/state.js';
 import { setBandLabVisible } from '../static/band-lab.js';
 import { setWsprMatrixVisible } from '../static/wspr-matrix.js';
 import { setAlmanacVisible } from '../static/almanac.js';
@@ -153,15 +154,17 @@ describe('cond dock', () => {
         expect(document.activeElement.id).toBe('cond-open');
     });
 
-    it('keeps the locator label current, also after a programmatic change and submit', () => {
-        document.body.insertAdjacentHTML('beforeend', '<form id="fetch-form"></form>');
-        vi.useFakeTimers();
+    it('labels the qth the stream runs for, not a half-typed locator', () => {
         initCondDock();
-        document.getElementById('qth').value = 'jo62wa';
-        document.getElementById('fetch-form').dispatchEvent(new Event('submit'));
-        vi.runAllTimers();
-        vi.useRealTimers();
-        expect(document.getElementById('cond-qth').textContent).toBe('JO62WA');
+        const before = document.getElementById('cond-qth').textContent;
+        document.getElementById('qth').value = 'FN3';
+        document.getElementById('qth').dispatchEvent(new Event('input'));
+        state.streamQth = 'JO32';
+        expect(document.getElementById('cond-qth').textContent).toBe(before);
+        state.streamQth = 'JO62';
+        window.dispatchEvent(new CustomEvent(STREAM_QTH_EVENT, { detail: { qth: 'JO62' } }));
+        expect(document.getElementById('cond-qth').textContent).toBe('JO62');
+        state.streamQth = '';
     });
 
 });

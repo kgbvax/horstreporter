@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"horstreporter/internal/maidenhead"
-	"horstreporter/internal/qrzlookup"
 )
 
 // Reverse Beacon Network (RBN) ingest. RBN is the CW/RTTY analog of PSKReporter: a fleet
@@ -20,15 +19,14 @@ import (
 // empties out, so the activity chart and live stream flatline even though the bands are
 // packed; RBN keeps producing CW/RTTY spots through those windows.
 //
-// Minimal scope (see docs/horstprop.md): RBN spots land in dx_raw_spots with
+// Minimal scope: RBN spots land in dx_raw_spots with
 // source_type='rbn' and a real mode (CW/RTTY), feeding the count-based activity chart and
-// (when QRZ resolves a DX locator) the live stream. RBN's dB is on a different SNR scale
+// the live stream (only for spots that carry locators; without QRZ enrichment RBN spots
+// carry none, so they are persisted for the activity chart only). RBN's dB is on a different SNR scale
 // than PSKReporter FT8 SNR (0–40 dB in a ~500 Hz CW filter vs −24..+5 in 2500 Hz), so RBN is
 // deliberately NOT fed to DxBaselineEngine.Observe and is excluded from the FT8
 // conditions accumulator (isNonConditionsMode in dx_conditions.go) until calibration
-// curves make the scales comparable. This mirrors DX-cluster's optional-QRZ shape but,
-// unlike DX-cluster, skips Observe (DX-cluster RP=0 is baseline-benign; RBN's 0–40 dB
-// would skew the FT8 snr_tier baseline).
+// curves make the scales comparable (RBN's 0–40 dB would skew the FT8 snr_tier baseline).
 
 type rbnAccountingState struct {
 	connectAttempts atomic.Int64
@@ -59,7 +57,6 @@ type rbnConfig struct {
 	ReconnectDelay time.Duration
 	Verbose        bool
 	Callsign       string // required-in-practice: the relay prompts "enter your call" before streaming
-	Resolver       qrzlookup.Resolver
 }
 
 type rbnSpot struct {
@@ -76,8 +73,7 @@ type rbnSpot struct {
 //	DX de W3LPL-#:      14024.0  N0CALL         CW   22 dB   EN91   1234 Z
 //
 // capturing skimmer, frequency (kHz), DX call, mode and dB. The trailing continent/grid
-// and time are ignored; ObservedAt is taken from time.Now() (the live stream is real-time,
-// matching DX-cluster). The skimmer class allows the RBN per-band "-#" / "-<n>" suffix and
+// and time are ignored; ObservedAt is taken from time.Now() (the live stream is real-time). The skimmer class allows the RBN per-band "-#" / "-<n>" suffix and
 // portable callsigns.
 var rbnLinePattern = regexp.MustCompile(`(?i)^DX\s+de\s+([A-Z0-9\-/#]+)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s+([A-Z0-9/\-]+)\s+(CW|RTTY|PSK[0-9]*|FT8|FT4|SSB|AM|FM|DIGI|JT65|JT9|JS8|FST4|WSPR|OLIVIA|CONTESTIA|HELL|MFSK[0-9]*|FSK441|MSK144|Q65|JT4)\s+(\d+)\s*dB`)
 
@@ -127,7 +123,7 @@ func runRBNSession(endpoint string, cfg rbnConfig) error {
 
 	// The raw RBN relay prompts "Please enter your call:" before it streams (the prompt is
 	// NOT newline-terminated, so a Scanner would only yield it at the server's ~30 s idle
-	// close — same shape as the DX-cluster "login:" prompt). Use a raw bufio.Reader byte
+	// close). Use a raw bufio.Reader byte
 	// scan for the prompt, answer with the callsign, then scan for spots on the SAME reader
 	// (so any spots already buffered aren't lost).
 	reader := bufio.NewReaderSize(conn, 128*1024)
@@ -183,7 +179,7 @@ func runRBNSession(endpoint string, cfg rbnConfig) error {
 		}
 		spotsParsed++
 		rbnAccounting.parsedSpots.Add(1)
-		handleRBNSpot(spot, cfg.Resolver)
+		handleRBNSpot(spot)
 	}
 	if err := scanner.Err(); err != nil {
 		if cfg.Verbose {
@@ -199,8 +195,7 @@ func runRBNSession(endpoint string, cfg rbnConfig) error {
 
 // awaitRBNPrompt reads raw bytes until the accumulated (lowercased) tail contains the
 // "your call" substring — robust to phrasing ("Please enter your call" / "enter your call:")
-// and the trailing ": ". Like dxcluster.go's awaitPrompt it works on the non-newline-
-// terminated prompt stream. Bounded by the caller's read deadline.
+// and the trailing ": ". It works on the non-newline-terminated prompt stream. Bounded by the caller's read deadline.
 func awaitRBNPrompt(reader *bufio.Reader) error {
 	needle := "your call"
 	tail := make([]byte, 0, 256)
@@ -254,32 +249,10 @@ func parseRBNSpot(line string, observedAt int64) (rbnSpot, bool) {
 	}, true
 }
 
-func handleRBNSpot(spot rbnSpot, resolver qrzlookup.Resolver) {
+func handleRBNSpot(spot rbnSpot) {
 	band := bandFromFrequencyKHz(spot.FrequencyKHz)
-	skimmerLocator := ""
-	dxLocator := ""
 
-	if resolver != nil {
-		// Skimmer locator is best-effort; not required for the live path.
-		if loc, err := resolver.LookupLocator(spot.Skimmer); err == nil {
-			skimmerLocator = strings.ToUpper(strings.TrimSpace(loc))
-		} else if logLevel == "DEBUG" {
-			logDebug("RBN QRZ lookup failed for skimmer %q: %v", spot.Skimmer, err)
-		}
-
-		// The DX/RX locator is what makes a
-		// spot usable for the live map (isRBNSpotUsableForLive), mirroring DX-cluster.
-		if info, err := resolver.LookupInfo(spot.DXCall); err == nil {
-			dxLocator = strings.ToUpper(strings.TrimSpace(info.Locator))
-			if dxLocator == "" && logLevel == "DEBUG" {
-				logDebug("RBN QRZ lookup returned no locator for DX call %q", spot.DXCall)
-			}
-		} else if logLevel == "DEBUG" {
-			logDebug("RBN QRZ lookup failed for DX call %q: %v", spot.DXCall, err)
-		}
-	}
-
-	// Sender/receiver convention matches DX-cluster (dxcluster.go:304-318): SC = the
+	// Sender/receiver convention (shared with WSPR): SC = the
 	// reporting station (skimmer/spotter), RC = the station being heard (DX). The live map
 	// draws skimmer→DX paths and activity_by_bin matches callsign-targets on
 	// receiver_callsign (the DX being heard).
@@ -287,9 +260,7 @@ func handleRBNSpot(spot rbnSpot, resolver qrzlookup.Resolver) {
 		RP:     spot.DB,
 		T:      spot.ObservedAt,
 		SC:     spot.Skimmer,
-		SL:     skimmerLocator,
 		RC:     spot.DXCall,
-		RL:     dxLocator,
 		B:      band,
 		MD:     spot.Mode,
 		F:      spot.FrequencyKHz,
@@ -298,10 +269,9 @@ func handleRBNSpot(spot rbnSpot, resolver qrzlookup.Resolver) {
 
 	// Persist unconditionally with full fidelity (real frequency, mode, dB, skimmer) so the
 	// count-based activity chart (activity_by_bin, which reads dx_raw_spots regardless of
-	// source_type) benefits even when QRZ is off. RBN does NOT call DxBaselineEngine.Observe:
+	// source_type) benefits even without locators. RBN does NOT call DxBaselineEngine.Observe:
 	// its 0–40 dB CW scale would skew the FT8-calibrated snr_tier baseline (SNR-scale
-	// mismatch, see docs/horstprop.md). This is the deliberate asymmetry vs DX-cluster,
-	// whose RP=0 is baseline-benign.
+	// mismatch, see docs/horstprop.md).
 	if dxBaseline != nil {
 		freq := spot.FrequencyKHz
 		dxBaseline.PersistRawSpot(m, "rbn", spot.Skimmer, &freq, "")
@@ -321,11 +291,48 @@ func handleRBNSpot(spot rbnSpot, resolver qrzlookup.Resolver) {
 	rbnAccounting.forwardedSpots.Add(1)
 }
 
-// isRBNSpotUsableForLive mirrors isDXClusterSpotUsableForLive: a valid band and a resolved
+// isRBNSpotUsableForLive: a valid band and a resolved
 // DX/RX locator are enough for the live map (the skimmer locator is optional).
 func isRBNSpotUsableForLive(m MQTTMessage) bool {
 	if strings.TrimSpace(m.B) == "" {
 		return false
 	}
 	return maidenhead.IsLocator(strings.ToUpper(strings.TrimSpace(m.RL)))
+}
+
+// bandFromFrequencyKHz maps a spot frequency in kHz to its amateur band name, or ""
+// when it falls outside every band.
+func bandFromFrequencyKHz(freq float64) string {
+	switch {
+	case freq >= 1800 && freq < 2000:
+		return "160m"
+	case freq >= 3500 && freq < 4000:
+		return "80m"
+	case freq >= 5250 && freq < 5450:
+		return "60m"
+	case freq >= 7000 && freq < 7300:
+		return "40m"
+	case freq >= 10100 && freq < 10150:
+		return "30m"
+	case freq >= 14000 && freq < 14350:
+		return "20m"
+	case freq >= 18068 && freq < 18168:
+		return "17m"
+	case freq >= 21000 && freq < 21450:
+		return "15m"
+	case freq >= 24890 && freq < 24990:
+		return "12m"
+	case freq >= 28000 && freq < 29700:
+		return "10m"
+	case freq >= 50000 && freq < 54000:
+		return "6m"
+	case freq >= 70000 && freq < 71000:
+		return "4m"
+	case freq >= 144000 && freq < 148000:
+		return "2m"
+	case freq >= 430000 && freq < 440000:
+		return "70cm"
+	default:
+		return ""
+	}
 }

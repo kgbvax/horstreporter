@@ -34,8 +34,6 @@ func TestReporterLocatorForMessage(t *testing.T) {
 	}{
 		{"pskreporter uses RL", MQTTMessage{SL: "JO62", RL: "FN31", Source: "mqtt"}, "FN31"},
 		{"no source defaults to RL", MQTTMessage{SL: "JO62", RL: "FN31"}, "FN31"},
-		{"dxcluster uses SL", MQTTMessage{SL: "JO62", RL: "FN31", Source: "dxcluster"}, "JO62"},
-		{"legacy dxcluster MD uses SL", MQTTMessage{SL: "JO62", RL: "FN31", MD: "DXCLUSTER"}, "JO62"},
 		{"rbn uses SL", MQTTMessage{SL: "jo62", RL: "FN31", Source: "rbn"}, "JO62"},
 		{"wspr uses SL", MQTTMessage{SL: "JO62", RL: "FN31", Source: "wspr"}, "JO62"},
 	}

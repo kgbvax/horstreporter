@@ -11,19 +11,18 @@ import (
 //
 //	event: spots
 //	id: <epoch>-<seq>                                     (live frames only)
-//	data: {"n":<server unix s>,"s":[[loc,band,snr,age,rep?,src?,snd?,rcv?],…]}
+//	data: {"n":<server unix s>,"s":[[loc,band,snr,age,rep?,src?],…]}
 //
 // age = n - spot time (may be negative under clock skew; the client clamps).
-// Trailing empty string elements are trimmed. src: "" mqtt, "d" dxcluster,
-// "r" rbn, "w" wspr, anything else verbatim.
+// Trailing empty string elements are trimmed. src: "" mqtt, "r" rbn, "w" wspr,
+// anything else verbatim. (Slots 6/7, sender/receiver callsigns, were only
+// ever filled for the removed DX-cluster source and are no longer emitted.)
 
 // v2SourceCode maps a sourceType to its v2 code.
 func v2SourceCode(src string) string {
 	switch src {
 	case "", "mqtt":
 		return ""
-	case "dxcluster":
-		return "d"
 	case "rbn":
 		return "r"
 	case "wspr":
@@ -56,18 +55,10 @@ func appendV2String(buf []byte, s string) []byte {
 func appendV2Spot(buf []byte, s Spot, n int64) []byte {
 	rep := s.ReporterLocator
 	src := v2SourceCode(s.SourceType)
-	var snd, rcv string
-	if s.SourceType == "dxcluster" {
-		snd, rcv = s.Sender, s.Receiver
-	}
 
 	// Number of optional string elements to emit after age.
 	extra := 0
 	switch {
-	case rcv != "":
-		extra = 4
-	case snd != "":
-		extra = 3
 	case src != "":
 		extra = 2
 	case rep != "":
@@ -82,7 +73,7 @@ func appendV2Spot(buf []byte, s Spot, n int64) []byte {
 	buf = strconv.AppendInt(buf, int64(s.SNR), 10)
 	buf = append(buf, ',')
 	buf = strconv.AppendInt(buf, n-s.T, 10)
-	for i, v := range [4]string{rep, src, snd, rcv} {
+	for i, v := range [2]string{rep, src} {
 		if i >= extra {
 			break
 		}

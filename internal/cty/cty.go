@@ -1,6 +1,6 @@
 // Package cty parses AD1C cty.dat and resolves a callsign to its DXCC entity
 // (name + primary prefix + continent). It is shared by the HorstReporter backend
-// (to label DX-cluster spots with country + flag) and is independent of QRZ.
+// (DXCC-centroid fallback for the regional baseline's callsign targets) and is independent of QRZ.
 //
 // cty.dat has no ISO/flag data; the primary-prefix → ISO-3166 mapping lives in
 // iso.go (used to render a country flag).

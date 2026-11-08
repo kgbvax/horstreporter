@@ -9,7 +9,6 @@ import (
 
 	"horstreporter/internal/cty"
 	"horstreporter/internal/maidenhead"
-	"horstreporter/internal/qrzlookup"
 )
 
 // Almanac area resolution (plan U1, R4/R5, KTD3): turn a QTH (locator or
@@ -96,8 +95,8 @@ func isAlmanacCallsignShape(s string) bool {
 
 // resolveAlmanacAreaWith resolves qth without caching. Locators are validated
 // strictly and truncated to grid4; callsigns go through resolveQTHLocator
-// (QRZ, then cty.dat centroid). qrz and ctyRes may be nil.
-func resolveAlmanacAreaWith(qth string, qrz qrzlookup.Resolver, ctyRes *cty.Resolver) (almanacArea, error) {
+// (cty.dat centroid). ctyRes may be nil.
+func resolveAlmanacAreaWith(qth string, ctyRes *cty.Resolver) (almanacArea, error) {
 	q := normalizeQTHToken(qth)
 	if q == "" {
 		return almanacArea{}, fmt.Errorf("%w: empty", errAlmanacInvalidQTH)
@@ -116,7 +115,7 @@ func resolveAlmanacAreaWith(qth string, qrz qrzlookup.Resolver, ctyRes *cty.Reso
 	if !isAlmanacCallsignShape(q) {
 		return almanacArea{}, fmt.Errorf("%w: %q is neither a locator nor a callsign", errAlmanacInvalidQTH, q)
 	}
-	loc, src, ok := resolveQTHLocator(q, qrz, ctyRes)
+	loc, src, ok := resolveQTHLocator(q, ctyRes)
 	if !ok {
 		return almanacArea{}, fmt.Errorf("%w: %s", errAlmanacUnresolved, q)
 	}
@@ -142,10 +141,10 @@ func newAlmanacAreaCache() *almanacAreaCache {
 	return &almanacAreaCache{entries: map[string]almanacAreaCacheEntry{}, now: time.Now}
 }
 
-func (c *almanacAreaCache) resolve(qth string, qrz qrzlookup.Resolver, ctyRes *cty.Resolver) (almanacArea, error) {
+func (c *almanacAreaCache) resolve(qth string, ctyRes *cty.Resolver) (almanacArea, error) {
 	key := normalizeQTHToken(qth)
 	if key == "" || maidenhead.IsLocator(key) || !isAlmanacCallsignShape(key) {
-		return resolveAlmanacAreaWith(key, qrz, ctyRes)
+		return resolveAlmanacAreaWith(key, ctyRes)
 	}
 	now := c.now()
 	c.mu.Lock()
@@ -156,7 +155,7 @@ func (c *almanacAreaCache) resolve(qth string, qrz qrzlookup.Resolver, ctyRes *c
 	c.mu.Unlock()
 
 	// Resolve outside the lock: QRZ is a network call.
-	area, err := resolveAlmanacAreaWith(key, qrz, ctyRes)
+	area, err := resolveAlmanacAreaWith(key, ctyRes)
 	ttl := almanacAreaCacheTTL
 	switch {
 	case err != nil:
@@ -185,17 +184,16 @@ func (c *almanacAreaCache) resolve(qth string, qrz qrzlookup.Resolver, ctyRes *c
 // and cty.dat resolvers, cached per engine. A nil engine resolves locators only.
 func (e *DxBaselineEngine) resolveAlmanacArea(qth string) (almanacArea, error) {
 	if e == nil {
-		return resolveAlmanacAreaWith(qth, nil, nil)
+		return resolveAlmanacAreaWith(qth, nil)
 	}
 	e.mu.Lock()
 	if e.almanacAreas == nil {
 		e.almanacAreas = newAlmanacAreaCache()
 	}
 	cache := e.almanacAreas
-	qrz := e.callsignResolver
 	ctyRes := e.ctyResolver
 	e.mu.Unlock()
-	return cache.resolve(qth, qrz, ctyRes)
+	return cache.resolve(qth, ctyRes)
 }
 
 // almanacGridBand keys per-(grid4, band) data: the fold's active pairs and the

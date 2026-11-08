@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { buildGlobalDecision, initBandLab, setBandLabVisible, updateBandLab } from '../static/band-lab.js';
+import { buildGlobalDecision, enabledOverall, initBandLab, setBandLabVisible, updateBandLab } from '../static/band-lab.js';
 import { state } from '../static/state.js';
 
 const GOOD = { label: 'Good: worth turning the radio on', className: 'is-go' };
@@ -143,5 +143,27 @@ describe('Band stats summary', () => {
         setBandLabVisible(true);
         updateBandLab({ force: true });
         expect(document.getElementById('band-lab-summary').textContent).toBe('Enter your locator to see band conditions.');
+    });
+});
+
+describe('enabledOverall', () => {
+    const resp = {
+        overall_score: 20, confidence: 70, status: 'red',
+        bands: [
+            { band: '10m', score: 70, confidence: 80, current_links: 40, status: 'green' },
+            { band: '40m', score: 10, confidence: 70, current_links: 200, status: 'red' },
+        ],
+    };
+
+    it('is the backend overall when every scored band is enabled', () => {
+        expect(enabledOverall(resp, new Set(['10m', '40m', '20m']))).toEqual({ score: 20, confidence: 70, status: 'red' });
+    });
+
+    it('re-derives over the enabled bands so the verdict matches "Best now"', () => {
+        expect(enabledOverall(resp, new Set(['10m', '6m']))).toEqual({ score: 70, confidence: 80, status: 'green' });
+    });
+
+    it('is grey when no scored band is enabled', () => {
+        expect(enabledOverall(resp, new Set(['6m'])).status).toBe('grey');
     });
 });

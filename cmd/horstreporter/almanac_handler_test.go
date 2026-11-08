@@ -26,7 +26,7 @@ func newTestAlmanacService(f *fakeAggStore) (*almanacService, *aggClock, *int64)
 			if strings.EqualFold(qth, "NOCALL1") {
 				return almanacArea{}, errAlmanacUnresolved
 			}
-			return resolveAlmanacAreaWith(qth, nil, nil)
+			return resolveAlmanacAreaWith(qth, nil)
 		},
 		func() int64 { return wm })
 	s.now = clk.now
@@ -222,7 +222,7 @@ func TestAlmanacTimeoutNegativeCache(t *testing.T) {
 }
 
 func TestAlmanacNoStore503(t *testing.T) {
-	s := newAlmanacService(nil, func(q string) (almanacArea, error) { return resolveAlmanacAreaWith(q, nil, nil) }, nil)
+	s := newAlmanacService(nil, func(q string) (almanacArea, error) { return resolveAlmanacAreaWith(q, nil) }, nil)
 	if rec := almanacGet(s, "JO32"); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("no store: %d", rec.Code)
 	}

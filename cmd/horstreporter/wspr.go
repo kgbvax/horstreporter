@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"horstreporter/internal/maidenhead"
-	"horstreporter/internal/qrzlookup"
 )
 
 // wsprUserAgent identifies HorstReporter to the volunteer-run wspr.live
@@ -143,7 +142,6 @@ type wsprConfig struct {
 	Endpoint    string
 	PollSeconds int
 	Verbose     bool
-	Resolver    qrzlookup.Resolver
 }
 
 // wsprSpot is one row from the wspr.rx table (FORMAT JSON).
@@ -316,7 +314,7 @@ func wsprMessageFromRow(s wsprSpot, now int64) (MQTTMessage, bool) {
 		ts = now
 	}
 
-	// Sender/receiver convention matches RBN/DX-cluster: SC = the reporting
+	// Sender/receiver convention matches RBN: SC = the reporting
 	// station (receiver), RC = the station being heard (transmitter). The
 	// live map draws receiver→transmitter paths; activity_by_bin matches
 	// callsign-targets on receiver_callsign (the transmitter being heard).
@@ -345,7 +343,7 @@ func ingestWSPRMessage(m MQTTMessage) {
 	wsprAccounting.parsedSpots.Add(1)
 
 	// Persist unconditionally so the count-based activity chart benefits even
-	// when QRZ is off. WSPR does NOT call DxBaselineEngine.Observe: its SNR is
+	// without a locator. WSPR does NOT call DxBaselineEngine.Observe: its SNR is
 	// on the same scale as FT8 but power varies wildly, so it would skew the
 	// FT8-calibrated snr_tier baseline (reference-only, like RBN).
 	if dxBaseline != nil {

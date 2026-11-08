@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -745,93 +744,6 @@ func TestStreamHandlerMaxClientsCapacity(t *testing.T) {
 	})
 }
 
-func TestCaptureSnapshotHandlerRequiresTarget(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(captureSnapshotHandler))
-	defer server.Close()
-
-	resp, err := http.Get(server.URL)
-	if err != nil {
-		t.Fatalf("Failed to make request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", resp.StatusCode)
-	}
-}
-
-func TestCaptureSnapshotHandlerReturnsFilteredSpots(t *testing.T) {
-	withHubSnapshot(t, func() {
-		now := time.Now().Unix()
-		hub.Lock()
-		hub.history = []MQTTMessage{
-			{
-				SC: "W1AW",
-				RC: "K1JT",
-				SL: "FN31",
-				RL: "FN20",
-				RP: -2,
-				T:  now - 20,
-				B:  "20m",
-				MD: "FT8",
-			},
-			{
-				SC: "W1AW",
-				RC: "DL1ABC",
-				SL: "FN31",
-				RL: "JO32",
-				RP: -12,
-				T:  now - 40,
-				B:  "40m",
-				MD: "FT8",
-			},
-			{
-				SC: "W1AW",
-				RC: "N0CALL",
-				SL: "FN31",
-				RL: "EM10",
-				RP: -4,
-				T:  now - 50,
-				B:  "20m",
-				MD: "DXCLUSTER",
-			},
-		}
-		hub.Unlock()
-
-		server := httptest.NewServer(http.HandlerFunc(captureSnapshotHandler))
-		defer server.Close()
-
-		url := server.URL + "?qth=W1AW&snapshot_at=" + strconv.FormatInt(now, 10) + "&minutes=15&min_snr_mode=ssb&ssb_min_db=-6&selected_band=20m&enabled_bands=20m&include_dxcluster=false"
-		resp, err := http.Get(url)
-		if err != nil {
-			t.Fatalf("Failed to make request: %v", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("expected 200, got %d", resp.StatusCode)
-		}
-
-		var payload captureSnapshotResponse
-		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-			t.Fatalf("failed to decode payload: %v", err)
-		}
-
-		if payload.QTH != "W1AW" {
-			t.Fatalf("expected target W1AW, got %q", payload.QTH)
-		}
-		if payload.Count != 1 {
-			t.Fatalf("expected 1 filtered spot, got %d", payload.Count)
-		}
-		if len(payload.Spots) != 1 {
-			t.Fatalf("expected exactly one spot in payload, got %d", len(payload.Spots))
-		}
-		if payload.Spots[0].Locator != "FN20" {
-			t.Fatalf("expected retained spot locator FN20, got %q", payload.Spots[0].Locator)
-		}
-	})
-}
-
 func TestDxConditionsHandlerRequiresTarget(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(dxConditionsHandler))
 	defer server.Close()
@@ -1358,16 +1270,17 @@ func TestServerHelperFunctions(t *testing.T) {
 		}
 	})
 
-	t.Run("toStreamSpot includes callsigns only for dxcluster spots", func(t *testing.T) {
-		// The DX cluster marker tooltip needs the DX/spotter callsigns; regular
-		// spots stay trimmed (senders are not needed by any client-side render).
-		dxc := toStreamSpot(Spot{SourceType: "dxcluster", Sender: "DL1ABC", Receiver: "JA1XYZ"})
-		if dxc.Sender != "DL1ABC" || dxc.Receiver != "JA1XYZ" {
-			t.Fatalf("expected dxcluster callsigns on the wire, got %+v", dxc)
-		}
-		regular := toStreamSpot(Spot{Sender: "DL1ABC", Receiver: "JA1XYZ"})
-		if regular.Sender != "" || regular.Receiver != "" {
-			t.Fatalf("expected regular spot to stay trimmed, got %+v", regular)
+	t.Run("toStreamSpot never carries callsigns", func(t *testing.T) {
+		// Senders/receivers are not needed by any client-side render; the
+		// stream stays locator-level for every source.
+		for _, src := range []string{"", "mqtt", "rbn", "wspr"} {
+			b, err := json.Marshal(toStreamSpot(Spot{SourceType: src, Sender: "DL1ABC", Receiver: "JA1XYZ"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(b), "DL1ABC") || strings.Contains(string(b), "JA1XYZ") {
+				t.Fatalf("source %q: callsigns leaked onto the wire: %s", src, b)
+			}
 		}
 	})
 
