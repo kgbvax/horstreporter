@@ -1160,8 +1160,7 @@ initUI();
     initRbnSpotsToggle();
     initWsprSpotsToggle();
 
-    const initialProjection = savedProjection;
-    const projRadio = document.querySelector(`input[name="projection-select"][value="${initialProjection}"]`);
+    const projRadio = document.querySelector(`input[name="projection-select"][value="${savedProjection}"]`);
     if (projRadio) projRadio.checked = true;
 
     // The country outlines (world-slim.geojson, ~0.6 MB) gate the Mercator
@@ -1172,7 +1171,7 @@ initUI();
     // each overlay appears when its data is ready. Azimuthal mode keeps waiting, because
     // nothing can be drawn without the outlines.
     const overlaysReady = (async () => {
-        await applyProjectionMode(initialProjection);
+        await applyProjectionMode(savedProjection);
         syncProjectionCenterToActiveQth();
 
         const dxccToggle = document.getElementById('show-dxcc-labels');
@@ -1180,7 +1179,7 @@ initUI();
 
         await syncMercatorOverlays(true);
     })();
-    if (initialProjection === 'azimuthal') {
+    if (savedProjection === 'azimuthal') {
         await overlaysReady;
     } else {
         overlaysReady.catch((err) => { console.warn('Initial map overlays failed:', err); });

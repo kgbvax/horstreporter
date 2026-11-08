@@ -254,8 +254,6 @@ func parseRBNSpot(line string, observedAt int64) (rbnSpot, bool) {
 
 func handleRBNSpot(spot rbnSpot) {
 	band := bandFromFrequencyKHz(spot.FrequencyKHz)
-	skimmerLocator := ""
-	dxLocator := ""
 
 	// Sender/receiver convention matches DX-cluster (dxcluster.go:304-318): SC = the
 	// reporting station (skimmer/spotter), RC = the station being heard (DX). The live map
@@ -265,9 +263,7 @@ func handleRBNSpot(spot rbnSpot) {
 		RP:     spot.DB,
 		T:      spot.ObservedAt,
 		SC:     spot.Skimmer,
-		SL:     skimmerLocator,
 		RC:     spot.DXCall,
-		RL:     dxLocator,
 		B:      band,
 		MD:     spot.Mode,
 		F:      spot.FrequencyKHz,

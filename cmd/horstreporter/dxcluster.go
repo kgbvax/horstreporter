@@ -286,16 +286,12 @@ func parseDXClusterSpot(line string, observedAt int64) (dxClusterSpot, bool) {
 
 func handleDXClusterSpot(spot dxClusterSpot) {
 	band := bandFromFrequencyKHz(spot.FrequencyKHz)
-	spotterLocator := ""
-	dxLocator := ""
 
 	m := MQTTMessage{
 		RP:     0,
 		T:      spot.ObservedAt,
 		SC:     spot.Spotter,
-		SL:     spotterLocator,
 		RC:     spot.DXCall,
-		RL:     dxLocator,
 		B:      band,
 		MD:     "DXCLUSTER",
 		F:      spot.FrequencyKHz,
