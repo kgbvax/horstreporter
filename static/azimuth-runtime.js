@@ -1,3 +1,5 @@
+import { state as appState } from './state.js';
+import { regionForLocatorCached } from './utils.js';
 import { bandColors, getCountryColoringEnabled, getCountryFillForFeature, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, gridSnrOpacity, topQuartileMean, locatorToBounds, getGridResolution, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
 import { radialLine, strokeCircle } from './canvas-draw.js';
 import { dataNow, GRAYLINE_BUCKET_MS } from './data-now.js';
@@ -452,7 +454,10 @@ function collectGridSquares(visibleSpots, resolution) {
     // on every frame.
     const squareData = {};
     visibleSpots.forEach(spot => {
-        if (String(spot?.sourceType || '').toLowerCase() === 'dxcluster') return;
+        // Grid squares are FT8/RBN reports only, as in Mercator (renderers.js
+        // splitSpotSources): DX cluster and WSPR spots are drawn as markers.
+        const src = String(spot?.sourceType || '').toLowerCase();
+        if (src === 'dxcluster' || src === 'wspr') return;
         let loc = (spot.locator || '').substring(0, resolution);
         if (loc.length < resolution) loc = (spot.locator || '').substring(0, 4);
         if (loc.length < 4) return;
@@ -572,11 +577,19 @@ export function selectProminentDxccLabels(featureCollection, center, options = {
 }
 
 function getFilteredSpots(spots, renderCtx) {
+    const { filterBand, filterRegion } = renderCtx;
     return spots.filter(spot => {
-        if (renderCtx.minSnrMode === 'ssb' && spot.snr < renderCtx.ssbMinDb) return false;
-        if (renderCtx.minSnrMode === 'cw' && spot.snr < renderCtx.cwMinDb) return false;
+        // The SSB/CW floors are FT8-calibrated: WSPR and DX cluster spots are
+        // exempt, as in Mercator and the session ring.
+        const src = String(spot?.sourceType || '').toLowerCase();
+        const snrExempt = src === 'wspr' || src === 'dxcluster';
+        if (!snrExempt && renderCtx.minSnrMode === 'ssb' && spot.snr < renderCtx.ssbMinDb) return false;
+        if (!snrExempt && renderCtx.minSnrMode === 'cw' && spot.snr < renderCtx.cwMinDb) return false;
         if (!renderCtx.enabledBands.has(spot.band)) return false;
         if (renderCtx.selectedBand !== 'all' && spot.band !== renderCtx.selectedBand) return false;
+        // Matrix drill-down (band x region), as in Mercator.
+        if (filterBand && spot.band !== filterBand) return false;
+        if (filterRegion && regionForLocatorCached(spot.locator) !== filterRegion) return false;
         return true;
     });
 }
@@ -1849,6 +1862,8 @@ export function renderAzimuthScene({ spots = [], style, dataNowMs } = {}) {
         cwMinDb: parseInt(document.getElementById('cw-min-db')?.value || '-15', 10),
         selectedBand: getSelectedBand(),
         enabledBands: getEnabledBands(),
+        filterBand: appState.drillDownBand || '',
+        filterRegion: appState.drillDownRegion || '',
         maxClusterDist: Math.max(100, parseInt(document.getElementById('cluster-distance')?.value || '500', 10) || 500)
     };
 

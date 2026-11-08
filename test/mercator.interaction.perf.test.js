@@ -52,6 +52,8 @@ vi.mock('../static/ui.js', () => ({
 }));
 
 vi.mock('../static/renderers.js', () => ({
+    visibleMapSpots: (spots) => spots || [],
+    setRailSpanOverride: vi.fn(),
     updateMapVisualization: vi.fn(),
     updateBandLabels: vi.fn(),
     refreshBandLabels: vi.fn(),
@@ -70,6 +72,8 @@ vi.mock('../static/band-lab.js', () => ({
 }));
 
 vi.mock('../static/state.js', () => ({
+    STREAM_QTH_EVENT: 'horst:stream-qth',
+    panelQth: () => '',
     state: {
         liveSpots: [],
         renderPending: false,

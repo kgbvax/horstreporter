@@ -42,24 +42,37 @@ var dxBaselineMaxEvents = defaultDxBaselineMaxEvents
 // append path. Callers must treat the slice as read-only; engines read it but
 // never retain it.
 func snapshotHubHistoryWindow(now int64, minutes int) ([]MQTTMessage, func()) {
-	cutoff := now - int64(minutes)*60
 	hub.RLock()
-	idx := sort.Search(len(hub.history), func(i int) bool {
-		return hub.history[i].T >= cutoff
-	})
+	idx := historyWindowStartLocked(now - int64(minutes)*60)
 	hist := hub.windowFromLocked(idx)
 	hub.RUnlock()
 	return hist, func() {}
 }
 
+// historyWindowOrderSlackSeconds is how far out of order reception times
+// arrive in hub.history. History is in arrival order, but T is the reporter's
+// reception time and reporters upload in batches minutes later, so near the
+// cutoff the T >= cutoff predicate is not monotone and a plain binary search
+// lands inside the mixed stretch, dropping in-window reports that arrived
+// before an older one.
+const historyWindowOrderSlackSeconds = 300
+
+// historyWindowStartLocked is the first history index a window starting at
+// cutoff must include: the binary search runs on cutoff minus the ordering
+// slack, so the view may start with a few messages older than cutoff. Every
+// reader filters on T itself (liveStart <= T <= now). Caller holds hub's lock.
+func historyWindowStartLocked(cutoff int64) int {
+	lo := cutoff - historyWindowOrderSlackSeconds
+	return sort.Search(len(hub.history), func(i int) bool {
+		return hub.history[i].T >= lo
+	})
+}
+
 // snapshotHubHistoryWindowSeq is snapshotHubHistoryWindow plus the sequence
 // numbers the per-area index keys on.
 func snapshotHubHistoryWindowSeq(now int64, minutes int) historyWindow {
-	cutoff := now - int64(minutes)*60
 	hub.RLock()
-	idx := sort.Search(len(hub.history), func(i int) bool {
-		return hub.history[i].T >= cutoff
-	})
+	idx := historyWindowStartLocked(now - int64(minutes)*60)
 	win := historyWindow{
 		msgs:     hub.windowFromLocked(idx),
 		firstSeq: hub.baseSeq + uint64(idx) + 1,
@@ -1055,8 +1068,14 @@ func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, min
 	// or zero rows matched; the per-band loop then lazily snapshots the
 	// in-memory event ring and falls back to in-memory binning (see the loop).
 	var activityByBinMap map[string][]float64
+	// trendFromBin is the first activity bin the trend may read. A widened
+	// area bins from hub.history only (no Postgres fallback), so bins before
+	// the hub's coverage (retention, or the restart backfill) read zero and
+	// would make every band look "rising".
+	trendFromBin := 0
 	if matchArea != nil {
 		activityByBinMap = buildActivityByBinFromHistoryAt(history, pos, usePos, matchArea, cwMinDb, minutes, now)
+		trendFromBin = hubCoveredFromBin(now, minutes)
 	} else if st != nil {
 		if m, ok := hubActivityByBin(qth, surroundings, history, pos, usePos, cwMinDb, minutes, now); ok {
 			activityByBinMap = m
@@ -1370,7 +1389,7 @@ func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, min
 		// meaningful. Backed by the full-window activity series now, not the old
 		// recentEvents path that only ever populated the newest bins.
 		historicalBandSeries := normalizeSeriesTo100(activityByBin)
-		trend, trendDelta := computeTrend(historicalBandSeries)
+		trend, trendDelta := computeTrend(historicalBandSeries[min(trendFromBin, len(historicalBandSeries)):])
 
 		uniqueCount := len(acc.uniqueLinks)
 		repeatRatio := 0.0
@@ -2000,6 +2019,35 @@ func hubCoversWindow(now int64, minutes int) bool {
 		return false
 	}
 	return true
+}
+
+// hubCoveredFromBin is the index of the first of the window's activityBins
+// that hub.history covers completely: 0 when the hub covers the whole window,
+// activityBins when it covers none of it.
+func hubCoveredFromBin(now int64, minutes int) int {
+	if minutes <= 0 {
+		return 0
+	}
+	windowSec := int64(minutes) * 60
+	binSec := windowSec / activityBins
+	if binSec <= 0 {
+		return 0
+	}
+	windowStart := now - windowSec
+	coverStart := liveHistoryCompleteSince.Load()
+	if liveHistoryRetentionMinutes > 0 {
+		if r := now - int64(liveHistoryRetentionMinutes)*60; r > coverStart {
+			coverStart = r
+		}
+	}
+	if coverStart <= windowStart {
+		return 0
+	}
+	i := int((coverStart - windowStart + binSec - 1) / binSec)
+	if i > activityBins {
+		i = activityBins
+	}
+	return i
 }
 
 // hubActivityByBin is the Postgres activity-by-bin series for a locator qth

@@ -9,7 +9,7 @@ vi.mock('../static/perf.js', () => ({
 vi.mock('../static/map.js', () => ({ map: {} }));
 
 import { readFileSync } from 'node:fs';
-import { bandActivity, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, sparkSpanLabel } from '../static/renderers.js';
+import { bandActivity, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, sparkSpanLabel, setRailSpanOverride } from '../static/renderers.js';
 
 const ctx = { minSnrMode: 'all', ssbMinDb: 0, cwMinDb: -15 };
 
@@ -199,5 +199,20 @@ describe('band rail time scale', () => {
         slider.value = '60';
         slider.dispatchEvent(new Event('input', { bubbles: true }));
         expect(document.querySelector('.band-rail-time-span').textContent).toBe('1 h');
+    });
+});
+
+describe('rail span override (Time Travel)', () => {
+    afterEach(() => setRailSpanOverride(null));
+
+    it('bins over the override instead of the Max Spot Age slider', () => {
+        document.body.innerHTML = '<input id="minutes" value="60">';
+        // 7.5 min before the newest spot: middle bin of a 15 min span, but a
+        // late bin of the 60 min slider span.
+        const spots = [{ band: '20m', snr: 0, t: 1000 }, { band: '20m', snr: 0, t: 1000 - 450 }];
+        setRailSpanOverride(15);
+        expect(bandActivity(spots, ctx).get('20m').bins[7]).toBe(1);
+        setRailSpanOverride(null);
+        expect(bandActivity(spots, ctx).get('20m').bins[7]).toBe(0);
     });
 });

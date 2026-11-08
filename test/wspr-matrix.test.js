@@ -13,7 +13,7 @@ vi.mock('../static/utils.js', () => ({
 }));
 
 import { initWsprMatrix, setWsprMatrixVisible, setRowExtras, refreshMatrix, __test } from '../static/wspr-matrix.js';
-import { state } from '../static/state.js';
+import { state, STREAM_QTH_EVENT } from '../static/state.js';
 
 const {
     renderLookCell,
@@ -402,7 +402,7 @@ describe('wspr-matrix (Propagation) panel', () => {
         expect(calls.length).toBe(1);
     });
 
-    it('changing QTH triggers a re-poll with the new QTH', async () => {
+    it('the stream starting for a new QTH triggers a re-poll with it', async () => {
         const calls = [];
         global.fetch = vi.fn(async (url) => {
             calls.push(url);
@@ -415,10 +415,16 @@ describe('wspr-matrix (Propagation) panel', () => {
         expect(calls.length).toBe(1);
         expect(calls[0]).toContain('qth=JO32');
 
+        // Typing alone does not re-poll; the stream starting for FN31 does.
         const qthInput = document.getElementById('qth');
         qthInput.value = 'FN31';
         qthInput.dispatchEvent(new Event('change'));
         await new Promise((r) => setTimeout(r, 0));
+        expect(calls.length).toBe(1);
+        state.streamQth = 'FN31';
+        window.dispatchEvent(new CustomEvent(STREAM_QTH_EVENT, { detail: { qth: 'FN31' } }));
+        await new Promise((r) => setTimeout(r, 0));
+        state.streamQth = '';
         expect(calls.length).toBe(2);
         expect(calls[1]).toContain('qth=FN31');
     });

@@ -113,6 +113,26 @@ function buildFilterCtx() {
     };
 }
 
+// The spots the map's own layers would show under the current filters: Min
+// SNR (WSPR and DX cluster exempt), enabled bands, band focus and the matrix
+// drill-down. For overlays that draw spots outside the grid/marker layers
+// (the timeline afterglow), so they cannot show bands the map hides.
+export function visibleMapSpots(spots, filterCtx = buildFilterCtx()) {
+    if (!Array.isArray(spots) || spots.length === 0) return [];
+    const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands, filterBand, filterRegion } = filterCtx;
+    return spots.filter((spot) => {
+        const src = String(spot?.sourceType || '').toLowerCase();
+        const snrExempt = src === 'wspr' || src === 'dxcluster';
+        if (!snrExempt && minSnrMode === 'ssb' && spot.snr < ssbMinDb) return false;
+        if (!snrExempt && minSnrMode === 'cw' && spot.snr < cwMinDb) return false;
+        if (enabledBands && !enabledBands.has(spot.band)) return false;
+        if (selectedBand && selectedBand !== 'all' && spot.band !== selectedBand) return false;
+        if (filterBand && spot.band !== filterBand) return false;
+        if (filterRegion && regionForLocatorCached(spot.locator) !== filterRegion) return false;
+        return true;
+    });
+}
+
 // resetRenderFingerprint forces the next render to rebuild the heat layer even
 // if the spot set looks identical. Called on stream stop and projection switch
 // so a restarted/cleared stream always redraws.
@@ -508,7 +528,7 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
     for (const a of activity.values()) for (const v of a.line) if (v > sparkPeak) sparkPeak = v;
     // The dashed "normal for this hour" line, in spots per bin like the trend.
     // It joins the shared peak so it stays on the chart when activity is below it.
-    const binMinutes = (Number(document.getElementById('minutes')?.value) || 15) / SPARK_BINS;
+    const binMinutes = railSpanMinutes() / SPARK_BINS;
     const normals = new Map();
     for (const band of enabledBands) {
         const perMin = bandNormalRate ? bandNormalRate(band) : null;
@@ -580,6 +600,19 @@ export function updateBandLabels(spots, filterCtx = null, activeBands = null) {
 
 const SPARK_BINS = 15;
 
+// Span of the rail sparklines in minutes: the Max Spot Age slider, or a fixed
+// span while a replay feeds the rail (the timeline's moments always cover
+// MOMENT_WINDOW_SECONDS, so a 60 min slider left 3/4 of every line empty).
+let railSpanOverrideMinutes = null;
+export function setRailSpanOverride(minutes) {
+    railSpanOverrideMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : null;
+    updateRailTimeAnchor();
+}
+function railSpanMinutes() {
+    if (railSpanOverrideMinutes) return railSpanOverrideMinutes;
+    return Number(typeof document !== 'undefined' ? document.getElementById('minutes')?.value : NaN) || 15;
+}
+
 // "15 min", "1 h": the span of the sparklines (max spot age).
 export function sparkSpanLabel(minutes) {
     const m = Math.max(1, Math.round(Number(minutes) || 15));
@@ -589,7 +622,7 @@ export function sparkSpanLabel(minutes) {
 // The rail's time scale: the label at the foot of the hairline that marks
 // where the sparklines start.
 function updateRailTimeAnchor() {
-    const span = sparkSpanLabel(document.getElementById('minutes')?.value);
+    const span = sparkSpanLabel(railSpanMinutes());
     const label = document.querySelector('.band-rail-time-span');
     if (label) label.textContent = span;
     const row = document.querySelector('.band-rail-time');
@@ -620,7 +653,7 @@ export function bandActivity(spots, ctx) {
         const t = spotEpochSeconds(s);
         if (t > tMax) tMax = t;
     }
-    const span = 60 * (Number(document.getElementById('minutes')?.value) || 15);
+    const span = 60 * railSpanMinutes();
     const t0 = tMax - span;
     for (const s of spots) {
         let a = out.get(s.band);
@@ -855,7 +888,7 @@ function renderActiveArea(regularSpots, maxMinutes, filterCtx, layer) {
     const timer = startPerfTimer();
 
     // Item 3: use passed filterCtx instead of re-reading DOM
-    const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands } = filterCtx;
+    const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands, filterBand, filterRegion } = filterCtx;
     let maxClusterDist = parseInt(document.getElementById('cluster-distance')?.value, 10);
     if (isNaN(maxClusterDist) || maxClusterDist < 100) maxClusterDist = 500;
 
@@ -868,6 +901,9 @@ function renderActiveArea(regularSpots, maxMinutes, filterCtx, layer) {
         if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
         if (!enabledBands.has(spot.band)) return;
         if (selectedBand !== 'all' && spot.band !== selectedBand) return;
+        // Matrix drill-down (band x region), as in the grid style.
+        if (filterBand && spot.band !== filterBand) return;
+        if (filterRegion && regionForLocatorCached(spot.locator) !== filterRegion) return;
 
         if (!pointsByBand[spot.band]) {
             pointsByBand[spot.band] = [];

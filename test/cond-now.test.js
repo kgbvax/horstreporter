@@ -75,6 +75,7 @@ describe('formatFactor', () => {
         [0, '×0'], [0.04, '×0'], [0.05, '×0.1'], [0.12, '×0.1'], [0.41, '×0.4'], [0.89, '×0.9'],
         [0.9, '×1'], [0.95, '×1'], [1.1, '×1'], [1.11, '×1.1'], [2.37, '×2.4'],
         [9.96, '×10'], [12.6, '×13'], [99, '×99'], [150, '>×99'],
+        [1.47, '×1.47'], [1.5, '×1.50'], [0.66, '×0.66'], [0.7, '×0.70'], [1.6, '×1.6'], [0.6, '×0.6'],
     ])('%s → %s', (ratio, text) => {
         expect(formatFactor(ratio)).toBe(text);
     });
@@ -109,7 +110,7 @@ describe('reportsPair', () => {
 describe('reportsTitle', () => {
     it('keeps the exact numbers for the tooltip', () => {
         expect(reportsTitle(row({ activity_level: 'above', regional_spots: 1234, regional_expected: 812.4, activity_ratio: 1.5191 })))
-            .toBe('1,234 reports · normal 812 · ×1.52');
+            .toBe('1,234 station reports in your region · normal 812 · ×1.52');
         expect(reportsTitle(row(null))).toBe('');
     });
 });
@@ -118,7 +119,7 @@ describe('row extras', () => {
     it('stacks verdict and pair under the band name, and adds the plot cell', () => {
         getBandRow.mockReturnValueOnce(row({ activity_level: 'below', regional_spots: 3, regional_expected: 9, activity_ratio: 0.33 }));
         const header = __test.extras.rowHeader('20m');
-        expect(header).toBe('<span class="cond-band-verdict">quiet</span><span class="cond-band-pair" title="3 reports · normal 9 · ×0.33">3 · ×0.3</span>');
+        expect(header).toBe('<span class="cond-band-verdict">quiet</span><span class="cond-band-pair" title="3 station reports in your region · normal 9 · ×0.33">3 · ×0.3</span>');
         expect(__test.extras.cells('20m')).toContain('<canvas class="cond-mini" data-band="20m"');
         expect(__test.extras.columns).toHaveLength(1);
     });

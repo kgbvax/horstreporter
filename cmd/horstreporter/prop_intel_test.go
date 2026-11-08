@@ -244,7 +244,7 @@ func TestAtypicalConfidence(t *testing.T) {
 // TestAssignFlavorUnavailable verifies AE6/R9: FT8 climatology unavailable →
 // "atypical-wspr-only" with ft8Ref "unavailable".
 func TestAssignFlavorUnavailable(t *testing.T) {
-	flavor, ref := assignFlavor("17m", "OC", 10, nil)
+	flavor, ref := assignFlavor("17m", "OC", 10, nil, 1)
 	if flavor != "atypical-wspr-only" {
 		t.Errorf("flavor = %q, want atypical-wspr-only", flavor)
 	}
@@ -260,7 +260,7 @@ func TestAssignFlavorBoth(t *testing.T) {
 			Mean: 5, StdDev: 2, Today: 20, SampleDays: 30,
 		},
 	}
-	flavor, ref := assignFlavor("15m", "SA", 10, ft8Clim)
+	flavor, ref := assignFlavor("15m", "SA", 10, ft8Clim, 1)
 	if flavor != "atypical-both" {
 		t.Errorf("flavor = %q, want atypical-both", flavor)
 	}
@@ -276,7 +276,7 @@ func TestAssignFlavorSilentFT8(t *testing.T) {
 			Mean: 10, StdDev: 3, Today: 0, SampleDays: 30,
 		},
 	}
-	flavor, ref := assignFlavor("10m", "AF", 10, ft8Clim)
+	flavor, ref := assignFlavor("10m", "AF", 10, ft8Clim, 1)
 	if flavor != "atypical-wspr-silent-ft8" {
 		t.Errorf("flavor = %q, want atypical-wspr-silent-ft8", flavor)
 	}
@@ -775,5 +775,37 @@ func TestPropIntelSummaryAlmanacDataPoor(t *testing.T) {
 				t.Fatalf("almanac present for data-poor area: %s", rr.Body.String())
 			}
 		})
+	}
+}
+
+// The cached FT8 Today count covers only part of the slot (or none of it):
+// compare it with the mean scaled to that part, and don't call FT8 silent
+// from a slot the cache never saw.
+func TestAssignFlavorPartialSlot(t *testing.T) {
+	ft8Clim := map[regionBaselineKey]regionCalendarStatRow{
+		{"15m", "AS", 21}: {Band: "15m", Region: "AS", SlotOfDay: 21, Mean: 120, StdDev: 30, SampleDays: 20, Today: 0},
+	}
+	if f, _ := assignFlavor("15m", "AS", 21, ft8Clim, 0); f != "atypical-wspr-only" {
+		t.Fatalf("slot not seen by the cache: flavor %q, want atypical-wspr-only", f)
+	}
+	ft8Clim[regionBaselineKey{"15m", "AS", 21}] = regionCalendarStatRow{Band: "15m", Region: "AS", SlotOfDay: 21, Mean: 120, StdDev: 30, SampleDays: 20, Today: 25}
+	// 25 reports in the first 6 minutes (20%) of a slot that averages 120 is
+	// on par with the 24 expected for that part of the slot.
+	if f, _ := assignFlavor("15m", "AS", 21, ft8Clim, 0.2); f != "atypical-wspr-only" {
+		t.Fatalf("on-par partial slot: flavor %q, want atypical-wspr-only", f)
+	}
+	ft8Clim[regionBaselineKey{"15m", "AS", 21}] = regionCalendarStatRow{Band: "15m", Region: "AS", SlotOfDay: 21, Mean: 120, StdDev: 30, SampleDays: 20, Today: 60}
+	if f, _ := assignFlavor("15m", "AS", 21, ft8Clim, 0.2); f != "atypical-both" {
+		t.Fatalf("60 in 20%% of a 120 slot: flavor %q, want atypical-both", f)
+	}
+}
+
+func TestFT8TodaySlotFraction(t *testing.T) {
+	now := int64(1_800_000_000) - int64(1_800_000_000)%1800 + 1200 // 20 min into a slot
+	if got := ft8TodaySlotFraction(now-1500, now); got != 0 {
+		t.Fatalf("loaded before the slot: %v, want 0", got)
+	}
+	if got := ft8TodaySlotFraction(now-600, now); got < 0.333 || got > 0.334 {
+		t.Fatalf("loaded 10 min into the slot: %v, want 1/3", got)
 	}
 }

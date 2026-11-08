@@ -1,4 +1,4 @@
-import { state } from './state.js';
+import { state, panelQth } from './state.js';
 import { bandColors, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds, haversineKm, hexToRgba } from './utils.js';
 import { dashedLine, fillCircle } from './canvas-draw.js';
 import { parseAreaPayload } from './live-area.js';
@@ -7,7 +7,10 @@ const UPDATE_THROTTLE_MS = 300;
 const DX_FETCH_INTERVAL_MS = 15000;
 const ACTIVITY_BINS = 12;
 const TIME_RANGE_KEY = 'bandLabTimeRangeMinutes';
-const BAND_LAB_TIME_RANGE_MINUTES = [15, 30, 60, 120];
+// Capped at 1 h: the live counts, verdict and plot come from the in-memory
+// window (live history retention, 60 min by default), so a 2 h choice silently
+// covered 1 h.
+const BAND_LAB_TIME_RANGE_MINUTES = [15, 30, 60];
 
 // SNR thresholds from the Display section (src/SnrThresholds.svelte). Only the
 // slider for the active min-SNR mode is mounted; the other value lives in the
@@ -147,7 +150,7 @@ export function updateBandLab(options = {}) {
     const summaryEl = document.getElementById('band-lab-summary');
     if (!summaryEl) return;
 
-    const qth = String(document.getElementById('qth')?.value || '').trim().toUpperCase();
+    const qth = panelQth();
     const minutes = getBandLabLookbackMinutes();
     const surroundings = document.getElementById('surroundings')?.checked === true;
 
@@ -310,9 +313,11 @@ function renderSummary(summaryEl, options = {}) {
         return;
     }
 
-    const score = Number(resp.overall_score || 0);
-    const confidence = confidence01(resp.confidence);
-    const { bestBands, recBands } = enabledBestBands(resp, getEnabledBands());
+    const enabled = getEnabledBands();
+    const overall = enabledOverall(resp, enabled);
+    const score = overall.score;
+    const confidence = confidence01(overall.confidence);
+    const { bestBands, recBands } = enabledBestBands(resp, enabled);
 
     const top = recBands.length > 0 ? recBands : bestBands;
     const recommendation = top.length > 0
@@ -324,7 +329,7 @@ function renderSummary(summaryEl, options = {}) {
     // populated whenever any band has spots — feeding it here would let the
     // verdict pass with zero recommended bands. The "Best now" line keeps the
     // fallback.
-    const decision = buildGlobalDecision(resp.status, confidence, recBands.length);
+    const decision = buildGlobalDecision(overall.status, confidence, recBands.length);
     const confidencePct = Math.round(confidence * 100);
 
     summaryEl.innerHTML = `
@@ -337,6 +342,35 @@ function renderSummary(summaryEl, options = {}) {
             <div class="band-lab-summary-reco">${recommendation}</div>
         </div>
     `;
+}
+
+// Overall score / confidence / status over the user's enabled bands, so the
+// verdict and Score describe the same bands as "Best now" below them. Mirrors
+// dx_conditions.go: a current_links-weighted mean of the band scores and
+// confidences, then classifyOverallStatus (grey below 15 confidence, green
+// >= 65, yellow >= 35, else red). With every scored band enabled (or no
+// per-band list) it is the backend's own overall.
+export function enabledOverall(resp, enabled) {
+    const backend = { score: Number(resp?.overall_score || 0), confidence: resp?.confidence, status: resp?.status };
+    const all = Array.isArray(resp?.bands) ? resp.bands.filter(Boolean) : null;
+    if (!all || !enabled || all.every((b) => enabled.has(b.band))) return backend;
+    const kept = all.filter((b) => enabled.has(b.band));
+    // Without per-band link counts there is nothing to re-weight with.
+    if (kept.length > 0 && !kept.some((b) => Number.isFinite(Number(b.current_links)))) return backend;
+    let w = 0, sw = 0, cw = 0;
+    for (const b of kept) {
+        const links = Number(b.current_links) || 0;
+        w += links;
+        sw += (Number(b.score) || 0) * links;
+        cw += (Number(b.confidence) || 0) * links;
+    }
+    const score = w > 0 ? Math.round((sw / w) * 10) / 10 : 0;
+    const confidence = w > 0 ? Math.round((cw / w) * 10) / 10 : 0;
+    let status = 'red';
+    if (kept.length === 0 || confidence < 15) status = 'grey';
+    else if (score >= 65) status = 'green';
+    else if (score >= 35) status = 'yellow';
+    return { score, confidence, status };
 }
 
 // Best / recommended bands restricted to the user's enabled set. The backend's

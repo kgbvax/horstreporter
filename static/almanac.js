@@ -1,4 +1,4 @@
-import { state } from './state.js';
+import { state, panelQth, STREAM_QTH_EVENT } from './state.js';
 import { WSPR_REGIONS, bandColors, getMinSnrMode, regionForLocator, regionLabel } from './utils.js';
 import { escapeHtml } from './ui-helpers.js';
 
@@ -74,6 +74,8 @@ const runtime = {
     lastMinSnr: null,   // min_snr of the last fetch (null = any SNR)
     snrTimer: null,     // debounce timer of a Min SNR change
     snrListener: null,  // delegated document listener (replaced on re-init)
+    qthListener: null,  // STREAM_QTH_EVENT listener (replaced on re-init)
+    fetchedAtMs: 0,     // client time the cached payload arrived
     // Open seasonal drill-down: { band, region, qth, loading, data, error }.
     drilldown: null,
     drillAbort: null,   // AbortController of the in-flight season fetch
@@ -91,8 +93,11 @@ export function initAlmanac() {
         if (!runtime.enabled) return;
         if (currentQth() !== runtime.lastQth) fetchAlmanac();
     };
-    document.getElementById('qth')?.addEventListener('change', onQthMaybeChanged);
-    document.getElementById('fetch-form')?.addEventListener('submit', onQthMaybeChanged);
+    // The schedule follows the stream's qth (panelQth): refetch when the
+    // stream starts for a new one. Replace, don't stack, on re-init.
+    if (runtime.qthListener) window.removeEventListener(STREAM_QTH_EVENT, runtime.qthListener);
+    runtime.qthListener = onQthMaybeChanged;
+    window.addEventListener(STREAM_QTH_EVENT, onQthMaybeChanged);
 
     // Min SNR mode radios and threshold sliders (both re-created by Svelte,
     // so the listener is delegated). Replace, don't stack, on re-init.
@@ -187,7 +192,7 @@ function minSnrParam(v) {
 }
 
 function currentQth() {
-    return String(document.getElementById('qth')?.value || state.qth || '').trim().toUpperCase();
+    return panelQth();
 }
 
 async function fetchAlmanac({ quiet = false } = {}) {
@@ -257,6 +262,7 @@ async function fetchAlmanac({ quiet = false } = {}) {
     runtime.loading = false;
     if (outcome.payload) {
         runtime.cache = outcome.payload;
+        runtime.fetchedAtMs = Date.now();
         runtime.error = null;
         runtime.refreshFailed = false;
     } else if (keepStale) {
@@ -521,7 +527,9 @@ function render() {
         body.innerHTML = html;
         return;
     }
-    html += scheduleHtml(data);
+    // A schedule over a minute old (server cache, refetch every 5 min) is
+    // re-timed for the clock; a fresh one is drawn as the server sent it.
+    html += scheduleHtml(data, new Date(), { retime: Date.now() - (runtime.fetchedAtMs || 0) > 60_000 });
     html += lanesHtml(data, lanes);
     html += legendHtml();
     body.innerHTML = html;
@@ -575,12 +583,35 @@ function headerHtml(data) {
 // Schedule: the usual openings now and within the next 3 h as bars on a 3 h
 // axis starting at `now`. Opacity follows n/m like the lanes; an outlined bar
 // is open now; a window that runs past the axis fades out at the right edge.
-export function scheduleHtml(data, now = new Date()) {
+// The agenda's status / starts_in_min are as of the server's response, which
+// is refetched every few minutes (and cached server-side): re-derive them for
+// `now` with the backend's rule (almanacAgendaEntryFor: ongoing while now's
+// slot is inside the window, else minutes until its start) so "open now" and
+// "in N min" stay current between refetches.
+export function retimeAgenda(agenda, now, slotMinutes = DEFAULT_SLOT_MINUTES) {
+    const nowUtcMin = now.getUTCHours() * 60 + now.getUTCMinutes();
+    const nowSlot = Math.floor(nowUtcMin / slotMinutes);
+    return agenda.map((e) => {
+        const start = Number(e.start_slot);
+        const len = Number(e.len_slots);
+        if (!Number.isFinite(start) || !Number.isFinite(len)) return e;
+        if (e.all_day || len >= SLOTS) return { ...e, status: 'ongoing', starts_in_min: 0 };
+        if (mod(nowSlot - start, SLOTS) < len) return { ...e, status: 'ongoing', starts_in_min: 0 };
+        return { ...e, status: 'upcoming', starts_in_min: mod(start * slotMinutes - nowUtcMin, 1440) };
+    });
+}
+
+// retime re-derives the agenda timing for `now` (retimeAgenda); without it the
+// server's status / starts_in_min are drawn as sent.
+export function scheduleHtml(data, now = new Date(), { retime = false } = {}) {
     const slotMinutes = data.slot_minutes || DEFAULT_SLOT_MINUTES;
     const offsetMin = tzOffsetMinutes(now);
     const nowUtcMin = now.getUTCHours() * 60 + now.getUTCMinutes();
+    const agenda = retime ? retimeAgenda(visibleAgenda(data), now, slotMinutes) : visibleAgenda(data);
+    const nowSlot = retime ? Math.floor(nowUtcMin / slotMinutes) : (Number(data.now_slot) || 0);
+    data = { ...data, agenda };
     const items = [];
-    for (const e of sortAgenda(visibleAgenda(data), Number(data.now_slot) || 0)) {
+    for (const e of sortAgenda(agenda, nowSlot)) {
         const ongoing = e.status === 'ongoing';
         const startOff = ongoing ? 0 : Number(e.starts_in_min) || 0;
         if (startOff >= SCHEDULE_MIN) continue;
@@ -831,6 +862,9 @@ function updateNowLines() {
     if (!body) return;
     const left = nowLeft();
     body.querySelectorAll('.almanac-now').forEach((el) => { el.style.left = left; });
+    // The schedule's bars and "open now" / "in N min" move with the clock too.
+    const sched = body.querySelector('.almanac-schedule');
+    if (sched && runtime.cache && !runtime.drilldown) sched.outerHTML = scheduleHtml(runtime.cache, new Date(), { retime: true });
 }
 
 // --- Interaction ----------------------------------------------------------------

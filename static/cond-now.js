@@ -66,6 +66,11 @@ export function formatFactor(ratio) {
     if (r >= 0.9 && r <= 1.1) return '×1';
     if (r > 99) return '>×99';
     if (r >= 10) return `×${Math.round(r)}`;
+    // Near the lively (1.5×) and quiet (0.67×) cuts one decimal can put the
+    // number on the wrong side of the verdict next to it (1.47 "normal" read
+    // ×1.5; 0.66 quiet and 0.70 normal both read ×0.7): show two there.
+    const r2 = Math.round(r * 100) / 100;
+    if ((r2 >= 1.45 && r2 < 1.55) || (r2 >= 0.62 && r2 < 0.72)) return `×${r2.toFixed(2)}`;
     const s = r.toFixed(1);
     return s === '10.0' ? '×10' : `×${s}`;
 }
@@ -93,11 +98,15 @@ export function reportsPair(row) {
     return [formatCount(f.spots), formatFactor(f.ratio)].filter(Boolean).join(' · ');
 }
 
-// Exact numbers for the line's tooltip: "1,234 reports · normal 812 · ×1.52".
+// Exact numbers for the line's tooltip: "1,234 station reports in your region
+// · normal 812 · ×1.52". regional_spots counts path ends in the region (the
+// cluster baseline counts the same way, so the factor is like-for-like): a
+// report with both stations in the region counts twice, which is why it is
+// not labelled plain "reports" and can exceed what the map shows.
 export function reportsTitle(row) {
     const f = reportsFigures(row);
     if (!f) return '';
-    const parts = [`${Math.round(f.spots).toLocaleString('en-US')} reports`, `normal ${Math.round(f.expected).toLocaleString('en-US')}`];
+    const parts = [`${Math.round(f.spots).toLocaleString('en-US')} station reports in your region`, `normal ${Math.round(f.expected).toLocaleString('en-US')}`];
     if (Number.isFinite(f.ratio) && f.ratio >= 0) parts.push(`×${f.ratio.toFixed(2)}`);
     return parts.join(' · ');
 }

@@ -4,7 +4,16 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 // of M days" per 30-min UTC slot), a UTC now line, the schedule above the
 // lanes, and the area header. Fixtures mirror the BACKEND /api/almanac JSON
 // (snake_case, see docs/api.md) so a naming mismatch surfaces here.
-import { initAlmanac, setAlmanacVisible, scheduleHtml, __test } from '../static/almanac.js';
+import { initAlmanac, setAlmanacVisible, scheduleHtml, retimeAgenda, __test } from '../static/almanac.js';
+import { state, STREAM_QTH_EVENT } from '../static/state.js';
+
+beforeEach(() => { state.streamQth = ''; });
+
+// The panel follows the stream's qth: simulate the stream starting for one.
+function streamStartsFor(qthValue) {
+    state.streamQth = qthValue;
+    window.dispatchEvent(new CustomEvent(STREAM_QTH_EVENT, { detail: { qth: qthValue } }));
+}
 
 const { runtime, reset, openDrilldown, PANEL_ID, BODY_ID } = __test;
 
@@ -384,8 +393,7 @@ describe('almanac panel (U7)', () => {
             expect(body().querySelector('.almanac-lanes').classList.contains('is-loading')).toBe(false);
 
             const qth = document.getElementById('qth');
-            qth.value = 'JO62';
-            qth.dispatchEvent(new Event('change'));
+            streamStartsFor('JO62');
             await flush();
             expect(body().querySelector('.almanac-lanes').classList.contains('is-loading')).toBe(true);
             expect(body().querySelector('.almanac-status').textContent).toContain('Loading');
@@ -401,8 +409,7 @@ describe('almanac panel (U7)', () => {
             const pending = deferredFetch();
             await openPanel();
             const qth = document.getElementById('qth');
-            qth.value = 'FN31';
-            qth.dispatchEvent(new Event('change'));
+            streamStartsFor('FN31');
             await flush();
             expect(pending).toHaveLength(2);
             expect(pending[1].url).toBe('/api/almanac?qth=FN31');
@@ -420,8 +427,7 @@ describe('almanac panel (U7)', () => {
             const pending = deferredFetch();
             await openPanel();
             const qth = document.getElementById('qth');
-            qth.value = 'FN31';
-            qth.dispatchEvent(new Event('change'));
+            streamStartsFor('FN31');
             await flush();
             pending[0].resolve(response(makePayload({ grid4: 'JO32', bands: ['20m'] })));
             await flush();
@@ -457,8 +463,7 @@ describe('almanac panel (U7)', () => {
             expect(body().querySelectorAll('.almanac-lane').length).toBeGreaterThan(0);
 
             const qth = document.getElementById('qth');
-            qth.value = 'JO62';
-            qth.dispatchEvent(new Event('change'));
+            streamStartsFor('JO62');
             await flush();
             pending[1].resolve(response({}, 503));
             await flush();
@@ -514,21 +519,24 @@ describe('almanac panel (U7)', () => {
             expect(body().querySelector('.almanac-lane')).toBeNull();
         });
 
-        it('submitting #fetch-form with a new QTH (no change event) refetches for it', async () => {
+        it('refetches when the stream starts for a new QTH, not while typing', async () => {
             const pending = deferredFetch();
             await openPanel();
             pending[0].resolve(response(makePayload({ bands: ['20m'] })));
             await flush();
-            document.getElementById('qth').value = 'FN31';
-            const ev = new Event('submit', { cancelable: true, bubbles: true });
-            document.getElementById('fetch-form').dispatchEvent(ev);
+            // Typing alone does not move the panel off the streamed qth.
+            document.getElementById('qth').value = 'FN3';
+            document.getElementById('qth').dispatchEvent(new Event('input'));
             await flush();
-            expect(ev.defaultPrevented).toBe(false);
+            expect(pending).toHaveLength(1);
+
+            streamStartsFor('FN31');
+            await flush();
             expect(pending).toHaveLength(2);
             expect(pending[1].url).toBe('/api/almanac?qth=FN31');
 
             // Same QTH again: no extra fetch.
-            document.getElementById('fetch-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            streamStartsFor('FN31');
             await flush();
             expect(pending).toHaveLength(2);
         });
@@ -762,8 +770,7 @@ describe('almanac seasonal drill-down (U8)', () => {
         expect(body().querySelector('.almanac-drill')).not.toBeNull();
         routeFetch({ landing: makePayload({ grid4: 'JO62', bands: ['20m'] }) });
         const qth = document.getElementById('qth');
-        qth.value = 'JO62';
-        qth.dispatchEvent(new Event('change'));
+        streamStartsFor('JO62');
         await flush();
         await flush();
         expect(runtime.drilldown).toBeNull();
@@ -794,8 +801,7 @@ describe('almanac seasonal drill-down (U8)', () => {
         await openOC();
         global.fetch = vi.fn(async () => response({}, 503));
         const qth = document.getElementById('qth');
-        qth.value = 'JO62';
-        qth.dispatchEvent(new Event('change'));
+        streamStartsFor('JO62');
         await flush();
         await flush();
         expect(runtime.drilldown).toBeNull();
@@ -851,8 +857,7 @@ describe('almanac seasonal drill-down (U8)', () => {
         lane('20m', 'OC').click();
         await flush();
         const qth = document.getElementById('qth');
-        qth.value = 'JO62';
-        qth.dispatchEvent(new Event('change'));
+        streamStartsFor('JO62');
         await flush();
         pending[1].resolve(response(makeSeason()));
         await flush();
@@ -1277,5 +1282,23 @@ describe('almanac preliminary SNR view', () => {
         const run = sep.querySelector('[data-slot="28"]');
         expect(run.classList.contains('is-unknown')).toBe(false);
         expect(run.getAttribute('title')).toBe('20m to NA - North America, Sep 2026, 14:00 local: opened 4 of 4 days');
+    });
+});
+
+describe('retimeAgenda', () => {
+    const at = (hh, mm) => new Date(Date.UTC(2026, 10, 8, hh, mm));
+    // 17:00-18:00 UTC window (slots 34-35).
+    const win = { band: '20m', region: 'NA', start_slot: 34, len_slots: 2, status: 'upcoming', starts_in_min: 2 };
+
+    it('turns an upcoming window ongoing once its start passes, and back after it ends', () => {
+        expect(retimeAgenda([win], at(16, 58))[0]).toMatchObject({ status: 'upcoming', starts_in_min: 2 });
+        expect(retimeAgenda([win], at(17, 5))[0]).toMatchObject({ status: 'ongoing' });
+        const after = retimeAgenda([win], at(18, 2))[0];
+        expect(after.status).toBe('upcoming');
+        expect(after.starts_in_min).toBe(1440 - 62);
+    });
+
+    it('keeps an all-day window ongoing', () => {
+        expect(retimeAgenda([{ ...win, all_day: true, len_slots: 48 }], at(3, 0))[0].status).toBe('ongoing');
     });
 });

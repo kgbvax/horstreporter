@@ -1,3 +1,4 @@
+import { panelQth, STREAM_QTH_EVENT } from './state.js';
 import { setBandLabVisible } from './band-lab.js';
 import { setWsprMatrixVisible } from './wspr-matrix.js';
 import { setAlmanacVisible } from './almanac.js';
@@ -69,12 +70,9 @@ export function initCondDock({ onLayoutChange } = {}) {
             const value = e.target?.value;
             if (value === 'now' || value === 'usual') setHorizon(value);
         });
-        const qth = document.getElementById('qth');
-        qth?.addEventListener('input', syncQthLabel);
-        qth?.addEventListener('change', syncQthLabel);
-        // The locator is also rewritten programmatically (geolocation, map
-        // click, 6 -> 4 character shortening on submit) without an input event.
-        document.getElementById('fetch-form')?.addEventListener('submit', () => setTimeout(syncQthLabel, 0));
+        // The label names the qth the panels describe (panelQth: the one the
+        // stream runs for), so it changes when the stream does, not per keystroke.
+        window.addEventListener(STREAM_QTH_EVENT, syncQthLabel);
         setupResize(dock);
         runtime.initialized = true;
     }
@@ -84,7 +82,7 @@ export function initCondDock({ onLayoutChange } = {}) {
 }
 
 function currentQth() {
-    return String(document.getElementById('qth')?.value || '').trim().toUpperCase();
+    return panelQth();
 }
 
 function syncQthLabel() {

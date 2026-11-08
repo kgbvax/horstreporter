@@ -90,4 +90,13 @@ describe('initHotBandIndicator pill copy', () => {
             'P90 distance: 5200 km vs baseline 3100 km',
         ]);
     });
+
+    it('does not set the region-wide baseline beside your squares\' rate', async () => {
+        globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ recommendations: [{
+            ...REC, activity_level: 'low_sample', activity_ratio: undefined, baseline_activity: 8.4,
+        }] }) }));
+        const pill = await renderPill();
+        expect(pill.title).toContain('Rate: 3.50/min');
+        expect(pill.title).not.toContain('baseline 8.40');
+    });
 });

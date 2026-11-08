@@ -799,12 +799,23 @@ func (resp propIntelV2Response) applyFromHere(fromHere bool) propIntelV2Response
 		return resp
 	}
 	filtered := make([]propIntelV2Cell, 0, len(resp.Cells))
+	kept := make(map[string]struct{}, len(resp.Bands))
 	for _, c := range resp.Cells {
 		if c.FromHere {
 			filtered = append(filtered, c)
+			kept[c.Band] = struct{}{}
 		}
 	}
 	resp.Cells = filtered
+	// Bands lists what the cells cover; the summary headline counts it, so
+	// drop the bands whose only cells were filtered out.
+	bands := make([]string, 0, len(kept))
+	for _, b := range resp.Bands {
+		if _, ok := kept[b]; ok {
+			bands = append(bands, b)
+		}
+	}
+	resp.Bands = bands
 	return resp
 }
 

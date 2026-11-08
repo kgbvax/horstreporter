@@ -1,4 +1,4 @@
-import { state } from './state.js';
+import { state, panelQth, STREAM_QTH_EVENT } from './state.js';
 import { WSPR_REGIONS, bandColors, getEnabledBands, getMinSnrMode } from './utils.js';
 import { escapeHtml } from './ui-helpers.js';
 import {
@@ -100,6 +100,7 @@ const runtime = {
     pollTimer: null,
     abortController: null,
     inFlightKey: '',
+    qthListener: null,
     cache: null,         // last /api/prop_intel/v2 payload
     cacheKey: '',
     lastFetchedAt: 0,
@@ -141,17 +142,18 @@ export function initWsprMatrix() {
     }
 
     // Re-poll when QTH changes (band-lab.js pattern).
-    const qthInput = document.getElementById('qth');
-    if (qthInput) {
-        qthInput.addEventListener('change', () => {
-            if (!runtime.enabled) return;
-            const next = currentQth();
-            if (next !== runtime.lastQth) {
-                invalidateCache();
-                pollMatrix(true);
-            }
-        });
-    }
+    // The panel follows the stream's qth (panelQth), so re-poll when the
+    // stream starts for a new one, not on every edit of the input. Replace,
+    // don't stack, on re-init.
+    if (runtime.qthListener) window.removeEventListener(STREAM_QTH_EVENT, runtime.qthListener);
+    runtime.qthListener = () => {
+        if (!runtime.enabled) return;
+        if (currentQth() !== runtime.lastQth) {
+            invalidateCache();
+            pollMatrix(true);
+        }
+    };
+    window.addEventListener(STREAM_QTH_EVENT, runtime.qthListener);
 
     // Re-poll when the global Min SNR control changes — the panel's SSB/CW
     // open floors are the same filter as everything else on the page.
@@ -218,7 +220,7 @@ function invalidateCache() {
 }
 
 function currentQth() {
-    return String(document.getElementById('qth')?.value || state.qth || '').trim().toUpperCase();
+    return panelQth();
 }
 
 // Toggle a source chip. The base source (PSKR) stays selected.
@@ -237,6 +239,15 @@ export async function updateWsprMatrix() {
     pollMatrix(false);
 }
 
+// Cache key of a matrix payload: qth, sources and the Min SNR state.
+// Both thresholds ride in it so toggling none/cw/ssb always re-fetches.
+function matrixKey(qth = currentQth()) {
+    const minSnrMode = getMinSnrMode();
+    const ssbMinDb = document.getElementById('ssb-min-db')?.value || '0';
+    const cwMinDb = document.getElementById('cw-min-db')?.value || '-15';
+    return `${qth}|15|fh|${runtime.sources.join(',')}|${minSnrMode}|${ssbMinDb}|${cwMinDb}`;
+}
+
 async function pollMatrix(force) {
     if (!runtime.enabled) return;
     const qth = currentQth();
@@ -253,7 +264,7 @@ async function pollMatrix(force) {
     const cwMinDb = document.getElementById('cw-min-db')?.value || '-15';
 
     const now = Date.now();
-    const key = `${qth}|15|fh|${runtime.sources.join(',')}|${minSnrMode}|${ssbMinDb}|${cwMinDb}`;
+    const key = matrixKey(qth);
     if (!force && runtime.cache && runtime.cacheKey === key && (now - runtime.lastFetchedAt) < CACHE_TTL_MS) {
         renderMatrix();
         return;
@@ -422,14 +433,17 @@ function restoreFocus(body, focus) {
 function renderMatrix() {
     const body = document.getElementById(BODY_ID);
     if (!body) return;
-    const data = runtime.cache;
+    // A cache for another qth/source/SNR key (the refetch is in flight or
+    // failed) must not be drawn next to the current rows: draw no cells.
+    const stale = runtime.cache && runtime.cacheKey && runtime.cacheKey !== matrixKey();
+    const data = stale ? null : runtime.cache;
     const allCells = (data && Array.isArray(data.cells)) ? data.cells : [];
     // Rows follow the band rail's enabled set (when the rail is present).
     const enabled = document.querySelector('.band-enable') ? getEnabledBands() : null;
     const cells = enabled ? allCells.filter((c) => enabled.has(c.band)) : allCells;
     if (cells.length === 0 && !(runtime.rowExtras && enabled && enabled.size > 0)) {
         runtime.lastRenderKey = '';
-        const empty = allCells.length > 0
+        const empty = stale ? 'Loading propagation for this locator…' : allCells.length > 0
             ? 'No paths open on the enabled bands.'
             : 'No paths open in the current window.';
         const focus = captureFocus(body);

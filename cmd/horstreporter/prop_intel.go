@@ -250,6 +250,9 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 
 	// Load the FT8 climatology for the atypical flavor cross-reference (U4).
 	ft8Clim := e.loadFT8Baselines(now)
+	e.ft8CacheMu.RLock()
+	ft8At := e.ft8CacheAt
+	e.ft8CacheMu.RUnlock()
 
 	cells := make([]propIntelCell, 0, len(acc))
 	// Use cwMinDb from the query param when valid; else use the default.
@@ -283,7 +286,7 @@ func (e *propIntelEngine) Evaluate(qth string, surroundings bool, minutes int, c
 				z := (liveRate - base.Mean) / base.StdDev
 				if z >= atypicalThreshold {
 					conf := atypicalConfidence(base.SampleDays)
-					flavor, ft8Ref := assignFlavor(key.band, key.region, slot, ft8Clim)
+					flavor, ft8Ref := assignFlavor(key.band, key.region, slot, ft8Clim, ft8TodaySlotFraction(ft8At, now))
 					atypical = &AtypicalInfo{
 						ZScore:      round3(z),
 						Confidence:  round3(conf),
@@ -333,23 +336,54 @@ func atypicalConfidence(sampleDays int) float64 {
 // assignFlavor reads the FT8 climatology for the same (band, region, slot) and
 // assigns one of three atypical flavors per R8. When the FT8 climatology is
 // unavailable, returns "atypical-wspr-only" with ft8Ref "unavailable" (R9).
-func assignFlavor(band, regionCode string, slot int, ft8Clim map[regionBaselineKey]regionCalendarStatRow) (flavor, ft8Ref string) {
+//
+// todayFrac is how much of today's slot base.Today had seen when the cached
+// climatology was loaded (ft8TodaySlotFraction): the cache refreshes every
+// 30 minutes, so Today can be a partial slot, or a slot that had not started.
+// The full-slot mean and stddev are scaled to that fraction; below
+// ft8MinTodaySlotFraction there is too little of the slot to call FT8 busy or
+// silent, and the flavor stays "atypical-wspr-only".
+func assignFlavor(band, regionCode string, slot int, ft8Clim map[regionBaselineKey]regionCalendarStatRow, todayFrac float64) (flavor, ft8Ref string) {
 	base, ok := ft8Clim[regionBaselineKey{band, regionCode, slot}]
 	if !ok || base.SampleDays < propIntelMinSampleDays || base.StdDev <= 0 {
 		return "atypical-wspr-only", "unavailable"
 	}
+	if todayFrac < ft8MinTodaySlotFraction {
+		return "atypical-wspr-only", "available"
+	}
+	if todayFrac > 1 {
+		todayFrac = 1
+	}
+	mean := base.Mean * todayFrac
+	sd := base.StdDev * math.Sqrt(todayFrac)
 	// FT8 is "atypical" if its today count z-scores above the FT8 climatology.
-	if base.Today > 0 && base.StdDev > 0 {
-		ft8Z := (float64(base.Today) - base.Mean) / base.StdDev
+	if base.Today > 0 && sd > 0 {
+		ft8Z := (float64(base.Today) - mean) / sd
 		if ft8Z >= propIntelAtypicalZThreshold {
 			return "atypical-both", "available"
 		}
 	}
 	// FT8 effectively absent (no activity today or far below typical).
-	if base.Today == 0 || (base.Mean > 0 && float64(base.Today) < base.Mean*0.1) {
+	if base.Today == 0 || (mean > 0 && float64(base.Today) < mean*0.1) {
 		return "atypical-wspr-silent-ft8", "available"
 	}
 	return "atypical-wspr-only", "available"
+}
+
+// ft8MinTodaySlotFraction is the least of the current slot (1/6 = 5 min) the
+// cached FT8 Today count must cover before assignFlavor reads it.
+const ft8MinTodaySlotFraction = 1.0 / 6.0
+
+// ft8TodaySlotFraction is the fraction of now's 30-minute slot that had
+// elapsed when the FT8 climatology was loaded at loadedAt: 0 when the load
+// predates the slot (its Today row for this slot is empty or yesterday's).
+func ft8TodaySlotFraction(loadedAt, now int64) float64 {
+	const slotSec = 1800
+	slotStart := now - ((now%slotSec)+slotSec)%slotSec
+	if loadedAt <= slotStart || loadedAt > now {
+		return 0
+	}
+	return float64(loadedAt-slotStart) / slotSec
 }
 
 // sortedSources returns the source tags as a sorted slice.
@@ -774,12 +808,23 @@ func (resp propIntelResponse) applyFromHere(fromHere bool) propIntelResponse {
 		return resp
 	}
 	filtered := make([]propIntelCell, 0, len(resp.Cells))
+	kept := make(map[string]struct{}, len(resp.Bands))
 	for _, c := range resp.Cells {
 		if c.FromHere {
 			filtered = append(filtered, c)
+			kept[c.Band] = struct{}{}
 		}
 	}
 	resp.Cells = filtered
+	// Bands lists what the cells cover; the summary headline counts it, so
+	// drop the bands whose only cells were filtered out.
+	bands := make([]string, 0, len(kept))
+	for _, b := range resp.Bands {
+		if _, ok := kept[b]; ok {
+			bands = append(bands, b)
+		}
+	}
+	resp.Bands = bands
 	return resp
 }
 

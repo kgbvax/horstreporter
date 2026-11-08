@@ -1,4 +1,4 @@
-import { state } from './state.js';
+import { state, STREAM_QTH_EVENT, panelQth } from './state.js';
 import { loadConfig } from './config.js';
 import { initMap, setTheme, map, syncMercatorCountryLayer, syncMercatorGraylineLayer, syncMercatorDxccLabelLayer } from './map.js';
 import { initAzimuthCanvas, isAzimuthEnabled, loadAzimuthWorldGeoJson, renderAzimuthScene, setAzimuthCenter, getAzimuthCenter, setAzimuthEnabled, setAzimuthDragging, setAzimuthTheme, setAzimuthZoom, clampAzimuthZoom, setAzimuthHorizonKm, clampAzimuthHorizonKm, setAzimuthNs6tIndicatorEnabled, setAzimuthDxccLabelDensity, setAzimuthDxccLabelsEnabled, getAzimuthLatLngFromClientPoint, getAzimuthHiddenGridSquaresCount } from './azimuth-runtime.js';
@@ -11,11 +11,11 @@ import { initCondNow } from './cond-now.js';
 import { initCondDock } from './cond-dock.js';
 import { initHorstKevin } from './horst-kevin.js';
 import { initPushUI } from './push.js';
-import { updateMapVisualization, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint, whenActiveAreaRendered } from './renderers.js';
+import { updateMapVisualization, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, clearDxClusterMarkers, clearWsprMarkers, resetRenderFingerprint, whenActiveAreaRendered, visibleMapSpots, setRailSpanOverride } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming, icon } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
 import { initOpMode, isOpModeActive, setBeamTargetFromMapClick, getRigBand } from './opmode.js';
-import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL, invalidateBundles as invalidateTimelineBundles, refreshMoment as refreshTimelineMoment } from './timeline.js';
+import { isTimelineActive, enterTimeline, exitTimeline, seek, play as timelinePlay, pause as timelinePause, onMoment as onTimelineMoment, onExit as onTimelineExit, syncTimelineURL, readTimelineURL, invalidateBundles as invalidateTimelineBundles, refreshMoment as refreshTimelineMoment, MOMENT_WINDOW_SECONDS } from './timeline.js';
 import { updateAfterglow, notifyMapMoved, hideAfterglow } from './afterglow.js';
 import { GRAYLINE_BUCKET_MS, setDataNowMs, clearDataNowOverride } from './data-now.js';
 import { sessionRing, deriveT, filterAllowed } from './session-ring.js';
@@ -1391,7 +1391,9 @@ if (captureConfig?.enabled) {
     }
     updateDrillDownButton();
     hotBandIndicator = initHotBandIndicator({
-        getQth: () => document.getElementById('qth')?.value?.trim()?.toUpperCase() || '',
+        // The pills sit in the Conditions dock: the stream's qth, not the input
+        // mid-edit (panelQth).
+        getQth: () => panelQth(),
         getSurroundings: () => Boolean(document.getElementById('surroundings')?.checked),
         getCurrentBand: () => getSelectedBand(),
         onBandSwitch: switchToBand,
@@ -1880,6 +1882,10 @@ function startLiveStream(preserveData = false) {
     }
 
     state.qth = qth;
+    if (state.streamQth !== qth) {
+        state.streamQth = qth;
+        window.dispatchEvent(new CustomEvent(STREAM_QTH_EVENT, { detail: { qth } }));
+    }
     localStorage.setItem('qth', qth);
     localStorage.setItem('minutes', minutes);
 
@@ -2045,7 +2051,10 @@ function startLiveStream(preserveData = false) {
         tone: 'warn',
         spinner: true,
     });
-    const showLiveStatus = () => setStreamStatus({ title: liveTitle, message: spotCountText(totalReceived), tone: 'ok' });
+    // The live count is the spots held (deduplicated, kept across a
+    // preserveData restart or resume), not this connection's deliveries: those
+    // counted duplicates and restarted from the resume delta.
+    const showLiveStatus = () => setStreamStatus({ title: liveTitle, message: spotCountText(state.liveSpots.length), tone: 'ok' });
 
     const btnSubmit = document.getElementById('btn-submit');
     if (btnSubmit) setSubmitMode(btnSubmit, 'stop');
@@ -2147,13 +2156,12 @@ function startLiveStream(preserveData = false) {
     // Adds one delivered spot to the live list and the session ring. Returns
     // false when it was a duplicate of a spot we already hold.
     function ingestSpot(spot) {
-        totalReceived++;
-
         if (seenKeys) {
             const key = exactSpotKey(spot, deriveT(Date.now(), spot.ageSeconds ?? 0));
             if (seenKeys.has(key)) return false;
             seenKeys.add(key);
         }
+        totalReceived++;
 
         // Cap liveSpots: drop oldest-arrived in a batch when over the limit so a
         // hot-band burst between 5s prunes can't grow memory unbounded.
@@ -2330,6 +2338,7 @@ function teardownTimelineFrame() {
     lastMomentSpots = null;
     lastMomentPlayhead = 0;
     clearDataNowOverride();
+    setRailSpanOverride(null);
 }
 
 // exitTimelineForRestart is the plain programmatic exit used when the timeline
@@ -2430,7 +2439,7 @@ function renderTimelineMomentFrame(moved = false) {
         // Afterglow overlay (Mercator only; azimuth renders its own scene).
         // moved marks a playhead move (decay active); a gate re-render is a
         // re-style, not a move, so no re-fade.
-        updateAfterglow(lastMomentSpots, lastMomentPlayhead, moved);
+        updateAfterglow(visibleMapSpots(lastMomentSpots), lastMomentPlayhead, moved);
         // Moment-driven grayline sync (plan 2026-09-11-002 U5, R8): the clock
         // is pinned to the playhead by the moment listener, and the layer's
         // 5-minute bucket/key check in map.js dedupes within a bucket — so
@@ -2525,6 +2534,9 @@ async function startTimelineMode(rangeSeconds) {
         return;
     }
     if (!isTimelineActive()) return; // enterTimeline bailed (no qth)
+    // Moments always span MOMENT_WINDOW_SECONDS: bin the rail over that, not
+    // the Max Spot Age slider (reset in teardownTimelineFrame).
+    setRailSpanOverride(MOMENT_WINDOW_SECONDS / 60);
     timelinePlay();
 }
 

@@ -55,6 +55,8 @@ vi.mock('../static/ui.js', () => ({
 }));
 
 vi.mock('../static/renderers.js', () => ({
+    visibleMapSpots: (spots) => spots || [],
+    setRailSpanOverride: vi.fn(),
     updateMapVisualization: vi.fn(),
     updateBandLabels: vi.fn(),
     refreshBandLabels: vi.fn(),
@@ -90,6 +92,7 @@ const timelineMock = {
     onExitCb: null
 };
 vi.mock('../static/timeline.js', () => ({
+    MOMENT_WINDOW_SECONDS: 900,
     isTimelineActive: () => timelineMock.timelineActive,
     enterTimeline: vi.fn(async () => {}),
     exitTimeline: vi.fn(),
