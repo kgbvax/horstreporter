@@ -96,7 +96,9 @@ function getGridCanvasRenderer() {
 function addSpotMarker(p, color, layer) {
     L.circleMarker([p.geometry.coordinates[1], p.geometry.coordinates[0]], {
         color, fillColor: color, radius: 4.5, weight: 2,
-        opacity: 0.65, fillOpacity: 0.5, interactive: false
+        opacity: 0.65, fillOpacity: 0.5, interactive: false,
+        // Canvas, like the grid: SVG re-projects every dot on each zoomend.
+        renderer: getGridCanvasRenderer()
     }).addTo(layer);
 }
 
@@ -226,6 +228,17 @@ function wsprTxLabel(spot) {
     return spot.locator || '—';
 }
 
+// Own canvas renderer for the WSPR dots: SVG re-projects every dot on each
+// zoomend. Canvas hit-tests interactive paths, so the tooltips keep working.
+// Singleton, recreated with the map (see getGridCanvasRenderer).
+let wsprCanvasRenderer = null;
+function getWsprCanvasRenderer() {
+    if (!wsprCanvasRenderer || !map.hasLayer(wsprCanvasRenderer)) {
+        wsprCanvasRenderer = L.canvas();
+    }
+    return wsprCanvasRenderer;
+}
+
 function renderWsprMarkers(wsprSpots) {
     if (!Array.isArray(wsprSpots) || wsprSpots.length === 0 || !state.wsprLayer) return;
 
@@ -242,7 +255,8 @@ function renderWsprMarkers(wsprSpots) {
             fillOpacity: 0.65,
             dashArray: '3,2',
             interactive: true,
-            bubblingMouseEvents: false
+            bubblingMouseEvents: false,
+            renderer: getWsprCanvasRenderer()
         }).addTo(state.wsprLayer);
 
         marker.bindTooltip(
