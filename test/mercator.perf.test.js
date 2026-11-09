@@ -11,6 +11,7 @@ const { mockMap } = vi.hoisted(() => ({
         off: () => {},
         getSize: () => ({ x: 1000, y: 700 }),
         getZoom: () => 3,
+        getCenter: () => ({ lat: 20, lng: 0 }),
         getBounds: () => ({ getSouth: () => -60, getNorth: () => 75, getWest: () => -180, getEast: () => 180 }),
         containerPointToLayerPoint: () => ({ x: 0, y: 0 }),
         latLngToContainerPoint: ([lat, lng]) => ({ x: (lng + 180) * 2.7, y: (90 - lat) * 3.8 })
