@@ -786,15 +786,40 @@ function createTerritoryLayer(filteredSpots, radiusKm) {
     const TerritoryLayer = L.Layer.extend({
         onAdd(m) {
             this._m = m;
-            this._c = L.DomUtil.create('canvas', 'leaflet-zoom-hide active-area-layer');
+            // Follows a zoom the way Leaflet's own renderers do: CSS-scaled
+            // on 'zoom' (wheel / pinch, see wheel-zoom.js) and on 'zoomanim'
+            // (+/- buttons), redrawn sharp on moveend / zoomend.
+            this._c = L.DomUtil.create('canvas', 'leaflet-zoom-animated active-area-layer');
             this._c.style.pointerEvents = 'none';
             m.getPanes().overlayPane.appendChild(this._c);
             m.on('moveend zoomend resize', this._redraw, this);
+            m.on('zoom', this._onZoom, this);
+            m.on('zoomanim', this._onZoomAnim, this);
             this._redraw();
         },
         onRemove(m) {
             m.off('moveend zoomend resize', this._redraw, this);
+            m.off('zoom', this._onZoom, this);
+            m.off('zoomanim', this._onZoomAnim, this);
             this._c.remove();
+        },
+        _onZoom() {
+            this._updateTransform(this._m.getCenter(), this._m.getZoom());
+        },
+        _onZoomAnim(e) {
+            this._updateTransform(e.center, e.zoom);
+        },
+        // Same math as L.Renderer._updateTransform with padding 0: scale the
+        // canvas drawn at (_center, _zoom) to the view at (center, zoom).
+        _updateTransform(center, zoom) {
+            const m = this._m;
+            if (this._zoom === undefined || !this._center) return;
+            const scale = m.getZoomScale(zoom, this._zoom);
+            const viewHalf = m.getSize().multiplyBy(0.5);
+            const offset = viewHalf.multiplyBy(-scale)
+                .add(m.project(this._center, zoom))
+                .subtract(m._getNewPixelOrigin(center, zoom));
+            L.DomUtil.setTransform(this._c, offset, scale);
         },
         _redraw() {
             const timer = startPerfTimer();
@@ -812,6 +837,8 @@ function createTerritoryLayer(filteredSpots, radiusKm) {
             c.style.width = `${size.x}px`;
             c.style.height = `${size.y}px`;
             L.DomUtil.setPosition(c, m.containerPointToLayerPoint([0, 0]));
+            this._center = m.getCenter();
+            this._zoom = m.getZoom();
             const ctx = c.getContext('2d');
             if (!ctx) return;
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
