@@ -12,6 +12,9 @@ import { fillMercatorGraylinePixels } from './grayline.js';
 import { dataNow, GRAYLINE_BUCKET_MS } from './data-now.js';
 import { COUNTRY_FILL_OPACITY, getMapTokens } from './map-tokens.js';
 import { endPerfTimer, incrementPerfCounter, startPerfTimer } from './perf.js';
+import { attachSmoothWheelZoom } from './wheel-zoom.js';
+
+let detachWheelZoom = null;
 
 let worldGeoJsonData = null;
 let worldGeoJsonPromise = null;
@@ -111,44 +114,33 @@ export function initMap(initialCenter, initialZoom) {
         throw new Error(msg);
     }
 
+    if (detachWheelZoom) {
+        detachWheelZoom();
+        detachWheelZoom = null;
+    }
     if (map) {
         map.remove();
         map = null;
     }
 
-    // zoomSnap: 0 disables Leaflet's wheel-zoom quantization. With a non-zero
-    // snap, ScrollWheelZoom._performZoom rounds each scroll batch's delta UP to
-    // the next snap multiple (Math.ceil(n/snap)*snap), so every batch jumps at
-    // least `snap` zoom levels — a series of discrete 0.25-level animated hops
-    // that reads as "stepped" zoom. With snap 0 the raw sigmoid-smoothed delta is
-    // used, giving small continuous fractional jumps (still animated via the
-    // CSS-transform pane zoom, so the per-frame marker-reposition cost is no
-    // higher than a normal animated zoom — no perf regression). zoomDelta stays
-    // 0.25 for the +/- buttons and keyboard.
-    //
-    // wheelPxPerZoomLevel: back to Leaflet's default 60 (was raised to 100 in
-    // 4ac0e73 "for finer granularity" — that made each scroll cover ~40% less
-    // zoom, the slow feel the user noticed). 60 is ~1.6× faster per scroll.
-    // NOTE: Leaflet's _performZoom still applies a sigmoid
-    //   n = 4*log2(2/(1+e^(-|d|/(4*wppzl))))  capped at +4 levels/gesture,
-    // which is hardcoded in vendor/js/leaflet.js — config can't remove that
-    // non-linearity, only a custom wheel handler could.
-    //
-    // wheelDebounceTime: 25ms (Leaflet default 40). Batches wheel ticks into a
-    // zoomend; lower = snappier but more zoomends per gesture. Safe to lower
-    // now that the grid/country/label layers are canvas-rendered + the DXCC
-    // label rebuild is debounced (0b727f1) — each zoomend is much cheaper, so
-    // we can spend a few more of them to cut scroll latency.
+    // Wheel and trackpad zoom: Leaflet's own scrollWheelZoom is off. It plays
+    // each 25-40 ms batch of wheel events as a separate 250 ms eased CSS zoom
+    // and drops the batches that arrive during that animation, so a trackpad
+    // gesture zoomed in stop-and-go hops. attachSmoothWheelZoom
+    // (wheel-zoom.js) drives one continuous zoom per gesture instead, with one
+    // zoomstart / zoomend. zoomSnap: 0 keeps fractional zoom levels (the wheel
+    // handler and fitBounds use them). zoomDelta stays 0.25 for the +/-
+    // buttons and the keyboard, which keep Leaflet's animated zoom.
     map = L.map('map', {
         zoomSnap: 0,
         zoomDelta: 0.25,
-        wheelPxPerZoomLevel: 60,
-        wheelDebounceTime: 25,
+        scrollWheelZoom: false,
         zoomControl: false,
         crs: L.CRS.EPSG3857,
         worldCopyJump: true,
         maxBoundsViscosity: 1.0
     }).setView(initialCenter, initialZoom);
+    detachWheelZoom = attachSmoothWheelZoom(map);
 
     if (!map.getPane('country-fill-pane')) {
         const pane = map.createPane('country-fill-pane');
