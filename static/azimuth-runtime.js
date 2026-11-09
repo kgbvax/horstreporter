@@ -2,6 +2,7 @@ import { state as appState } from './state.js';
 import { regionForLocatorCached } from './utils.js';
 import { bandColors, getCountryColoringEnabled, getCountryFillForFeature, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, gridSnrOpacity, topQuartileMean, locatorToBounds, getGridResolution, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
 import { radialLine, strokeCircle } from './canvas-draw.js';
+import { aggregateSpots, buildGeoBandField, buildTerritoryShapes, coarsenForExtent, drawDots, drawTerritoryShapes, loneDotPoints } from './active-area.js';
 import { dataNow, GRAYLINE_BUCKET_MS } from './data-now.js';
 import { clearMapTokenCache, COUNTRY_FILL_OPACITY, getMapTokens, mixHexColors } from './map-tokens.js';
 
@@ -11,23 +12,14 @@ const MAX_VISIBLE_C = Math.PI - 0.02;
 const DXCC_SHOW_ALL_ZOOM_THRESHOLD = 5.0;
 const AZIMUTH_SCALE_CLEARANCE_PX = 12;
 const GRAYLINE_RECOMPUTE_MIN_INTERVAL_MS = 320;
-// The active-area density field (Gaussian KDE + contour fill) is the most
-// expensive per-frame azimuth computation (~40ms at 20k spots). It's rebuilt
-// at most this often; between rebuilds the cached field is reused, so the
-// density view lags at most ~1s behind the live spots.
-const DENSITY_FIELD_REBUILD_INTERVAL_MS = 1000;
+// The active-area territories (density field + contour rings) are rebuilt at
+// most this often while spots stream in; between rebuilds a frame only
+// re-projects the cached rings, so the view lags at most ~1 s behind.
+const ACTIVE_AREA_REBUILD_INTERVAL_MS = 1000;
 // During a drag, reuse the last world-layer canvas briefly so a fast drag
 // (which moves >0.1 deg/frame, past the 1-decimal drag key precision) doesn't
 // re-project ~100k world.geojson vertices on every frame.
 const WORLD_LAYER_DRAG_REUSE_MS = 200;
-// Active-area density field: the field is a Gaussian KDE of report count, so a
-// single spot peaks at density ~1.0 and a cluster peaks higher. Contour
-// thresholds therefore double as the min-count gate: a lone spot (peak < PRESENCE)
-// never paints a region — it is drawn as a dot instead — while real clusters grow
-// a region whose size and brightness scale with local report count.
-const AZIMUTH_DENSITY_PRESENCE = 1.5; // outer "activity" boundary; lone-spot gate
-const AZIMUTH_DENSITY_MID = 4;       // moderate cluster
-const AZIMUTH_DENSITY_CORE = 10;     // dense core
 
 const DXCC_PREFIX_BY_ISO_A2 = {
     US: 'K', CA: 'VE', RU: 'UA', CN: 'BY', IN: 'VU', AU: 'VK', BR: 'PY', AR: 'LU', ZA: 'ZS', CL: 'CE',
@@ -119,11 +111,7 @@ const state = {
         canvas: null,
         at: 0
     },
-    densityFieldCache: {
-        key: '',
-        field: null,
-        at: 0
-    },
+    activeAreaCache: null,
     hiddenGridSquaresCount: 0,
     isDragging: false,
     antennaOverlay: {
@@ -1505,189 +1493,35 @@ function drawAntennaOverlay(ctx, width, height) {
     ctx.restore();
 }
 
-// buildAzimuthDensityField interpolates a continuous report-COUNT surface from
-// the projected spots — per-band Gaussian kernel-density estimates of activity,
-// not signal strength. Spots are projected into canvas space first, so the
-// azimuthal projection's distortion is handled implicitly. The field is sampled
-// on a regular grid; each vertex holds the Gaussian-weighted report count
-// (density) for each band. Because a single spot peaks at density ~1.0, contour
-// thresholds above 1.0 double as a min-count gate — lone spots never reach
-// PRESENCE and are drawn as dots by the caller instead. Returns null when there
-// is nothing to draw; otherwise { cols, rows, step, x0, y0, densityByBand,
-// activeBands, pts } where pts is the aggregated points for the lone-spot dot
-// pass.
-function buildAzimuthDensityField(filteredSpots, width, height, step, radius) {
-    // Reports from one grid square all project to the same pixel; aggregate
-    // them into a single weighted point per band so the wider smoothing kernel
-    // stays cheap. Each aggregated point carries a per-band report count (used as
-    // the density contribution). Keeping bands separate means multi-band views
-    // show smooth per-band iso-contours that overlap, instead of blocky
-    // per-cell dominant-band mosaics.
-    const agg = new Map();
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const spot of filteredSpots) {
-        const lat = Number(spot.lat), lng = Number(spot.lng), snr = Number(spot.snr);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(snr)) continue;
-        const p = projectToCanvas(lat, lng, width, height);
-        if (!p) continue;
-        const kx = Math.round(p.x), ky = Math.round(p.y);
-        const key = kx + ',' + ky;
-        const band = spot.band || 'all';
-        let a = agg.get(key);
-        if (!a) { a = { x: kx, y: ky, bands: {} }; agg.set(key, a); }
-        const b = a.bands[band] || (a.bands[band] = { n: 0, snrSum: 0 });
-        b.n += 1;
-        b.snrSum += snr;
-        if (kx < minX) minX = kx;
-        if (ky < minY) minY = ky;
-        if (kx > maxX) maxX = kx;
-        if (ky > maxY) maxY = ky;
+// Active-area territories (see active-area.js). The field, contour rings and
+// lone-dot list are in lat/lng and do not depend on centre or zoom, so a pan,
+// zoom or drag between rebuilds only re-projects them.
+function drawActiveArea(ctx, width, height, regularSpots, renderCtx) {
+    const project = (lat, lng) => projectToCanvas(lat, lng, width, height);
+    const radiusKm = Math.round(renderCtx.maxClusterDist * 0.8);
+    // ~7 px per grid cell at the centre of the view (as on Mercator), snapped
+    // to a few sizes so small zoom changes keep the cache. The azimuthal
+    // scale is min(w, h) * 0.47 * zoom / 180 px per degree near the centre.
+    const pxPerDeg = Math.min(width, height) * 0.47 * state.zoom / 180;
+    let cellDeg = [0.25, 0.5, 1, 2].find((d) => d >= 7 / pxPerDeg) || 2;
+    // Structural key: a change here rebuilds at once; new spots alone wait
+    // for the rebuild interval.
+    const key = `${radiusKm}:${cellDeg}:${renderCtx.selectedBand}:${renderCtx.filterBand}:${renderCtx.filterRegion}:${renderCtx.minSnrMode}:${renderCtx.ssbMinDb}:${renderCtx.cwMinDb}:${[...renderCtx.enabledBands].sort().join(',')}`;
+    const now = Date.now();
+    let cached = state.activeAreaCache;
+    if (!cached || cached.key !== key || now - cached.at >= ACTIVE_AREA_REBUILD_INTERVAL_MS) {
+        const pts = aggregateSpots(regularSpots);
+        // The field covers the whole data extent (the azimuthal view can show
+        // the whole world), so coarsen the grid until it stays under ~250k
+        // vertices. Zoomed in on a world-wide feed this trades some edge
+        // detail for a bounded rebuild.
+        cellDeg = coarsenForExtent(pts, cellDeg, radiusKm, 250000);
+        const field = buildGeoBandField(pts, { cellDeg, radiusKm });
+        cached = { key, at: now, shapes: buildTerritoryShapes(field), lone: loneDotPoints(field, pts) };
+        state.activeAreaCache = cached;
     }
-    if (agg.size === 0) return null;
-
-    // Flatten aggregated points into a per-band point list. Each point carries a
-    // report count for exactly one band; this is what the per-band KDE sums over.
-    const pts = [];
-    for (const a of agg.values()) {
-        for (const band in a.bands) {
-            const b = a.bands[band];
-            pts.push({ x: a.x, y: a.y, band, n: b.n, snr: b.snrSum / b.n });
-        }
-    }
-
-    // Bucket index for O(1) neighbour lookup (bucket size == search radius).
-    const bucket = Math.max(1, radius);
-    const buckets = new Map();
-    const bkey = (bx, by) => bx + ',' + by;
-    for (const p of pts) {
-        const bx = Math.floor((p.x - minX) / bucket);
-        const by = Math.floor((p.y - minY) / bucket);
-        const k = bkey(bx, by);
-        let arr = buckets.get(k);
-        if (!arr) { arr = []; buckets.set(k, arr); }
-        arr.push(p);
-    }
-
-    // Sample grid spans the data bounding box padded by one search radius so the
-    // estimate can fall off smoothly beyond the outermost spots. A Gaussian
-    // kernel blends neighbouring grid squares into continuous regions; the field
-    // value is the kernel-density estimate (Gaussian-weighted report count), so
-    // regions grow larger and brighter with more reports, and lone spots (peak
-    // density ~1.0) stay below the PRESENCE threshold and taper to nothing.
-    const x0 = minX - radius, y0 = minY - radius;
-    const cols = Math.max(2, Math.ceil((maxX + radius - x0) / step) + 1);
-    const rows = Math.max(2, Math.ceil((maxY + radius - y0) / step) + 1);
-    const r2 = radius * radius;
-    const sigma = radius / 2.2;
-    const twoSigma2 = 2 * sigma * sigma;
-
-    const activeBandsSet = new Set();
-    for (const p of pts) activeBandsSet.add(p.band);
-    const activeBands = [...activeBandsSet].sort();
-    const densityByBand = {};
-
-    for (const band of activeBands) {
-        const density = new Float32Array(cols * rows);
-        for (let j = 0; j < rows; j++) {
-            const vy = y0 + j * step;
-            const by = Math.floor((vy - minY) / bucket);
-            for (let i = 0; i < cols; i++) {
-                const vx = x0 + i * step;
-                const bx = Math.floor((vx - minX) / bucket);
-                let wsum = 0;
-                for (let dby = -1; dby <= 1; dby++) {
-                    for (let dbx = -1; dbx <= 1; dbx++) {
-                        const nb = buckets.get(bkey(bx + dbx, by + dby));
-                        if (!nb) continue;
-                        for (const p of nb) {
-                            if (p.band !== band) continue;
-                            const dx = p.x - vx, dy = p.y - vy;
-                            const d2 = dx * dx + dy * dy;
-                            if (d2 > r2) continue;
-                            wsum += Math.exp(-d2 / twoSigma2) * p.n;
-                        }
-                    }
-                }
-                density[j * cols + i] = wsum;
-            }
-        }
-        densityByBand[band] = density;
-    }
-
-    return { cols, rows, step, x0, y0, densityByBand, activeBands, pts };
-}
-
-// cellAbove returns the polygon (as {x,y} points) of the part of one grid cell
-// where the field value is >= threshold, using marching-squares edge
-// interpolation so contour boundaries are smooth rather than blocky.
-function cellAbove(threshold, cx, cy, cv) {
-    const out = [];
-    for (let i = 0; i < 4; i++) {
-        const n = (i + 1) % 4;
-        const vi = cv[i], vn = cv[n];
-        const insideI = vi >= threshold;
-        if (insideI) out.push({ x: cx[i], y: cy[i] });
-        if (insideI !== (vn >= threshold)) {
-            const f = (threshold - vi) / (vn - vi);
-            out.push({ x: cx[i] + f * (cx[n] - cx[i]), y: cy[i] + f * (cy[n] - cy[i]) });
-        }
-    }
-    return out;
-}
-
-// fillAzimuthContours renders each per-band density field as stacked filled
-// contour zones. The lowest threshold (PRESENCE) is the outer "activity"
-// boundary — it doubles as the min-count gate, so lone spots
-// (peak density ~1.0 < 1.5) never paint a region and are drawn as dots by the
-// caller. MID/CORE layers stack on top so denser clusters read brighter.
-// Because every band is rendered independently in its canonical color, no
-// per-cell dominant-band decision is made; contours are smooth iso-lines and
-// two bands covering the same area overlap translucently (matching Mercator's
-// overlapping-area look). Multi-band opacity is scaled down so overlaps stay
-// readable instead of washing out.
-function fillAzimuthContours(ctx, field) {
-    if (!field) return;
-    const { cols, rows, step, x0, y0, densityByBand, activeBands } = field;
-    if (!activeBands || activeBands.length === 0) return;
-
-    const overlapFactor = activeBands.length <= 1 ? 1.0 : 0.55;
-    const layers = [
-        { t: AZIMUTH_DENSITY_PRESENCE, alpha: 0.22 * overlapFactor },
-        { t: AZIMUTH_DENSITY_MID, alpha: 0.34 * overlapFactor },
-        { t: AZIMUTH_DENSITY_CORE, alpha: 0.48 * overlapFactor }
-    ];
-
-    for (const band of activeBands) {
-        const density = densityByBand[band];
-        if (!density) continue;
-        const color = bandColors[band] || bandColors.all;
-        ctx.fillStyle = color;
-
-        for (const layer of layers) {
-            ctx.globalAlpha = layer.alpha;
-            for (let j = 0; j < rows - 1; j++) {
-                for (let i = 0; i < cols - 1; i++) {
-                    const i00 = j * cols + i;
-                    const i10 = j * cols + i + 1;
-                    const i11 = (j + 1) * cols + i + 1;
-                    const i01 = (j + 1) * cols + i;
-
-                    const cv = [density[i00], density[i10], density[i11], density[i01]];
-                    const cx = [x0 + i * step, x0 + (i + 1) * step, x0 + (i + 1) * step, x0 + i * step];
-                    const cy = [y0 + j * step, y0 + j * step, y0 + (j + 1) * step, y0 + (j + 1) * step];
-                    const poly = cellAbove(layer.t, cx, cy, cv);
-                    if (!poly || poly.length < 3) continue;
-
-                    ctx.beginPath();
-                    ctx.moveTo(poly[0].x, poly[0].y);
-                    for (let k = 1; k < poly.length; k++) ctx.lineTo(poly[k].x, poly[k].y);
-                    ctx.closePath();
-                    ctx.fill();
-                }
-            }
-        }
-    }
-    ctx.globalAlpha = 1;
+    drawTerritoryShapes(ctx, cached.shapes, project, { pixelRatio: 1 });
+    drawDots(ctx, cached.lone, project, 3.5);
 }
 
 function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, renderCtx) {
@@ -1740,47 +1574,7 @@ function drawSpots(ctx, width, height, filteredSpots, style, gridSquares, render
     }
 
     if (style === 'active-area') {
-        // Interpolate per-band continuous report-COUNT (density) surfaces and
-        // render each as filled contour zones. Sample resolution and search radius
-        // scale with the canvas. Spots whose local density stays below PRESENCE
-        // — i.e. lone or near-isolated reports that never grow a region — are
-        // drawn as 4 px dots instead, so quiet single spots read as points, not
-        // blobs.
-        const minDim = Math.min(width, height);
-        const step = Math.max(8, Math.min(16, Math.round(minDim / 95)));
-        const radius = step * 3;
-        // Rebuild the KDE field at most ~1x/sec (it's the most expensive
-        // per-frame azimuth computation). The key captures the projection, the
-        // active band set, and a cheap spot-set fingerprint so pan/zoom/band
-        // toggles rebuild promptly but a fast traffic stream doesn't.
-        const now = Date.now();
-        const activeBandsArr = [...renderCtx.enabledBands].sort();
-        const spotFingerprint = `${filteredSpots.length}:${filteredSpots[0]?.locator || ''}:${filteredSpots[filteredSpots.length - 1]?.locator || ''}`;
-        const densityKey = `${width}x${height}:${state.center[0].toFixed(1)}:${state.center[1].toFixed(1)}:${state.zoom.toFixed(1)}:${activeBandsArr.join(',')}:${spotFingerprint}`;
-        let field = null;
-        const densityCached = state.densityFieldCache;
-        if (densityCached && densityCached.key === densityKey && (now - densityCached.at) < DENSITY_FIELD_REBUILD_INTERVAL_MS) {
-            field = densityCached.field;
-        } else {
-            field = buildAzimuthDensityField(filteredSpots, width, height, step, radius);
-            state.densityFieldCache = { key: densityKey, field, at: now };
-        }
-        fillAzimuthContours(ctx, field);
-        if (field) {
-            const { cols, step: fs, x0, y0, densityByBand, pts } = field;
-            for (const p of pts) {
-                const gi = Math.round((p.x - x0) / fs);
-                const gj = Math.round((p.y - y0) / fs);
-                const density = densityByBand[p.band];
-                const d = (density && gi >= 0 && gj >= 0) ? density[gj * cols + gi] : 0;
-                if (d >= AZIMUTH_DENSITY_PRESENCE) continue; // inside its band's region — no dot
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-                ctx.fillStyle = bandColors[p.band] || bandColors.all;
-                ctx.globalAlpha = 0.8;
-                ctx.fill();
-            }
-        }
+        drawActiveArea(ctx, width, height, regularSpots, renderCtx);
         state.hiddenGridSquaresCount = 0;
         drawWsprSpots(ctx, width, height, wsprSpots);
         ctx.globalAlpha = 1;

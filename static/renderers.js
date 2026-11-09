@@ -2,6 +2,7 @@ import { state } from './state.js';
 import { map } from './map.js';
 import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, pillTextColor, regionForLocatorCached } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTimer } from './perf.js';
+import { aggregateSpots, buildGeoBandField, buildTerritoryShapes, drawDots, drawTerritoryShapes, loneDotPoints } from './active-area.js';
 
 // Rendered-state fingerprint for the grid-snr heat layer. Unlike the old
 // spot-list fingerprint (spots.length + first/last ageSeconds — which changes
@@ -9,73 +10,16 @@ import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTi
 // and their appearance, so a new spot that doesn't change any square's
 // dominant band or quantized opacity doesn't tear down and rebuild the layer.
 let lastGridFingerprint = '';
-// Lazy loader for vendor/js/turf.min.js (~605KB raw). The script is not part
-// of the initial index.html payload; it is injected on demand the first time
-// the active-area (hull/cluster) render path actually runs. An already-loaded
-// global (e.g. the perf-gate stub) is reused as-is instead of re-injecting.
-let turfLoadPromise = null;
-// Backoff state for failed injections: without it the 2s rebuild debounce
-// would re-append the ~605KB script (and a dead <script> tag) forever while
-// the vendor file is unreachable.
-let turfFailures = 0;
-let lastTurfFailureAt = 0;
-export function ensureTurf() {
-    const existing = (typeof window !== 'undefined' ? window : globalThis).turf;
-    if (existing) return Promise.resolve(existing);
-    // Hoisted so ensureTurf always returns a Promise (the rejection flows into
-    // the caller's .catch instead of crashing on a null .then).
-    if (typeof document === 'undefined' || !document.createElement) {
-        return Promise.reject(new Error('turf: no DOM available to load vendor/js/turf.min.js'));
-    }
-    if (turfFailures && Date.now() - lastTurfFailureAt < Math.min(2000 * 2 ** turfFailures, 60000)) {
-        // Back off exponentially (2s -> 60s cap) after failures; reset on success.
-        return Promise.reject(new Error('turf: backing off after a failed load'));
-    }
-    if (!turfLoadPromise) {
-        turfLoadPromise = new Promise((resolve, reject) => {
-            const script = document.createElement('script');
-            script.src = 'vendor/js/turf.min.js';
-            script.async = true;
-            script.onload = () => {
-                const loaded = (typeof window !== 'undefined' ? window : globalThis).turf;
-                if (loaded) {
-                    turfFailures = 0;
-                    resolve(loaded);
-                } else {
-                    turfFailures += 1;
-                    lastTurfFailureAt = Date.now();
-                    script.remove();
-                    turfLoadPromise = null;
-                    reject(new Error('turf: vendor/js/turf.min.js loaded but the turf global is missing'));
-                }
-            };
-            script.onerror = () => {
-                // Remove the dead tag and allow a later frame to retry.
-                turfFailures += 1;
-                lastTurfFailureAt = Date.now();
-                script.remove();
-                turfLoadPromise = null;
-                reject(new Error('turf: failed to load vendor/js/turf.min.js'));
-            };
-            document.head.appendChild(script);
-        });
-    }
-    return turfLoadPromise;
-}
-
-// Debounce for the active-area rebuild: turf.clustersDbscan is O(n²), so the
-// layer is rebuilt at most this often even when spots are streaming in.
+// The active-area layer (density field + contour rings, see active-area.js)
+// is rebuilt at most this often while spots stream in. A change of filters,
+// bands or the area slider rebuilds at once (see activeAreaKey).
 const ACTIVE_AREA_REBUILD_INTERVAL_MS = 2000;
-// Cap on the per-band point count fed to the O(n²) DBSCAN. Strongest-SNR
-// points are kept for clustering; the rest are drawn as dots.
-const MAX_ACTIVE_AREA_CLUSTER_POINTS = 300;
 
-// Canvas renderer for the Mercator Grid-SNR / Active-Area non-interactive
-// polygon overlays. SVG re-projects every path on each zoomend; with many
+// Canvas renderer for the Mercator Grid-SNR non-interactive polygon
+// overlay. SVG re-projects every path on each zoomend; with many
 // grid squares (and zoomSnap:0 firing several fractional zoomends per net
 // zoom level) that is the dominant zoom-time cost. Canvas redraws all paths
-// in one batched paint instead. Grid squares and active-area polygons are
-// already interactive:false, so canvas (which can't do per-path mouse
+// in one batched paint instead. Grid squares are already interactive:false, so canvas (which can't do per-path mouse
 // events) is safe.
 //
 // Singleton, reused across heatLayer rebuilds: map.removeLayer(heatLayer)
@@ -89,15 +33,6 @@ function getGridCanvasRenderer() {
         gridCanvasRenderer = L.canvas();
     }
     return gridCanvasRenderer;
-}
-
-// Add a single isolated-spot circle marker to the given layer (shared by the
-// clustered and non-clustered render paths so the style lives in one place).
-function addSpotMarker(p, color, layer) {
-    L.circleMarker([p.geometry.coordinates[1], p.geometry.coordinates[0]], {
-        color, fillColor: color, radius: 4.5, weight: 2,
-        opacity: 0.65, fillOpacity: 0.5, interactive: false
-    }).addTo(layer);
 }
 
 function buildFilterCtx() {
@@ -303,25 +238,26 @@ export function updateMapVisualization(spots, maxMinutes) {
     const { regularSpots, wsprSpots } = splitSpotSources(spots);
 
     if (style === 'active-area') {
-        // turf.clustersDbscan is O(n²), so bound the rebuild with a debounce
-        // (the layer is kept as-is between rebuilds) and a per-band point cap
-        // inside renderActiveArea. The marker layers still update every render.
+        // The field + ring build is the expensive part (tens of ms on a
+        // contest-sized feed), so new spots rebuild at most every
+        // ACTIVE_AREA_REBUILD_INTERVAL_MS; the layer itself redraws cheaply on
+        // pan/zoom from its cached rings. The marker layers still update
+        // every render.
         const now = Date.now();
-        if (!state.heatLayer || (now - (state.lastActiveAreaRebuildAt || 0)) >= ACTIVE_AREA_REBUILD_INTERVAL_MS) {
+        const radiusKm = activeAreaRadiusKm();
+        const key = activeAreaKey(filterCtx, radiusKm);
+        if (!state.heatLayer || key !== state.lastActiveAreaKey || (now - (state.lastActiveAreaRebuildAt || 0)) >= ACTIVE_AREA_REBUILD_INTERVAL_MS) {
             state.lastActiveAreaRebuildAt = now;
+            state.lastActiveAreaKey = key;
             if (state.heatLayer) {
                 map.removeLayer(state.heatLayer);
                 incrementPerfCounter('mercator.layers.removed', 1);
             }
             incrementPerfCounter('mercator.render.style.active_area', 1);
-            // Create the layer synchronously so it is on the map even while
-            // turf is still loading; the hull/draw pass fills it in via the
-            // async continuation (its `layer` argument pins the draw target so
-            // a later style switch can't capture this draw).
-            const layer = L.layerGroup().addTo(map);
-            state.heatLayer = layer;
+            const filtered = filterActiveAreaSpots(regularSpots, filterCtx);
+            state.heatLayer = createTerritoryLayer(filtered, radiusKm).addTo(map);
             incrementPerfCounter('mercator.layers.added', 1);
-            rebuildActiveArea(layer, regularSpots, maxMinutes, filterCtx, spots);
+            updateBandLabels(spots, filterCtx, new Set(filtered.map((s) => s.band)));
         }
     } else {
         // grid-snr: the aggregate is O(n) but cheap; the L.geoJSON layer
@@ -746,159 +682,136 @@ function renderGridSquares(squareData, filterCtx) {
     incrementPerfCounter('mercator.grid.rectangles_added', gridFeatures.length);
 }
 
-// Promise for the most recent async active-area draw.
-let activeAreaRebuildPromise = Promise.resolve();
-
-// Async wrapper around renderActiveArea: load turf on demand (the vendor
-// script is no longer part of the initial index.html payload), then draw the
-// hulls into the already-created layer and update the band labels. On a turf
-// load failure the layer is left empty for this frame instead of crashing the
-// render; band pills still recompute from the spot set (they are data, not
-// decoration), and the rebuild debounce + backoff let a later frame retry.
-function rebuildActiveArea(layer, regularSpots, maxMinutes, filterCtx, spots) {
-    activeAreaRebuildPromise = ensureTurf()
-        .then(() => {
-            const activeBands = renderActiveArea(regularSpots, maxMinutes, filterCtx, layer);
-            const bandLabelTimer = startPerfTimer();
-            updateBandLabels(spots, filterCtx, activeBands);
-            endPerfTimer('mercator.band_labels.total_ms', bandLabelTimer);
-        })
-        .catch((err) => {
-            console.error('Active-area render skipped: turf is unavailable.', err);
-            updateBandLabels(spots, filterCtx, null);
-        });
-    return activeAreaRebuildPromise;
+// The spots the active-area layer draws: the same filters as the grid style.
+function filterActiveAreaSpots(regularSpots, filterCtx) {
+    const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands, filterBand, filterRegion } = filterCtx;
+    return regularSpots.filter((spot) => {
+        if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return false;
+        if (minSnrMode === 'cw' && spot.snr < cwMinDb) return false;
+        if (!enabledBands.has(spot.band)) return false;
+        if (selectedBand !== 'all' && spot.band !== selectedBand) return false;
+        if (filterBand && spot.band !== filterBand) return false;
+        if (filterRegion && regionForLocatorCached(spot.locator) !== filterRegion) return false;
+        return true;
+    });
 }
 
-function renderActiveArea(regularSpots, maxMinutes, filterCtx, layer) {
-    const timer = startPerfTimer();
+// Kernel radius of the active-area density field: 0.8 x the "Area smoothing"
+// slider (id cluster-distance, kept for stored settings; default 500 km).
+function activeAreaRadiusKm() {
+    let v = parseInt(document.getElementById('cluster-distance')?.value, 10);
+    if (isNaN(v) || v < 100) v = 500;
+    return Math.round(v * 0.8);
+}
 
-    // Item 3: use passed filterCtx instead of re-reading DOM
+// Everything that changes WHICH spots or HOW they are smoothed: a change
+// rebuilds the layer at once instead of waiting for the rebuild interval.
+function activeAreaKey(filterCtx, radiusKm) {
     const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands, filterBand, filterRegion } = filterCtx;
-    let maxClusterDist = parseInt(document.getElementById('cluster-distance')?.value, 10);
-    if (isNaN(maxClusterDist) || maxClusterDist < 100) maxClusterDist = 500;
+    return `${radiusKm}|${minSnrMode}|${ssbMinDb}|${cwMinDb}|${selectedBand}|${filterBand}|${filterRegion}|${[...enabledBands].sort().join(',')}`;
+}
 
-    const pointsByBand = {};
-    const seenCoordsByBand = {};
+// Active-area territories (see active-area.js) as a non-interactive canvas in
+// the overlay pane, redrawn on moveend/zoomend/resize from the spot set
+// captured at rebuild time. Contour rings and the lone-dot list are cached
+// per grid size in lat/lng, so a pan only re-projects them and a zoom
+// re-samples only when the grid size changes.
+function createTerritoryLayer(filteredSpots, radiusKm) {
     const aggregateTimer = startPerfTimer();
-
-    regularSpots.forEach(spot => {
-        if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) return;
-        if (minSnrMode === 'cw' && spot.snr < cwMinDb) return;
-        if (!enabledBands.has(spot.band)) return;
-        if (selectedBand !== 'all' && spot.band !== selectedBand) return;
-        // Matrix drill-down (band x region), as in the grid style.
-        if (filterBand && spot.band !== filterBand) return;
-        if (filterRegion && regionForLocatorCached(spot.locator) !== filterRegion) return;
-
-        if (!pointsByBand[spot.band]) {
-            pointsByBand[spot.band] = [];
-            seenCoordsByBand[spot.band] = new Set();
-        }
-
-        const coordKey = `${spot.lng},${spot.lat}`;
-        if (!seenCoordsByBand[spot.band].has(coordKey)) {
-            seenCoordsByBand[spot.band].add(coordKey);
-            // Carry the SNR so the DBSCAN input can be capped to the strongest
-            // points (see MAX_ACTIVE_AREA_CLUSTER_POINTS).
-            pointsByBand[spot.band].push(turf.point([spot.lng, spot.lat], { snr: Number(spot.snr) || 0 }));
-        }
-    });
+    const pts = aggregateSpots(filteredSpots);
     endPerfTimer('mercator.active_area.aggregate_ms', aggregateTimer);
-
-    let polygonsAdded = 0;
-    let markersAdded = 0;
-    const clusterTimer = startPerfTimer();
-
-    for (const band in pointsByBand) {
-        const allPts = pointsByBand[band];
-        const color = bandColors[band] || bandColors['all'];
-
-        // Cap the DBSCAN input: turf.clustersDbscan is O(n²), so a band with
-        // thousands of points would take hundreds of ms. Keep the strongest-SNR
-        // points for clustering; the capped-out points are drawn as dots below
-        // so no spots are lost.
-        let pts = allPts;
-        let cappedOut = [];
-        if (allPts.length > MAX_ACTIVE_AREA_CLUSTER_POINTS) {
-            pts = allPts.slice()
-                .sort((a, b) => (b.properties?.snr || 0) - (a.properties?.snr || 0))
-                .slice(0, MAX_ACTIVE_AREA_CLUSTER_POINTS);
-            const cappedSet = new Set(pts);
-            cappedOut = allPts.filter((p) => !cappedSet.has(p));
+    const shapesByCell = new Map();
+    // A fine grid over the whole data extent would be millions of cells
+    // (world-wide feed, zoomed in), so above MAX_FIELD_CELLS the field covers
+    // only the view plus a margin, and is rebuilt when the view leaves the
+    // covered area.
+    const MAX_FIELD_CELLS = 250000;
+    const padLatDeg = radiusKm / 110.57;
+    let extent = null;
+    for (const p of pts) {
+        if (!extent) extent = { s: p.lat, n: p.lat, w: p.lng, e: p.lng };
+        else {
+            if (p.lat < extent.s) extent.s = p.lat;
+            if (p.lat > extent.n) extent.n = p.lat;
+            if (p.lng < extent.w) extent.w = p.lng;
+            if (p.lng > extent.e) extent.e = p.lng;
         }
-
-        if (pts.length >= 3) {
-            const fc = turf.featureCollection(pts);
-            const clustered = turf.clustersDbscan(fc, maxClusterDist, { units: 'kilometers', minPoints: 3 });
-
-            const clusters = {};
-            const isolatedPts = [];
-
-            turf.featureEach(clustered, function (point) {
-                if (point.properties && point.properties.cluster !== undefined && point.properties.cluster !== null) {
-                    const clusterId = point.properties.cluster;
-                    if (!clusters[clusterId]) clusters[clusterId] = [];
-                    clusters[clusterId].push(point);
-                } else {
-                    isolatedPts.push(point);
-                }
-            });
-
-            for (const clusterId in clusters) {
-                const clusterPts = clusters[clusterId];
-                if (clusterPts.length >= 3) {
-                    const clusterFc = turf.featureCollection(clusterPts);
-                    let hull;
-                    try {
-                        // Attempt to create a concave hull (which supports indentations and holes).
-                        // If the points are too sparse to form a valid concave hull, fallback to convex.
-                        hull = turf.concave(clusterFc, { maxEdge: maxClusterDist * 1.5, units: 'kilometers' }) || turf.convex(clusterFc);
-                    } catch (e) {
-                        hull = turf.convex(clusterFc);
-                    }
-                    if (hull) {
-                        let finalShape = hull;
-                        try {
-                            finalShape = turf.polygonSmooth(hull, { iterations: 2 });
-                        } catch (e) {
-                            console.error("Error smoothing polygon", e);
-                        }
-                        L.geoJSON(finalShape, {
-                            renderer: getGridCanvasRenderer(),
-                            style: { color: color, weight: 1, opacity: 0.9, fillColor: color, fillOpacity: 0.18 },
-                            interactive: false
-                        }).addTo(layer);
-                        polygonsAdded += 1;
-                    }
-                } else {
-                    clusterPts.forEach(p => isolatedPts.push(p));
-                }
-            }
-
-            isolatedPts.forEach(p => {
-                addSpotMarker(p, color, layer);
-                markersAdded += 1;
-            });
-        } else {
-            pts.forEach(p => {
-                addSpotMarker(p, color, layer);
-                markersAdded += 1;
-            });
-        }
-
-        // Capped-out points (weaker SNR) are drawn as dots so the view still
-        // shows them, just not as cluster regions.
-        cappedOut.forEach(p => {
-            addSpotMarker(p, color, layer);
-            markersAdded += 1;
-        });
     }
-
-    endPerfTimer('mercator.active_area.cluster_draw_ms', clusterTimer);
-    endPerfTimer('mercator.active_area.total_ms', timer);
-    incrementPerfCounter('mercator.active_area.polygons_added', polygonsAdded);
-    incrementPerfCounter('mercator.active_area.markers_added', markersAdded);
-    // Item 6: return bands with data for updateBandLabels
-    return new Set(Object.keys(pointsByBand));
+    const build = (cellDeg, subset) => {
+        const timer = startPerfTimer();
+        const field = buildGeoBandField(subset, { cellDeg, radiusKm });
+        const entry = { shapes: buildTerritoryShapes(field), lone: loneDotPoints(field, subset) };
+        endPerfTimer('mercator.active_area.build_ms', timer);
+        incrementPerfCounter('mercator.active_area.builds', 1);
+        return entry;
+    };
+    const shapesFor = (cellDeg, view) => {
+        const hit = shapesByCell.get(cellDeg);
+        // Rough size of the full-extent grid (longitude padding taken as
+        // twice the latitude padding, the value near 60 deg N).
+        const fullCells = extent
+            ? ((extent.e - extent.w + 4 * padLatDeg) / cellDeg) * ((extent.n - extent.s + 2 * padLatDeg) / cellDeg)
+            : 0;
+        if (fullCells <= MAX_FIELD_CELLS) {
+            if (hit) return hit;
+            const entry = build(cellDeg, pts);
+            shapesByCell.set(cellDeg, entry);
+            return entry;
+        }
+        const vs = view.getSouth(), vn = view.getNorth(), vw = view.getWest(), ve = view.getEast();
+        if (hit && hit.cover && vs >= hit.cover.s && vn <= hit.cover.n && vw >= hit.cover.w && ve <= hit.cover.e) return hit;
+        // Cover the view plus half a view on each side; take points one
+        // kernel radius further out so densities inside the cover are exact.
+        const dLat = (vn - vs) / 2, dLng = (ve - vw) / 2;
+        const cover = { s: vs - dLat, n: vn + dLat, w: vw - dLng, e: ve + dLng };
+        const padLng = padLatDeg / Math.max(0.15, Math.cos(Math.min(80, Math.max(Math.abs(cover.s), Math.abs(cover.n))) * Math.PI / 180));
+        const subset = pts.filter((p) => p.lat >= cover.s - padLatDeg && p.lat <= cover.n + padLatDeg
+            && p.lng >= cover.w - padLng && p.lng <= cover.e + padLng);
+        const entry = { ...build(cellDeg, subset), cover };
+        shapesByCell.set(cellDeg, entry);
+        return entry;
+    };
+    const TerritoryLayer = L.Layer.extend({
+        onAdd(m) {
+            this._m = m;
+            this._c = L.DomUtil.create('canvas', 'leaflet-zoom-hide active-area-layer');
+            this._c.style.pointerEvents = 'none';
+            m.getPanes().overlayPane.appendChild(this._c);
+            m.on('moveend zoomend resize', this._redraw, this);
+            this._redraw();
+        },
+        onRemove(m) {
+            m.off('moveend zoomend resize', this._redraw, this);
+            this._c.remove();
+        },
+        _redraw() {
+            const timer = startPerfTimer();
+            const m = this._m;
+            // ~7 px per grid cell at the current zoom, snapped to a few sizes
+            // so small zoom changes reuse the cached shapes.
+            const target = 7 * 360 / (256 * Math.pow(2, m.getZoom()));
+            const cellDeg = [0.125, 0.25, 0.5, 1, 2].find((d) => d >= target) || 2;
+            const entry = shapesFor(cellDeg, m.getBounds());
+            const size = m.getSize();
+            const dpr = window.devicePixelRatio || 1;
+            const c = this._c;
+            c.width = Math.round(size.x * dpr);
+            c.height = Math.round(size.y * dpr);
+            c.style.width = `${size.x}px`;
+            c.style.height = `${size.y}px`;
+            L.DomUtil.setPosition(c, m.containerPointToLayerPoint([0, 0]));
+            const ctx = c.getContext('2d');
+            if (!ctx) return;
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, size.x, size.y);
+            const project = (lat, lng) => {
+                const p = m.latLngToContainerPoint([lat, lng]);
+                return { x: p.x, y: p.y };
+            };
+            drawTerritoryShapes(ctx, entry.shapes, project, { pixelRatio: 1 });
+            drawDots(ctx, entry.lone, project, 3.5);
+            endPerfTimer('mercator.active_area.draw_ms', timer);
+        },
+    });
+    return new TerritoryLayer();
 }
