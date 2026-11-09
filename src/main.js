@@ -22,7 +22,7 @@ const minutesHost = document.getElementById('minutes-root');
 if (minutesHost) new Range({ target: minutesHost, props: { id: 'minutes', valId: 'minutes-val', label: 'Max spot age', unit: 'min', key: 'minutes', min: 1, max: 60 } });
 
 const clusterHost = document.getElementById('cluster-root');
-if (clusterHost) new Range({ target: clusterHost, props: { id: 'cluster-distance', valId: 'cluster-dist-val', label: 'Max cluster dist', unit: 'km', key: 'clusterDistance', min: 100, max: 2000, step: 50 } });
+if (clusterHost) new Range({ target: clusterHost, props: { id: 'cluster-distance', valId: 'cluster-dist-val', label: 'Area smoothing', unit: 'km', key: 'clusterDistance', min: 100, max: 2000, step: 50 } });
 
 const autoZoomHost = document.getElementById('auto-zoom-root');
 if (autoZoomHost) new Toggle({ target: autoZoomHost, props: { id: 'auto-zoom', label: 'Auto-zoom', key: 'autoZoom', hook: '__horstAutoZoomChanged' } });

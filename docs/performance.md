@@ -120,6 +120,6 @@ Local, 1.4M messages (a cluster-heavy synthetic feed, harder than prod): `hot_ba
 - The in-memory (no-Postgres) baseline path (`snapshotEventsLocked`, `buildBandActivityByBin`, `cloneBuckets`) is dev-only and was not optimised; it is most of what remains in the indexed `EvaluateArea` benchmark.
 - Per-client gzip writers for the SSE stream cost ~1 MB each (150 clients, about 160 MB). `BestSpeed` saves a quarter of that at about 30% larger frames; not done.
 - `MQTTMessage` could shrink further (152 bytes now): `B`, `MD` and `Source` are low-cardinality strings that could be small enums, and `RP`/`TXPower` could share a word.
-- Active-area style with 20k unique coordinates blocks the main thread for ~130 ms (capped DBSCAN); first azimuthal switch ~95 ms. Neither shows at realistic spot counts.
+- Active-area style (band territories, `static/active-area.js`) with 20k spots: a pan or azimuthal drag only re-projects cached contour rings (Mercator 2-3 ms, azimuthal drag on par with the Grid style), but each data rebuild (every 2 s on Mercator, 1 s on azimuthal) runs the density field and ring tracing on the main thread, 40-80 ms in a worst case where every band covers the world. Moving the build into a Web Worker is the next step if that shows.
 - `static/vendor/world.geojson` (3 MB) is still embedded in the binary though the app no longer fetches it.
 - Postgres paths (cold baseline queries, raw-spot disk growth) were not profiled: no database in this environment.

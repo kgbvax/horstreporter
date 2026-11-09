@@ -12,9 +12,9 @@ C'est en pratique une interface alternative pour <a href="https://www.pskreporte
 * **Projection :** Basculez entre *Mercator* (la carte du monde plate habituelle) et *Azimutale* (une vue en grand cercle centrée sur votre position — pratique pour lire les azimuts d'antenne et les distances).
 * **Styles :** Choisissez comment visualiser les données :
     * *Grid :* Regroupe les spots en carrés Maidenhead. La couleur indique la bande dominante, l'opacité la force du signal.
-    * *Active area :* Trace des polygones dynamiques englobant les spots regroupés pour montrer l'empreinte globale de propagation.
+    * *Active area :* Colore chaque région avec la bande la plus active à cet endroit. Des hachures diagonales montrent une deuxième bande presque aussi active. Les spots isolés apparaissent comme des points.
 
-* **Réglages :** Sous la liste des bandes, **Layers** active les calques de la carte et les sources de spots (RBN, WSPR, étiquettes DXCC, couleurs des pays, prévision), **Display** règle l'âge des spots, les seuils SNR, la distance de regroupement, le zoom automatique et plus encore, et **Notifications** gère les alertes push.
+* **Réglages :** Sous la liste des bandes, **Layers** active les calques de la carte et les sources de spots (RBN, WSPR, étiquettes DXCC, couleurs des pays, prévision), **Display** règle l'âge des spots, les seuils SNR, le lissage des zones, le zoom automatique et plus encore, et **Notifications** gère les alertes push.
 * Si vous ne voyez pas assez de données pour votre carré, activez **Adj. squares** qui récupère aussi les données des 8 carrés voisins.
 
 ## Interaction avec la carte
