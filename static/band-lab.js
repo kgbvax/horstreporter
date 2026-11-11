@@ -2,6 +2,7 @@ import { state, panelQth } from './state.js';
 import { bandColors, getEnabledBands, getMinSnrMode, getSelectedBand, locatorToBounds, haversineKm, hexToRgba } from './utils.js';
 import { dashedLine, fillCircle } from './canvas-draw.js';
 import { parseAreaPayload } from './live-area.js';
+import { parseFeedLag } from './feed-lag.js';
 
 const UPDATE_THROTTLE_MS = 300;
 const DX_FETCH_INTERVAL_MS = 15000;
@@ -405,7 +406,8 @@ function snapshotRows(grouped, qth, minutes, dxReady, thresholds) {
     const distanceCache = qthCenter ? computeDistanceCache(grouped, qthCenter) : null;
     const capKm = qthCenter ? getGlobalDistanceCapKm(grouped, qthCenter, distanceCache) : null;
     const area = dxReady ? parseAreaPayload(runtime.dxCache?.area) : null;
-    runtime.rowsSnap = { grouped, qthCenter, distanceCache, capKm, dxBands, dxReady, area, minutes, thresholds, snrAxis: miniSnrAxis(grouped) };
+    const feedLag = dxReady ? parseFeedLag(runtime.dxCache) : null;
+    runtime.rowsSnap = { grouped, qthCenter, distanceCache, capKm, dxBands, dxReady, area, feedLag, minutes, thresholds, snrAxis: miniSnrAxis(grouped) };
     notifyRows();
 }
 
@@ -424,6 +426,13 @@ export function subscribeBandRows(fn) {
 // first dx_conditions answer for this qth/window or when none was reported.
 export function getLiveArea() {
     return runtime.rowsSnap?.area ?? null;
+}
+
+// The PSKReporter feed delay the rows were computed with (feed-lag.js), with
+// the time range of the rows, or null while the feed is on time.
+export function getFeedLag() {
+    const lag = runtime.rowsSnap?.feedLag;
+    return lag ? { ...lag, minutes: runtime.rowsSnap.minutes } : null;
 }
 
 // The row model for one band: dx metrics (null until they arrive or when the

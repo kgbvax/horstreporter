@@ -566,6 +566,8 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	if dxBaseline != nil {
 		_, dxBaselineEventCount, dxBaselineHistoryMinutes = dxBaseline.Stats(time.Now().Unix())
 	}
+	// The raw estimate, before the per-window cap evalNowFor applies.
+	feedLagRaw, feedLagMeasured := pskrFeedLag.estimate(time.Now().Unix())
 	propIntelReqs, propIntelErrs, propIntelSurges := propIntelAccounting.snapshot()
 	pushSurges, pushSent, pushErrs := pushAccounting.snapshot()
 	// Persistence health: dx_raw_spots history depends on the raw flush
@@ -598,6 +600,8 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		DxBaselineEventCount int                  `json:"dx_baseline_event_count"`
 		DxBaselineHistoryM   int                  `json:"dx_baseline_history_minutes"`
 		DxBaselineMaxEvents  int                  `json:"dx_baseline_max_events"`
+		PSKRFeedLagSeconds   int64                `json:"pskr_feed_lag_seconds"`
+		PSKRFeedLagMeasured  bool                 `json:"pskr_feed_lag_measured"`
 		RbnConnAttempt       int64                `json:"rbn_connect_attempts"`
 		RbnConnected         int64                `json:"rbn_connected_sessions"`
 		RbnLinesSeen         int64                `json:"rbn_lines_seen"`
@@ -636,6 +640,8 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		DxBaselineEventCount: dxBaselineEventCount,
 		DxBaselineHistoryM:   dxBaselineHistoryMinutes,
 		DxBaselineMaxEvents:  dxBaselineMaxEvents,
+		PSKRFeedLagSeconds:   feedLagRaw,
+		PSKRFeedLagMeasured:  feedLagMeasured,
 		RbnConnAttempt:       rbnAttempts,
 		RbnConnected:         rbnConnected,
 		RbnLinesSeen:         rbnLinesSeen,
@@ -783,7 +789,10 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 
 	area := liveAreaForRequest(r, qth, surroundings, now)
-	win := snapshotHubHistoryWindowSeq(now, minutes)
+	// The window ends where the PSKReporter feed is, not at the wall clock,
+	// while the feed runs late (feed_lag.go).
+	evalNow, feedLag, feedLagRaw := evalNowFor(now, minutes)
+	win := snapshotHubHistoryWindowSeq(evalNow, minutes)
 
 	resp := dxConditionsResponse{
 		QTH:              qth,
@@ -803,8 +812,11 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dxBaseline != nil {
-		resp = dxBaseline.EvaluateAreaWindow(qth, surroundings, minutes, cwMinDb, win, now, area)
+		resp = dxBaseline.EvaluateAreaWindow(qth, surroundings, minutes, cwMinDb, win, evalNow, area)
 	}
+	resp.GeneratedAt = now
+	resp.FeedLagSeconds = feedLag
+	resp.PSKRFeedLagSeconds = feedLagRaw
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -842,7 +854,8 @@ func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 
 	area := liveAreaForRequest(r, qth, surroundings, now)
-	win := snapshotHubHistoryWindowSeq(now, minutes)
+	evalNow, feedLag, _ := evalNowFor(now, minutes)
+	win := snapshotHubHistoryWindowSeq(evalNow, minutes)
 
 	resp := hotBandsResponse{
 		QTH:              qth,
@@ -854,8 +867,10 @@ func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dxBaseline != nil {
-		resp = dxBaseline.HotBandsAreaWindow(qth, surroundings, minutes, cwMinDb, currentBand, win, now, area, opts)
+		resp = dxBaseline.HotBandsAreaWindow(qth, surroundings, minutes, cwMinDb, currentBand, win, evalNow, area, opts)
 	}
+	resp.GeneratedAt = now
+	resp.FeedLagSeconds = feedLag
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

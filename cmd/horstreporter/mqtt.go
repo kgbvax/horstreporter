@@ -129,9 +129,11 @@ func ingestPSKRMessage(topic string, payload []byte) {
 	m.RL = strings.ToUpper(strings.TrimSpace(m.RL))
 
 	if pskrModeFeedsBaseline(m.MD) {
+		arrival := time.Now().Unix()
 		if m.T == 0 {
-			m.T = time.Now().Unix()
+			m.T = arrival
 		}
+		pskrFeedLag.observe(m.T, arrival)
 
 		if dxBaseline != nil {
 			dxBaseline.Observe(m)

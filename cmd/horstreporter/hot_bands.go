@@ -68,7 +68,11 @@ type hotBandsResponse struct {
 	CurrentBand      string `json:"current_band"`
 	CurrentSlotOfDay int    `json:"current_slot_of_day"`
 	GeneratedAt      int64  `json:"generated_at"`
-	BaselineHistoryM int    `json:"baseline_history_minutes"`
+	// FeedLagSeconds is how far the window was moved back from the wall clock
+	// because the PSKReporter feed runs late (feed_lag.go); 0 while it is on
+	// time.
+	FeedLagSeconds   int64 `json:"feed_lag_seconds"`
+	BaselineHistoryM int   `json:"baseline_history_minutes"`
 	// Area is the live area the recommendations are scoped to; present only
 	// when the request asked for one (rings=auto or rings=N).
 	Area            *liveArea               `json:"area,omitempty"`

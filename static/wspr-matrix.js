@@ -687,7 +687,9 @@ function renderLookCell(band, region, cell, data, regionNames, heatMax = 0) {
     const minutes = Number(data?.minutes) || 15;
     const svg = runtime.style === 'day'
         ? dayStripSvg(cell, now, minutes, label)
-        : sparklineSvg(cell, now, minutes, Number(data?.trend_bin_minutes) || 5, label);
+        // The trend ends at the wall clock (trend_now), which is later than
+        // now while the PSKReporter feed runs late (feed_lag.go).
+        : sparklineSvg(cell, Number(data?.trend_now) || now, minutes, Number(data?.trend_bin_minutes) || 5, label);
     const heat = isSilent(cell) ? '' : heatCss(cell.spot_count, heatMax);
     return `<td class="wspr-matrix-cell wspr-look-cell${isSilent(cell) ? ' is-silent' : ''}${heat ? ' has-heat' : ''}"${heat ? ` style="--heat:${heat}"` : ''} ` +
         `${cellAttrs(band, region, cell, regionNames)}>${svg}</td>`;

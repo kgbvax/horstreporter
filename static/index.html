@@ -41,6 +41,7 @@
     <link rel="modulepreload" href="session-ring.js">
     <link rel="modulepreload" href="stream-wire.js">
     <link rel="modulepreload" href="live-area.js">
+    <link rel="modulepreload" href="feed-lag.js">
     <link rel="modulepreload" href="stream-status.js">
     <link rel="modulepreload" href="grayline.js">
     <link rel="modulepreload" href="map-tokens.js">
@@ -411,6 +412,7 @@
                     <div><strong>Region cells:</strong> reports from your area over the last 15 minutes against their normal for this hour, independent of the time range. <em>vs Normal</em> places each region on a scale from ×¼ to ×4 of its normal (a few reports on a usually quiet band stay near ×1), <em>Day</em> draws each path's usual day with a dot for now, <em>Trend</em> shows the last hour in 5-minute steps against the normal. <em>Heat</em> colours each cell by its reports now, from blue (few) to red (the busiest path).</div>
                 </div>
                 <div id="cond-area" class="cond-area small" role="status" hidden></div>
+                <div id="cond-feed-lag" class="cond-area small" role="status" hidden></div>
                 <div id="band-lab-content" class="cond-now-summary">
                     <div id="band-lab-summary" class="band-lab-summary small"></div>
                 </div>

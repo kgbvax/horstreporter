@@ -81,6 +81,7 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `spot.go` — spot model and spot-to-client matching
 - `server.go` — HTTP handlers
 - `dx_conditions.go` — DX baseline scoring engine
+- `feed_lag.go` — measures how late the PSKReporter MQTT feed runs; dx_conditions / hot_bands / prop_intel v2 end their "now" window at the feed head instead of the wall clock while it is late (capped to the hub retention and the restart gap; v2 moves PSKReporter spots only)
 - `live_area.go` — adaptive live area (`rings=auto`): widens a sparse home square ring by ring, cached per grid4, shared by stream / dx_conditions / hot_bands / prop_intel v2
 - `dx_postgres.go` — Postgres persistence for raw spots and baseline
 - `rbn.go` — optional RBN (Reverse Beacon Network) CW/RTTY raw telnet ingest; `source_type='rbn'`, activity + live only (kept out of the FT8-SNR baseline)
