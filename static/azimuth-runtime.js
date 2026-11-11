@@ -1,6 +1,6 @@
 import { state as appState } from './state.js';
 import { regionForLocatorCached } from './utils.js';
-import { bandColors, getCountryColoringEnabled, getCountryFillForFeature, getEnabledBands, getForecastEnabled, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, gridSnrOpacity, topQuartileMean, locatorToBounds, getGridResolution, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
+import { bandColors, getCountryColoringEnabled, getCountryFillForFeature, getEnabledBands, getGraylineEnabled, getGraylineOverlayOpacities, getSubsolarPoint, getMinSnrMode, getSelectedBand, gridSnrOpacity, topQuartileMean, locatorToBounds, getGridResolution, degToRad, radToDeg, haversineKm, hexToRgb, blendOverlayColors, normalizeLongitude as normalizeLng } from './utils.js';
 import { radialLine, strokeCircle } from './canvas-draw.js';
 import { aggregateSpots, buildGeoBandField, buildTerritoryShapes, coarsenForExtent, drawDots, drawTerritoryShapes, loneDotPoints } from './active-area.js';
 import { dataNow, GRAYLINE_BUCKET_MS } from './data-now.js';
@@ -1045,92 +1045,6 @@ function drawGrayline(ctx, width, height, dataNowMs) {
 // key machinery and the basemap draw steps without the full scene render.
 export const __internals = { state, drawGrayline, drawBackground, drawWorld, drawAzimuthIndicator, drawDxccLabels };
 
-// bearingFromCenter returns the initial great-circle bearing (0–360°, 0 = N) from
-// the station center to a point.
-export function bearingFromCenter(lat, lng) {
-    const lat1 = degToRad(state.center[0]);
-    const lat2 = degToRad(lat);
-    const dLng = degToRad(lng - state.center[1]);
-    const y = Math.sin(dLng) * Math.cos(lat2);
-    const x = (Math.cos(lat1) * Math.sin(lat2)) - (Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng));
-    return (radToDeg(Math.atan2(y, x)) + 360) % 360;
-}
-
-// drawTrendHalo highlights azimuth sectors where spot activity is RISING over the
-// streamed window (newer half vs older half), as a faint arc just inside the rim.
-// This is recent momentum from live data, NOT a slot-of-day historical baseline.
-export function drawTrendHalo(ctx, width, height, filteredSpots) {
-    if (!filteredSpots || filteredSpots.length < 8) return;
-
-    const SECTORS = 24;
-    const older = new Array(SECTORS).fill(0);
-    const newer = new Array(SECTORS).fill(0);
-    // Per-sector, per-band newer/older counts so the halo can be tinted with
-    // the band whose activity is rising most in that direction.
-    const newerByBand = Array.from({ length: SECTORS }, () => ({}));
-    const olderByBand = Array.from({ length: SECTORS }, () => ({}));
-    let maxAge = 0;
-    for (const s of filteredSpots) {
-        const age = Number(s?.ageSeconds) || 0;
-        if (age > maxAge) maxAge = age;
-    }
-    if (maxAge < 120) return; // window too short to read a trend
-    const split = maxAge / 2;
-
-    for (const s of filteredSpots) {
-        if (!Number.isFinite(s?.lat) || !Number.isFinite(s?.lng)) continue;
-        const sector = Math.floor((bearingFromCenter(s.lat, s.lng) / 360) * SECTORS) % SECTORS;
-        const band = s?.band || 'all';
-        if ((Number(s.ageSeconds) || 0) <= split) {
-            newer[sector] += 1;
-            newerByBand[sector][band] = (newerByBand[sector][band] || 0) + 1;
-        } else {
-            older[sector] += 1;
-            olderByBand[sector][band] = (olderByBand[sector][band] || 0) + 1;
-        }
-    }
-
-    const cx = width / 2;
-    const cy = height / 2;
-    const radiusBase = Math.min(width, height) * 0.47;
-    const horizonAngular = Math.min(MAX_VISIBLE_C, state.horizonKm / EARTH_RADIUS_KM);
-    const scale = (radiusBase * state.zoom) / Math.PI;
-    const rimRadius = Math.min(scale * horizonAngular, radiusBase - AZIMUTH_SCALE_CLEARANCE_PX) - 8;
-    if (rimRadius <= 0) return;
-
-    const sectorRad = (2 * Math.PI) / SECTORS;
-    // Sectors with no single rising band fall back to the neutral map ink.
-    const neutralColor = mapTokens().graticule;
-    ctx.save();
-    ctx.lineCap = 'butt';
-    ctx.lineWidth = 5;
-    for (let sec = 0; sec < SECTORS; sec += 1) {
-        const delta = newer[sec] - older[sec];
-        if (delta < 2) continue; // only meaningfully rising sectors
-        // Tint the arc with whichever band is rising most in this sector.
-        let risingBand = null;
-        let bestRise = 0;
-        const bands = newerByBand[sec];
-        for (const band in bands) {
-            const rise = bands[band] - (olderByBand[sec][band] || 0);
-            if (rise > bestRise) { bestRise = rise; risingBand = band; }
-        }
-        ctx.strokeStyle = (risingBand && bandColors[risingBand]) || neutralColor;
-        // Keep the tint faint: a touch dimmer than the old monochrome halo.
-        ctx.globalAlpha = Math.min(0.42, 0.12 + (0.06 * delta));
-        // Sector spans bearings [sec, sec+1) * (360/SECTORS); 0° = up (canvas -Y).
-        const startBearing = sec * sectorRad;
-        const endBearing = (sec + 1) * sectorRad;
-        // Convert bearing (0=N, clockwise) to canvas angle (0=+X, clockwise, Y-down).
-        const a0 = startBearing - (Math.PI / 2);
-        const a1 = endBearing - (Math.PI / 2);
-        ctx.beginPath();
-        ctx.arc(cx, cy, rimRadius, a0, a1);
-        ctx.stroke();
-    }
-    ctx.restore();
-}
-
 function drawAzimuthIndicator(ctx, width, height) {
     const centerX = width / 2;
     const centerY = height / 2;
@@ -1666,10 +1580,6 @@ export function renderAzimuthScene({ spots = [], style, dataNowMs } = {}) {
             if (profile) profile.graylineStart = nowMs();
             drawGrayline(state.ctx, width, height, dataNowMs);
             if (profile) profile.graylineEnd = nowMs();
-        }
-
-        if (getForecastEnabled()) {
-            drawTrendHalo(state.ctx, width, height, filteredSpots);
         }
 
         if (profile) profile.spotsStart = nowMs();

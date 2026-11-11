@@ -19,17 +19,6 @@ beforeAll(async () => {
 
 // Minimal canvas 2D context that records draw calls, for asserting which
 // primitives a render function emits without a real canvas.
-function makeRecordingCtx(calls) {
-    const inc = (k) => { calls[k] = (calls[k] || 0) + 1; };
-    return {
-        save() {}, restore() {}, beginPath() {}, closePath() {},
-        moveTo() { inc('moveTo'); }, lineTo() { inc('lineTo'); },
-        arc() { inc('arc'); }, stroke() { inc('stroke'); }, fill() { inc('fill'); },
-        setLineDash() { inc('dash'); }, clearRect() {}, fillRect() {},
-        globalAlpha: 1, strokeStyle: '', fillStyle: '', lineWidth: 1, lineCap: '', lineJoin: ''
-    };
-}
-
 describe('azimuth.js', () => {
     it('clamps azimuth zoom to supported range and handles invalid input', () => {
         expect(az.clampAzimuthZoom(0.1)).toBe(1);
@@ -48,27 +37,6 @@ describe('azimuth.js', () => {
         expect(p.visible).toBe(true);
         expect(p.x).toBeCloseTo(0, 8);
         expect(p.y).toBeCloseTo(0, 8);
-    });
-
-    it('computes initial great-circle bearing from the station center', () => {
-        az.setAzimuthCenter([0, 0]);
-        expect(az.bearingFromCenter(10, 0)).toBeCloseTo(0, 3);   // due north
-        expect(az.bearingFromCenter(0, 10)).toBeCloseTo(90, 3);  // due east
-        expect(az.bearingFromCenter(-10, 0)).toBeCloseTo(180, 3); // due south
-        expect(az.bearingFromCenter(0, -10)).toBeCloseTo(270, 3); // due west
-    });
-
-    it('draws a rim halo arc for azimuth sectors with rising activity', () => {
-        az.setAzimuthCenter([52, 7]);
-        const spots = [];
-        for (let i = 0; i < 4; i++) spots.push({ lat: 52, lng: 30, ageSeconds: 200 }); // older
-        for (let i = 0; i < 12; i++) spots.push({ lat: 52, lng: 30, ageSeconds: 10 }); // newer -> rising
-        const calls = { stroke: 0, arc: 0, fill: 0 };
-        const ctx = makeRecordingCtx(calls);
-        az.drawTrendHalo(ctx, 800, 800, spots);
-        expect(calls.arc).toBeGreaterThanOrEqual(1);
-        expect(calls.stroke).toBeGreaterThanOrEqual(1);
-        expect(calls.fill).toBe(0);
     });
 
     it('computes 30 degree azimuth labels including cardinals', () => {
