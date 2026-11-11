@@ -141,13 +141,19 @@ async function getOrCreateSubscription(reg, appServerKey) {
 
 // Post the subscription + preferences to the backend. Idempotent: a
 // re-POST of an existing endpoint updates preferences in place.
+// subscriptionKeys returns the subscription's encryption keys as the
+// base64url strings the server stores. A browser PushSubscription has no
+// `keys` property: the keys come from toJSON() (or getKey(), as ArrayBuffers).
+export function subscriptionKeys(sub) {
+    const json = sub && typeof sub.toJSON === 'function' ? sub.toJSON() : null;
+    const keys = (json && json.keys) || {};
+    return { auth: keys.auth || '', p256dh: keys.p256dh || '' };
+}
+
 async function postSubscription(sub, preferences) {
     const body = {
         endpoint: sub.endpoint,
-        keys: {
-            auth: sub.keys ? sub.keys.auth : '',
-            p256dh: sub.keys ? sub.keys.p256dh : ''
-        },
+        keys: subscriptionKeys(sub),
         qth: getQth(),
         preferences
     };

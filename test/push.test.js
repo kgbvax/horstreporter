@@ -22,7 +22,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 function installMockServiceWorker({ existingSubscription }) {
     const sub = existingSubscription || {
         endpoint: 'https://fcm.googleapis.com/fcm/test-sub',
-        keys: { auth: 'a', p256dh: 'p' },
+        // Like a browser PushSubscription: no `keys` property, keys via toJSON().
+        toJSON: () => ({ endpoint: 'https://fcm.googleapis.com/fcm/test-sub', keys: { auth: 'a', p256dh: 'p' } }),
         unsubscribe: vi.fn(() => Promise.resolve(true))
     };
     const registration = {
@@ -376,7 +377,7 @@ describe('push.js UI: enable flow posts subscription to backend', () => {
         expect(global.__pushSubCalls.length).toBeGreaterThanOrEqual(1);
         const last = global.__pushSubCalls[global.__pushSubCalls.length - 1];
         expect(last.endpoint).toBe('https://fcm.googleapis.com/fcm/test-sub');
-        expect(last.keys).toBeDefined();
+        expect(last.keys).toEqual({ auth: 'a', p256dh: 'p' });
         expect(last.qth).toBe('JO62');
         // The status indicator should reflect success.
         const status = document.getElementById('push-status');
@@ -511,7 +512,7 @@ describe('push.js UI: re-subscription-after-restart reconciliation', () => {
         // reconciliation path has something to re-POST.
         const existingSub = {
             endpoint: 'https://fcm.googleapis.com/fcm/existing',
-            keys: { auth: 'a', p256dh: 'p' },
+            toJSON: () => ({ endpoint: 'https://fcm.googleapis.com/fcm/existing', keys: { auth: 'a', p256dh: 'p' } }),
             unsubscribe: vi.fn(() => Promise.resolve(true))
         };
         installMockServiceWorker({ existingSubscription: existingSub });
@@ -529,5 +530,14 @@ describe('push.js UI: re-subscription-after-restart reconciliation', () => {
         // The re-enable indicator should be hidden after success.
         const hint = document.getElementById('push-reenable-hint');
         expect(hint.style.display).toBe('none');
+    });
+});
+describe('push.js subscriptionKeys', () => {
+    it('reads the keys through toJSON like a browser PushSubscription', async () => {
+        const { subscriptionKeys } = await import('../static/push.js');
+        const sub = { endpoint: 'https://x/y', toJSON: () => ({ keys: { auth: 'A', p256dh: 'P' } }) };
+        expect(subscriptionKeys(sub)).toEqual({ auth: 'A', p256dh: 'P' });
+        // A PushSubscription has no `keys` property; without toJSON nothing is sent.
+        expect(subscriptionKeys({ endpoint: 'https://x/y' })).toEqual({ auth: '', p256dh: '' });
     });
 });
