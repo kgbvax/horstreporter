@@ -10,8 +10,9 @@ go run ./cmd/horstreporter -dev -port 8080
 
 # Optional RBN (Reverse Beacon Network) CW/RTTY telnet ingest — public relay, no password,
 # but it prompts for a callsign before streaming (set -rbn-callsign / RBN_CALLSIGN). Fills the
-# activity chart/live stream during CW/SSB contests when FT8 thins out. Minimal scope:
-# activity + live only, kept out of the FT8-SNR conditions baseline (rbn.go).
+# activity chart/live stream during CW/SSB contests when FT8 thins out. Kept out of the
+# FT8-SNR conditions baseline (rbn.go). Set QRZ_USERNAME / QRZ_PASSWORD to look up the
+# locators of RBN stations that no PSKReporter / WSPR report showed (optional).
 #   go run ./cmd/horstreporter -dev -port 8080 -rbn-enable -rbn-callsign <yourcall>
 # Optional WSPR ingest — wspr.live ClickHouse HTTP poller (reference-only, like RBN):
 #   go run ./cmd/horstreporter -dev -port 8080 -wspr-enable
@@ -81,9 +82,13 @@ Single Go binary + plain-ES-modules frontend (no React/Vue build pipeline).
 - `spot.go` — spot model and spot-to-client matching
 - `server.go` — HTTP handlers
 - `dx_conditions.go` — DX baseline scoring engine
+- `feed_lag.go` — measures how late the PSKReporter MQTT feed runs; dx_conditions / hot_bands / prop_intel v2 end their "now" window at the feed head instead of the wall clock while it is late (capped to the hub retention and the restart gap; v2 moves PSKReporter spots only)
 - `live_area.go` — adaptive live area (`rings=auto`): widens a sparse home square ring by ring, cached per grid4, shared by stream / dx_conditions / hot_bands / prop_intel v2
 - `dx_postgres.go` — Postgres persistence for raw spots and baseline
-- `rbn.go` — optional RBN (Reverse Beacon Network) CW/RTTY raw telnet ingest; `source_type='rbn'`, activity + live only (kept out of the FT8-SNR baseline)
+- `rbn.go` — optional RBN (Reverse Beacon Network) CW/RTTY raw telnet ingest; `source_type='rbn'`, activity + live + prop_intel v2 (kept out of the FT8-SNR baseline). Spots carry calls only; locators come from:
+  - `rbn_skimmers.go` — RBN's published skimmer list (grid per skimmer, refetched every 6 h)
+  - `call_locators.go` — callsign → locator cache, filled from PSKReporter / WSPR history by a background walker (never on the ingest hot path)
+  - `qrz_worker.go` + `internal/qrzlookup/` — rate-limited QRZ.com lookups for calls the feeds never showed (`QRZ_USERNAME` / `QRZ_PASSWORD`), persisted in `callsign_locators`
 - `wspr.go` — optional WSPR ingest (wspr.live ClickHouse HTTP poller); `source_type='wspr'`, reference-only (kept out of the FT8-SNR baseline, like RBN)
 - `opmode.go` — operator mode endpoint wiring (browser calls local agent directly; backend never proxies)
 - `internal/httpx/` — gzip middleware for JSON/static responses + precompressed embedded assets

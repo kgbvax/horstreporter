@@ -31,7 +31,7 @@ ssh "${USER}@${HOST}" << 'EOF'
     # REMOVED_FLAGS take a value ("-f v" or "-f=v"): the next token goes too.
     # REMOVED_BOOL_FLAGS are booleans ("-f" or "-f=true"): never swallow the
     # next token, which is the following flag.
-    REMOVED_FLAGS="horstprop-url opmode-agent-url pathscope-url qrz-username qrz-password proplab-cell-retention-days dxcluster-endpoint dxcluster-reconnect-seconds dxcluster-username dxcluster-password"
+    REMOVED_FLAGS="horstprop-url opmode-agent-url pathscope-url proplab-cell-retention-days dxcluster-endpoint dxcluster-reconnect-seconds dxcluster-username dxcluster-password"
     REMOVED_BOOL_FLAGS="proplab-sw-enable dxcluster-enable dxcluster-verbose"
     ENVFILE=/etc/default/horstreporter
     if [ -f "$ENVFILE" ]; then

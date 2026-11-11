@@ -566,6 +566,8 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	if dxBaseline != nil {
 		_, dxBaselineEventCount, dxBaselineHistoryMinutes = dxBaseline.Stats(time.Now().Unix())
 	}
+	// The raw estimate, before the per-window cap evalNowFor applies.
+	feedLagRaw, feedLagMeasured := pskrFeedLag.estimate(time.Now().Unix())
 	propIntelReqs, propIntelErrs, propIntelSurges := propIntelAccounting.snapshot()
 	pushSurges, pushSent, pushErrs := pushAccounting.snapshot()
 	// Persistence health: dx_raw_spots history depends on the raw flush
@@ -585,43 +587,46 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := struct {
-		ActiveConnections    int                  `json:"active_connections"`
-		HistorySize          int                  `json:"history_size"`
-		HistoryMinutes       int                  `json:"history_minutes"`
-		HistoryRetentionMins int                  `json:"history_retention_minutes"`
-		HistorySizeKB        int64                `json:"history_size_kb"`
-		SessionsTotal        int64                `json:"sessions_total"`
-		SessionsCompleted    int64                `json:"sessions_completed"`
-		SessionsActive       int64                `json:"sessions_active"`
-		SessionBytesTotal    int64                `json:"session_bytes_total"`
-		SessionBytesAvg      float64              `json:"session_bytes_avg"`
-		DxBaselineEventCount int                  `json:"dx_baseline_event_count"`
-		DxBaselineHistoryM   int                  `json:"dx_baseline_history_minutes"`
-		DxBaselineMaxEvents  int                  `json:"dx_baseline_max_events"`
-		RbnConnAttempt       int64                `json:"rbn_connect_attempts"`
-		RbnConnected         int64                `json:"rbn_connected_sessions"`
-		RbnLinesSeen         int64                `json:"rbn_lines_seen"`
-		RbnParsed            int64                `json:"rbn_parsed_spots"`
-		RbnPersisted         int64                `json:"rbn_persisted_spots"`
-		RbnForwarded         int64                `json:"rbn_live_forwarded"`
-		RbnDroppedLoc        int64                `json:"rbn_dropped_no_locator"`
-		WsprPollAttempts     int64                `json:"wspr_poll_attempts"`
-		WsprPollFailures     int64                `json:"wspr_poll_failures"`
-		WsprRowsSeen         int64                `json:"wspr_rows_seen"`
-		WsprParsed           int64                `json:"wspr_parsed_spots"`
-		WsprPersisted        int64                `json:"wspr_persisted_spots"`
-		WsprForwarded        int64                `json:"wspr_live_forwarded"`
-		WsprDroppedLoc       int64                `json:"wspr_dropped_no_locator"`
-		WsprDuplicateRows    int64                `json:"wspr_duplicate_rows"`
-		StreamBytesWire      int64                `json:"stream_bytes_wire_total"`
-		StreamHistoryBytes   int64                `json:"stream_history_bytes_total"`
-		StreamSpotsSent      int64                `json:"stream_spots_sent_total"`
-		StreamFrames         int64                `json:"stream_frames_total"`
-		StreamResumeDelta    int64                `json:"stream_resume_delta_total"`
-		StreamResumeFull     int64                `json:"stream_resume_full_total"`
-		Postgres             *postgresStatsBlock  `json:"postgres,omitempty"`
-		PropIntel            *propIntelStatsBlock `json:"prop_intel"`
-		Push                 *pushStatsBlock      `json:"push"`
+		ActiveConnections    int                   `json:"active_connections"`
+		HistorySize          int                   `json:"history_size"`
+		HistoryMinutes       int                   `json:"history_minutes"`
+		HistoryRetentionMins int                   `json:"history_retention_minutes"`
+		HistorySizeKB        int64                 `json:"history_size_kb"`
+		SessionsTotal        int64                 `json:"sessions_total"`
+		SessionsCompleted    int64                 `json:"sessions_completed"`
+		SessionsActive       int64                 `json:"sessions_active"`
+		SessionBytesTotal    int64                 `json:"session_bytes_total"`
+		SessionBytesAvg      float64               `json:"session_bytes_avg"`
+		DxBaselineEventCount int                   `json:"dx_baseline_event_count"`
+		DxBaselineHistoryM   int                   `json:"dx_baseline_history_minutes"`
+		DxBaselineMaxEvents  int                   `json:"dx_baseline_max_events"`
+		PSKRFeedLagSeconds   int64                 `json:"pskr_feed_lag_seconds"`
+		PSKRFeedLagMeasured  bool                  `json:"pskr_feed_lag_measured"`
+		RbnConnAttempt       int64                 `json:"rbn_connect_attempts"`
+		RbnConnected         int64                 `json:"rbn_connected_sessions"`
+		RbnLinesSeen         int64                 `json:"rbn_lines_seen"`
+		RbnParsed            int64                 `json:"rbn_parsed_spots"`
+		RbnPersisted         int64                 `json:"rbn_persisted_spots"`
+		RbnForwarded         int64                 `json:"rbn_live_forwarded"`
+		RbnDroppedLoc        int64                 `json:"rbn_dropped_no_locator"`
+		RbnLocators          *rbnLocatorStatsBlock `json:"rbn_locators"`
+		WsprPollAttempts     int64                 `json:"wspr_poll_attempts"`
+		WsprPollFailures     int64                 `json:"wspr_poll_failures"`
+		WsprRowsSeen         int64                 `json:"wspr_rows_seen"`
+		WsprParsed           int64                 `json:"wspr_parsed_spots"`
+		WsprPersisted        int64                 `json:"wspr_persisted_spots"`
+		WsprForwarded        int64                 `json:"wspr_live_forwarded"`
+		WsprDroppedLoc       int64                 `json:"wspr_dropped_no_locator"`
+		WsprDuplicateRows    int64                 `json:"wspr_duplicate_rows"`
+		StreamBytesWire      int64                 `json:"stream_bytes_wire_total"`
+		StreamHistoryBytes   int64                 `json:"stream_history_bytes_total"`
+		StreamSpotsSent      int64                 `json:"stream_spots_sent_total"`
+		StreamFrames         int64                 `json:"stream_frames_total"`
+		StreamResumeDelta    int64                 `json:"stream_resume_delta_total"`
+		StreamResumeFull     int64                 `json:"stream_resume_full_total"`
+		Postgres             *postgresStatsBlock   `json:"postgres,omitempty"`
+		PropIntel            *propIntelStatsBlock  `json:"prop_intel"`
+		Push                 *pushStatsBlock       `json:"push"`
 	}{
 		ActiveConnections:    numClients,
 		HistorySize:          historySize,
@@ -636,6 +641,8 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		DxBaselineEventCount: dxBaselineEventCount,
 		DxBaselineHistoryM:   dxBaselineHistoryMinutes,
 		DxBaselineMaxEvents:  dxBaselineMaxEvents,
+		PSKRFeedLagSeconds:   feedLagRaw,
+		PSKRFeedLagMeasured:  feedLagMeasured,
 		RbnConnAttempt:       rbnAttempts,
 		RbnConnected:         rbnConnected,
 		RbnLinesSeen:         rbnLinesSeen,
@@ -643,6 +650,7 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		RbnPersisted:         rbnPersisted,
 		RbnForwarded:         rbnForwarded,
 		RbnDroppedLoc:        rbnDroppedNoLoc,
+		RbnLocators:          rbnLocatorStats(),
 		WsprPollAttempts:     wsprAttempts,
 		WsprPollFailures:     wsprFailures,
 		WsprRowsSeen:         wsprRowsSeen,
@@ -672,6 +680,63 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
+}
+
+// rbnLocatorStatsBlock is rbn_locators in /api/stats: where RBN spots got
+// their locators (call_locators.go, rbn_skimmers.go, qrz_worker.go).
+type rbnLocatorStatsBlock struct {
+	SkimmerList        int   `json:"skimmer_list_size"`
+	SkimmerListFetched int64 `json:"skimmer_list_fetched_unix"`
+	SkimmerFromList    int64 `json:"skimmer_from_list"`
+	SkimmerFromCache   int64 `json:"skimmer_from_cache"`
+	SkimmerMissing     int64 `json:"skimmer_missing"`
+	DXFromFeed         int64 `json:"dx_from_feed"`
+	DXFromQRZ          int64 `json:"dx_from_qrz"`
+	DXNoGrid           int64 `json:"dx_no_grid"`
+	DXMissing          int64 `json:"dx_missing"`
+	CacheFeed          int   `json:"cache_feed_calls"`
+	CacheQRZ           int   `json:"cache_qrz_calls"`
+	CacheNegative      int   `json:"cache_negative_calls"`
+	QRZEnabled         bool  `json:"qrz_enabled"`
+	QRZAuthFailed      bool  `json:"qrz_auth_failed"`
+	QRZQueue           int   `json:"qrz_queue"`
+	QRZLookups         int64 `json:"qrz_lookups"`
+	QRZFound           int64 `json:"qrz_found"`
+	QRZNoGrid          int64 `json:"qrz_no_grid"`
+	QRZErrors          int64 `json:"qrz_errors"`
+	QRZDropped         int64 `json:"qrz_dropped"`
+	QRZLoaded          int64 `json:"qrz_loaded_from_db"`
+}
+
+func rbnLocatorStats() *rbnLocatorStatsBlock {
+	a := rbnAccounting
+	feed, qrz, neg := callLocators.counts()
+	b := &rbnLocatorStatsBlock{
+		SkimmerList:        rbnSkimmers.size(),
+		SkimmerListFetched: rbnSkimmers.fetchedAt.Load(),
+		SkimmerFromList:    a.skimmerFromList.Load(),
+		SkimmerFromCache:   a.skimmerFromCache.Load(),
+		SkimmerMissing:     a.skimmerMissing.Load(),
+		DXFromFeed:         a.dxFromFeed.Load(),
+		DXFromQRZ:          a.dxFromQRZ.Load(),
+		DXNoGrid:           a.dxNoGrid.Load(),
+		DXMissing:          a.dxMissing.Load(),
+		CacheFeed:          feed,
+		CacheQRZ:           qrz,
+		CacheNegative:      neg,
+	}
+	if w := qrzLookups; w != nil {
+		b.QRZEnabled = true
+		b.QRZAuthFailed = w.stats.authFailed.Load()
+		b.QRZQueue = w.queued()
+		b.QRZLookups = w.stats.lookups.Load()
+		b.QRZFound = w.stats.found.Load()
+		b.QRZNoGrid = w.stats.noGrid.Load()
+		b.QRZErrors = w.stats.errors.Load()
+		b.QRZDropped = w.stats.dropped.Load()
+		b.QRZLoaded = w.stats.loaded.Load()
+	}
+	return b
 }
 
 // propIntelStatsBlock is the prop_intel.* sub-object in /api/stats.
@@ -783,7 +848,10 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 
 	area := liveAreaForRequest(r, qth, surroundings, now)
-	win := snapshotHubHistoryWindowSeq(now, minutes)
+	// The window ends where the PSKReporter feed is, not at the wall clock,
+	// while the feed runs late (feed_lag.go).
+	evalNow, feedLag, feedLagRaw := evalNowFor(now, minutes)
+	win := snapshotHubHistoryWindowSeq(evalNow, minutes)
 
 	resp := dxConditionsResponse{
 		QTH:              qth,
@@ -803,8 +871,11 @@ func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dxBaseline != nil {
-		resp = dxBaseline.EvaluateAreaWindow(qth, surroundings, minutes, cwMinDb, win, now, area)
+		resp = dxBaseline.EvaluateAreaWindow(qth, surroundings, minutes, cwMinDb, win, evalNow, area)
 	}
+	resp.GeneratedAt = now
+	resp.FeedLagSeconds = feedLag
+	resp.PSKRFeedLagSeconds = feedLagRaw
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -842,7 +913,8 @@ func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 
 	area := liveAreaForRequest(r, qth, surroundings, now)
-	win := snapshotHubHistoryWindowSeq(now, minutes)
+	evalNow, feedLag, _ := evalNowFor(now, minutes)
+	win := snapshotHubHistoryWindowSeq(evalNow, minutes)
 
 	resp := hotBandsResponse{
 		QTH:              qth,
@@ -854,8 +926,10 @@ func hotBandsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dxBaseline != nil {
-		resp = dxBaseline.HotBandsAreaWindow(qth, surroundings, minutes, cwMinDb, currentBand, win, now, area, opts)
+		resp = dxBaseline.HotBandsAreaWindow(qth, surroundings, minutes, cwMinDb, currentBand, win, evalNow, area, opts)
 	}
+	resp.GeneratedAt = now
+	resp.FeedLagSeconds = feedLag
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

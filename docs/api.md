@@ -64,6 +64,30 @@ Related contracts documented elsewhere:
   event): `{"centre":"FN76","base_radius":0,"radius":2,"widened":true}`,
   present only when the request carried `rings`.
 
+### Late PSKReporter feed
+
+The PSKReporter MQTT feed sometimes delivers reports many minutes after
+their own timestamp (13 to 21 minutes on 2026-11-11). A window that ends at
+the wall clock then holds almost no PSKReporter reports, and every band and
+region reads far below normal. The server measures the delay from what
+arrives (`feed_lag.go`: the 10th-percentile age of the arrivals in the last
+two minutes).
+
+While the delay is 2 to 30 minutes, `dx_conditions`, `hot_bands` and
+`prop_intel/v2` end their "now" window where the feed is, not at the wall
+clock. The shift has these limits:
+
+- The whole window must stay inside the live history, so a 60-minute window
+  with the 60-minute retention is never moved.
+- The window never ends before ingest resumed after a restart.
+- In `prop_intel/v2` only PSKReporter spots are moved. RBN and WSPR spots
+  keep the wall-clock window.
+
+A delay of more than 30 minutes counts as a broken feed, and the windows stay
+at the wall clock. Each response carries `feed_lag_seconds`, which is how far
+the window moved (0 while the feed is on time). `generated_at` stays at the
+wall clock.
+
 ## Core endpoints
 
 ### `GET /api/stream` — live spot stream (SSE)
@@ -167,7 +191,11 @@ per band with ~38 fields — activity (`current_links`, `unique_links`,
 `region_counts`, trend + `sparkline`, `activity_by_bin`; band vs its own
 normal (`activity_ratio`, `activity_level` =
 `above`|`normal`|`below`|`low_sample`|`no_baseline`, `regional_spots`,
-`regional_expected`, `baseline_local_scale`) and reach
+`regional_expected`, `baseline_local_scale`), the late-feed figures
+`feed_lag_seconds` (how far the window moved) and `pskr_feed_lag_seconds`
+(the measured delay, 0 while on time or above 30 minutes; larger than
+`feed_lag_seconds` when the window could not move back that far, see Late
+PSKReporter feed) and reach
 (`baseline_p90_distance_km`, `reach_ratio`, `reach_level` =
 `longer`|`typical`|`shorter`, omitted when unsupported).
 
@@ -472,9 +500,12 @@ Params: v1's (`qth` required, `surroundings`, `minutes`, `surge_threshold`,
     cold, 60 s timeout) in the background; a request waits 0.3 s after the
     window normal, so the first poll of the day may come without it.
   - `trend=1` adds `trend` to every from-here cell: the spots behind
-    `expected_spots` in 12 five-minute bins ending now, oldest first (the last
-    three are the 15-minute window), and `trend_bin_minutes: 5` to the
-    envelope.
+    `expected_spots` in 12 five-minute bins ending at the wall clock, oldest
+    first, and `trend_bin_minutes: 5` and `trend_now` (the end of the bins) to
+    the envelope. Envelope `now` is where the PSKReporter window ends. It is
+    the wall clock while the feed is on time, and `feed_lag_seconds` earlier
+    while it runs late (see Late PSKReporter feed). The trend does not move
+    with it, so its last bins are then empty: they show the delay.
 
 - `sources`: source selection, CSV or repeated (`?sources=wspr,pskr` or
   `?sources=wspr&sources=rbn`). Public names: `wspr` (WSPR beacons),
@@ -797,9 +828,34 @@ post-gzip bytes including open sessions, `stream_history_bytes_total`,
 `stream_spots_sent_total`, `stream_frames_total` flushes,
 `stream_resume_delta_total`, `stream_resume_full_total`; `wspr_duplicate_rows`
 counts overlapping-poll rows dropped at ingest), DX baseline event counts, RBN / WSPR ingest
-counters, plus a `prop_intel` block (`requests`, `errors`, `surges_detected`)
+counters, the PSKReporter feed delay (`pskr_feed_lag_seconds`, the raw
+estimate before any cap; `pskr_feed_lag_measured` false when fewer than 50
+reports arrived in the last two minutes and the figure is the time since the
+last data), plus a `prop_intel` block (`requests`, `errors`, `surges_detected`)
 and a `push` block (`surges_detected`, `push_sent`, `push_errors`). The
 de-facto health endpoint.
+
+`rbn_live_forwarded` counts RBN spots sent to the live stream, and
+`rbn_dropped_no_locator` counts the RBN spots that were persisted but not
+forwarded because the skimmer or the DX locator was unknown. The RBN telnet
+line names both stations by call only. The server finds the skimmer's grid in
+RBN's published skimmer list, and either station's grid in a callsign cache
+that PSKReporter / WSPR reports and QRZ.com lookups fill. The `rbn_locators`
+block shows where the locators came from:
+
+| Field | Meaning |
+|---|---|
+| `skimmer_list_size` / `skimmer_list_fetched_unix` | skimmers with a grid in the RBN status page (fetched every 6 h) and the time of the last good fetch (0 = never) |
+| `skimmer_from_list` / `skimmer_from_cache` / `skimmer_missing` | spots whose skimmer locator came from the list, from the callsign cache, or stayed unknown |
+| `dx_from_feed` / `dx_from_qrz` | spots whose DX locator came from a PSKReporter / WSPR report or from QRZ |
+| `dx_no_grid` | spots whose DX call QRZ has no grid for (not asked again for 7 days) |
+| `dx_missing` | spots whose DX call was not known yet; with QRZ on, the call is queued |
+| `cache_feed_calls` / `cache_qrz_calls` / `cache_negative_calls` | callsign cache entries by source |
+| `qrz_enabled` | QRZ credentials are configured (`QRZ_USERNAME` / `QRZ_PASSWORD`) |
+| `qrz_auth_failed` | QRZ rejected the login; lookups stopped until a restart |
+| `qrz_queue` / `qrz_dropped` | calls waiting for a lookup (at most 5,000), and calls dropped because the queue was full |
+| `qrz_lookups` / `qrz_found` / `qrz_no_grid` / `qrz_errors` | lookups made (at most 2 a second), answers with a grid, answers without a grid or record, and failures |
+| `qrz_loaded_from_db` | QRZ answers loaded from the `callsign_locators` table at startup |
 
 When Postgres is configured, a `postgres` block carries persistence health:
 `raw_flush_last_ok_unix`, `raw_flush_fail_streak`,

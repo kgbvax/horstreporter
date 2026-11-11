@@ -116,6 +116,12 @@ type propIntelV2FromHere struct {
 	dayCurves    *fromHereDayCurves
 	trend        bool
 	trendHistory []MQTTMessage
+	// trendNow is where the trend ends; 0 means the evaluation's now. The
+	// handler sets the wall clock while the window is shifted for a late feed.
+	trendNow int64
+	// pskrLag is how far now is behind the wall clock for a late PSKReporter
+	// feed (feed_lag.go); RBN and WSPR spots are counted up to the wall clock.
+	pskrLag int64
 }
 
 // propIntelV2Response is the JSON envelope for /api/prop_intel/v2.
@@ -137,6 +143,14 @@ type propIntelV2Response struct {
 	Cells            []propIntelV2Cell `json:"cells"`
 	// TrendBinMinutes is the width of a cell trend bin, set with trend=1.
 	TrendBinMinutes int `json:"trend_bin_minutes,omitempty"`
+	// FeedLagSeconds is how far the window was moved back from the wall clock
+	// because the PSKReporter feed runs late (feed_lag.go); 0 while it is on
+	// time.
+	FeedLagSeconds int64 `json:"feed_lag_seconds"`
+	// TrendNow is where the cell trends end (the wall clock), set with
+	// trend=1; Now, where the PSKReporter window ends, is earlier while the
+	// feed runs late.
+	TrendNow int64 `json:"trend_now,omitempty"`
 }
 
 // propIntelV2CellKey indexes accumulators by (band × region × source).
@@ -348,7 +362,7 @@ func propIntelRemoteCall(m *MQTTMessage, receiverSide string, remoteIsRecv bool)
 // scanPropIntelV2Window walks the history window once and accumulates the
 // per-(band, region, source) cells, the from-here flags and the bands seen.
 func scanPropIntelV2Window(history []MQTTMessage, profiles []propIntelSourceProfile, qthSet []string, matchArea *liveArea, now, cutoff, midpoint int64) (map[propIntelV2CellKey]*propIntelV2Acc, map[propIntelCellKey]bool, map[string]struct{}) {
-	accs, fromHere, bands, _, _ := scanPropIntelV2WindowMode(history, profiles, qthSet, matchArea, now, cutoff, midpoint, false)
+	accs, fromHere, bands, _, _ := scanPropIntelV2WindowMode(history, profiles, qthSet, matchArea, now, cutoff, midpoint, false, 0)
 	return accs, fromHere, bands
 }
 
@@ -359,7 +373,12 @@ func scanPropIntelV2Window(history []MQTTMessage, profiles []propIntelSourceProf
 // region), the spots the area normal is built from (PSKReporter FT8/FT4),
 // and normalStations the distinct far-end stations behind them
 // (capped at fromHereSurgeMinStations); both nil otherwise.
-func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSourceProfile, qthSet []string, matchArea *liveArea, now, cutoff, midpoint int64, fromHereOnly bool) (map[propIntelV2CellKey]*propIntelV2Acc, map[propIntelCellKey]bool, map[string]struct{}, map[propIntelCellKey]int, map[propIntelCellKey]int) {
+//
+// pskrLag moves the window back for PSKReporter spots only, while that feed
+// runs late (feed_lag.go): a PSKReporter spot is timed as T + pskrLag, so it
+// counts when T is in [cutoff - pskrLag, now - pskrLag]; RBN and WSPR spots,
+// which are not late, keep [cutoff, now].
+func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSourceProfile, qthSet []string, matchArea *liveArea, now, cutoff, midpoint int64, fromHereOnly bool, pskrLag int64) (map[propIntelV2CellKey]*propIntelV2Acc, map[propIntelCellKey]bool, map[string]struct{}, map[propIntelCellKey]int, map[propIntelCellKey]int) {
 	// Per-message accumulation is indexed by (band, region, source) position
 	// in flat arrays instead of string-keyed maps (three string hashes per
 	// message); the maps the rest of the function reads are rebuilt below.
@@ -382,12 +401,16 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 
 	for i := range history {
 		m := &history[i]
-		if m.T > now || m.T < cutoff {
-			continue
-		}
 		src := m.Source
 		if src == "" {
 			src = "mqtt" // MQTT ingest leaves Source empty (only wspr/rbn tag theirs)
+		}
+		t := m.T
+		if src == "mqtt" {
+			t += pskrLag
+		}
+		if t > now || t < cutoff {
+			continue
 		}
 		si := -1
 		for j := range profiles {
@@ -460,7 +483,7 @@ func scanPropIntelV2WindowMode(history []MQTTMessage, profiles []propIntelSource
 				stations[bi*nRegions+ri].add(endCalls[k])
 			}
 
-			if m.T < midpoint {
+			if t < midpoint {
 				cell.firstHalfSpots++
 			} else {
 				cell.secondHalfSpots++
@@ -521,7 +544,7 @@ func (e *propIntelV2Engine) EvaluateV2(qth string, surroundings bool, minutes in
 // the climatology it compares against is not scaled to a widened block, so its
 // larger live counts would read as surges.
 func (e *propIntelV2Engine) EvaluateV2Area(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea) propIntelV2Response {
-	return e.evaluateV2(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, area, nil)
+	return e.evaluateV2(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, area, nil, 0)
 }
 
 // EvaluateV2FromHere is the from-here view (from_here=true): a spot counts once
@@ -540,7 +563,7 @@ func (e *propIntelV2Engine) EvaluateV2FromHere(qth string, surroundings bool, mi
 // EvaluateV2FromHereDetail is EvaluateV2FromHere with the optional detail in
 // fh (silent cells, day curves, trend).
 func (e *propIntelV2Engine) EvaluateV2FromHereDetail(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea, fh propIntelV2FromHere) propIntelV2Response {
-	resp := e.evaluateV2(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, area, &fh)
+	resp := e.evaluateV2(qth, surroundings, minutes, profiles, ssbOverride, cwOverride, history, now, atypicalThreshold, area, &fh, fh.pskrLag)
 	resp.FromHere = true
 	if fh.trend {
 		resp.TrendBinMinutes = fromHereTrendBinSec / 60
@@ -548,7 +571,9 @@ func (e *propIntelV2Engine) EvaluateV2FromHereDetail(qth string, surroundings bo
 	return resp
 }
 
-func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea, fh *propIntelV2FromHere) propIntelV2Response {
+// now is where the PSKReporter window ends; pskrLag (feed_lag.go) is how far
+// that is behind the wall clock, where the RBN and WSPR windows end.
+func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes int, profiles []propIntelSourceProfile, ssbOverride, cwOverride *int, history []MQTTMessage, now int64, atypicalThreshold float64, area *liveArea, fh *propIntelV2FromHere, pskrLag int64) propIntelV2Response {
 	qth = normalizeQTHToken(qth)
 	if len(profiles) == 0 {
 		profiles = propIntelSourceProfiles
@@ -582,10 +607,13 @@ func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes in
 	}
 	qthSet := maidenhead.QTHSquares(qth, surroundings)
 
-	cutoff := now - int64(minutes)*60
-	midpoint := cutoff + (now-cutoff)/2
+	// The scan runs on the wall clock; PSKReporter spots are moved forward
+	// by pskrLag inside it, so their window still ends at now.
+	scanNow := now + pskrLag
+	cutoff := scanNow - int64(minutes)*60
+	midpoint := cutoff + (scanNow-cutoff)/2
 
-	cellAccs, cellFromHere, bandsSeen, normalSpots, normalStations := scanPropIntelV2WindowMode(history, profiles, qthSet, matchArea, now, cutoff, midpoint, fh != nil)
+	cellAccs, cellFromHere, bandsSeen, normalSpots, normalStations := scanPropIntelV2WindowMode(history, profiles, qthSet, matchArea, scanNow, cutoff, midpoint, fh != nil, pskrLag)
 
 	resp.Bands = inScopeBandsOrdered(bandsSeen)
 	slot := utcSlotOfDay(now)
@@ -616,7 +644,11 @@ func (e *propIntelV2Engine) evaluateV2(qth string, surroundings bool, minutes in
 	}
 	var trend map[propIntelCellKey][]int
 	if fh != nil && fh.trend && pskrSelected {
-		trend = fromHereTrend(fh.trendHistory, profiles, qthSet, matchArea, now)
+		trendNow := now
+		if fh.trendNow != 0 {
+			trendNow = fh.trendNow
+		}
+		trend = fromHereTrend(fh.trendHistory, profiles, qthSet, matchArea, trendNow)
 	}
 
 	for ck, acc := range cellAccs {
@@ -823,8 +855,13 @@ func propIntelV2Handler(w http.ResponseWriter, r *http.Request) {
 	}
 	profiles := parseSourcesParam(r)
 
-	now := time.Now().Unix()
-	area := liveAreaForRequest(r, p.qth, p.surroundings, now)
+	wallNow := time.Now().Unix()
+	area := liveAreaForRequest(r, p.qth, p.surroundings, wallNow)
+	// The window, its normals and the day dot are anchored where the
+	// PSKReporter feed is while it runs late (feed_lag.go). The trend stays at
+	// the wall clock: it reaches back the whole hour hub.history holds, so it
+	// cannot shift, and its empty last bins show the delay.
+	now, feedLag, _ := evalNowFor(wallNow, p.minutes)
 	historyCopy, release := snapshotPropIntelHistory(now, p.minutes)
 	defer release()
 
@@ -847,15 +884,20 @@ func propIntelV2Handler(w http.ResponseWriter, r *http.Request) {
 			fh.dayCurves = fromHereDayCurvesFor(grids, now, fromHereDayWait)
 		}
 		if q.Get("trend") == "1" {
-			trendHistory, releaseTrend := snapshotPropIntelHistory(now, fromHereTrendBins*fromHereTrendBinSec/60)
+			trendHistory, releaseTrend := snapshotPropIntelHistory(wallNow, fromHereTrendBins*fromHereTrendBinSec/60)
 			defer releaseTrend()
-			fh.trend, fh.trendHistory = true, trendHistory
+			fh.trend, fh.trendHistory, fh.trendNow = true, trendHistory, wallNow
 		}
+		fh.pskrLag = feedLag
 		resp = propIntelV2.EvaluateV2FromHereDetail(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area, fh)
 	} else {
-		resp = propIntelV2.EvaluateV2Area(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area)
+		resp = propIntelV2.evaluateV2(p.qth, p.surroundings, p.minutes, profiles, p.ssbOverride, p.cwOverride, historyCopy, now, p.atypicalThreshold, area, nil, feedLag)
 	}
 	resp = resp.applyFromHere(p.fromHere)
+	resp.FeedLagSeconds = feedLag
+	if resp.TrendBinMinutes > 0 {
+		resp.TrendNow = wallNow
+	}
 
 	// Push fan-out: adapt v2 cells to the v1 push payload (push.go consumes
 	// []propIntelCell; the flavor string is unused by the payload).

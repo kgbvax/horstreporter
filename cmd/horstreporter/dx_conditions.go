@@ -262,7 +262,14 @@ type dxConditionsResponse struct {
 	CwMinDb          int    `json:"cw_min_db"`
 	CurrentSlotOfDay int    `json:"current_slot_of_day"`
 	GeneratedAt      int64  `json:"generated_at"`
-	OperatorCluster  string `json:"qth_cluster,omitempty"`
+	// FeedLagSeconds is how far the window was moved back from the wall clock
+	// because the PSKReporter feed runs late (feed_lag.go); 0 while it is on
+	// time.
+	FeedLagSeconds int64 `json:"feed_lag_seconds"`
+	// PSKRFeedLagSeconds is the measured feed lag (0 while on time); larger
+	// than FeedLagSeconds when the window was too long to move back that far.
+	PSKRFeedLagSeconds int64  `json:"pskr_feed_lag_seconds"`
+	OperatorCluster    string `json:"qth_cluster,omitempty"`
 	// Area is the live area the report is scoped to; present only when the
 	// request asked for one (rings=auto or rings=N).
 	Area             *liveArea `json:"area,omitempty"`
@@ -1116,8 +1123,10 @@ func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, min
 		if m.T < liveStart || m.T > now {
 			continue
 		}
-		conditionsMode := !isNonConditionsMode(m.MD)
-		if !regionalFromIndex && clusterOK && conditionsMode && feedsClusterBaseline(*m) {
+		// FT8/FT4 from PSKReporter only: an RBN digital feed (-rbn-endpoint
+		// :7001) carries FT8 too and would double-count PSKReporter.
+		conditionsMode := !isNonConditionsMode(m.MD) && sourceFeedsClusterBaseline(m.Source)
+		if !regionalFromIndex && clusterOK && conditionsMode {
 			if n := clusterEndCount(*m, clusterX, clusterY); n > 0 {
 				if band := normalizeBand(m.B); band != "" {
 					regionalCount[band] += n

@@ -1,5 +1,6 @@
 import { setRowExtras, refreshMatrix } from './wspr-matrix.js';
-import { getBandRow, getBandNormalRate, subscribeBandRows, drawBandMiniPlot, getLiveArea } from './band-lab.js';
+import { getBandRow, getBandNormalRate, subscribeBandRows, drawBandMiniPlot, getLiveArea, getFeedLag } from './band-lab.js';
+import { feedLagSummary } from './feed-lag.js';
 import { areaSummary, bandAreaTag } from './live-area.js';
 import { escapeHtml } from './ui-helpers.js';
 
@@ -168,6 +169,17 @@ function renderAreaLine() {
     el.hidden = !text;
 }
 
+// The note above the table while the PSKReporter feed runs late. Hidden
+// otherwise.
+function renderFeedLagLine() {
+    const el = document.getElementById('cond-feed-lag');
+    if (!el) return;
+    const lag = getFeedLag();
+    const text = feedLagSummary(lag, lag?.minutes);
+    el.textContent = text;
+    el.hidden = !text;
+}
+
 // onRailChange: called when a band's normal rate (the rail sparkline's dashed
 // line) changed, so the rail can redraw.
 export function initCondNow({ onRailChange } = {}) {
@@ -176,8 +188,10 @@ export function initCondNow({ onRailChange } = {}) {
     const railKeyNow = () => RAIL_BANDS.map((b) => getBandNormalRate(b) ?? '').join('|');
     let railKey = railKeyNow();
     renderAreaLine();
+    renderFeedLagLine();
     unsubscribe = subscribeBandRows(() => {
         renderAreaLine();
+        renderFeedLagLine();
         refreshMatrix();
         drawPlots();
         const key = railKeyNow();

@@ -511,6 +511,21 @@ describe('wspr-matrix (Propagation) panel', () => {
         expect((html.match(/<circle/g) || []).length).toBe(2); // dot + surge ring
     });
 
+    it('the trend sparkline ends at trend_now, the wall clock, when the feed runs late', () => {
+        runtime.style = 'trend';
+        const cell = {
+            ...makeCell({ band: '20m', region: 'NA' }),
+            expected: 6, expected_spots: 12,
+            normal_day: Array.from({ length: 48 }, (_, i) => i + 1),
+            trend: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0, 0],
+        };
+        const late = { ...LOOK_DATA, now: LOOK_DATA.now - 20 * 60, trend_now: LOOK_DATA.now };
+        const wallClock = renderLookCell('20m', 'NA', cell, LOOK_DATA, {});
+        const lagged = renderLookCell('20m', 'NA', cell, { ...LOOK_DATA, now: LOOK_DATA.now - 20 * 60 }, {});
+        expect(lagged).not.toBe(wallClock); // the normals depend on the end time
+        expect(renderLookCell('20m', 'NA', cell, late, {})).toBe(wallClock);
+    });
+
     it('a silent cell is drawn and named as usually open, silent now', () => {
         runtime.style = 'day';
         const silent = { band: '15m', region: 'JA', spot_count: 0, silent: true, expected: 12.4, expected_spots: 0, normal_day: new Array(48).fill(20), sources: [], active_sources: [] };
