@@ -352,18 +352,75 @@ func TestHandleRBNSpotDropsWithoutDXLocator(t *testing.T) {
 }
 
 func TestIsRBNSpotUsableForLive(t *testing.T) {
-	if !isRBNSpotUsableForLive(MQTTMessage{B: "20m", RL: "JO62"}) {
-		t.Error("band + DX locator should be usable")
+	if !isRBNSpotUsableForLive(MQTTMessage{B: "20m", RL: "JO62", SL: "FN31"}) {
+		t.Error("band + both locators should be usable")
 	}
-	// Skimmer locator alone is not enough.
+	if isRBNSpotUsableForLive(MQTTMessage{B: "20m", RL: "JO62"}) {
+		t.Error("DX locator alone should not be usable")
+	}
 	if isRBNSpotUsableForLive(MQTTMessage{B: "20m", RL: "", SL: "JO62"}) {
 		t.Error("skimmer locator alone should not be usable")
 	}
-	if isRBNSpotUsableForLive(MQTTMessage{B: "", RL: "JO62"}) {
+	if isRBNSpotUsableForLive(MQTTMessage{B: "", RL: "JO62", SL: "FN31"}) {
 		t.Error("empty band should not be usable")
 	}
-	if isRBNSpotUsableForLive(MQTTMessage{B: "20m", RL: "W1AW"}) {
+	if isRBNSpotUsableForLive(MQTTMessage{B: "20m", RL: "W1AW", SL: "FN31"}) {
 		t.Error("callsign as locator should not be usable")
+	}
+}
+
+// withRBNLocatorGlobals swaps in empty skimmer list, callsign cache and QRZ
+// worker for the test.
+func withRBNLocatorGlobals(t *testing.T, worker *qrzWorker) (*rbnSkimmerList, *callLocatorCache) {
+	t.Helper()
+	savedSk, savedCache, savedQRZ := rbnSkimmers, callLocators, qrzLookups
+	rbnSkimmers = &rbnSkimmerList{}
+	callLocators = newCallLocatorCache()
+	if worker != nil {
+		worker.cache = callLocators
+	}
+	qrzLookups = worker
+	t.Cleanup(func() { rbnSkimmers, callLocators, qrzLookups = savedSk, savedCache, savedQRZ })
+	return rbnSkimmers, callLocators
+}
+
+func TestHandleRBNSpotResolvesLocators(t *testing.T) {
+	isolateHubForIngest(t, false)
+	worker := newQRZWorker(&fakeQRZClient{}, nil, nil)
+	skimmers, cache := withRBNLocatorGlobals(t, worker)
+	const now = int64(1_794_400_000)
+	skimmers.set(map[string]string{"W3LPL": "FM19LG"}, now)
+	cache.observeFeed("DL1ABC", "JO62qm", now)
+	cache.observeFeed("K1TTT", "FN32", now)
+
+	_, _, _, _, _, fwdBefore, _ := rbnAccounting.snapshot()
+	listBefore, cacheBefore := rbnAccounting.skimmerFromList.Load(), rbnAccounting.skimmerFromCache.Load()
+	missBefore := rbnAccounting.dxMissing.Load()
+
+	// Skimmer from the list, DX from the feed cache: forwarded.
+	handleRBNSpot(rbnSpot{Skimmer: "W3LPL-#", DXCall: "DL1ABC", FrequencyKHz: 14024.0, Mode: "CW", DB: 20, ObservedAt: now})
+	// Skimmer from the cache (not listed), DX unknown: queued for QRZ, not forwarded.
+	handleRBNSpot(rbnSpot{Skimmer: "K1TTT-2-#", DXCall: "N0NEW", FrequencyKHz: 7024.0, Mode: "CW", DB: 12, ObservedAt: now})
+
+	_, _, _, _, _, fwdAfter, _ := rbnAccounting.snapshot()
+	if got := fwdAfter - fwdBefore; got != 1 {
+		t.Fatalf("forwarded %d spots, want 1", got)
+	}
+	if rbnAccounting.skimmerFromList.Load()-listBefore != 1 || rbnAccounting.skimmerFromCache.Load()-cacheBefore != 1 {
+		t.Fatal("skimmer resolution counters")
+	}
+	if rbnAccounting.dxMissing.Load()-missBefore != 1 || worker.queued() != 1 {
+		t.Fatalf("unknown DX not queued: queue %d", worker.queued())
+	}
+
+	hub.RLock()
+	defer hub.RUnlock()
+	if len(hub.history) != 1 {
+		t.Fatalf("history has %d spots, want 1", len(hub.history))
+	}
+	m := hub.history[0]
+	if m.SL != "FM19LG" || m.RL != "JO62QM" || m.SC != "W3LPL-#" || m.RC != "DL1ABC" || m.Source != "rbn" {
+		t.Fatalf("forwarded spot %+v", m)
 	}
 }
 

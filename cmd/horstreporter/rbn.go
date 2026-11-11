@@ -19,10 +19,14 @@ import (
 // empties out, so the activity chart and live stream flatline even though the bands are
 // packed; RBN keeps producing CW/RTTY spots through those windows.
 //
-// Minimal scope: RBN spots land in dx_raw_spots with
-// source_type='rbn' and a real mode (CW/RTTY), feeding the count-based activity chart and
-// the live stream (only for spots that carry locators; without QRZ enrichment RBN spots
-// carry none, so they are persisted for the activity chart only). RBN's dB is on a different SNR scale
+// RBN spots land in dx_raw_spots with source_type='rbn' and a real mode (CW/RTTY),
+// feeding the count-based activity chart, the live stream and prop_intel v2. The telnet
+// line names both stations by call only; handleRBNSpot gives them locators: the skimmer
+// from RBN's published skimmer list (rbn_skimmers.go), either end from the callsign cache
+// that PSKReporter / WSPR reports and QRZ lookups fill (call_locators.go, qrz_worker.go).
+// A spot reaches the live stream only with both locators; one without the DX locator is
+// still persisted (it counts at the skimmer's end) and its call is queued for QRZ, so the
+// station's next spot resolves. RBN's dB is on a different SNR scale
 // than PSKReporter FT8 SNR (0–40 dB in a ~500 Hz CW filter vs −24..+5 in 2500 Hz), so RBN is
 // deliberately NOT fed to DxBaselineEngine.Observe and is excluded from the FT8
 // conditions accumulator (isNonConditionsMode in dx_conditions.go) until calibration
@@ -36,6 +40,15 @@ type rbnAccountingState struct {
 	persistedSpots  atomic.Int64
 	forwardedSpots  atomic.Int64
 	droppedNoLoc    atomic.Int64
+
+	// Locator resolution per spot (handleRBNSpot).
+	skimmerFromList  atomic.Int64
+	skimmerFromCache atomic.Int64
+	skimmerMissing   atomic.Int64
+	dxFromFeed       atomic.Int64
+	dxFromQRZ        atomic.Int64
+	dxNoGrid         atomic.Int64 // QRZ has no grid for the call
+	dxMissing        atomic.Int64 // not known yet (queued for QRZ when configured)
 }
 
 func (a *rbnAccountingState) snapshot() (attempts, connected, linesSeen, parsed, persisted, forwarded, droppedNoLoc int64) {
@@ -267,9 +280,11 @@ func handleRBNSpot(spot rbnSpot) {
 		Source: "rbn",
 	}
 
-	// Persist unconditionally with full fidelity (real frequency, mode, dB, skimmer) so the
-	// count-based activity chart (activity_by_bin, which reads dx_raw_spots regardless of
-	// source_type) benefits even without locators. RBN does NOT call DxBaselineEngine.Observe:
+	resolveRBNLocators(&m, spot)
+
+	// Persist unconditionally with full fidelity (real frequency, mode, dB, skimmer) and
+	// whichever locators resolved, so the activity chart counts the spot at the skimmer's
+	// end even before the DX call resolves. RBN does NOT call DxBaselineEngine.Observe:
 	// its 0–40 dB CW scale would skew the FT8-calibrated snr_tier baseline (SNR-scale
 	// mismatch, see docs/horstprop.md).
 	if dxBaseline != nil {
@@ -281,8 +296,7 @@ func handleRBNSpot(spot rbnSpot) {
 	if !isRBNSpotUsableForLive(m) {
 		rbnAccounting.droppedNoLoc.Add(1)
 		if logLevel == "DEBUG" {
-			rl := strings.TrimSpace(m.RL)
-			logDebug("RBN spot dropped (no usable DX locator): dx=%s skimmer=%s dx_locator=%q", m.RC, m.SC, rl)
+			logDebug("RBN spot not forwarded (locator missing): dx=%s dx_locator=%q skimmer=%s skimmer_locator=%q", m.RC, m.RL, m.SC, m.SL)
 		}
 		return
 	}
@@ -291,13 +305,49 @@ func handleRBNSpot(spot rbnSpot) {
 	rbnAccounting.forwardedSpots.Add(1)
 }
 
-// isRBNSpotUsableForLive: a valid band and a resolved
-// DX/RX locator are enough for the live map (the skimmer locator is optional).
+// resolveRBNLocators sets m.SL (skimmer) and m.RL (DX) from the skimmer list
+// and the callsign cache, and queues the calls neither knows for a QRZ lookup.
+func resolveRBNLocators(m *MQTTMessage, spot rbnSpot) {
+	now := spot.ObservedAt
+	if loc, ok := rbnSkimmers.lookup(spot.Skimmer); ok {
+		m.SL = loc
+		rbnAccounting.skimmerFromList.Add(1)
+	} else {
+		base := skimmerBaseCall(strings.TrimSuffix(spot.Skimmer, "-#"))
+		if loc, st := callLocators.resolve(base, now); st.ok() {
+			m.SL = loc
+			rbnAccounting.skimmerFromCache.Add(1)
+		} else {
+			rbnAccounting.skimmerMissing.Add(1)
+			if st == resolveMiss {
+				qrzLookups.enqueue(base)
+			}
+		}
+	}
+
+	loc, st := callLocators.resolve(spot.DXCall, now)
+	switch st {
+	case resolveFeed:
+		rbnAccounting.dxFromFeed.Add(1)
+	case resolveQRZ:
+		rbnAccounting.dxFromQRZ.Add(1)
+	case resolveNegative:
+		rbnAccounting.dxNoGrid.Add(1)
+	default:
+		rbnAccounting.dxMissing.Add(1)
+		qrzLookups.enqueue(spot.DXCall)
+	}
+	m.RL = loc
+}
+
+// isRBNSpotUsableForLive: a valid band and both locators, like every other
+// live source (the map draws skimmer→DX paths; the area match reads either end).
 func isRBNSpotUsableForLive(m MQTTMessage) bool {
 	if strings.TrimSpace(m.B) == "" {
 		return false
 	}
-	return maidenhead.IsLocator(strings.ToUpper(strings.TrimSpace(m.RL)))
+	return maidenhead.IsLocator(strings.ToUpper(strings.TrimSpace(m.RL))) &&
+		maidenhead.IsLocator(strings.ToUpper(strings.TrimSpace(m.SL)))
 }
 
 // bandFromFrequencyKHz maps a spot frequency in kHz to its amateur band name, or ""

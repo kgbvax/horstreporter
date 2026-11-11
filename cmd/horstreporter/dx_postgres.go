@@ -686,6 +686,15 @@ func initSchemaStmts() []string {
 			k TEXT PRIMARY KEY,
 			v TEXT NOT NULL
 		);`,
+		// QRZ.com answers for callsigns no feed showed with a grid (RBN DX
+		// stations and skimmers, qrz_worker.go). locator NULL = QRZ has no
+		// record or no grid. A few thousand rows; pruned at load.
+		`CREATE TABLE IF NOT EXISTS callsign_locators (
+			callsign TEXT PRIMARY KEY,
+			locator TEXT,
+			source TEXT NOT NULL DEFAULT 'qrz',
+			fetched_at BIGINT NOT NULL
+		);`,
 	}
 	stmts = append(stmts, almanacSeasonSchemaStmts()...)
 	return stmts
@@ -2477,5 +2486,52 @@ func (p *pgRegionSNRSchema) seedSince(ctx context.Context, day int64) error {
 
 func (p *pgRegionSNRSchema) recordColumnsAdded(ctx context.Context, unix int64) error {
 	_, err := p.pool.Exec(ctx, almanacSNRSinceSeedSQL, almanacSNRColumnsAddedKey, fmt.Sprintf("%d", unix))
+	return err
+}
+
+// loadCallsignLocators returns the persisted QRZ answers still within their
+// TTL (positive rows fetched after positiveSince, negative ones after
+// negativeSince) and deletes the rest.
+func (s *dxPostgresStore) loadCallsignLocators(ctx context.Context, positiveSince, negativeSince int64) ([]callLocatorRow, error) {
+	if s == nil || s.pool == nil {
+		return nil, nil
+	}
+	if _, err := s.pool.Exec(ctx, `
+		DELETE FROM callsign_locators
+		WHERE (locator IS NOT NULL AND fetched_at < $1)
+		   OR (locator IS NULL AND fetched_at < $2)`, positiveSince, negativeSince); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `SELECT callsign, COALESCE(locator, ''), fetched_at FROM callsign_locators`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []callLocatorRow
+	for rows.Next() {
+		var r callLocatorRow
+		if err := rows.Scan(&r.Call, &r.Locator, &r.FetchedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// upsertCallsignLocator stores one QRZ answer (loc "" = negative).
+func (s *dxPostgresStore) upsertCallsignLocator(ctx context.Context, call, loc string, fetchedAt int64) error {
+	if s == nil || s.pool == nil {
+		return nil
+	}
+	var locArg any
+	if loc != "" {
+		locArg = loc
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO callsign_locators (callsign, locator, source, fetched_at)
+		VALUES ($1, $2::text, 'qrz', $3)
+		ON CONFLICT (callsign) DO UPDATE
+		SET locator = EXCLUDED.locator, source = EXCLUDED.source, fetched_at = EXCLUDED.fetched_at`,
+		call, locArg, fetchedAt)
 	return err
 }

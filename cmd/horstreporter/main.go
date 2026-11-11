@@ -22,6 +22,7 @@ import (
 	"horstreporter"
 	"horstreporter/internal/cty"
 	"horstreporter/internal/httpx"
+	"horstreporter/internal/qrzlookup"
 
 	"golang.org/x/crypto/acme/autocert"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -250,6 +251,9 @@ func main() {
 	rbnCallsign := flag.String("rbn-callsign", "", "Callsign sent at the RBN relay's \"enter your call\" prompt (required-in-practice to get a spot stream; no password/auth). Falls back to env RBN_CALLSIGN")
 	rbnReconnectSeconds := flag.Int("rbn-reconnect-seconds", 15, "Delay before reconnecting to RBN after disconnect")
 	rbnVerbose := flag.Bool("rbn-verbose", false, "Enable verbose RBN connection logging")
+	rbnSkimmerURL := flag.String("rbn-skimmer-list-url", rbnSkimmerListURL, "RBN skimmer status page that lists each skimmer's grid (fetched every 6 h while -rbn-enable)")
+	qrzUsername := flag.String("qrz-username", "", "QRZ.com XML username for RBN callsign locator lookups (needs an XML subscription). Falls back to env QRZ_USERNAME")
+	qrzPassword := flag.String("qrz-password", "", "QRZ.com XML password. Falls back to env QRZ_PASSWORD (prefer the env var: flags show in ps)")
 	wsprEnable := flag.Bool("wspr-enable", false, "Enable optional WSPR ingest (wspr.live ClickHouse HTTP interface)")
 	wsprEndpoint := flag.String("wspr-endpoint", "https://db1.wspr.live", "WSPR ClickHouse HTTP endpoint (base URL)")
 	wsprPollSeconds := flag.Int("wspr-poll-seconds", 60, "Seconds between WSPR polls (wspr.live rate-limits to ~20 req/min)")
@@ -474,12 +478,17 @@ func main() {
 				backfillErr = err
 				break
 			}
-			merged = append(merged, cached...)
-			totalLoaded += len(cached)
 			for i := range cached {
 				if cached[i].T > backfilledThrough {
 					backfilledThrough = cached[i].T
 				}
+				// RBN rows are persisted with whatever locators resolved; the
+				// live path only admits spots with both (isRBNSpotUsableForLive).
+				if cached[i].Source == "rbn" && !isRBNSpotUsableForLive(cached[i]) {
+					continue
+				}
+				merged = append(merged, cached[i])
+				totalLoaded++
 			}
 		}
 		if backfillErr != nil {
@@ -533,6 +542,22 @@ func main() {
 			// env var), so keep reading it when -rbn-callsign/RBN_CALLSIGN is unset.
 			if rbnCall == "" {
 				rbnCall = strings.TrimSpace(os.Getenv("DXCLUSTER_USERNAME"))
+			}
+			// Locators for the call-only RBN spots: the skimmer list, the
+			// callsign cache fed from PSKReporter/WSPR history and, with
+			// credentials, QRZ lookups (call_locators.go).
+			go startRBNSkimmerList(strings.TrimSpace(*rbnSkimmerURL))
+			go startCallLocatorWalker()
+			if client := qrzlookup.NewClient(firstNonEmpty(*qrzUsername, os.Getenv("QRZ_USERNAME")), firstNonEmpty(*qrzPassword, os.Getenv("QRZ_PASSWORD"))); client != nil {
+				w := newQRZWorker(client, callLocators, dxBaseline.callLocatorStore())
+				qrzLookups = w
+				go func() {
+					if n := w.loadPersisted(); n > 0 {
+						logInfo("QRZ: loaded %d cached callsign locators", n)
+					}
+					w.run()
+				}()
+				logInfo("QRZ callsign lookups enabled for RBN")
 			}
 			reconnectDelay := time.Duration(*rbnReconnectSeconds) * time.Second
 			go startRBNIngest(rbnConfig{

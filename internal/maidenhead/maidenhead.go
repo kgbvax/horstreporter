@@ -235,3 +235,17 @@ func FromLatLng(lat, lng float64, precision int) string {
 	}
 	return SquareXYToLocator(fieldLng*10+col, fieldLat*10+row)
 }
+
+// Normalize returns grid upper-cased and cut to its longest valid prefix of 6
+// or 4 characters ("jo62qm77" -> "JO62QM", "JO62" -> "JO62", "JO62Z" ->
+// "JO62"), or "" when not even the first 4 form a locator.
+func Normalize(grid string) string {
+	g := strings.ToUpper(strings.TrimSpace(grid))
+	if !IsLocator(g) {
+		return ""
+	}
+	if len(g) >= 6 && g[4] >= 'A' && g[4] <= 'X' && g[5] >= 'A' && g[5] <= 'X' {
+		return g[:6]
+	}
+	return g[:4]
+}

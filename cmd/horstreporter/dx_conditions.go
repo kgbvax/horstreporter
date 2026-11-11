@@ -1123,8 +1123,10 @@ func (e *DxBaselineEngine) evaluateAreaWindow(qth string, surroundings bool, min
 		if m.T < liveStart || m.T > now {
 			continue
 		}
-		conditionsMode := !isNonConditionsMode(m.MD)
-		if !regionalFromIndex && clusterOK && conditionsMode && feedsClusterBaseline(*m) {
+		// FT8/FT4 from PSKReporter only: an RBN digital feed (-rbn-endpoint
+		// :7001) carries FT8 too and would double-count PSKReporter.
+		conditionsMode := !isNonConditionsMode(m.MD) && sourceFeedsClusterBaseline(m.Source)
+		if !regionalFromIndex && clusterOK && conditionsMode {
 			if n := clusterEndCount(*m, clusterX, clusterY); n > 0 {
 				if band := normalizeBand(m.B); band != "" {
 					regionalCount[band] += n

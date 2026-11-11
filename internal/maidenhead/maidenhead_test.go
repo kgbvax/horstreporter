@@ -121,3 +121,20 @@ func TestLatLngToLocatorHighLatitudes(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalize(t *testing.T) {
+	for in, want := range map[string]string{
+		"jo62qm":   "JO62QM",
+		" JO62 ":   "JO62",
+		"jo62qm77": "JO62QM",
+		"JO62Z":    "JO62",
+		"JO62QZ":   "JO62", // Z is not a subsquare letter
+		"XX99":     "",
+		"JO6":      "",
+		"":         "",
+	} {
+		if got := Normalize(in); got != want {
+			t.Errorf("Normalize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -835,6 +835,28 @@ last data), plus a `prop_intel` block (`requests`, `errors`, `surges_detected`)
 and a `push` block (`surges_detected`, `push_sent`, `push_errors`). The
 de-facto health endpoint.
 
+`rbn_live_forwarded` counts RBN spots sent to the live stream, and
+`rbn_dropped_no_locator` counts the RBN spots that were persisted but not
+forwarded because the skimmer or the DX locator was unknown. The RBN telnet
+line names both stations by call only. The server finds the skimmer's grid in
+RBN's published skimmer list, and either station's grid in a callsign cache
+that PSKReporter / WSPR reports and QRZ.com lookups fill. The `rbn_locators`
+block shows where the locators came from:
+
+| Field | Meaning |
+|---|---|
+| `skimmer_list_size` / `skimmer_list_fetched_unix` | skimmers with a grid in the RBN status page (fetched every 6 h) and the time of the last good fetch (0 = never) |
+| `skimmer_from_list` / `skimmer_from_cache` / `skimmer_missing` | spots whose skimmer locator came from the list, from the callsign cache, or stayed unknown |
+| `dx_from_feed` / `dx_from_qrz` | spots whose DX locator came from a PSKReporter / WSPR report or from QRZ |
+| `dx_no_grid` | spots whose DX call QRZ has no grid for (not asked again for 7 days) |
+| `dx_missing` | spots whose DX call was not known yet; with QRZ on, the call is queued |
+| `cache_feed_calls` / `cache_qrz_calls` / `cache_negative_calls` | callsign cache entries by source |
+| `qrz_enabled` | QRZ credentials are configured (`QRZ_USERNAME` / `QRZ_PASSWORD`) |
+| `qrz_auth_failed` | QRZ rejected the login; lookups stopped until a restart |
+| `qrz_queue` / `qrz_dropped` | calls waiting for a lookup (at most 5,000), and calls dropped because the queue was full |
+| `qrz_lookups` / `qrz_found` / `qrz_no_grid` / `qrz_errors` | lookups made (at most 2 a second), answers with a grid, answers without a grid or record, and failures |
+| `qrz_loaded_from_db` | QRZ answers loaded from the `callsign_locators` table at startup |
+
 When Postgres is configured, a `postgres` block carries persistence health:
 `raw_flush_last_ok_unix`, `raw_flush_fail_streak`,
 `baseline_flush_last_ok_unix`, `baseline_flush_fail_streak`, and an
