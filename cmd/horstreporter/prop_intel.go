@@ -852,28 +852,11 @@ func propIntelHandler(w http.ResponseWriter, r *http.Request) {
 	resp = resp.applyFromHere(p.fromHere)
 
 	// Count atypical detection events per request.
-	hasAtypical := false
 	for _, c := range resp.Cells {
 		if c.Atypical != nil {
 			propIntelAccounting.surgesDetected.Add(1)
-			hasAtypical = true
 			break
 		}
-	}
-
-	// Web Push: fan out atypical cells to push subscriptions. Runs in a
-	// goroutine so a slow push endpoint cannot block the response. The
-	// resp.Cells slice is owned by this response, so the goroutine can
-	// read it after the handler returns.
-	if hasAtypical {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logInfo("push goroutine panic: %v", r)
-				}
-			}()
-			pushStore.NotifySurges(resp.Cells, p.qth)
-		}()
 	}
 
 	w.Header().Set("Content-Type", "application/json")

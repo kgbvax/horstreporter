@@ -87,7 +87,6 @@ var dxBaseline *DxBaselineEngine
 var wsprClimatology *WsprClimatologyEngine
 var streamAccounting = &streamAccountingState{}
 var propIntelAccounting = &propIntelAccountingState{}
-var pushAccounting = &pushAccountingState{}
 
 const defaultLiveHistoryRetentionMinutes = 60
 
@@ -106,23 +105,6 @@ func (a *propIntelAccountingState) snapshot() (requests, errors, surgesDetected 
 	requests = a.requests.Load()
 	errors = a.errors.Load()
 	surgesDetected = a.surgesDetected.Load()
-	return
-}
-
-// pushAccountingState tracks Web Push send and error counters, plus the
-// number of surges that triggered a push fan-out. Mirrors the per-ingest
-// accounting pattern; surfaced via statsHandler under the push.* JSON
-// keys. See U6.
-type pushAccountingState struct {
-	surgesDetected atomic.Int64
-	pushSent       atomic.Int64
-	pushErrors     atomic.Int64
-}
-
-func (a *pushAccountingState) snapshot() (surgesDetected, pushSent, pushErrors int64) {
-	surgesDetected = a.surgesDetected.Load()
-	pushSent = a.pushSent.Load()
-	pushErrors = a.pushErrors.Load()
 	return
 }
 
@@ -285,11 +267,7 @@ func main() {
 		"One-off: backfill the Almanac SNR counters of dx_region_baseline_daily from dx_raw_spots for the days before the SNR collection start, re-fold them and lower almanac_snr_since_day (false: skip).")
 	almanacSNRBackfillCutoffFlag := flag.Int64("almanac-snr-backfill-cutoff-unix", 0,
 		"Unix time the SNR columns were added (live SNR counting start) for the SNR backfill's partial deploy day; 0 = dx_meta almanac_snr_columns_added_unix. Prod: 1790609737.")
-	pushEnableFlag := flag.Bool("push-enable", false, "Enable Web Push notification channel for surge alerts (requires VAPID keys via -push-vapid-private-key/-push-vapid-public-key or PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
-	pushVAPIDPrivateKeyFlag := flag.String("push-vapid-private-key", "", "VAPID private key (base64url) for signing Web Push messages. Falls back to env PUSH_VAPID_PRIVATE_KEY. Generate with scripts/generate-vapid-keys.sh.")
-	pushVAPIDPublicKeyFlag := flag.String("push-vapid-public-key", "", "VAPID public key (base64url) served at /api/push/vapid-public-key for the browser subscription flow. Falls back to env PUSH_VAPID_PUBLIC_KEY.")
-	pushVAPIDSubscriberFlag := flag.String("push-vapid-subscriber", "", "E-mail address or https: URL in the VAPID JWT (identifies the sending server to the push service). Defaults to horstreporter@example.com.")
-	pushTrustedProxyCIDRFlag := flag.String("push-trusted-proxy-cidr", "", "Comma-separated CIDR ranges of trusted TLS-terminating proxies whose X-Forwarded-For header is honored for push rate-limiting (e.g. \"10.0.0.0/8,172.16.0.0/12\"). When unset, X-Forwarded-For is NOT trusted and the client IP is taken from RemoteAddr — this prevents spoofed-XFF rate-limit bypass. Only applies when -push-enable is set.")
+	pushTrustedProxyCIDRFlag := flag.String("push-trusted-proxy-cidr", "", "Comma-separated CIDR ranges of trusted TLS-terminating proxies whose X-Forwarded-For header is honored for per-IP rate limiting of /api/history (e.g. \"10.0.0.0/8,172.16.0.0/12\"). When unset, X-Forwarded-For is NOT trusted and the client IP is taken from RemoteAddr — this prevents spoofed-XFF rate-limit bypass. (The name predates the removal of Web Push.)")
 	flag.Parse()
 	// hub.history starts empty; the startup backfill (if any) moves this back.
 	liveHistoryCompleteSince.Store(time.Now().Unix())
@@ -318,31 +296,11 @@ func main() {
 		dxBaselineMaxEvents = *dxBaselineMaxEventsFlag
 	}
 
-	// Web Push (U5): resolve VAPID keys from flag then env (mirrors the
-	// DX_POSTGRES_DSN pattern — keep the private key out of argv via the
-	// env var in production). Push is enabled only when both keys are
-	// present AND -push-enable is set, so the subsystem is opt-in.
-	pushVAPIDPrivate := strings.TrimSpace(*pushVAPIDPrivateKeyFlag)
-	if pushVAPIDPrivate == "" {
-		pushVAPIDPrivate = strings.TrimSpace(os.Getenv("PUSH_VAPID_PRIVATE_KEY"))
-	}
-	pushVAPIDPublic := strings.TrimSpace(*pushVAPIDPublicKeyFlag)
-	if pushVAPIDPublic == "" {
-		pushVAPIDPublic = strings.TrimSpace(os.Getenv("PUSH_VAPID_PUBLIC_KEY"))
-	}
-	pushStore.configure(pushVAPIDPrivate, pushVAPIDPublic, *pushVAPIDSubscriberFlag, *pushEnableFlag)
-	if pushStore.isEnabled() {
-		logInfo("Web Push enabled (vapid public key present, subscriber=%q)", pushStore.vapidSubscriber)
-	} else if *pushEnableFlag {
-		logInfo("Web Push requested via -push-enable but VAPID keys are missing — push disabled (set PUSH_VAPID_PRIVATE_KEY/PUSH_VAPID_PUBLIC_KEY env vars)")
-	} else {
-		logInfo("Web Push disabled (-push-enable not set)")
-	}
 	// Configure the trusted-proxy allowlist for X-Forwarded-For handling
-	// in push rate-limiting. Without this, XFF is never trusted, so a
+	// in per-IP rate limiting (/api/history). Without this, XFF is never trusted, so a
 	// spoofed X-Forwarded-For header cannot rotate the rate-limit key.
 	if *pushTrustedProxyCIDRFlag != "" {
-		if err := setPushTrustedProxies(strings.Split(*pushTrustedProxyCIDRFlag, ",")); err != nil {
+		if err := setTrustedProxies(strings.Split(*pushTrustedProxyCIDRFlag, ",")); err != nil {
 			log.Fatalf("invalid -push-trusted-proxy-cidr: %v", err)
 		}
 	}
@@ -618,15 +576,6 @@ func main() {
 	appMux.HandleFunc("/api/almanac/season", almanacSeasonHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
 	appMux.HandleFunc("/api/history", historyHandler)
-	// Web Push (U5): VAPID public key for the browser subscription flow,
-	// subscribe/unsubscribe, and a subscription-status endpoint used by
-	// the frontend's re-subscription-after-restart check. The handlers
-	// are registered unconditionally (they return 503 when push is not
-	// configured) so the frontend can feature-detect without a crash.
-	appMux.HandleFunc("/api/push/vapid-public-key", pushVAPIDPublicKeyHandler)
-	appMux.HandleFunc("/api/push/subscribe", pushSubscribeHandler)
-	appMux.HandleFunc("/api/push/unsubscribe", pushUnsubscribeHandler)
-	appMux.HandleFunc("/api/push/subscription-status", pushSubscriptionStatusHandler)
 
 	// dx_raw_spots retention loop: prune rows older than the configured
 	// window once an hour. Disabled when retention is set to 0 days.

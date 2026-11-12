@@ -366,9 +366,6 @@ Response:
   (`dx_region_baseline_daily`): `atypical-both` (FT8 also hot),
   `atypical-wspr-silent-ft8` (FT8 quiet), `atypical-wspr-only` otherwise;
   `ft8_cross_ref` notes whether that comparison was `available`.
-- When at least one cell is atypical, the engine fans out Web Push
-  notifications to matching subscriptions asynchronously (see
-  `/api/push/*`); the push send never blocks this response.
 - Counters are surfaced in `/api/stats` under `prop_intel.requests`,
   `prop_intel.errors`, `prop_intel.surges_detected`.
 
@@ -467,8 +464,7 @@ Params: v1's (`qth` required, `surroundings`, `minutes`, `surge_threshold`,
 - `rings`: see Conventions. The area is then the block of squares around the
   QTH and the response carries `area`. Without `from_here`, `atypical` is
   omitted while the area is widened (the global climatology is not scaled to a
-  wider block, so its larger live counts would read as surges); surge push
-  fan-out follows.
+  wider block, so its larger live counts would read as surges).
 
 - `from_here=true` switches to the **from-here view** (`prop_intel_fromhere.go`).
   Only spots with an end in the area are counted: each such end adds one
@@ -557,8 +553,6 @@ region):
   from-here detail params above.
 - `open_agreement` is vacuously 1.0 with a single active source — render
   the `active_sources` count, not the fraction.
-- Atypical cells fan out Web Push like v1 (adapted to the v1 push payload;
-  push labels are unchanged).
 
 ### `GET /api/almanac` — QTH propagation Almanac (30-day "opened N of M days")
 
@@ -743,73 +737,6 @@ Response:
   but the floor hides it, and the UI shows a note.
   The top-level `m_min` stays 8.
 
-### `GET /api/push/vapid-public-key` — Web Push public key
-
-Returns the server's VAPID public key (base64url) for the browser
-subscription flow. The private key is NEVER exposed here. Returns 503
-when push is not configured (`-push-enable` false or VAPID keys
-missing).
-
-No params.
-
-Response: `{"public_key": "<base64url>"}`.
-
-### `POST /api/push/subscribe` — register a Web Push subscription
-
-Stores (or updates) a browser Push API subscription. Validates the
-subscription shape (HTTPS endpoint + `p256dh` + `auth` keys) before
-storing. Per-client-IP rate limiting (`pushSubscribeRatePerHour`/hour =
-10/h) mitigates abuse from unauthenticated clients. A re-POST of an
-existing endpoint updates the QTH/preferences in place (idempotent
-re-subscription — the plan's restart-recovery requirement). When the
-store is at capacity (`pushMaxSubscriptions` = 1000), the oldest
-subscription is evicted (FIFO) before the new one is added.
-
-Request body:
-```
-{
-  "endpoint": "https://fcm.googleapis.com/fcm/abc",
-  "keys": { "auth": "<base64url>", "p256dh": "<base64url>" },
-  "qth": "JO32",
-  "preferences": { "all": true }
-}
-```
-
-`preferences` is a map of `"band:region"` → bool (e.g.
-`"10m:CAR": true`) or the special key `"all"` for every surge. An empty
-map with no `"all"` entry means no pushes (subscription stored but
-inert).
-
-Response: `{"ok": true, "endpoint": "...", "registered": true}`.
-
-Errors: 405 (non-POST), 503 (push not configured), 429 (rate limit),
-400 (invalid JSON / validation failure).
-
-### `POST /api/push/unsubscribe` — remove a Web Push subscription
-
-Removes a subscription by endpoint. No-op when the endpoint was never
-stored (the browser may unsubscribe after a server restart that already
-lost the record). Accepts the request even when push is disabled so the
-browser can clean up its side without a 503.
-
-Request body: `{"endpoint": "https://fcm.googleapis.com/fcm/abc"}`.
-
-Response: `{"ok": true}`.
-
-Errors: 405 (non-POST), 400 (invalid JSON).
-
-### `GET /api/push/subscription-status` — check subscription state
-
-Checks whether a subscription endpoint is registered server-side. Used by the
-frontend re-subscription-after-restart flow: a `registered: false` response
-triggers a re-POST to `/api/push/subscribe`.
-
-Params: `endpoint` (required, the push service URL).
-
-Response: `{"registered": true|false}`.
-
-Errors: 405 (non-GET), 400 (missing endpoint), 503 (push not configured).
-
 ### `GET /api/square_details` — one grid square's reports
 
 Params: `locator` (required, valid Maidenhead or 400), plus the same context
@@ -832,7 +759,7 @@ counters, the PSKReporter feed delay (`pskr_feed_lag_seconds`, the raw
 estimate before any cap; `pskr_feed_lag_measured` false when fewer than 50
 reports arrived in the last two minutes and the figure is the time since the
 last data), plus a `prop_intel` block (`requests`, `errors`, `surges_detected`)
-and a `push` block (`surges_detected`, `push_sent`, `push_errors`). The
+The
 de-facto health endpoint.
 
 `rbn_live_forwarded` counts RBN spots sent to the live stream, and

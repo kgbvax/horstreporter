@@ -29,7 +29,6 @@ Reads these from the environment (flags still win when passed):
 | `DX_POSTGRES_DSN` | `-dx-postgres-dsn` | Postgres DSN incl. password. Logged **masked** (`maskDSN`), with a `DSN source:` provenance line. |
 | `RBN_CALLSIGN` | `-rbn-callsign` | Callsign sent to the RBN relay. Legacy fallback: `DXCLUSTER_USERNAME` (the removed DX cluster ingest's login) is still read when this is unset. |
 | `QRZ_USERNAME` / `QRZ_PASSWORD` | `-qrz-username` / `-qrz-password` | QRZ.com XML login (needs an XML subscription for the grid field). Used with `-rbn-enable` to look up the locators of RBN stations that no PSKReporter / WSPR report showed. Optional: without it, RBN uses the skimmer list and the PSKReporter / WSPR callsign cache only. Answers are kept in the `callsign_locators` table. |
-| `PUSH_VAPID_PRIVATE_KEY` / `PUSH_VAPID_PUBLIC_KEY` | `-push-vapid-private-key` / `-push-vapid-public-key` | Web Push signing pair; only used with `-push-enable`. Create with `scripts/generate-vapid-keys.sh` (see below). Rotating the pair invalidates every browser subscription. |
 
 `/etc/default/horstreporter` (`root:root`, `0600`) holds both: the secrets as
 env vars and the non-secret flags in `ARGS`:
@@ -40,11 +39,8 @@ DX_POSTGRES_DSN=postgres://dxuser:CHANGEME@localhost:5432/dxdata?sslmode=disable
 RBN_CALLSIGN=YOURCALL
 QRZ_USERNAME=YOURCALL
 QRZ_PASSWORD=…
-PUSH_VAPID_PRIVATE_KEY=…
-PUSH_VAPID_PUBLIC_KEY=…
 ARGS="-port 443 -domain horstreporter.kgbvax.net -pprof -compress -max-clients 150 \
-  -log-file /home/hk/horst.log -log-level=INFO \
-  -push-enable -push-vapid-subscriber https://horstreporter.kgbvax.net …"
+  -log-file /home/hk/horst.log -log-level=INFO …"
 ```
 
 Unit `[Service]` section (`/etc/systemd/system/horstreporter.service`):
@@ -56,13 +52,6 @@ Group=hk
 WorkingDirectory=/opt/horstreporter
 EnvironmentFile=-/etc/default/horstreporter
 ExecStart=/opt/horstreporter/horstreporter-linux-x64 $ARGS
-```
-
-The VAPID pair has no generator on the host (no Go toolchain); create it locally
-and stream it in over SSH so the private key is never printed:
-
-```
-scripts/generate-vapid-keys.sh | ssh root@horstreporter.kgbvax.net 'cat >> /etc/default/horstreporter'
 ```
 
 `deploy.sh` ships the binary only; it does **not** touch the unit or the env

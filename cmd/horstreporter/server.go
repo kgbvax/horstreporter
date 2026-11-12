@@ -19,152 +19,18 @@ import (
 	"horstreporter/internal/maidenhead"
 )
 
-// pushSubscribeRequest is the JSON body of POST /api/push/subscribe.
-// The browser sends its PushSubscription object (endpoint + keys) and
-// the operator's per-(band × region) enable preferences. A re-POST of an
-// existing endpoint updates the preferences in place (idempotent).
-type pushSubscribeRequest struct {
-	Endpoint    string               `json:"endpoint"`
-	Keys        pushSubscriptionKeys `json:"keys"`
-	QTH         string               `json:"qth"`
-	Preferences map[string]bool      `json:"preferences"`
-}
-
-// pushUnsubscribeRequest is the JSON body of POST /api/push/unsubscribe.
-type pushUnsubscribeRequest struct {
-	Endpoint string `json:"endpoint"`
-}
-
-// pushVAPIDPublicKeyHandler serves the server's VAPID public key (base64url)
-// for the frontend subscription flow. The private key is NEVER exposed
-// here. Returns 503 when push is not configured.
-func pushVAPIDPublicKeyHandler(w http.ResponseWriter, r *http.Request) {
-	if !pushStore.isEnabled() {
-		http.Error(w, "push not configured", http.StatusServiceUnavailable)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
-		PublicKey string `json:"public_key"`
-	}{PublicKey: pushStore.publicKey()})
-}
-
-// pushSubscribeHandler stores (or updates) a browser Push API
-// subscription. Validates the subscription shape (HTTPS endpoint +
-// p256dh + auth keys) before storing. Per-client-IP rate limiting
-// (pushSubscribeRatePerHour / hour) mitigates abuse from unauthenticated
-// clients. A re-POST of an existing endpoint is a no-op update (the plan's
-// idempotent re-subscription requirement).
-func pushSubscribeHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !pushStore.isEnabled() {
-		http.Error(w, "push not configured", http.StatusServiceUnavailable)
-		return
-	}
-	if !pushRateLimiter.allow(clientIPFromRequest(r)) {
-		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
-	var req pushSubscribeRequest
-	r.Body = http.MaxBytesReader(w, r.Body, 8192)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
-		return
-	}
-	sub := &pushSubscription{
-		Endpoint:    strings.TrimSpace(req.Endpoint),
-		Keys:        req.Keys,
-		QTH:         strings.ToUpper(strings.TrimSpace(req.QTH)),
-		Preferences: req.Preferences,
-	}
-	if sub.Preferences == nil {
-		sub.Preferences = map[string]bool{}
-	}
-	if err := validatePushSubscription(sub); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	pushStore.add(sub)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(struct {
-		OK         bool   `json:"ok"`
-		Endpoint   string `json:"endpoint"`
-		Registered bool   `json:"registered"`
-	}{OK: true, Endpoint: sub.Endpoint, Registered: true})
-}
-
-// pushUnsubscribeHandler removes a subscription by endpoint. No-op when
-// the endpoint was never stored (the browser may unsubscribe after a
-// server restart that already lost the record).
-func pushUnsubscribeHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !pushStore.isEnabled() {
-		// Still accept unsubscriptions when push is disabled so the
-		// browser can clean up its side without a 503.
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(struct {
-			OK bool `json:"ok"`
-		}{OK: true})
-		return
-	}
-	var req pushUnsubscribeRequest
-	r.Body = http.MaxBytesReader(w, r.Body, 2048)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
-		return
-	}
-	pushStore.remove(strings.TrimSpace(req.Endpoint))
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(struct {
-		OK bool `json:"ok"`
-	}{OK: true})
-}
-
-// pushSubscriptionStatusHandler reports whether a given endpoint is
-// currently registered server-side. Used by the frontend's
-// re-subscription flow: on panel open the browser queries its existing
-// subscription endpoint here; a 404 triggers a re-POST to
-// /api/push/subscribe (the plan's restart-recovery requirement).
-func pushSubscriptionStatusHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !pushStore.isEnabled() {
-		http.Error(w, "push not configured", http.StatusServiceUnavailable)
-		return
-	}
-	endpoint := strings.TrimSpace(r.URL.Query().Get("endpoint"))
-	if endpoint == "" {
-		http.Error(w, "endpoint required", http.StatusBadRequest)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
-		Registered bool `json:"registered"`
-	}{Registered: pushStore.has(endpoint)})
-}
-
-// pushTrustedProxies is the allowlist of CIDR ranges whose
-// X-Forwarded-For header is trusted for push rate-limiting. When empty,
+// trustedProxies is the allowlist of CIDR ranges whose
+// X-Forwarded-For header is trusted for per-IP rate limiting. When empty,
 // X-Forwarded-For is never honored — the client IP is taken from RemoteAddr.
 // This prevents a client from spoofing X-Forwarded-For to rotate the
 // rate-limit key and bypass the per-IP subscribe cap. Configured via
-// -push-trusted-proxy-cidr (main.go) and only meaningful when push is enabled.
-var pushTrustedProxies []*net.IPNet
+// -push-trusted-proxy-cidr (main.go).
+var trustedProxies []*net.IPNet
 
-// setPushTrustedProxies parses a list of CIDR strings into the trusted-proxy
+// setTrustedProxies parses a list of CIDR strings into the trusted-proxy
 // allowlist. Invalid CIDRs return an error (fatal at startup). An empty list
 // (or all-empty entries) clears the allowlist, disabling XFF trust.
-func setPushTrustedProxies(cidrs []string) error {
+func setTrustedProxies(cidrs []string) error {
 	var nets []*net.IPNet
 	for _, c := range cidrs {
 		c = strings.TrimSpace(c)
@@ -177,7 +43,7 @@ func setPushTrustedProxies(cidrs []string) error {
 		}
 		nets = append(nets, ipnet)
 	}
-	pushTrustedProxies = nets
+	trustedProxies = nets
 	return nil
 }
 
@@ -193,14 +59,14 @@ func remoteAddrHost(r *http.Request) string {
 
 // clientIPFromRequest extracts the client IP for rate limiting. It honors
 // X-Forwarded-For (leftmost entry) ONLY when the direct TCP peer (RemoteAddr)
-// is in the configured trusted-proxy allowlist (pushTrustedProxies); otherwise
+// is in the configured trusted-proxy allowlist (trustedProxies); otherwise
 // it uses RemoteAddr. This prevents spoofed X-Forwarded-For from rotating the
 // rate-limit key when the server is reachable directly. Strips the port.
 func clientIPFromRequest(r *http.Request) string {
 	peer := remoteAddrHost(r)
-	if len(pushTrustedProxies) > 0 {
+	if len(trustedProxies) > 0 {
 		if ip := net.ParseIP(peer); ip != nil {
-			for _, n := range pushTrustedProxies {
+			for _, n := range trustedProxies {
 				if n.Contains(ip) {
 					if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 						if idx := strings.IndexByte(xff, ','); idx >= 0 {
@@ -569,7 +435,6 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	// The raw estimate, before the per-window cap evalNowFor applies.
 	feedLagRaw, feedLagMeasured := pskrFeedLag.estimate(time.Now().Unix())
 	propIntelReqs, propIntelErrs, propIntelSurges := propIntelAccounting.snapshot()
-	pushSurges, pushSent, pushErrs := pushAccounting.snapshot()
 	// Persistence health: dx_raw_spots history depends on the raw flush
 	// succeeding; surface last success + failure streak so an outage is
 	// visible from the API instead of only in the log.
@@ -626,7 +491,6 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		StreamResumeFull     int64                 `json:"stream_resume_full_total"`
 		Postgres             *postgresStatsBlock   `json:"postgres,omitempty"`
 		PropIntel            *propIntelStatsBlock  `json:"prop_intel"`
-		Push                 *pushStatsBlock       `json:"push"`
 	}{
 		ActiveConnections:    numClients,
 		HistorySize:          historySize,
@@ -670,11 +534,6 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 			Requests:       propIntelReqs,
 			Errors:         propIntelErrs,
 			SurgesDetected: propIntelSurges,
-		},
-		Push: &pushStatsBlock{
-			SurgesDetected: pushSurges,
-			PushSent:       pushSent,
-			PushErrors:     pushErrs,
 		},
 	}
 
@@ -802,13 +661,6 @@ type propIntelStatsBlock struct {
 	Requests       int64 `json:"requests"`
 	Errors         int64 `json:"errors"`
 	SurgesDetected int64 `json:"surges_detected"`
-}
-
-// pushStatsBlock is the push.* sub-object in /api/stats. U6.
-type pushStatsBlock struct {
-	SurgesDetected int64 `json:"surges_detected"`
-	PushSent       int64 `json:"push_sent"`
-	PushErrors     int64 `json:"push_errors"`
 }
 
 func dxConditionsHandler(w http.ResponseWriter, r *http.Request) {

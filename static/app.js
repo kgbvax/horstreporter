@@ -10,7 +10,6 @@ import { initHotBandIndicator } from './hot-band-indicator.js';
 import { initCondNow } from './cond-now.js';
 import { initCondDock } from './cond-dock.js';
 import { initHorstKevin } from './horst-kevin.js';
-import { initPushUI } from './push.js';
 import { updateMapVisualization, updateBandLabels, refreshBandLabels, setBandNormalRateProvider, clearWsprMarkers, resetRenderFingerprint, visibleMapSpots, setRailSpanOverride } from './renderers.js';
 import { latLngToLocator, locatorToBounds, normalizeLongitude, setFaviconColor, getMinSnrMode, getEnabledBands, getSelectedBand, formatNumber, bandColors, getCountryColoringEnabled, pillTextColor, setSubmitMode, isStreaming, icon } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, installPerfDebugApi, perfNow, startPerfTimer } from './perf.js';
@@ -1215,10 +1214,6 @@ initUI();
         getCurrentBand: () => getSelectedBand(),
         onBandSwitch: switchToBand,
     });
-    // U5: Web Push UI — wires up the push settings panel, Service Worker
-    // registration, and re-subscription-after-restart reconciliation.
-    // Returns null when push is unsupported (UI stays hidden).
-    initPushUI().catch((err) => { console.warn('push UI init failed:', err); });
     if (HORST_KEVIN_ENABLED) {
         horstKevin = initHorstKevin({
             getQth: () => document.getElementById('qth')?.value?.trim()?.toUpperCase() || '',
