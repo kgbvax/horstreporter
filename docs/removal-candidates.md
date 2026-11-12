@@ -298,7 +298,9 @@ Not called by the web UI: `/api/stats`, `/api/prop_intel`,
   `/v1/rig/tune` and `/v1/operate`, but no module imports those two exports
   (only `getRigBand` is used). That is unwired rig control within a kept feature,
   not a removal candidate.
-- **K6. Web Push (`/api/push/*`, `-push-*`):** `static/push.js`, enabled on prod.
+- **K6. Web Push (`/api/push/*`, `-push-*`):** removed 2026-11-12 in favour of
+  Horst-Kevin's desktop nag (surge alerts were repetitive; `deploy.sh` strips the
+  flags from prod ARGS).
 - **K7. `-pprof`, `-compress`, `-max-clients`, log flags:** operational, used on
   prod (`-pprof` is in prod ARGS per the *Perf pass* note).
 - **K8. `-cty-path`:** still read (`main.go:415`, `loadCtyResolver`) for the

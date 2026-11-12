@@ -1337,15 +1337,13 @@ func TestBuildSquareDetailsResponseEmptyAndFiltered(t *testing.T) {
 //   - /api/prop_intel returns the documented response shape (bands, regions, cells).
 //   - At least one cell has p_open > 0 when the history window has live spots.
 //   - /api/stats reports prop_intel.requests == N after N calls.
-//   - When a surge triggers a push (mocked sendFunc), /api/stats reports
-//     push.surges_detected >= 1 and push.push_sent >= 1.
 //
 // The test mirrors the TestStreamHandlerIntegration / TestStatsHandlerIntegration
 // pattern: seed hub.history, spin up httptest.NewServer with the handler, make
 // real HTTP requests, decode JSON, assert on the shape.
 func TestPropIntelIntegration(t *testing.T) {
-	// Isolate global state: hub history, prop_intel accounting, push store,
-	// and the push accounting counters. Restore on exit.
+	// Isolate global state: hub history and prop_intel accounting. Restore
+	// on exit.
 	hub.Lock()
 	origHistory := hub.history
 	origClients := hub.clients
@@ -1361,31 +1359,16 @@ func TestPropIntelIntegration(t *testing.T) {
 	origPropIntelReqs := propIntelAccounting.requests.Load()
 	origPropIntelErrs := propIntelAccounting.errors.Load()
 	origPropIntelSurges := propIntelAccounting.surgesDetected.Load()
-	origPushSurges := pushAccounting.surgesDetected.Load()
-	origPushSent := pushAccounting.pushSent.Load()
-	origPushErrs := pushAccounting.pushErrors.Load()
 	defer func() {
 		propIntelAccounting.requests.Store(origPropIntelReqs)
 		propIntelAccounting.errors.Store(origPropIntelErrs)
 		propIntelAccounting.surgesDetected.Store(origPropIntelSurges)
-		pushAccounting.surgesDetected.Store(origPushSurges)
-		pushAccounting.pushSent.Store(origPushSent)
-		pushAccounting.pushErrors.Store(origPushErrs)
-	}()
-
-	resetPushStoreForTest()
-	defer resetPushStoreForTest()
-	mock := &mockPushSend{}
-	newTestPushStore(t, mock)
-	defer func() {
-		pushStore.configure("", "", "", false)
 	}()
 
 	// Seed hub.history with WSPR spots into the Caribbean region (CAR)
 	// from a JO32 operator. The new WSPR nowcast processes WSPR spots only.
 	// The atypical flag requires a WSPR climatology which is not available
-	// in this test (no Postgres), so we verify the response shape and push
-	// fan-out separately.
+	// in this test (no Postgres), so we verify the response shape.
 	now := time.Now().Unix()
 	const liveSenders = 12
 	history := make([]MQTTMessage, 0, 200)
@@ -1417,31 +1400,10 @@ func TestPropIntelIntegration(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/prop_intel", propIntelHandler)
 	mux.HandleFunc("/api/stats", statsHandler)
-	mux.HandleFunc("/api/push/subscribe", pushSubscribeHandler)
-	mux.HandleFunc("/api/push/unsubscribe", pushUnsubscribeHandler)
-	mux.HandleFunc("/api/push/vapid-public-key", pushVAPIDPublicKeyHandler)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	// Subscribe to 20m:CAR surges so the mocked sendFunc will fire.
-	subBody := `{"endpoint":"https://fcm.googleapis.com/fcm/inttest","keys":{"auth":"auth-key","p256dh":"p256dh-key"},"qth":"JO32","preferences":{"20m:CAR":true}}`
-	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/push/subscribe", strings.NewReader(subBody))
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("subscribe status = %d, want 200", resp.StatusCode)
-	}
-
-	// Make 3 calls to /api/prop_intel. The engine fans out push
-	// notifications in a goroutine; we issue the requests serially and
-	// then poll the mock until at least one push lands (the goroutine
-	// schedule is non-deterministic).
+	// Make 3 calls to /api/prop_intel.
 	for i := 0; i < 3; i++ {
 		resp, err := http.Get(server.URL + "/api/prop_intel?qth=JO32&minutes=15")
 		if err != nil {
@@ -1499,25 +1461,7 @@ func TestPropIntelIntegration(t *testing.T) {
 		}
 	}
 
-	// The WSPR nowcast does not flag atypical without a climatology (no
-	// Postgres in this test). Trigger the push fan-out directly by calling
-	// NotifySurges with an atypical cell, to verify the push mechanism still
-	// works end-to-end through the subscribed endpoint.
-	pushStore.NotifySurges([]propIntelCell{
-		{Band: "20m", Region: "CAR", Atypical: &AtypicalInfo{ZScore: 7.0, Flavor: "atypical-wspr-only"}},
-	}, "JO32")
-
-	// Poll the mock push send for up to 2s — the push fan-out runs in a
-	// goroutine and may land after the call returns.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && mock.count() < 1 {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if got := mock.count(); got < 1 {
-		t.Fatalf("expected at least 1 push sent after NotifySurges, got %d", got)
-	}
-
-	// Verify /api/stats includes the prop_intel and push blocks.
+	// Verify /api/stats includes the prop_intel block and no push block.
 	statsResp, err := http.Get(server.URL + "/api/stats")
 	if err != nil {
 		t.Fatalf("stats: %v", err)
@@ -1532,11 +1476,7 @@ func TestPropIntelIntegration(t *testing.T) {
 			Errors         int64 `json:"errors"`
 			SurgesDetected int64 `json:"surges_detected"`
 		} `json:"prop_intel"`
-		Push *struct {
-			SurgesDetected int64 `json:"surges_detected"`
-			PushSent       int64 `json:"push_sent"`
-			PushErrors     int64 `json:"push_errors"`
-		} `json:"push"`
+		Push *struct{} `json:"push"`
 	}
 	if err := json.NewDecoder(statsResp.Body).Decode(&stats); err != nil {
 		t.Fatalf("stats decode: %v", err)
@@ -1544,8 +1484,8 @@ func TestPropIntelIntegration(t *testing.T) {
 	if stats.PropIntel == nil {
 		t.Fatalf("stats: prop_intel block missing")
 	}
-	if stats.Push == nil {
-		t.Fatalf("stats: push block missing")
+	if stats.Push != nil {
+		t.Errorf("stats: push block still present after the Web Push removal")
 	}
 	// 3 calls to /api/prop_intel → requests delta == 3.
 	gotReqs := stats.PropIntel.Requests - origPropIntelReqs
@@ -1559,20 +1499,9 @@ func TestPropIntelIntegration(t *testing.T) {
 	}
 	// The WSPR nowcast does not flag atypical without a climatology (no
 	// Postgres in this test), so prop_intel.surges_detected should be 0.
-	// The push fan-out was triggered directly via NotifySurges above, so
-	// push.surges_detected and push.push_sent should reflect that.
 	gotSurges := stats.PropIntel.SurgesDetected - origPropIntelSurges
 	if gotSurges != 0 {
 		t.Errorf("stats prop_intel.surges_detected delta = %d, want 0 (no climatology)", gotSurges)
-	}
-	// Push accounting: surges_detected >= 1, push_sent >= 1.
-	gotPushSurges := stats.Push.SurgesDetected - origPushSurges
-	if gotPushSurges < 1 {
-		t.Errorf("stats push.surges_detected delta = %d, want >= 1", gotPushSurges)
-	}
-	gotPushSent := stats.Push.PushSent - origPushSent
-	if gotPushSent < 1 {
-		t.Errorf("stats push.push_sent delta = %d, want >= 1", gotPushSent)
 	}
 }
 

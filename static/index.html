@@ -29,7 +29,6 @@
     <link rel="modulepreload" href="cond-now.js">
     <link rel="modulepreload" href="cond-dock.js">
     <link rel="modulepreload" href="horst-kevin.js">
-    <link rel="modulepreload" href="push.js">
     <link rel="modulepreload" href="renderers.js">
     <link rel="modulepreload" href="active-area.js">
     <link rel="modulepreload" href="utils.js">
@@ -292,37 +291,6 @@
                         <div class="small text-muted" id="opmode-status-row">Opmode status: <strong id="opmode-status">Disabled</strong></div>
                         <div class="small text-muted" id="opmode-station-row">Station: <strong id="opmode-station">n/a</strong></div>
                         <div class="small text-muted" id="opmode-heading-row">Antenna: <strong id="opmode-heading">n/a</strong></div>
-                    </div>
-                </div>
-            </details>
-            <details class="settings-section" name="settings" id="notifications-section">
-                <summary>Notifications</summary>
-                <div class="settings-body d-flex flex-column gap-2 small">
-                    <!-- U5: Web Push settings. The push.js module wires this up;
-                         it stays hidden on browsers without Web Push support. -->
-                    <div id="push-settings-root" class="push-settings-root">
-                        <div class="d-flex align-items-center gap-2">
-                            <input type="checkbox" id="push-enable" autocomplete="off">
-                            <label for="push-enable" class="mb-0">Enable push notifications</label>
-                        </div>
-                        <div id="push-ios-hint" class="push-ios-hint small text-muted" style="display:none;">
-                            iOS Safari requires <strong>Add to Home Screen</strong> for Web Push.
-                            Tap the Share button, then “Add to Home Screen”, and launch from there.
-                        </div>
-                        <div id="push-reenable-hint" class="push-reenable-hint small" style="display:none;" role="status" aria-live="polite">
-                            The server no longer has your push subscription. Enable push again to receive alerts.
-                        </div>
-                        <div id="push-status" class="small" data-kind="idle"></div>
-                        <div id="push-pref-matrix" class="push-pref-matrix" hidden>
-                            <label class="d-flex align-items-center gap-2 small">
-                                <input type="checkbox" id="push-pref-all" autocomplete="off">
-                                All surges
-                            </label>
-                            <div class="push-pref-grid">
-                                <!-- header row + band rows are built by push.js (buildPrefGridRows)
-                                     from PUSH_REGIONS, so headers always match the columns -->
-                            </div>
-                        </div>
                     </div>
                 </div>
             </details>

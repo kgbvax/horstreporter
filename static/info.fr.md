@@ -14,7 +14,7 @@ C'est en pratique une interface alternative pour <a href="https://www.pskreporte
     * *Grid :* Regroupe les spots en carrés Maidenhead. La couleur indique la bande dominante, l'opacité la force du signal.
     * *Active area :* Colore chaque région avec la bande la plus active à cet endroit. Des hachures diagonales montrent une deuxième bande presque aussi active. Les spots isolés apparaissent comme des points.
 
-* **Réglages :** Sous la liste des bandes, **Layers** active les calques de la carte et les sources de spots (RBN, WSPR, étiquettes DXCC, couleurs des pays, prévision), **Display** règle l'âge des spots, les seuils SNR, le lissage des zones, le zoom automatique et plus encore, et **Notifications** gère les alertes push.
+* **Réglages :** Sous la liste des bandes, **Layers** active les calques de la carte et les sources de spots (RBN, WSPR, étiquettes DXCC, couleurs des pays), et **Display** règle l'âge des spots, les seuils SNR, le lissage des zones, le zoom automatique et plus encore.
 * Si vous ne voyez pas assez de données pour votre carré, activez **Adj. squares** qui récupère aussi les données des 8 carrés voisins.
 
 ## Interaction avec la carte
@@ -34,7 +34,7 @@ Si cette approche vous intéresse, jetez un œil à <a href="https://hf.dxview.o
 Comme tout en radioamateur, ceci est à considérer comme expérimental et peut imploser à tout moment. 95 % de ce projet a été créé avec Google Gemini. Contactez-moi pour tout retour ou demande.  
 Plus d'informations sont peut-être disponibles sur mon blog : <a href="https://dl9et.darc.de/tags/horstreporter/" target="_blank">https://dl9et.darc.de/tags/horstreporter/</a>
 
-Le dragon en peluche vert en bas de la barre latérale s'appelle « Horst-Kevin ».
+Le dragon en peluche vert en bas de la barre latérale s'appelle « Horst-Kevin ». Il vous signale quand une bande s'ouvre. Cochez « let me nag your desktop » dans son panneau et il envoie aussi une notification de bureau tant que l'onglet horstreporter est en arrière-plan.
 
 ## Note d'implémentation
 Au cœur du système, horstreporter s'abonne *une seule fois* au firehose de pskreporter et assure lui-même le fan-out / filtrage 1:n pour chaque client. C'est un choix délibéré pour ne pas surcharger les serveurs pskreporter. Horstreporter conserve aussi un court historique afin que les nouveaux clients n'aient pas à attendre l'arrivée des données via le flux d'événements. L'essentiel de la logique de visualisation et d'interaction se fait dans le navigateur, tandis que le scoring dérivé des conditions DX est calculé côté serveur et exposé via `/api/dx_conditions`.

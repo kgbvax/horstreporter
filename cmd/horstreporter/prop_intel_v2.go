@@ -899,42 +899,12 @@ func propIntelV2Handler(w http.ResponseWriter, r *http.Request) {
 		resp.TrendNow = wallNow
 	}
 
-	// Push fan-out: adapt v2 cells to the v1 push payload (push.go consumes
-	// []propIntelCell; the flavor string is unused by the payload).
-	hasAtypical := false
-	var pushCells []propIntelCell
+	// Count atypical detection events per request.
 	for _, c := range resp.Cells {
-		if c.Atypical == nil {
-			continue
+		if c.Atypical != nil {
+			propIntelAccounting.surgesDetected.Add(1)
+			break
 		}
-		hasAtypical = true
-		flavor := "atypical-wspr-only"
-		if c.AtypicalAgreement >= 0.5 {
-			flavor = "atypical-multi"
-		}
-		pushCells = append(pushCells, propIntelCell{
-			Band:     c.Band,
-			Region:   c.Region,
-			SSBOpen:  c.SSBOpen,
-			CWOpen:   c.CWOpen,
-			FromHere: c.FromHere,
-			Atypical: &AtypicalInfo{
-				ZScore:     c.Atypical.ZScore,
-				Confidence: c.Atypical.Confidence,
-				Flavor:     flavor,
-			},
-		})
-	}
-	if hasAtypical {
-		propIntelAccounting.surgesDetected.Add(1)
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logInfo("push goroutine panic: %v", r)
-				}
-			}()
-			pushStore.NotifySurges(pushCells, p.qth)
-		}()
 	}
 
 	w.Header().Set("Content-Type", "application/json")

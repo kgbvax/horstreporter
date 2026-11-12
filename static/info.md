@@ -15,7 +15,7 @@ It is effectively an alternate frontend for <a href="https://www.pskreporter.inf
     * *Grid:* Groups spots into Maidenhead squares. Color indicates the dominant band, opacity indicates signal strength.
     * *Active area:* Colors each region by the band with the most activity there. Diagonal stripes show a second band that is almost as active. Single spots appear as dots.
 
-* **Settings:** Below the band list, **Layers** switches map overlays and spot sources (RBN, WSPR, DXCC labels, country colors), **Display** sets spot age, SNR thresholds, area smoothing, auto-zoom and more, and **Notifications** manages push alerts.
+* **Settings:** Below the band list, **Layers** switches map overlays and spot sources (RBN, WSPR, DXCC labels, country colors), and **Display** sets spot age, SNR thresholds, area smoothing, auto-zoom and more.
 * If you don't see enough data for your square, try enabling **Adj. squares** (adjacent squares), which also pulls data from the 8 grid squares around you.
 * **Operator mode** (when running behind the local operator agent with an UltraBeam antenna): the map gains a **Beam direction** control — three buttons, *Forward* / *180°* / *Bi-dir* — that show and set the antenna's pattern live over MQTT. When the beam is left in **180°**, that button pulses an escalating red with a **REVERSE** warning; this is intentional, since a forgotten reverse beam is easy to miss.
 
@@ -42,7 +42,7 @@ If you are interested in this approach, have a look at <a href="https://hf.dxvie
 As with everything ham radio, this should be considered experimental and may implode any moment.  95% of this was created with Google Gemini. Contact me for feedback or requests.  
 More information may be available in my blog: <a href="https://dl9et.darc.de/tags/horstreporter/" target="_blank">https://dl9et.darc.de/tags/horstreporter/</a>
 
-The green plushy dragon at the bottom of the sidebar is called "Horst-Kevin".
+The green plushy dragon at the bottom of the sidebar is called "Horst-Kevin". He tells you when a band opens. Tick "let me nag your desktop" in his panel and he also sends a desktop notification while the horstreporter tab is in the background.
 
 ## Implementation note
 In its core horstreporter subscribes to the pskreporter firehose *once* and does the 1:n fan-out / filtering for each client by itself. This is an explicit choice to not overload the pskreporter servers. Horstreporter also maintains a short history so that new clients don't have to wait for data to arrive from the event stream. Most visualization and interaction logic is done in the browser, while derived DX condition scoring is computed server-side and exposed via `/api/dx_conditions`.
