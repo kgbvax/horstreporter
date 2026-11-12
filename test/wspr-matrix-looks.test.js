@@ -136,10 +136,45 @@ describe('wspr-matrix-looks dot strip', () => {
         expect(placed[0].slot).not.toBe(0);
     });
 
+    it('placeStrip with no free lane puts a dot under a trail, not on a dot', () => {
+        // Five dots with trails over the whole strip fill every lane.
+        const items = STRIP_LANES.map((_, i) => ({ cx: 100 + 40 * i, r: 5, w: 14, h: 10, tl: 0, tr: 400 }));
+        // A dot at the first dot's position: lane 0 holds that dot, so it goes elsewhere.
+        items.push({ cx: 100, r: 5, w: 14, h: 10 });
+        const placed = placeStrip(items, 60);
+        expect(placed[5].dy).not.toBe(placed[0].dy);
+    });
+
+    it('placeStrip keeps big dots in neighbouring lanes apart', () => {
+        // Two 14px dots side by side: one lane up (11px) would still touch.
+        const items = [
+            { cx: 100, r: 7, w: 14, h: 10 },
+            { cx: 106, r: 7, w: 14, h: 10 },
+        ];
+        const placed = placeStrip(items, 60);
+        expect(Math.abs(placed[1].dy - placed[0].dy)).toBeGreaterThanOrEqual(15);
+    });
+
     it('placeStrip hides a label with no free slot', () => {
         const items = Array.from({ length: 8 }, (_, i) => ({ cx: 100 + i, r: 3, w: 20, h: 10 }));
         const placed = placeStrip(items, 48);
         expect(placed.some((p) => p.slot === -1)).toBe(true);
+    });
+
+    it('layoutStripLabels measures a label the last layout hid', () => {
+        document.body.innerHTML = `<div id="root"><div class="wspr-strip">
+            <span class="wspr-strip-dot"><span class="wspr-strip-label is-hidden">EU</span></span></div></div>`;
+        const strip = document.querySelector('.wspr-strip');
+        strip.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 60 });
+        const dot = document.querySelector('.wspr-strip-dot');
+        dot.getBoundingClientRect = () => ({ left: 95, top: 25, width: 10, height: 10 });
+        const label = document.querySelector('.wspr-strip-label');
+        const seen = [];
+        Object.defineProperty(label, 'offsetWidth', { get: () => { seen.push(label.classList.contains('is-hidden')); return 14; } });
+        Object.defineProperty(label, 'offsetHeight', { get: () => 10 });
+        layoutStripLabels(document.getElementById('root'));
+        expect(seen).toEqual([false]);
+        expect(label.classList.contains('is-hidden')).toBe(false);
     });
 
     it('layoutStripLabels applies the placement to the live DOM', () => {

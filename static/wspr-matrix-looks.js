@@ -256,15 +256,28 @@ function spanOverlap(a, b) {
     return Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l) + 1);
 }
 
+// Cost of putting it into lane k: the overlap of the stretches in that lane,
+// plus any dot it would touch, in that lane or in a neighbouring one (lanes
+// are closer than two big dots are wide). A dot on a dot is far worse than a
+// trail under a dot or along a trail.
+function laneCost(placed, k, it, span) {
+    const dot = { l: it.cx - it.r, r: it.cx + it.r };
+    return placed.reduce((s, o) => {
+        if (o.lane === k) s += spanOverlap(o.span, span);
+        if (Math.abs(STRIP_LANES[o.lane] - STRIP_LANES[k]) < o.r + it.r + 1) s += 100 * spanOverlap(o.dot, dot);
+        return s;
+    }, 0);
+}
+
 export function placeStrip(items, height) {
-    const lanes = STRIP_LANES.map(() => []);
+    const placed = [];
     const out = items.map((it) => {
         const span = laneSpan(it);
-        const cost = lanes.map((lane) => lane.reduce((s, o) => s + spanOverlap(o, span), 0));
+        const cost = STRIP_LANES.map((_, k) => laneCost(placed, k, it, span));
         let li = cost.findIndex((c) => c === 0);
         // No free lane: the one with the least overlap.
         if (li < 0) li = cost.indexOf(Math.min(...cost));
-        lanes[li].push(span);
+        placed.push({ lane: li, span, r: it.r, dot: { l: it.cx - it.r, r: it.cx + it.r } });
         return { dy: STRIP_LANES[li], slot: -1, top: 0 };
     });
     const dots = items.map((it, i) => {
@@ -285,7 +298,7 @@ export function placeStrip(items, height) {
             const rect = { l: it.cx - it.w / 2, r: it.cx + it.w / 2, t: slots[k], b: slots[k] + it.h };
             if (rect.t < -8 || rect.b > height + 8) continue;
             if (labels.some((b) => overlaps(b, rect, 1))) continue;
-            if (dots.some((o, j) => j !== i && overlaps(o, rect, 0))) continue;
+            if (dots.some((o, j) => j !== i && overlaps(o, rect, 1))) continue;
             if (trails.some((o) => overlaps(o, rect, 0))) continue;
             labels.push(rect);
             out[i].slot = k;
@@ -302,12 +315,15 @@ export function layoutStripLabels(root) {
         const dotEls = Array.from(strip.querySelectorAll('.wspr-strip-dot'));
         const trailEls = strip.querySelectorAll('.wspr-strip-trail');
         for (const el of [...dotEls, ...trailEls]) el.style.setProperty('--dy', '0px');
+        // A label hidden by the last layout measures 0x0 and would fit anywhere:
+        // show them all again before measuring.
+        for (const el of strip.querySelectorAll('.wspr-strip-label.is-hidden')) el.classList.remove('is-hidden');
         const box = strip.getBoundingClientRect();
         if (box.width === 0) continue;
         const items = dotEls.map((el, i) => {
             const r = el.getBoundingClientRect();
             const label = el.querySelector('.wspr-strip-label');
-            const it = { cx: r.left - box.left + r.width / 2, r: r.width / 2, w: label?.offsetWidth || 0, h: label?.offsetHeight || 0 };
+            const it = { cx: r.left - box.left + r.width / 2, r: r.width / 2, w: label ? label.getBoundingClientRect().width || label.offsetWidth : 0, h: label?.offsetHeight || 0 };
             const t = trailEls[i]?.getBoundingClientRect();
             if (t && t.width > 0) {
                 it.tl = t.left - box.left;
