@@ -231,11 +231,13 @@ export function stripRowHtml(dots, heatMax = 0, trail = null) {
 // stretch of a lane; dots whose stretches would overlap (a dot on a dot, a
 // trail through a dot or along another trail) step into a lane above or below
 // the axis (a small beeswarm; the outer pair only when the inner three are
-// taken). Each label takes the first free slot of: above its dot, below,
-// further above, further below, avoiding every other label, dot and trail, or
-// is left out (slot -1; the region stays in the dot's name and tooltip).
-// Returns per item the lane offset dy and the label's top relative to the
-// dot's top edge.
+// taken). Each label takes the first free slot of: above its dot, below, to
+// its right, to its left, further above, further below, avoiding every other
+// label, dot and trail (its own trail too, so a side label goes to the side
+// away from the trail) and the strip's ends, or is left out (slot -1; the
+// region stays in the dot's name and tooltip). Returns per item the lane
+// offset dy, the label's top relative to the dot's top edge and dx, the
+// label's centre relative to the dot's centre.
 export const STRIP_LANES = [0, -11, 11, -22, 22];
 
 function overlaps(a, b, pad) {
@@ -269,7 +271,7 @@ function laneCost(placed, k, it, span) {
     }, 0);
 }
 
-export function placeStrip(items, height) {
+export function placeStrip(items, height, width = Infinity) {
     const placed = [];
     const out = items.map((it) => {
         const span = laneSpan(it);
@@ -278,7 +280,7 @@ export function placeStrip(items, height) {
         // No free lane: the one with the least overlap.
         if (li < 0) li = cost.indexOf(Math.min(...cost));
         placed.push({ lane: li, span, r: it.r, dot: { l: it.cx - it.r, r: it.cx + it.r } });
-        return { dy: STRIP_LANES[li], slot: -1, top: 0 };
+        return { dy: STRIP_LANES[li], slot: -1, top: 0, dx: 0 };
     });
     const dots = items.map((it, i) => {
         const cy = height / 2 + out[i].dy;
@@ -293,16 +295,28 @@ export function placeStrip(items, height) {
     const labels = [];
     items.forEach((it, i) => {
         const d = dots[i];
-        const slots = [d.t - 1 - it.h, d.b + 1, d.t - 2 - 2 * it.h, d.b + 2 + it.h];
+        const cy = (d.t + d.b) / 2;
+        const side = it.r + 3 + it.w / 2;
+        const slots = [
+            { t: d.t - 1 - it.h, dx: 0 },
+            { t: d.b + 1, dx: 0 },
+            { t: cy - it.h / 2, dx: side },
+            { t: cy - it.h / 2, dx: -side },
+            { t: d.t - 2 - 2 * it.h, dx: 0 },
+            { t: d.b + 2 + it.h, dx: 0 },
+        ];
         for (let k = 0; k < slots.length; k++) {
-            const rect = { l: it.cx - it.w / 2, r: it.cx + it.w / 2, t: slots[k], b: slots[k] + it.h };
+            const c = it.cx + slots[k].dx;
+            const rect = { l: c - it.w / 2, r: c + it.w / 2, t: slots[k].t, b: slots[k].t + it.h };
             if (rect.t < -8 || rect.b > height + 8) continue;
+            if (rect.l < -2 || rect.r > width + 2) continue;
             if (labels.some((b) => overlaps(b, rect, 1))) continue;
             if (dots.some((o, j) => j !== i && overlaps(o, rect, 1))) continue;
             if (trails.some((o) => overlaps(o, rect, 0))) continue;
             labels.push(rect);
             out[i].slot = k;
             out[i].top = rect.t - d.t;
+            out[i].dx = slots[k].dx;
             break;
         }
     });
@@ -331,7 +345,7 @@ export function layoutStripLabels(root) {
             }
             return it;
         });
-        const placed = placeStrip(items, box.height);
+        const placed = placeStrip(items, box.height, box.width);
         dotEls.forEach((el, i) => {
             el.style.setProperty('--dy', `${placed[i].dy}px`);
             trailEls[i]?.style.setProperty('--dy', `${placed[i].dy}px`);
@@ -340,6 +354,7 @@ export function layoutStripLabels(root) {
             label.classList.toggle('is-hidden', placed[i].slot < 0);
             label.style.top = `${placed[i].top.toFixed(1)}px`;
             label.style.bottom = 'auto';
+            label.style.left = placed[i].dx ? `calc(50% + ${placed[i].dx.toFixed(1)}px)` : '';
         });
     }
 }

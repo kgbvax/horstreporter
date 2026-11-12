@@ -99,7 +99,8 @@ describe('wspr-matrix-looks dot strip', () => {
         const rects = placed.map((p, i) => {
             const cy = 24 + p.dy;
             const t = cy - items[i].r + p.top;
-            return p.slot < 0 ? null : { l: items[i].cx - 7, r: items[i].cx + 7, t, b: t + 10 };
+            const c = items[i].cx + p.dx;
+            return p.slot < 0 ? null : { l: c - 7, r: c + 7, t, b: t + 10 };
         }).filter(Boolean);
         for (let a = 0; a < rects.length; a++) {
             for (let b = a + 1; b < rects.length; b++) {
@@ -157,8 +158,18 @@ describe('wspr-matrix-looks dot strip', () => {
 
     it('placeStrip hides a label with no free slot', () => {
         const items = Array.from({ length: 8 }, (_, i) => ({ cx: 100 + i, r: 3, w: 20, h: 10 }));
-        const placed = placeStrip(items, 48);
+        // A strip just wide enough for the dots: no room beside them either.
+        const placed = placeStrip(items, 48, 112);
         expect(placed.some((p) => p.slot === -1)).toBe(true);
+    });
+
+    it('placeStrip puts a label beside its dot, away from its trail, when above and below are taken', () => {
+        // Dots stacked in all five lanes at one spot, every trail running left.
+        const items = STRIP_LANES.map((_, i) => ({ cx: 200 + (i % 2), r: 5, w: 14, h: 10, tl: 100, tr: 200 }));
+        const placed = placeStrip(items, 60, 400);
+        expect(new Set(placed.map((p) => p.dy)).size).toBe(5);
+        expect(placed.filter((p) => p.slot === 2)).not.toHaveLength(0);
+        for (const p of placed) expect(p.dx).toBeGreaterThanOrEqual(0);
     });
 
     it('layoutStripLabels measures a label the last layout hid', () => {
