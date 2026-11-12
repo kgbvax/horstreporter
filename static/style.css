@@ -806,8 +806,8 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
 .wspr-strip-trail {
     position: absolute;
     top: calc(50% + var(--dy, 0px));
-    height: 2px;
-    margin-top: -1px;
+    height: 1px;
+    margin-top: -0.5px;
     background: var(--text-color);
     pointer-events: none;
 }
@@ -818,8 +818,8 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
     content: '';
     position: absolute;
     top: -3px;
-    width: 2px;
-    height: 8px;
+    width: 1px;
+    height: 7px;
     background: var(--text-color);
 }
 .wspr-strip-trail.is-up::before { left: 0; }
