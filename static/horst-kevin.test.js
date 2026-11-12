@@ -16,6 +16,7 @@ import {
     isHoldingOpen,
     bandProfile,
     initHorstKevin,
+    summarizeCalls,
 } from './horst-kevin.js';
 
 const P = TUNING.POLL_MS;
@@ -467,6 +468,65 @@ describe('resync / moodOf', () => {
     });
 });
 
+describe('call log', () => {
+    it('stores when the opening ended and how often the band was skipped', () => {
+        const a = run([warm, ...rep(45, { bands: ['20m'] })]);
+        const lastSeen = a.t;
+        const b = run(rep(11, { bands: [] }), { state: a.state, start: a.t });
+        const c = b.state.calls[0];
+        expect(c.verdict).toBe('banger');
+        expect(c.endedAt).toBe(lastSeen);
+        expect(c.skips).toBe(1);
+        expect(c.answered).toBeUndefined();
+    });
+
+    it('clears endedAt when the opening comes back within the merge window', () => {
+        const a = run([warm, ...rep(3, { bands: ['20m'] })]);
+        const b = run(rep(11, { bands: [] }), { state: a.state, start: a.t });
+        expect(b.state.calls[0].endedAt).toBe(a.t);
+        const c = run([{ bands: ['20m'] }], { state: b.state, start: b.t });
+        expect(c.state.calls[0].endedAt).toBeUndefined();
+    });
+
+    it('keeps "answered" on a call you took after it was graded', () => {
+        const a = run([warm, ...rep(25, { bands: ['20m'] })]);
+        expect(a.state.calls[0].verdict).toBe('banger');
+        const b = run([{ bands: ['20m'], ctx: { answeredBands: ['20m'] } }], { state: a.state, start: a.t });
+        expect(b.state.calls[0]).toMatchObject({ verdict: 'banger', answered: true });
+    });
+
+    it('summarizes the last 7 days into plain outcomes, newest first', () => {
+        const now = T0;
+        const calls = [
+            { id: 'old', band: '20m', ts: now - 8 * 24 * 60 * MIN, verdict: 'banger' },
+            { id: 'held', band: '20m', ts: now - 120 * MIN, verdict: 'banger', endedAt: now - 80 * MIN, skips: 3 },
+            { id: 'gone', band: '10m', ts: now - 60 * MIN, verdict: 'dud', endedAt: now - 57 * MIN },
+            { id: 'flap', band: '15m', ts: now - 50 * MIN, verdict: 'dud', endedAt: now - 20 * MIN },
+            { id: 'went', band: '17m', ts: now - 40 * MIN, verdict: 'answered' },
+            { id: 'void', band: '40m', ts: now - 30 * MIN, verdict: 'void' },
+            { id: 'live', band: '20m', ts: now - 20 * MIN, verdict: 'banger' },
+            { id: 'pend', band: '15m', ts: now - 4 * MIN, verdict: 'pending' },
+        ];
+        const sum = summarizeCalls(calls, now, new Set(['20m', '17m']));
+        expect(sum).toMatchObject({ total: 7, graded: 4, held: 2, went: 1, pct: 50 });
+        const byId = Object.fromEntries(sum.rows.map((r) => [r.id, r]));
+        expect(sum.rows.map((r) => r.id)).toEqual(['pend', 'live', 'void', 'went', 'flap', 'gone', 'held']);
+        expect(byId.held.outcome).toEqual({ kind: 'held', min: 40 });
+        expect(byId.held.you).toEqual({ kind: 'skipped', nth: 3 });
+        expect(byId.gone.outcome).toEqual({ kind: 'gone', min: 3 });
+        expect(byId.gone.you).toBeNull(); // skipping a band that fizzled is no failure
+        expect(byId.flap.outcome).toEqual({ kind: 'fizzled', min: 0 });
+        expect(byId.went).toMatchObject({ outcome: { kind: 'open' }, you: { kind: 'went' } });
+        expect(byId.void).toMatchObject({ outcome: { kind: 'ungraded' }, you: null });
+        expect(byId.live).toMatchObject({ outcome: { kind: 'open' }, you: null });
+        expect(byId.pend.outcome).toEqual({ kind: 'grading', min: 6 });
+    });
+
+    it('returns an empty summary for no calls', () => {
+        expect(summarizeCalls(undefined, T0)).toEqual({ total: 0, graded: 0, held: 0, went: 0, pct: null, rows: [] });
+    });
+});
+
 // ── DOM wiring ───────────────────────────────────────────────────────────
 
 function mountDom() {
@@ -478,7 +538,7 @@ function mountDom() {
             <div class="hk-panel" hidden>
                 <select class="hk-meanness"><option value="soft">a</option><option value="buzzed">b</option><option value="drill">c</option></select>
                 <select class="hk-lang"><option value="en">EN</option><option value="de">DE</option></select>
-                <button class="hk-panel-close"></button>
+                <span class="hk-panel-sub"></span><button class="hk-panel-close"></button>
                 <div class="hk-panel-body"></div>
                 <input type="checkbox" class="hk-desktop"><span class="hk-panel-foot-text"></span>
             </div>
@@ -553,6 +613,8 @@ describe('initHorstKevin', () => {
 
         avatar.click();
         expect(document.querySelector('.hk-panel').hidden).toBe(false);
+        expect(document.querySelector('.hk-panel-sub').textContent).toBe('Watching the bands from JO32');
+        expect(document.querySelector('.hk-empty').textContent).toMatch(/No calls this week/);
         kevin.stop();
     });
 
@@ -621,6 +683,32 @@ describe('initHorstKevin', () => {
         expect(hot.every((u) => !new URL(u, 'http://x').searchParams.has('include'))).toBe(true);
         expect(document.querySelector('.hk-bubble').hidden).toBe(true);
         expect(storage.getItem('hk:calls')).toBeNull();
+        kevin.stop();
+    });
+
+    it('renders stored calls as a call log with plain outcomes', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(T0);
+        storage.setItem('hk:lang', JSON.stringify('en'));
+        storage.setItem('hk:calls', JSON.stringify([
+            { id: 'a', band: '20m', ts: T0 - 120 * MIN, verdict: 'banger', endedAt: T0 - 80 * MIN, skips: 3 },
+            { id: 'b', band: '10m', ts: T0 - 60 * MIN, verdict: 'dud', endedAt: T0 - 57 * MIN },
+            { id: 'c', band: '15m', ts: T0 - 30 * MIN, verdict: 'banger', answered: true, endedAt: T0 - 5 * MIN },
+        ]));
+        const kevin = initHorstKevin({ getQth: () => 'JO32ab', getCurrentBand: () => '', onBandSwitch: () => true });
+        await vi.advanceTimersByTimeAsync(0);
+        document.querySelector('.hk-avatar').click();
+        const values = [...document.querySelectorAll('.hk-stat-value')].map((e) => e.textContent.trim());
+        expect(values).toEqual(['3', '2 of 3', '1']);
+        expect(document.querySelector('.hk-quip').textContent).toMatch(/^67% right/);
+        const rows = [...document.querySelectorAll('.hk-call')].map((li) => [...li.querySelectorAll('.hk-tag, .hk-chip')].map((e) => e.textContent));
+        expect(rows).toEqual([
+            ['15m', 'held 25 min', 'you went'],
+            ['10m', 'gone after 3 min'],
+            ['20m', 'held 40 min', 'you skipped, 3rd time this week'],
+        ]);
+        expect(document.querySelector('.hk-chip.is-warn').textContent).toMatch(/3rd time/);
+        expect(document.querySelector('.hk-panel-sub').textContent).toBe('Watching the bands from JO32');
         kevin.stop();
     });
 
