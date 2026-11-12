@@ -321,14 +321,30 @@ function defaultLang() {
 // Localised panel chrome (Horst-Kevin's voice, so it follows the language too).
 const UI = {
     en: {
-        confTitle: 'Eating my words',
-        grudgeTitle: 'The grudge',
-        noGraded: 'No graded dares yet. Give me a chance.',
-        honesty: (t, b, d, p) => `Last ${t} dares: <strong>${b}</strong> bangers · <strong>${d}</strong> ${d === 1 ? 'lie' : 'lies'} · <strong>${p}%</strong> honest`,
-        grudgeHead: (n) => `You've ghosted me <strong>${n}</strong> ${n === 1 ? 'time' : 'times'} this week.`,
-        cleanSlate: 'Clean slate. For now.',
-        ghosted: (n) => `ghosted ${n}×`,
-        nag: 'let me nag your desktop',
+        watching: (bands, qth) => `${bands.length ? `Watching ${bands.join(', ')}` : 'Watching the bands'}${qth ? ` from ${qth}` : ''}`,
+        intro: 'I dare you onto bands that open from your area. Then I check if they held.',
+        statCalls: 'Calls, 7 days',
+        statHeld: 'Band held',
+        statHeldTip: 'A call counts as held when the band stayed open for most of the next 5 to 10 minutes.',
+        statWent: 'You went',
+        of: 'of',
+        quip: (p) => (p >= 80 ? `${p}% right. Better than your logbook.`
+            : p >= 50 ? `${p}% right. I am a heckler, not a crystal ball.`
+                : `${p}% right. Fine, I will eat my words.`),
+        recentTitle: 'Recent calls',
+        noCalls: 'No calls this week. Quiet bands, or I was napping.',
+        grading: (m) => `grading, ${m} min left`,
+        open: 'still open',
+        held: (m) => (m ? `held ${m} min` : 'held'),
+        gone: (m) => `gone after ${m} min`,
+        fizzled: 'fizzled',
+        ungraded: 'not graded',
+        ungradedTip: 'Too few polls to grade it (tab hidden, feed gap or area change).',
+        went: 'you went',
+        skipped: (n) => (n >= 2 ? `you skipped, ${ordinal(n)} time this week` : 'you skipped'),
+        tone: 'Tone',
+        language: 'Language',
+        nag: 'Desktop notifications',
         meanLabels: { soft: 'Supportive', buzzed: 'In character', drill: 'Drill Sergeant' },
         demoDone: 'demo done. reload to reset.',
         demo: {
@@ -341,14 +357,30 @@ const UI = {
         },
     },
     de: {
-        confTitle: 'Wort gehalten?',
-        grudgeTitle: 'Nachtragend',
-        noGraded: "Noch keine bewerteten Ansagen. Gib mir 'ne Chance.",
-        honesty: (t, b, d, p) => `Letzte ${t} Ansagen: <strong>${b}</strong> Volltreffer · <strong>${d}</strong> ${d === 1 ? 'Lüge' : 'Lügen'} · <strong>${p}%</strong> ehrlich`,
-        grudgeHead: (n) => `Du hast mich diese Woche <strong>${n}</strong>× versetzt.`,
-        cleanSlate: 'Weiße Weste. Vorerst.',
-        ghosted: (n) => `${n}× versetzt`,
-        nag: 'nerv meinen Desktop',
+        watching: (bands, qth) => `${bands.length ? `Beobachte ${bands.join(', ')}` : 'Beobachte die Bänder'}${qth ? ` von ${qth} aus` : ''}`,
+        intro: 'Ich schicke dich auf Bänder, die bei dir aufgehen. Danach prüfe ich, ob sie gehalten haben.',
+        statCalls: 'Ansagen, 7 Tage',
+        statHeld: 'Band hielt',
+        statHeldTip: 'Eine Ansage zählt als gehalten, wenn das Band in den nächsten 5 bis 10 Minuten meist offen blieb.',
+        statWent: 'Du warst da',
+        of: 'von',
+        quip: (p) => (p >= 80 ? `${p}% Treffer. Besser als dein Logbuch.`
+            : p >= 50 ? `${p}% Treffer. Ich bin Heckler, keine Glaskugel.`
+                : `${p}% Treffer. Gut, ich ess meine Worte.`),
+        recentTitle: 'Letzte Ansagen',
+        noCalls: 'Diese Woche keine Ansagen. Ruhige Bänder, oder ich hab geschlafen.',
+        grading: (m) => `wird bewertet, noch ${m} Min`,
+        open: 'noch offen',
+        held: (m) => (m ? `hielt ${m} Min` : 'hielt'),
+        gone: (m) => `weg nach ${m} Min`,
+        fizzled: 'verpufft',
+        ungraded: 'nicht bewertet',
+        ungradedTip: 'Zu wenige Abfragen für eine Bewertung (Tab versteckt, Feed-Lücke oder Ortswechsel).',
+        went: 'du warst da',
+        skipped: (n) => (n >= 2 ? `verpasst, ${n}. Mal diese Woche` : 'verpasst'),
+        tone: 'Ton',
+        language: 'Sprache',
+        nag: 'Desktop-Benachrichtigungen',
         meanLabels: { soft: 'Aufmunternd', buzzed: 'Echt Horst-Kevin', drill: 'Ausbilder' },
         demoDone: 'Demo fertig. zum Zurücksetzen neu laden.',
         demo: {
@@ -361,6 +393,16 @@ const UI = {
         },
     },
 };
+
+function ordinal(n) {
+    const t = n % 100;
+    if (t >= 11 && t <= 13) return `${n}th`;
+    return `${n}${['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
+}
+
+function escapeHtml(v) {
+    return String(v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
 
 function uiPack(lang) {
     return UI[lang] || UI.en;
@@ -435,12 +477,20 @@ function voidCall(s, ep) {
     if (c && c.verdict === 'pending') c.verdict = 'void';
 }
 
+// `answered` on the call outlives the verdict, so the panel can say "you went"
+// for a dare you took after it was graded.
 function answerEpisode(s, ep) {
     if (ep.answered) return;
     ep.answered = true;
     if (!ep.callId) return;
     const c = s.calls.find((x) => x.id === ep.callId);
-    if (c && c.verdict === 'pending') c.verdict = 'answered';
+    if (!c) return;
+    c.answered = true;
+    if (c.verdict === 'pending') c.verdict = 'answered';
+}
+
+function callOf(s, ep) {
+    return ep?.callId ? s.calls.find((x) => x.id === ep.callId) || null : null;
 }
 
 // Close every episode without grudges or speech, void pending calls. Spoken
@@ -496,6 +546,47 @@ function recordCall(s, ep, now) {
     s.calls.push({ id, band: ep.band, rung: 0, kind: ep.kind || '', rate: ep.peakRate || 0, ts: now, verdict: 'pending' });
     if (s.calls.length > MAX_CALLS) s.calls = s.calls.slice(-MAX_CALLS);
     return id;
+}
+
+// ── call log (what the panel shows) ───────────────────────────────────────
+//
+// One row per spoken dare from the last GRUDGE_WINDOW_MS, newest first, with
+// two plain outcomes: what the band did after the dare (`band`) and what you
+// did (`you`). Pure, so the panel copy can be tested without the DOM.
+//   band.kind: grading | open | held | gone | fizzled | ungraded | null
+//   you.kind:  went | skipped | null (still open, fizzled, or not graded)
+// `liveBands` are the bands whose episode is still running.
+export function summarizeCalls(calls, now, liveBands = new Set()) {
+    const minutes = (ms) => Math.max(1, Math.round(ms / 60_000));
+    const rows = [];
+    let graded = 0;
+    let held = 0;
+    let went = 0;
+    for (const c of Array.isArray(calls) ? calls : []) {
+        const ts = Number(c?.ts) || 0;
+        if (!ts || now - ts > GRUDGE_WINDOW_MS) continue;
+        const v = c.verdict;
+        const win = bandProfile(c.band).verdictMs;
+        const ended = Number(c.endedAt) > 0;
+        const live = !ended && liveBands.has(c.band);
+        const tookIt = Boolean(c.answered) || v === 'answered';
+        let band = null;
+        if (v === 'pending') band = { kind: 'grading', min: minutes(ts + win - now) };
+        else if (v === 'banger') band = ended ? { kind: 'held', min: minutes(c.endedAt - ts) } : { kind: live ? 'open' : 'held', min: 0 };
+        else if (v === 'dud') band = ended && c.endedAt - ts < win ? { kind: 'gone', min: minutes(c.endedAt - ts) } : { kind: 'fizzled', min: 0 };
+        else if (v === 'answered') band = live ? { kind: 'open', min: 0 } : null;
+        else if (v === 'void') band = { kind: 'ungraded', min: 0 };
+        let you = null;
+        if (tookIt) you = { kind: 'went', nth: 0 };
+        // Skipping a band that fizzled is no failure, so only a held one counts.
+        else if (v === 'banger' && !live) you = { kind: 'skipped', nth: Number(c.skips) || 0 };
+        if (v === 'banger' || v === 'dud') graded += 1;
+        if (v === 'banger') held += 1;
+        if (tookIt) went += 1;
+        rows.push({ id: c.id, band: c.band, ts, outcome: band, you });
+    }
+    rows.sort((a, b) => b.ts - a.ts);
+    return { total: rows.length, graded, held, went, pct: graded ? Math.round((held / graded) * 100) : null, rows };
 }
 
 function accrue(ep, now) {
@@ -668,6 +759,8 @@ export function reduce(state, recs, now, ctx = {}) {
             if (r) {
                 ep = r.episode;
                 delete s.recent[b];
+                const c = callOf(s, ep);
+                if (c) delete c.endedAt;
                 delete s.cooldownUntil[b];
                 accrue(ep, now);
                 countSighting(ep, now);
@@ -733,6 +826,13 @@ export function reduce(state, recs, now, ctx = {}) {
         if (grudge) {
             addGrudge(s, { band: b, kind: ep.kind, reason: ep.reason, peakRate: Math.round((ep.peakRate || 0) * 100) / 100, firstSeenAt: ep.firstSeenAt, fadedAt: now }, now);
             ep.grudged = true;
+        }
+        // The call keeps when the opening was last seen (its length for the
+        // panel) and, for a grudge, how often this band was skipped this week.
+        const call = callOf(s, ep);
+        if (call) {
+            call.endedAt = ep.lastSeenAt;
+            if (grudge) call.skips = grudgeCountFor(s.grudges, b, now);
         }
         note(b, `faded${grudge ? ', grudge' : ''}`);
         if (!ep.answered && ep.spoken) faded.push(ep);
@@ -1044,7 +1144,7 @@ export function initHorstKevin({ getQth, getSurroundings, getCurrentBand, getRig
         return out;
     }
 
-    // ── confession + grudge panel ────────────────────────────────────────────
+    // ── call log panel ───────────────────────────────────────────────────────
 
     // Keep the panel's selects/labels in sync with current language + settings.
     function syncChrome() {
@@ -1059,10 +1159,62 @@ export function initHorstKevin({ getQth, getSurroundings, getCurrentBand, getRig
         }
         const langSel = panel.querySelector('.hk-lang');
         if (langSel) langSel.value = lang;
-        const foot = panel.querySelector('.hk-panel-foot-text');
-        if (foot) foot.textContent = u.nag;
+        setText('.hk-panel-foot-text', u.nag);
+        setText('.hk-tone-label', u.tone);
+        setText('.hk-lang-label', u.language);
         const deskToggle = panel.querySelector('.hk-desktop');
         if (deskToggle) deskToggle.checked = desktopNags;
+    }
+
+    function setText(sel, text) {
+        const el = panel.querySelector(sel);
+        if (el) el.textContent = text;
+    }
+
+    // The 4-char square of a locator QTH, else '' (a callsign QTH is not shown).
+    function qthSquare() {
+        const q = String((typeof getQth === 'function' && getQth()) || '').trim();
+        return /^[A-R]{2}[0-9]{2}/i.test(q) ? q.slice(0, 4).toUpperCase() : '';
+    }
+
+    function bandTag(band) {
+        return `<span class="hk-tag"><span class="hk-swatch" style="--hk-tag:${bandColors[band] || bandColors.all}"></span>${escapeHtml(band)}</span>`;
+    }
+
+    function chip(text, tone, tip = '') {
+        return `<span class="hk-chip is-${tone}"${tip ? ` title="${escapeHtml(tip)}"` : ''}>${escapeHtml(text)}</span>`;
+    }
+
+    function outcomeChip(u, o) {
+        if (!o) return '';
+        switch (o.kind) {
+            case 'grading': return chip(u.grading(o.min), 'neutral');
+            case 'open': return chip(u.open, 'good');
+            case 'held': return chip(u.held(o.min), 'good');
+            case 'gone': return chip(u.gone(o.min), 'bad');
+            case 'fizzled': return chip(u.fizzled, 'bad');
+            case 'ungraded': return chip(u.ungraded, 'neutral', u.ungradedTip);
+            default: return '';
+        }
+    }
+
+    function youChip(u, y) {
+        if (!y) return '';
+        if (y.kind === 'went') return chip(u.went, 'good');
+        return chip(u.skipped(y.nth), y.nth >= 2 ? 'warn' : 'neutral');
+    }
+
+    function fmtWhen(ts, now) {
+        const d = new Date(ts);
+        const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        if (d.toDateString() === new Date(now).toDateString()) return hm;
+        let day = '';
+        try {
+            day = d.toLocaleDateString(lang === 'de' ? 'de-DE' : 'en-GB', { weekday: 'short' });
+        } catch {
+            day = '';
+        }
+        return day ? `${day} ${hm}` : hm;
     }
 
     function renderPanel() {
@@ -1070,53 +1222,34 @@ export function initHorstKevin({ getQth, getSurroundings, getCurrentBand, getRig
         if (panel.hidden) return;
         const u = uiPack(lang);
         const now = Date.now();
-        const { calls, grudges } = state;
-        // Answered and void calls are left out of the honesty score.
-        const graded = calls.filter((c) => c.verdict === 'banger' || c.verdict === 'dud');
-        const bangers = graded.filter((c) => c.verdict === 'banger').length;
-        const duds = graded.filter((c) => c.verdict === 'dud').length;
-        const total = bangers + duds;
-        const pct = total > 0 ? Math.round((bangers / total) * 100) : null;
+        const live = Object.values(state.episodes).filter((e) => e.confirmed).map((e) => e.band);
+        const sum = summarizeCalls(state.calls, now, new Set(live));
 
-        const recentGrudges = grudges.filter((g) => now - g.fadedAt < GRUDGE_WINDOW_MS);
+        setText('.hk-panel-sub', u.watching(live, qthSquare()));
 
-        const dudList = graded
-            .filter((c) => c.verdict === 'dud')
-            .slice(-6)
-            .reverse()
-            .map((c) => `<li><span class="hk-tag" style="--hk-tag:${bandColors[c.band] || bandColors.all}">${c.band}</span> <span class="hk-time">${fmtTime(c.ts)}</span> <span class="hk-dud-note">${dudLine(lang, c.band)}</span></li>`)
-            .join('');
-
-        // Grudges grouped by band, worst offenders first.
-        const byBand = new Map();
-        for (const g of recentGrudges) byBand.set(g.band, (byBand.get(g.band) || 0) + 1);
-        const grudgeRows = [...byBand.entries()]
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 6)
-            .map(([band, n]) => `<li><span class="hk-tag" style="--hk-tag:${bandColors[band] || bandColors.all}">${band}</span> <span class="hk-grudge-n${n >= 3 ? ' is-repeat' : ''}">${u.ghosted(n)}</span></li>`)
-            .join('');
-
-        const honestyLine = pct == null
-            ? `<span class="hk-muted">${u.noGraded}</span>`
-            : u.honesty(total, bangers, duds, pct);
+        const stat = (label, value, tip = '') => `<div class="hk-stat"${tip ? ` title="${escapeHtml(tip)}"` : ''}><div class="hk-stat-label">${escapeHtml(label)}</div><div class="hk-stat-value">${value}</div></div>`;
+        const heldValue = sum.graded ? `${sum.held} <span class="hk-stat-of">${u.of} ${sum.graded}</span>` : '–';
+        const rows = sum.rows.slice(0, 8).map((r) => `
+            <li class="hk-call">
+                ${bandTag(r.band)}
+                <span class="hk-time">${fmtWhen(r.ts, now)}</span>
+                <span class="hk-chips">${outcomeChip(u, r.outcome)}${youChip(u, r.you)}</span>
+            </li>`).join('');
 
         panel.querySelector('.hk-panel-body').innerHTML = `
             <section class="hk-section">
-                <h4>${u.confTitle}</h4>
-                <p class="hk-honesty">${honestyLine}</p>
-                ${pct != null ? `<div class="hk-bar"><div class="hk-bar-fill" style="width:${pct}%"></div></div>` : ''}
-                ${dudList ? `<ul class="hk-list">${dudList}</ul>` : ''}
+                <p class="hk-intro">${escapeHtml(u.intro)}</p>
+                <div class="hk-stats">
+                    ${stat(u.statCalls, String(sum.total))}
+                    ${stat(u.statHeld, heldValue, u.statHeldTip)}
+                    ${stat(u.statWent, String(sum.went))}
+                </div>
+                ${sum.pct != null ? `<p class="hk-quip">${escapeHtml(u.quip(sum.pct))}</p>` : ''}
             </section>
             <section class="hk-section">
-                <h4>${u.grudgeTitle}</h4>
-                <p class="hk-grudge-head">${recentGrudges.length ? u.grudgeHead(recentGrudges.length) : `<span class="hk-muted">${u.cleanSlate}</span>`}</p>
-                ${grudgeRows ? `<ul class="hk-list">${grudgeRows}</ul>` : ''}
+                <h4>${escapeHtml(u.recentTitle)}</h4>
+                ${rows ? `<ul class="hk-list">${rows}</ul>` : `<p class="hk-muted hk-empty">${escapeHtml(u.noCalls)}</p>`}
             </section>`;
-    }
-
-    function fmtTime(ts) {
-        const d = new Date(ts);
-        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     }
 
     function togglePanel(force) {

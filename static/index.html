@@ -402,26 +402,31 @@
         </div>
         <div class="hk-panel" hidden role="dialog" aria-label="Horst-Kevin">
             <div class="hk-panel-head">
-                <span>Horst-Kevin</span>
-                <div class="hk-panel-head-actions">
-                    <label class="visually-hidden" for="hk-lang">Language / Sprache</label>
-                    <select id="hk-lang" class="hk-lang form-select form-select-sm" title="Language / Sprache">
-                        <option value="en">EN</option>
-                        <option value="de">DE</option>
-                    </select>
-                    <label class="visually-hidden" for="hk-meanness">Heckle intensity</label>
-                    <select id="hk-meanness" class="hk-meanness form-select form-select-sm" title="How mean is Horst-Kevin?">
+                <div class="hk-panel-title">
+                    <span class="hk-panel-name">Horst-Kevin</span>
+                    <span class="hk-panel-sub"></span>
+                </div>
+                <button type="button" class="hk-panel-close btn btn-sm btn-outline-secondary" title="Close" aria-label="Close">×</button>
+            </div>
+            <div class="hk-panel-body"></div>
+            <div class="hk-panel-foot">
+                <label class="hk-setting"><span class="hk-tone-label">Tone</span>
+                    <select id="hk-meanness" class="hk-meanness form-select form-select-sm">
                         <option value="soft">Supportive</option>
                         <option value="buzzed">In character</option>
                         <option value="drill">Drill Sergeant</option>
                     </select>
-                    <button type="button" class="hk-panel-close btn btn-sm btn-outline-secondary" title="Close">×</button>
-                </div>
+                </label>
+                <label class="hk-setting"><span class="hk-lang-label">Language</span>
+                    <select id="hk-lang" class="hk-lang form-select form-select-sm">
+                        <option value="en">EN</option>
+                        <option value="de">DE</option>
+                    </select>
+                </label>
+                <label class="hk-setting hk-setting-check">
+                    <input type="checkbox" class="hk-desktop" /> <span class="hk-panel-foot-text">Desktop notifications</span>
+                </label>
             </div>
-            <div class="hk-panel-body"></div>
-            <label class="hk-panel-foot">
-                <input type="checkbox" class="hk-desktop" /> <span class="hk-panel-foot-text">let me nag your desktop</span>
-            </label>
         </div>
     </div>
     <div id="tooltip"></div>
