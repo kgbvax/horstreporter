@@ -507,6 +507,13 @@ function renderMatrix() {
         }
     }
 
+    // Trails back to each dot's position TRAIL_MINUTES ago (experiment).
+    const stripTrail = strip ? {
+        windowMinutes: Number(data?.minutes) || 15,
+        binMinutes: Number(data?.trend_bin_minutes) || 5,
+        lagSec: Number(data?.feed_lag_seconds) || 0,
+    } : null;
+
     let html = renderSourceChips();
     html += `<table class="wspr-matrix-table wspr-look-${runtime.style}" role="grid" aria-label="Propagation by band and region">` +
         `<thead><tr role="row"><th scope="col" role="columnheader" class="wspr-matrix-corner"><span class="wspr-sr-only">Band</span>${timeAnchor(data)}</th>` + extraHead;
@@ -529,7 +536,7 @@ function renderMatrix() {
                 const cell = bandMap.get(region);
                 return { region, cell, attrs: cellAttrs(band, region, cell, regionNames) };
             });
-            html += `<td class="wspr-strip-td" role="presentation">${stripRowHtml(dots, heatMax)}</td>`;
+            html += `<td class="wspr-strip-td" role="presentation">${stripRowHtml(dots, heatMax, stripTrail)}</td>`;
         } else {
             for (const region of regions) {
                 const cell = bandMap.get(region);

@@ -155,17 +155,58 @@ export function stripDotSize(step) {
     return 6 + 1.6 * Math.max(1, step);
 }
 
+// --- Trails (experiment) -------------------------------------------------------
+// Each dot gets a line back to where it stood TRAIL_MINUTES ago, so the change
+// of the last minutes shows next to the level. The earlier position comes from
+// the cell's trend (5-minute bins of the same reports expected_spots counts):
+// the factor of the window then against the factor of the window now, both
+// from the trend, moved onto the dot's own position. Using the trend for both
+// ends keeps a mismatch between the trend and the window (the trend ends at
+// the wall clock, the window at the feed head) from showing as a move.
+export const TRAIL_MINUTES = 10;
+// Moves under this many percent of the strip are not drawn (noise).
+const TRAIL_MIN_DX = 1.5;
+
+// The trail's start for a cell: the log2 factor TRAIL_MINUTES ago, on the
+// dot's own scale, or null (no normal, silent, no or too short a trend).
+// lagSec: payload feed_lag_seconds, so the bins the late feed has not filled
+// yet are not read as a drop.
+export function trailFactor(cell, m, { windowMinutes = 15, binMinutes = 5, lagSec = 0 } = {}) {
+    if (!m?.hasNormal || m.silent || m.lf == null) return null;
+    const trend = Array.isArray(cell?.trend) ? cell.trend.map((v) => Math.max(0, Number(v) || 0)) : null;
+    const bm = Number(binMinutes) || 5;
+    const w = Math.max(1, Math.round(windowMinutes / bm));
+    const shift = Math.round(TRAIL_MINUTES / bm);
+    const lagBins = Math.max(0, Math.round((Number(lagSec) || 0) / (bm * 60)));
+    if (!trend) return null;
+    const end = trend.length - lagBins;
+    if (end - w - shift < 0) return null;
+    const sum = (a, b) => trend.slice(a, b).reduce((s, v) => s + v, 0);
+    const e = m.e * (w * bm) / windowMinutes;
+    const lfOf = (n) => Math.log2((n + LF_PRIOR) / (e + LF_PRIOR));
+    const delta = lfOf(sum(end - w, end)) - lfOf(sum(end - w - shift, end - shift));
+    return clamp(m.lf - delta, -LF_MAX, LF_MAX);
+}
+
 // One band row of the strip. dots: [{ region, cell, attrs }] where attrs is the
 // gridcell attribute string wspr-matrix.js builds (role, label, title,
 // aria-selected, tabindex, data-band/region). Dots come out in x order so the
-// arrow keys walk left to right.
-export function stripRowHtml(dots, heatMax = 0) {
+// arrow keys walk left to right. trail: options for trailFactor, or null for
+// no trails.
+export function stripRowHtml(dots, heatMax = 0, trail = null) {
     const placed = dots.map((d) => {
         const m = cellModel(d.cell);
         // Silent: far left. No normal: the centre, drawn as unknown.
         const lf = m.silent ? -LF_MAX : (m.lf ?? 0);
-        return { ...d, m, x: stripX(lf) };
+        const past = trail ? trailFactor(d.cell, m, trail) : null;
+        return { ...d, m, x: stripX(lf), px: past == null ? null : stripX(past) };
     }).sort((a, b) => a.x - b.x || a.region.localeCompare(b.region));
+    // One trail per dot, in dot order (layoutStripLabels gives each its dot's lane).
+    const trails = trail ? placed.map(({ x, px }) => {
+        if (px == null || Math.abs(x - px) < TRAIL_MIN_DX) return '<span class="wspr-strip-trail is-none"></span>';
+        const dir = x > px ? 'is-up' : 'is-down';
+        return `<span class="wspr-strip-trail ${dir}" style="left:${Math.min(x, px).toFixed(1)}%;width:${Math.abs(x - px).toFixed(1)}%" aria-hidden="true"></span>`;
+    }).join('') : '';
     const grid = STRIP_TICKS.map(([lf]) =>
         `<span class="wspr-strip-line${lf === 0 ? ' is-centre' : ''}" style="left:${stripX(lf).toFixed(1)}%"></span>`).join('');
     const marks = placed.map(({ region, m, x, attrs }) => {
@@ -181,7 +222,7 @@ export function stripRowHtml(dots, heatMax = 0) {
         return `<span class="${cls.join(' ')}" style="left:${x.toFixed(1)}%;--d:${size.toFixed(1)}px${heat ? `;--heat:${heat}` : ''}" data-col="${Math.round(x * 10)}" ${attrs}>` +
             `<span class="wspr-strip-label" aria-hidden="true">${escapeHtml(region)}</span></span>`;
     }).join('');
-    return `<div class="wspr-strip">${grid}${marks}</div>`;
+    return `<div class="wspr-strip">${grid}${trails}${marks}</div>`;
 }
 
 // Strip placement, from measured geometry (px, relative to the strip; items
@@ -240,8 +281,10 @@ export function layoutStripLabels(root) {
             return { cx: r.left - box.left + r.width / 2, r: r.width / 2, w: label?.offsetWidth || 0, h: label?.offsetHeight || 0 };
         });
         const placed = placeStrip(items, box.height);
+        const trailEls = strip.querySelectorAll('.wspr-strip-trail');
         dotEls.forEach((el, i) => {
             el.style.setProperty('--dy', `${placed[i].dy}px`);
+            trailEls[i]?.style.setProperty('--dy', `${placed[i].dy}px`);
             const label = el.querySelector('.wspr-strip-label');
             if (!label) return;
             label.classList.toggle('is-hidden', placed[i].slot < 0);
@@ -374,7 +417,8 @@ export function lookLegendHtml(style, has, pskrSelected, heatMax = 0) {
         const key = keySvg(70, 14, '<line x1="35" x2="35" y1="0" y2="14" stroke="currentColor" stroke-opacity=".5"/>' +
             '<circle cx="12" cy="7" r="3" fill="currentColor" fill-opacity=".5"/><circle cx="35" cy="7" r="3.5" fill="currentColor"/><circle cx="58" cy="7" r="5" fill="currentColor"/>');
         text = `${key} position = PSKReporter reports now against the normal for this hour (×½ halves, ×2 doubles), size = all reports, ` +
-            'hollow = CW only, ring = surge, dashed = usually open, silent now';
+            'hollow = CW only, ring = surge, dashed = usually open, silent now; ' +
+            `line = where the dot was ${TRAIL_MINUTES} minutes ago (tick at that end)`;
     } else if (style === 'day') {
         const key = keySvg(44, 16, '<path d="M1 15 L8 14 L15 9 L22 3 L29 4 L36 10 L43 14 L43 15Z" fill="currentColor" fill-opacity=".16"/>' +
             '<line x1="31" x2="31" y1="0" y2="16" stroke="currentColor" stroke-opacity=".55" stroke-dasharray="1.5 1.5"/><circle cx="31" cy="3" r="2.4" fill="currentColor"/>');

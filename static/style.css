@@ -801,6 +801,29 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
 .wspr-strip-dot:focus-visible::after {
     border-radius: 50%;
 }
+/* Trail (experiment): a line from each dot back to where it stood
+   TRAIL_MINUTES ago, with a short tick at the earlier end. */
+.wspr-strip-trail {
+    position: absolute;
+    top: calc(50% + var(--dy, 0px));
+    height: 2px;
+    margin-top: -1px;
+    background: var(--text-color);
+    pointer-events: none;
+}
+.wspr-strip-trail.is-none {
+    display: none;
+}
+.wspr-strip-trail::before {
+    content: '';
+    position: absolute;
+    top: -3px;
+    width: 2px;
+    height: 8px;
+    background: var(--text-color);
+}
+.wspr-strip-trail.is-up::before { left: 0; }
+.wspr-strip-trail.is-down::before { right: 0; }
 .wspr-strip-label {
     position: absolute;
     left: 50%;

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     LOOKS, LF_MAX, STRIP_LANES, volumeStep, cellModel, payloadHas, stripX, stripAxisHtml, stripDotSize,
     stripRowHtml, placeStrip, layoutStripLabels, dayStripSvg, trendNormals, sparklineSvg, lookLegendHtml,
-    CET_R2, heatRgb, heatT, heatCss, heatLegendHtml,
+    CET_R2, heatRgb, heatT, heatCss, heatLegendHtml, trailFactor, TRAIL_MINUTES,
 } from '../static/wspr-matrix-looks.js';
 
 const NOW = Date.UTC(2026, 9, 4, 18, 0) / 1000; // 18:00 UTC: slot 36
@@ -257,5 +257,47 @@ describe('wspr-matrix-looks heat overlay', () => {
         const all = { normal: true, day: true, trend: true };
         expect(lookLegendHtml('day', all, true, 900)).toContain('wspr-heat-bar');
         expect(lookLegendHtml('day', all, true)).not.toContain('wspr-heat-bar');
+    });
+});
+
+describe('wspr-matrix-looks trails', () => {
+    // 12 five-minute bins; the window is the last three, ten minutes ago is bins 7..9.
+    const rising = [0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 10, 10];
+    const c = (o = {}) => cell({ expected: 9, expected_spots: 21, trend: rising, ...o });
+
+    it('places the earlier end from the trend, relative to the dot', () => {
+        expect(TRAIL_MINUTES).toBe(10);
+        const m = cellModel(c());
+        const past = trailFactor(c(), m);
+        // now (1+10+10) against then (1+1+1) on the same normal of 9.
+        const delta = Math.log2((21 + 3) / 12) - Math.log2((3 + 3) / 12);
+        expect(past).toBeCloseTo(m.lf - delta, 6);
+        expect(past).toBeLessThan(m.lf);
+    });
+
+    it('skips the bins the late feed has not filled', () => {
+        const lagged = [0, 0, 0, 0, 0, 1, 1, 1, 10, 10, 0, 0];
+        const m = cellModel(c({ trend: lagged }));
+        expect(trailFactor(c({ trend: lagged }), m, { lagSec: 600 })).toBeCloseTo(trailFactor(c(), cellModel(c())), 6);
+    });
+
+    it('has no trail without a normal, when silent or without a long enough trend', () => {
+        expect(trailFactor(cell({ trend: rising }), cellModel(cell({ trend: rising })))).toBeNull();
+        const silent = { spot_count: 0, silent: true, expected: 30, expected_spots: 0, trend: rising };
+        expect(trailFactor(silent, cellModel(silent))).toBeNull();
+        expect(trailFactor(c({ trend: [1, 2, 3, 4] }), cellModel(c()))).toBeNull();
+        expect(trailFactor(c({ trend: undefined }), cellModel(c()))).toBeNull();
+    });
+
+    it('stripRowHtml draws one trail per dot only when asked', () => {
+        const dots = [
+            { region: 'EU', cell: c(), attrs: '' },
+            { region: 'NA', cell: c({ trend: [5, 5, 5, 5, 5, 5, 5, 7, 7, 7, 7, 7], expected_spots: 21 }), attrs: '' },
+        ];
+        expect(stripRowHtml(dots)).not.toContain('wspr-strip-trail');
+        const html = stripRowHtml(dots, 0, {});
+        expect(html.match(/wspr-strip-trail/g)).toHaveLength(2);
+        expect(html).toContain('wspr-strip-trail is-up');
+        expect(html).toContain('wspr-strip-trail is-none');
     });
 });
