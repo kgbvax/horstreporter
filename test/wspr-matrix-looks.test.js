@@ -110,6 +110,32 @@ describe('wspr-matrix-looks dot strip', () => {
         }
     });
 
+    it('placeStrip moves a dot whose trail would run through a dot or along a trail', () => {
+        const items = [
+            { cx: 100, r: 5, w: 14, h: 10 },
+            { cx: 160, r: 5, w: 14, h: 10 },
+            // Trail back to 80: through both dots in lane 0.
+            { cx: 220, r: 5, w: 14, h: 10, tl: 80, tr: 220 },
+            // Trail to 300 from a dot clear of the others: lane 0 is free for it.
+            { cx: 250, r: 5, w: 14, h: 10, tl: 250, tr: 300 },
+            // Along the trail above, and along the one in lane 0.
+            { cx: 120, r: 5, w: 14, h: 10, tl: 120, tr: 290 },
+        ];
+        const placed = placeStrip(items, 60);
+        expect(placed.map((p) => p.dy)).toEqual([0, 0, STRIP_LANES[1], 0, STRIP_LANES[2]]);
+    });
+
+    it('placeStrip keeps labels off the trails', () => {
+        // B's trail runs in the lane above, right where A's label would go.
+        const items = [
+            { cx: 100, r: 5, w: 14, h: 10 },
+            { cx: 140, r: 5, w: 14, h: 10, tl: 60, tr: 140 },
+        ];
+        const placed = placeStrip(items, 60);
+        expect(placed[1].dy).toBe(STRIP_LANES[1]);
+        expect(placed[0].slot).not.toBe(0);
+    });
+
     it('placeStrip hides a label with no free slot', () => {
         const items = Array.from({ length: 8 }, (_, i) => ({ cx: 100 + i, r: 3, w: 20, h: 10 }));
         const placed = placeStrip(items, 48);

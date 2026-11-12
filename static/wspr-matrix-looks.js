@@ -226,29 +226,56 @@ export function stripRowHtml(dots, heatMax = 0, trail = null) {
 }
 
 // Strip placement, from measured geometry (px, relative to the strip; items
-// in x order: centre cx, radius r, label width w and height h). Dots that
-// would overlap step into a lane above or below the axis (a small beeswarm);
-// each label takes the first free slot of: above its dot, below, further
-// above, further below, avoiding every other label and dot, or is left out
-// (slot -1; the region stays in the dot's name and tooltip). Returns per item
-// the lane offset dy and the label's top relative to the dot's top edge.
-export const STRIP_LANES = [0, -11, 11];
+// in x order: centre cx, radius r, label width w and height h, and for a dot
+// with a trail the trail's ends tl and tr). Each dot with its trail takes a
+// stretch of a lane; dots whose stretches would overlap (a dot on a dot, a
+// trail through a dot or along another trail) step into a lane above or below
+// the axis (a small beeswarm; the outer pair only when the inner three are
+// taken). Each label takes the first free slot of: above its dot, below,
+// further above, further below, avoiding every other label, dot and trail, or
+// is left out (slot -1; the region stays in the dot's name and tooltip).
+// Returns per item the lane offset dy and the label's top relative to the
+// dot's top edge.
+export const STRIP_LANES = [0, -11, 11, -22, 22];
 
 function overlaps(a, b, pad) {
     return a.l < b.r + pad && b.l < a.r + pad && a.t < b.b + pad && b.t < a.b + pad;
 }
 
+const hasTrail = (it) => Number.isFinite(it.tl) && Number.isFinite(it.tr) && it.tr > it.tl;
+
+// The horizontal stretch a dot and its trail take in their lane.
+function laneSpan(it) {
+    const l = it.cx - it.r;
+    const r = it.cx + it.r;
+    return hasTrail(it) ? { l: Math.min(l, it.tl), r: Math.max(r, it.tr) } : { l, r };
+}
+
+// Overlap in px (with a 1px gap) between two stretches, 0 when apart.
+function spanOverlap(a, b) {
+    return Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l) + 1);
+}
+
 export function placeStrip(items, height) {
     const lanes = STRIP_LANES.map(() => []);
     const out = items.map((it) => {
-        let li = STRIP_LANES.findIndex((_, k) => lanes[k].every((p) => Math.abs(p.cx - it.cx) >= p.r + it.r + 1));
-        if (li < 0) li = 0;
-        lanes[li].push(it);
+        const span = laneSpan(it);
+        const cost = lanes.map((lane) => lane.reduce((s, o) => s + spanOverlap(o, span), 0));
+        let li = cost.findIndex((c) => c === 0);
+        // No free lane: the one with the least overlap.
+        if (li < 0) li = cost.indexOf(Math.min(...cost));
+        lanes[li].push(span);
         return { dy: STRIP_LANES[li], slot: -1, top: 0 };
     });
     const dots = items.map((it, i) => {
         const cy = height / 2 + out[i].dy;
         return { l: it.cx - it.r, r: it.cx + it.r, t: cy - it.r, b: cy + it.r };
+    });
+    // Trails as obstacles for the labels: the line with its end tick (8px tall).
+    const trails = items.flatMap((it, i) => {
+        if (!hasTrail(it)) return [];
+        const cy = height / 2 + out[i].dy;
+        return [{ l: it.tl, r: it.tr, t: cy - 4, b: cy + 4 }];
     });
     const labels = [];
     items.forEach((it, i) => {
@@ -259,6 +286,7 @@ export function placeStrip(items, height) {
             if (rect.t < -8 || rect.b > height + 8) continue;
             if (labels.some((b) => overlaps(b, rect, 1))) continue;
             if (dots.some((o, j) => j !== i && overlaps(o, rect, 0))) continue;
+            if (trails.some((o) => overlaps(o, rect, 0))) continue;
             labels.push(rect);
             out[i].slot = k;
             out[i].top = rect.t - d.t;
@@ -272,16 +300,22 @@ export function placeStrip(items, height) {
 export function layoutStripLabels(root) {
     for (const strip of root.querySelectorAll('.wspr-strip')) {
         const dotEls = Array.from(strip.querySelectorAll('.wspr-strip-dot'));
-        for (const el of dotEls) el.style.setProperty('--dy', '0px');
+        const trailEls = strip.querySelectorAll('.wspr-strip-trail');
+        for (const el of [...dotEls, ...trailEls]) el.style.setProperty('--dy', '0px');
         const box = strip.getBoundingClientRect();
         if (box.width === 0) continue;
-        const items = dotEls.map((el) => {
+        const items = dotEls.map((el, i) => {
             const r = el.getBoundingClientRect();
             const label = el.querySelector('.wspr-strip-label');
-            return { cx: r.left - box.left + r.width / 2, r: r.width / 2, w: label?.offsetWidth || 0, h: label?.offsetHeight || 0 };
+            const it = { cx: r.left - box.left + r.width / 2, r: r.width / 2, w: label?.offsetWidth || 0, h: label?.offsetHeight || 0 };
+            const t = trailEls[i]?.getBoundingClientRect();
+            if (t && t.width > 0) {
+                it.tl = t.left - box.left;
+                it.tr = t.right - box.left;
+            }
+            return it;
         });
         const placed = placeStrip(items, box.height);
-        const trailEls = strip.querySelectorAll('.wspr-strip-trail');
         dotEls.forEach((el, i) => {
             el.style.setProperty('--dy', `${placed[i].dy}px`);
             trailEls[i]?.style.setProperty('--dy', `${placed[i].dy}px`);
