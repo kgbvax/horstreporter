@@ -155,17 +155,58 @@ export function stripDotSize(step) {
     return 6 + 1.6 * Math.max(1, step);
 }
 
+// --- Trails (experiment) -------------------------------------------------------
+// Each dot gets a line back to where it stood TRAIL_MINUTES ago, so the change
+// of the last minutes shows next to the level. The earlier position comes from
+// the cell's trend (5-minute bins of the same reports expected_spots counts):
+// the factor of the window then against the factor of the window now, both
+// from the trend, moved onto the dot's own position. Using the trend for both
+// ends keeps a mismatch between the trend and the window (the trend ends at
+// the wall clock, the window at the feed head) from showing as a move.
+export const TRAIL_MINUTES = 10;
+// Moves under this many percent of the strip are not drawn (noise).
+const TRAIL_MIN_DX = 1.5;
+
+// The trail's start for a cell: the log2 factor TRAIL_MINUTES ago, on the
+// dot's own scale, or null (no normal, silent, no or too short a trend).
+// lagSec: payload feed_lag_seconds, so the bins the late feed has not filled
+// yet are not read as a drop.
+export function trailFactor(cell, m, { windowMinutes = 15, binMinutes = 5, lagSec = 0 } = {}) {
+    if (!m?.hasNormal || m.silent || m.lf == null) return null;
+    const trend = Array.isArray(cell?.trend) ? cell.trend.map((v) => Math.max(0, Number(v) || 0)) : null;
+    const bm = Number(binMinutes) || 5;
+    const w = Math.max(1, Math.round(windowMinutes / bm));
+    const shift = Math.round(TRAIL_MINUTES / bm);
+    const lagBins = Math.max(0, Math.round((Number(lagSec) || 0) / (bm * 60)));
+    if (!trend) return null;
+    const end = trend.length - lagBins;
+    if (end - w - shift < 0) return null;
+    const sum = (a, b) => trend.slice(a, b).reduce((s, v) => s + v, 0);
+    const e = m.e * (w * bm) / windowMinutes;
+    const lfOf = (n) => Math.log2((n + LF_PRIOR) / (e + LF_PRIOR));
+    const delta = lfOf(sum(end - w, end)) - lfOf(sum(end - w - shift, end - shift));
+    return clamp(m.lf - delta, -LF_MAX, LF_MAX);
+}
+
 // One band row of the strip. dots: [{ region, cell, attrs }] where attrs is the
 // gridcell attribute string wspr-matrix.js builds (role, label, title,
 // aria-selected, tabindex, data-band/region). Dots come out in x order so the
-// arrow keys walk left to right.
-export function stripRowHtml(dots, heatMax = 0) {
+// arrow keys walk left to right. trail: options for trailFactor, or null for
+// no trails.
+export function stripRowHtml(dots, heatMax = 0, trail = null) {
     const placed = dots.map((d) => {
         const m = cellModel(d.cell);
         // Silent: far left. No normal: the centre, drawn as unknown.
         const lf = m.silent ? -LF_MAX : (m.lf ?? 0);
-        return { ...d, m, x: stripX(lf) };
+        const past = trail ? trailFactor(d.cell, m, trail) : null;
+        return { ...d, m, x: stripX(lf), px: past == null ? null : stripX(past) };
     }).sort((a, b) => a.x - b.x || a.region.localeCompare(b.region));
+    // One trail per dot, in dot order (layoutStripLabels gives each its dot's lane).
+    const trails = trail ? placed.map(({ x, px }) => {
+        if (px == null || Math.abs(x - px) < TRAIL_MIN_DX) return '<span class="wspr-strip-trail is-none"></span>';
+        const dir = x > px ? 'is-up' : 'is-down';
+        return `<span class="wspr-strip-trail ${dir}" style="left:${Math.min(x, px).toFixed(1)}%;width:${Math.abs(x - px).toFixed(1)}%" aria-hidden="true"></span>`;
+    }).join('') : '';
     const grid = STRIP_TICKS.map(([lf]) =>
         `<span class="wspr-strip-line${lf === 0 ? ' is-centre' : ''}" style="left:${stripX(lf).toFixed(1)}%"></span>`).join('');
     const marks = placed.map(({ region, m, x, attrs }) => {
@@ -181,46 +222,101 @@ export function stripRowHtml(dots, heatMax = 0) {
         return `<span class="${cls.join(' ')}" style="left:${x.toFixed(1)}%;--d:${size.toFixed(1)}px${heat ? `;--heat:${heat}` : ''}" data-col="${Math.round(x * 10)}" ${attrs}>` +
             `<span class="wspr-strip-label" aria-hidden="true">${escapeHtml(region)}</span></span>`;
     }).join('');
-    return `<div class="wspr-strip">${grid}${marks}</div>`;
+    return `<div class="wspr-strip">${grid}${trails}${marks}</div>`;
 }
 
 // Strip placement, from measured geometry (px, relative to the strip; items
-// in x order: centre cx, radius r, label width w and height h). Dots that
-// would overlap step into a lane above or below the axis (a small beeswarm);
-// each label takes the first free slot of: above its dot, below, further
-// above, further below, avoiding every other label and dot, or is left out
-// (slot -1; the region stays in the dot's name and tooltip). Returns per item
-// the lane offset dy and the label's top relative to the dot's top edge.
-export const STRIP_LANES = [0, -11, 11];
+// in x order: centre cx, radius r, label width w and height h, and for a dot
+// with a trail the trail's ends tl and tr). Each dot with its trail takes a
+// stretch of a lane; dots whose stretches would overlap (a dot on a dot, a
+// trail through a dot or along another trail) step into a lane above or below
+// the axis (a small beeswarm; the outer pair only when the inner three are
+// taken). Each label takes the first free slot of: above its dot, below, to
+// its right, to its left, further above, further below, avoiding every other
+// label, dot and trail (its own trail too, so a side label goes to the side
+// away from the trail) and the strip's ends, or is left out (slot -1; the
+// region stays in the dot's name and tooltip). Returns per item the lane
+// offset dy, the label's top relative to the dot's top edge and dx, the
+// label's centre relative to the dot's centre.
+export const STRIP_LANES = [0, -11, 11, -22, 22];
 
 function overlaps(a, b, pad) {
     return a.l < b.r + pad && b.l < a.r + pad && a.t < b.b + pad && b.t < a.b + pad;
 }
 
-export function placeStrip(items, height) {
-    const lanes = STRIP_LANES.map(() => []);
+const hasTrail = (it) => Number.isFinite(it.tl) && Number.isFinite(it.tr) && it.tr > it.tl;
+
+// The horizontal stretch a dot and its trail take in their lane.
+function laneSpan(it) {
+    const l = it.cx - it.r;
+    const r = it.cx + it.r;
+    return hasTrail(it) ? { l: Math.min(l, it.tl), r: Math.max(r, it.tr) } : { l, r };
+}
+
+// Overlap in px (with a 1px gap) between two stretches, 0 when apart.
+function spanOverlap(a, b) {
+    return Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l) + 1);
+}
+
+// Cost of putting it into lane k: the overlap of the stretches in that lane,
+// plus any dot it would touch, in that lane or in a neighbouring one (lanes
+// are closer than two big dots are wide). A dot on a dot is far worse than a
+// trail under a dot or along a trail.
+function laneCost(placed, k, it, span) {
+    const dot = { l: it.cx - it.r, r: it.cx + it.r };
+    return placed.reduce((s, o) => {
+        if (o.lane === k) s += spanOverlap(o.span, span);
+        if (Math.abs(STRIP_LANES[o.lane] - STRIP_LANES[k]) < o.r + it.r + 1) s += 100 * spanOverlap(o.dot, dot);
+        return s;
+    }, 0);
+}
+
+export function placeStrip(items, height, width = Infinity) {
+    const placed = [];
     const out = items.map((it) => {
-        let li = STRIP_LANES.findIndex((_, k) => lanes[k].every((p) => Math.abs(p.cx - it.cx) >= p.r + it.r + 1));
-        if (li < 0) li = 0;
-        lanes[li].push(it);
-        return { dy: STRIP_LANES[li], slot: -1, top: 0 };
+        const span = laneSpan(it);
+        const cost = STRIP_LANES.map((_, k) => laneCost(placed, k, it, span));
+        let li = cost.findIndex((c) => c === 0);
+        // No free lane: the one with the least overlap.
+        if (li < 0) li = cost.indexOf(Math.min(...cost));
+        placed.push({ lane: li, span, r: it.r, dot: { l: it.cx - it.r, r: it.cx + it.r } });
+        return { dy: STRIP_LANES[li], slot: -1, top: 0, dx: 0 };
     });
     const dots = items.map((it, i) => {
         const cy = height / 2 + out[i].dy;
         return { l: it.cx - it.r, r: it.cx + it.r, t: cy - it.r, b: cy + it.r };
     });
+    // Trails as obstacles for the labels: the line with its end tick (8px tall).
+    const trails = items.flatMap((it, i) => {
+        if (!hasTrail(it)) return [];
+        const cy = height / 2 + out[i].dy;
+        return [{ l: it.tl, r: it.tr, t: cy - 4, b: cy + 4 }];
+    });
     const labels = [];
     items.forEach((it, i) => {
         const d = dots[i];
-        const slots = [d.t - 1 - it.h, d.b + 1, d.t - 2 - 2 * it.h, d.b + 2 + it.h];
+        const cy = (d.t + d.b) / 2;
+        const side = it.r + 3 + it.w / 2;
+        const slots = [
+            { t: d.t - 1 - it.h, dx: 0 },
+            { t: d.b + 1, dx: 0 },
+            { t: cy - it.h / 2, dx: side },
+            { t: cy - it.h / 2, dx: -side },
+            { t: d.t - 2 - 2 * it.h, dx: 0 },
+            { t: d.b + 2 + it.h, dx: 0 },
+        ];
         for (let k = 0; k < slots.length; k++) {
-            const rect = { l: it.cx - it.w / 2, r: it.cx + it.w / 2, t: slots[k], b: slots[k] + it.h };
+            const c = it.cx + slots[k].dx;
+            const rect = { l: c - it.w / 2, r: c + it.w / 2, t: slots[k].t, b: slots[k].t + it.h };
             if (rect.t < -8 || rect.b > height + 8) continue;
+            if (rect.l < -2 || rect.r > width + 2) continue;
             if (labels.some((b) => overlaps(b, rect, 1))) continue;
-            if (dots.some((o, j) => j !== i && overlaps(o, rect, 0))) continue;
+            if (dots.some((o, j) => j !== i && overlaps(o, rect, 1))) continue;
+            if (trails.some((o) => overlaps(o, rect, 0))) continue;
             labels.push(rect);
             out[i].slot = k;
             out[i].top = rect.t - d.t;
+            out[i].dx = slots[k].dx;
             break;
         }
     });
@@ -231,22 +327,34 @@ export function placeStrip(items, height) {
 export function layoutStripLabels(root) {
     for (const strip of root.querySelectorAll('.wspr-strip')) {
         const dotEls = Array.from(strip.querySelectorAll('.wspr-strip-dot'));
-        for (const el of dotEls) el.style.setProperty('--dy', '0px');
+        const trailEls = strip.querySelectorAll('.wspr-strip-trail');
+        for (const el of [...dotEls, ...trailEls]) el.style.setProperty('--dy', '0px');
+        // A label hidden by the last layout measures 0x0 and would fit anywhere:
+        // show them all again before measuring.
+        for (const el of strip.querySelectorAll('.wspr-strip-label.is-hidden')) el.classList.remove('is-hidden');
         const box = strip.getBoundingClientRect();
         if (box.width === 0) continue;
-        const items = dotEls.map((el) => {
+        const items = dotEls.map((el, i) => {
             const r = el.getBoundingClientRect();
             const label = el.querySelector('.wspr-strip-label');
-            return { cx: r.left - box.left + r.width / 2, r: r.width / 2, w: label?.offsetWidth || 0, h: label?.offsetHeight || 0 };
+            const it = { cx: r.left - box.left + r.width / 2, r: r.width / 2, w: label ? label.getBoundingClientRect().width || label.offsetWidth : 0, h: label?.offsetHeight || 0 };
+            const t = trailEls[i]?.getBoundingClientRect();
+            if (t && t.width > 0) {
+                it.tl = t.left - box.left;
+                it.tr = t.right - box.left;
+            }
+            return it;
         });
-        const placed = placeStrip(items, box.height);
+        const placed = placeStrip(items, box.height, box.width);
         dotEls.forEach((el, i) => {
             el.style.setProperty('--dy', `${placed[i].dy}px`);
+            trailEls[i]?.style.setProperty('--dy', `${placed[i].dy}px`);
             const label = el.querySelector('.wspr-strip-label');
             if (!label) return;
             label.classList.toggle('is-hidden', placed[i].slot < 0);
             label.style.top = `${placed[i].top.toFixed(1)}px`;
             label.style.bottom = 'auto';
+            label.style.left = placed[i].dx ? `calc(50% + ${placed[i].dx.toFixed(1)}px)` : '';
         });
     }
 }
@@ -374,7 +482,8 @@ export function lookLegendHtml(style, has, pskrSelected, heatMax = 0) {
         const key = keySvg(70, 14, '<line x1="35" x2="35" y1="0" y2="14" stroke="currentColor" stroke-opacity=".5"/>' +
             '<circle cx="12" cy="7" r="3" fill="currentColor" fill-opacity=".5"/><circle cx="35" cy="7" r="3.5" fill="currentColor"/><circle cx="58" cy="7" r="5" fill="currentColor"/>');
         text = `${key} position = PSKReporter reports now against the normal for this hour (×½ halves, ×2 doubles), size = all reports, ` +
-            'hollow = CW only, ring = surge, dashed = usually open, silent now';
+            'hollow = CW only, ring = surge, dashed = usually open, silent now; ' +
+            `line = where the dot was ${TRAIL_MINUTES} minutes ago (tick at that end)`;
     } else if (style === 'day') {
         const key = keySvg(44, 16, '<path d="M1 15 L8 14 L15 9 L22 3 L29 4 L36 10 L43 14 L43 15Z" fill="currentColor" fill-opacity=".16"/>' +
             '<line x1="31" x2="31" y1="0" y2="16" stroke="currentColor" stroke-opacity=".55" stroke-dasharray="1.5 1.5"/><circle cx="31" cy="3" r="2.4" fill="currentColor"/>');

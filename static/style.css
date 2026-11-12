@@ -758,10 +758,12 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
     z-index: 1;
 }
 .wspr-strip-dot.is-below {
-    background: color-mix(in srgb, currentColor 50%, transparent);
+    background: color-mix(in srgb, currentColor 50%, var(--bg-color));
 }
+/* Hollow and pale dots are opaque (panel colour inside), so a trail running
+   under a dot does not show through it. */
 .wspr-strip-dot.is-cw {
-    background: none;
+    background: var(--bg-color);
     border: 1.5px solid currentColor;
 }
 .wspr-strip-dot.is-cw.is-below {
@@ -769,7 +771,7 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
 }
 .wspr-matrix-table .wspr-strip-dot.is-silent,
 .wspr-matrix-table .wspr-strip-dot.is-unknown {
-    background: none;
+    background: var(--bg-color);
     border: 1.5px dashed color-mix(in srgb, currentColor 60%, transparent);
 }
 .wspr-strip-dot.is-silent .wspr-strip-label,
@@ -783,10 +785,10 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-color) 55%, transparent);
 }
 .wspr-matrix-table .wspr-strip-dot.has-heat.is-below {
-    background: color-mix(in srgb, var(--heat) 55%, transparent);
+    background: color-mix(in srgb, var(--heat) 55%, var(--bg-color));
 }
 .wspr-matrix-table .wspr-strip-dot.has-heat.is-cw {
-    background: none;
+    background: var(--bg-color);
     border-color: var(--heat);
 }
 /* Surge: a ring around the dot (thicker when strong). */
@@ -801,6 +803,29 @@ body[data-theme="dark"] .wspr-matrix-table .wspr-look-cell.has-heat {
 .wspr-strip-dot:focus-visible::after {
     border-radius: 50%;
 }
+/* Trail (experiment): a line from each dot back to where it stood
+   TRAIL_MINUTES ago, with a short tick at the earlier end. */
+.wspr-strip-trail {
+    position: absolute;
+    top: calc(50% + var(--dy, 0px));
+    height: 1px;
+    margin-top: -0.5px;
+    background: var(--text-color);
+    pointer-events: none;
+}
+.wspr-strip-trail.is-none {
+    display: none;
+}
+.wspr-strip-trail::before {
+    content: '';
+    position: absolute;
+    top: -3px;
+    width: 1px;
+    height: 7px;
+    background: var(--text-color);
+}
+.wspr-strip-trail.is-up::before { left: 0; }
+.wspr-strip-trail.is-down::before { right: 0; }
 .wspr-strip-label {
     position: absolute;
     left: 50%;

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     LOOKS, LF_MAX, STRIP_LANES, volumeStep, cellModel, payloadHas, stripX, stripAxisHtml, stripDotSize,
     stripRowHtml, placeStrip, layoutStripLabels, dayStripSvg, trendNormals, sparklineSvg, lookLegendHtml,
-    CET_R2, heatRgb, heatT, heatCss, heatLegendHtml,
+    CET_R2, heatRgb, heatT, heatCss, heatLegendHtml, trailFactor, TRAIL_MINUTES,
 } from '../static/wspr-matrix-looks.js';
 
 const NOW = Date.UTC(2026, 9, 4, 18, 0) / 1000; // 18:00 UTC: slot 36
@@ -99,7 +99,8 @@ describe('wspr-matrix-looks dot strip', () => {
         const rects = placed.map((p, i) => {
             const cy = 24 + p.dy;
             const t = cy - items[i].r + p.top;
-            return p.slot < 0 ? null : { l: items[i].cx - 7, r: items[i].cx + 7, t, b: t + 10 };
+            const c = items[i].cx + p.dx;
+            return p.slot < 0 ? null : { l: c - 7, r: c + 7, t, b: t + 10 };
         }).filter(Boolean);
         for (let a = 0; a < rects.length; a++) {
             for (let b = a + 1; b < rects.length; b++) {
@@ -110,10 +111,81 @@ describe('wspr-matrix-looks dot strip', () => {
         }
     });
 
+    it('placeStrip moves a dot whose trail would run through a dot or along a trail', () => {
+        const items = [
+            { cx: 100, r: 5, w: 14, h: 10 },
+            { cx: 160, r: 5, w: 14, h: 10 },
+            // Trail back to 80: through both dots in lane 0.
+            { cx: 220, r: 5, w: 14, h: 10, tl: 80, tr: 220 },
+            // Trail to 300 from a dot clear of the others: lane 0 is free for it.
+            { cx: 250, r: 5, w: 14, h: 10, tl: 250, tr: 300 },
+            // Along the trail above, and along the one in lane 0.
+            { cx: 120, r: 5, w: 14, h: 10, tl: 120, tr: 290 },
+        ];
+        const placed = placeStrip(items, 60);
+        expect(placed.map((p) => p.dy)).toEqual([0, 0, STRIP_LANES[1], 0, STRIP_LANES[2]]);
+    });
+
+    it('placeStrip keeps labels off the trails', () => {
+        // B's trail runs in the lane above, right where A's label would go.
+        const items = [
+            { cx: 100, r: 5, w: 14, h: 10 },
+            { cx: 140, r: 5, w: 14, h: 10, tl: 60, tr: 140 },
+        ];
+        const placed = placeStrip(items, 60);
+        expect(placed[1].dy).toBe(STRIP_LANES[1]);
+        expect(placed[0].slot).not.toBe(0);
+    });
+
+    it('placeStrip with no free lane puts a dot under a trail, not on a dot', () => {
+        // Five dots with trails over the whole strip fill every lane.
+        const items = STRIP_LANES.map((_, i) => ({ cx: 100 + 40 * i, r: 5, w: 14, h: 10, tl: 0, tr: 400 }));
+        // A dot at the first dot's position: lane 0 holds that dot, so it goes elsewhere.
+        items.push({ cx: 100, r: 5, w: 14, h: 10 });
+        const placed = placeStrip(items, 60);
+        expect(placed[5].dy).not.toBe(placed[0].dy);
+    });
+
+    it('placeStrip keeps big dots in neighbouring lanes apart', () => {
+        // Two 14px dots side by side: one lane up (11px) would still touch.
+        const items = [
+            { cx: 100, r: 7, w: 14, h: 10 },
+            { cx: 106, r: 7, w: 14, h: 10 },
+        ];
+        const placed = placeStrip(items, 60);
+        expect(Math.abs(placed[1].dy - placed[0].dy)).toBeGreaterThanOrEqual(15);
+    });
+
     it('placeStrip hides a label with no free slot', () => {
         const items = Array.from({ length: 8 }, (_, i) => ({ cx: 100 + i, r: 3, w: 20, h: 10 }));
-        const placed = placeStrip(items, 48);
+        // A strip just wide enough for the dots: no room beside them either.
+        const placed = placeStrip(items, 48, 112);
         expect(placed.some((p) => p.slot === -1)).toBe(true);
+    });
+
+    it('placeStrip puts a label beside its dot, away from its trail, when above and below are taken', () => {
+        // Dots stacked in all five lanes at one spot, every trail running left.
+        const items = STRIP_LANES.map((_, i) => ({ cx: 200 + (i % 2), r: 5, w: 14, h: 10, tl: 100, tr: 200 }));
+        const placed = placeStrip(items, 60, 400);
+        expect(new Set(placed.map((p) => p.dy)).size).toBe(5);
+        expect(placed.filter((p) => p.slot === 2)).not.toHaveLength(0);
+        for (const p of placed) expect(p.dx).toBeGreaterThanOrEqual(0);
+    });
+
+    it('layoutStripLabels measures a label the last layout hid', () => {
+        document.body.innerHTML = `<div id="root"><div class="wspr-strip">
+            <span class="wspr-strip-dot"><span class="wspr-strip-label is-hidden">EU</span></span></div></div>`;
+        const strip = document.querySelector('.wspr-strip');
+        strip.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 60 });
+        const dot = document.querySelector('.wspr-strip-dot');
+        dot.getBoundingClientRect = () => ({ left: 95, top: 25, width: 10, height: 10 });
+        const label = document.querySelector('.wspr-strip-label');
+        const seen = [];
+        Object.defineProperty(label, 'offsetWidth', { get: () => { seen.push(label.classList.contains('is-hidden')); return 14; } });
+        Object.defineProperty(label, 'offsetHeight', { get: () => 10 });
+        layoutStripLabels(document.getElementById('root'));
+        expect(seen).toEqual([false]);
+        expect(label.classList.contains('is-hidden')).toBe(false);
     });
 
     it('layoutStripLabels applies the placement to the live DOM', () => {
@@ -257,5 +329,47 @@ describe('wspr-matrix-looks heat overlay', () => {
         const all = { normal: true, day: true, trend: true };
         expect(lookLegendHtml('day', all, true, 900)).toContain('wspr-heat-bar');
         expect(lookLegendHtml('day', all, true)).not.toContain('wspr-heat-bar');
+    });
+});
+
+describe('wspr-matrix-looks trails', () => {
+    // 12 five-minute bins; the window is the last three, ten minutes ago is bins 7..9.
+    const rising = [0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 10, 10];
+    const c = (o = {}) => cell({ expected: 9, expected_spots: 21, trend: rising, ...o });
+
+    it('places the earlier end from the trend, relative to the dot', () => {
+        expect(TRAIL_MINUTES).toBe(10);
+        const m = cellModel(c());
+        const past = trailFactor(c(), m);
+        // now (1+10+10) against then (1+1+1) on the same normal of 9.
+        const delta = Math.log2((21 + 3) / 12) - Math.log2((3 + 3) / 12);
+        expect(past).toBeCloseTo(m.lf - delta, 6);
+        expect(past).toBeLessThan(m.lf);
+    });
+
+    it('skips the bins the late feed has not filled', () => {
+        const lagged = [0, 0, 0, 0, 0, 1, 1, 1, 10, 10, 0, 0];
+        const m = cellModel(c({ trend: lagged }));
+        expect(trailFactor(c({ trend: lagged }), m, { lagSec: 600 })).toBeCloseTo(trailFactor(c(), cellModel(c())), 6);
+    });
+
+    it('has no trail without a normal, when silent or without a long enough trend', () => {
+        expect(trailFactor(cell({ trend: rising }), cellModel(cell({ trend: rising })))).toBeNull();
+        const silent = { spot_count: 0, silent: true, expected: 30, expected_spots: 0, trend: rising };
+        expect(trailFactor(silent, cellModel(silent))).toBeNull();
+        expect(trailFactor(c({ trend: [1, 2, 3, 4] }), cellModel(c()))).toBeNull();
+        expect(trailFactor(c({ trend: undefined }), cellModel(c()))).toBeNull();
+    });
+
+    it('stripRowHtml draws one trail per dot only when asked', () => {
+        const dots = [
+            { region: 'EU', cell: c(), attrs: '' },
+            { region: 'NA', cell: c({ trend: [5, 5, 5, 5, 5, 5, 5, 7, 7, 7, 7, 7], expected_spots: 21 }), attrs: '' },
+        ];
+        expect(stripRowHtml(dots)).not.toContain('wspr-strip-trail');
+        const html = stripRowHtml(dots, 0, {});
+        expect(html.match(/wspr-strip-trail/g)).toHaveLength(2);
+        expect(html).toContain('wspr-strip-trail is-up');
+        expect(html).toContain('wspr-strip-trail is-none');
     });
 });
