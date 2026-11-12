@@ -489,19 +489,6 @@ export function getGraylineEnabled() {
     return true;
 }
 
-// Forecast overlay: rising-activity directional halo.
-// Local-only toggle (no server config), default on.
-export function getForecastEnabled() {
-    const toggle = document.getElementById('show-forecast');
-    if (toggle) return toggle.checked;
-
-    const saved = (typeof localStorage !== 'undefined' && localStorage)
-        ? localStorage.getItem('forecastEnabled')
-        : null;
-    if (saved === null) return true;
-    return saved === 'true';
-}
-
 export function getCountryColoringEnabled() {
     const toggle = document.getElementById('show-country-coloring');
     if (toggle) return toggle.checked;
