@@ -286,11 +286,11 @@ export function placeStrip(items, height, width = Infinity) {
         const cy = height / 2 + out[i].dy;
         return { l: it.cx - it.r, r: it.cx + it.r, t: cy - it.r, b: cy + it.r };
     });
-    // Trails as obstacles for the labels: the line with its end tick (8px tall).
+    // Trails as obstacles for the labels: the line (1px, padded to 4px).
     const trails = items.flatMap((it, i) => {
         if (!hasTrail(it)) return [];
         const cy = height / 2 + out[i].dy;
-        return [{ l: it.tl, r: it.tr, t: cy - 4, b: cy + 4 }];
+        return [{ l: it.tl, r: it.tr, t: cy - 2, b: cy + 2 }];
     });
     const labels = [];
     items.forEach((it, i) => {
