@@ -94,7 +94,9 @@ const (
 	// (season 64 ms, tail 368 ms, tail active days 181 ms) plus cold-cache I/O,
 	// landing at 1.3-1.6 s and timing out. The typical part is cached for 6 h,
 	// so one slower cold read is cheap; the negative cache still caps retries.
-	almanacQueryTimeout = 4 * time.Second
+	// Raised from 4 s to 10 s on 2026-11-16: 82 cold reads timed out at 4 s
+	// between 2026-10-04 and 2026-11-16 (logotter's Typical look got a 503).
+	almanacQueryTimeout = 10 * time.Second
 	// almanacNegCacheTTL: a failed/timed-out read is remembered this long per
 	// key before Postgres is tried again (503 meanwhile).
 	almanacNegCacheTTL = 30 * time.Second
