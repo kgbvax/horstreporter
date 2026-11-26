@@ -1,6 +1,6 @@
-import { state } from './state.js';
+import { state, panelQth } from './state.js';
 import { map } from './map.js';
-import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, pillTextColor, regionForLocatorCached } from './utils.js';
+import { getGridResolution, getMinSnrMode, getSelectedBand, getEnabledBands, gridSnrOpacity, topQuartileMean, bandColors, locatorToBounds, locatorToLatLngJS, pillTextColor, regionForLocatorCached } from './utils.js';
 import { endPerfTimer, incrementPerfCounter, isPerfProfilingEnabled, startPerfTimer } from './perf.js';
 
 // Rendered-state fingerprint for the grid-snr heat layer. Unlike the old
@@ -259,16 +259,15 @@ function renderWsprMarkers(wsprSpots) {
 // AUTO_ZOOM_TRIM of each axis; small sets keep every spot.
 const AUTO_ZOOM_TRIM = 0.05;
 const AUTO_ZOOM_TRIM_MIN_SPOTS = 20;
+// Zoom 5 showed one country plus neighbours; 4 keeps a regional context.
+export const AUTO_ZOOM_MAX_ZOOM = 4;
 
 export function computeAutoZoomBox(spots, filterCtx) {
-    const { minSnrMode, ssbMinDb, cwMinDb, selectedBand, enabledBands } = filterCtx;
+    // The same set the map draws (WSPR is exempt from Min SNR), so the fit
+    // never ignores a spot that is on screen.
     const lats = [];
     const lngs = [];
-    for (const spot of spots) {
-        if (minSnrMode === 'ssb' && spot.snr < ssbMinDb) continue;
-        if (minSnrMode === 'cw' && spot.snr < cwMinDb) continue;
-        if (!enabledBands.has(spot.band)) continue;
-        if (selectedBand !== 'all' && spot.band !== selectedBand) continue;
+    for (const spot of visibleMapSpots(spots, filterCtx)) {
         if (!Number.isFinite(spot.lat) || !Number.isFinite(spot.lng)) continue;
         lats.push(spot.lat);
         lngs.push(spot.lng);
@@ -376,7 +375,11 @@ export function updateMapVisualization(spots, maxMinutes) {
             const center = bounds.getCenter();
             const minBounds = center.toBounds(2000000); // minimum 2000km
             bounds.extend(minBounds);
-            map.fitBounds(bounds, { padding: [20, 20], maxZoom: 5 });
+            // The operator's own square always stays in view; the box
+            // otherwise holds only the remote ends of the spots.
+            const home = locatorToLatLngJS(panelQth());
+            if (home) bounds.extend([home.lat, home.lng]);
+            map.fitBounds(bounds, { padding: [20, 20], maxZoom: AUTO_ZOOM_MAX_ZOOM });
             endPerfTimer('mercator.autozoom.fit_bounds_ms', fitBoundsTimer);
             incrementPerfCounter('mercator.autozoom.applied', 1);
             state.lastMercatorAutoZoomAt = now;
