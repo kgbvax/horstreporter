@@ -747,6 +747,35 @@ Response: `{locator, count, min_snr, max_snr, avg_snr, best_band,
 band_counts{band:n}, top_reports[{sender, receiver, band, snr}]}` — top 10
 by SNR, deduped per sender|receiver|band.
 
+### `GET /api/area_heard` — stations heard by receivers in an area
+
+Read-only, public (CORS `*`). Lists the stations that PSKReporter receivers in
+the area heard in the window. The 75auto band survey polls it every 5 minutes
+with `qth=<grid4>&surroundings=true&minutes=15&modes=FT8,FT4`.
+
+Params: `qth` (QTH resolution as above, but it must be a Maidenhead locator;
+missing, a callsign, or not a locator → `400`), `surroundings` (`true` = the
+3×3 block), `minutes` (default 15, max 60), `modes` (comma-separated, default
+`FT8,FT4`, case-insensitive).
+
+Only PSKReporter reports count (no RBN, no WSPR). A report counts when its
+receiver locator lies in one of the area squares and its mode is in `modes`.
+Reports without a sender call are skipped.
+
+Response:
+
+```json
+{"generated_at":1764180000,"qth":"JO62","squares":["JO51","JO52","JO53","JO61","JO62","JO63","JO71","JO72","JO73"],
+ "window_minutes":15,"count":1,
+ "stations":[{"call":"K1ABC","band":"20m","mode":"FT8","grid":"FN42"}]}
+```
+
+- One row per sender call, band, and mode, however many receivers heard it.
+- `grid` is the sender locator as reported; when a sender reported several
+  locators in the window, it is the one of the latest report (empty when no
+  report carried one).
+- Rows are sorted by band (as a string), then call, then mode.
+
 ### `GET /api/stats` — server counters
 
 No params. Active connections, hub history size/minutes/KB, session totals

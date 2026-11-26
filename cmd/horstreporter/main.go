@@ -575,6 +575,8 @@ func main() {
 	// Seasonal month × hour drill-down (U4) for one band + region.
 	appMux.HandleFunc("/api/almanac/season", almanacSeasonHandler)
 	appMux.HandleFunc("/api/square_details", squareDetailsHandler)
+	// Stations that PSKReporter receivers in an area heard (75auto band survey).
+	appMux.HandleFunc("/api/area_heard", areaHeardHandler)
 	appMux.HandleFunc("/api/history", historyHandler)
 
 	// dx_raw_spots retention loop: prune rows older than the configured
